@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package trogonatlas.type.v1alpha1;
+
+// System-owned incarnation identity, mirroring Kubernetes metadata.uid
+// (Decision #26). The Id (namespace/slug@version) is the DECLARED identity
+// that refs and manifests use; `uid` identifies this stored INCARNATION:
+// assigned by the server on create, immutable across updates, and a NEW
+// uid on delete+recreate of the same name, making silent re-keying
+// detectable and giving external state management a durable handle.
+// Client-provided values are ignored; the server owns this block.
+message SystemMeta {
+  string uid = 1;          // UUIDv7, time-sortable incarnation id
+  string created_at = 2;   // RFC 3339, set once at creation
+}

@@ -1,0 +1,146 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+// The bounded context itself, as data (Decision #27): one per namespace,
+// identified BY the namespace (id.slug == id.namespace). Carries the
+// context charter -- what this boundary owns, its links and metadata.
+// Event models are curations within it; this is the root document.
+message BoundedContext {
+  trogonatlas.type.v1alpha1.Id id = 1;   // convention: slug == namespace, making it unique per context
+  string title = 2;
+  string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+
+  // The mapping from solution to problem: which subdomains this context
+  // solves (Decision #29). Usually one; several is a monolith confessing.
+  // Cross-namespace by nature (subdomains live in the domain's namespace)
+  // and legal: strategic mapping is knowledge, not behavioral coupling.
+  repeated SubdomainRef realizes = 6;
+
+  // The agreement behind each seam (Decision #30): declared by the
+  // DOWNSTREAM context about its upstream. The seam itself stays derived
+  // (event -> subscription view); this records who moves when the
+  // upstream wants a breaking change.
+  repeated ContextRelationship relationships = 7;
+  message ContextRelationship {
+    BoundedContextRef upstream = 1;
+    Intent intent = 2;
+    string doc = 3;             // the agreement's body: who negotiated what
+    repeated google.protobuf.Any metadata = 4;
+
+    enum Intent {
+      INTENT_UNSPECIFIED = 0;
+      INTENT_CUSTOMER_SUPPLIER = 1;  // downstream has a voice in upstream planning
+      INTENT_CONFORMIST = 2;         // downstream takes what it gets
+      INTENT_PARTNERSHIP = 3;        // the two succeed or fail together
+      INTENT_SEPARATE_WAYS = 4;      // deliberate non-integration, on record
+    }
+  }
+}
+
+// The business itself -- the container word. Usually exactly one. Pure
+// knowledge: no behavior, no slices, no time.
+message Domain {
+  trogonatlas.type.v1alpha1.Id id = 1;          // convention: slug == namespace of the problem space
+  string title = 2;
+  string doc = 3;     // the pitch-deck sentence
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  // The codebase/project this domain is mapped from. Optional during
+  // the migration window; when set, it is what makes a multi-project
+  // store unambiguous (two Domains in the same Project, two Domains in
+  // different Projects can share a namespace prefix without colliding
+  // identity). Surfaced via validator rules -- see DOMAIN_MISSING_PROJECT.
+  ProjectRef project = 6;
+}
+
+// The codebase / repository / customer the model is being mapped FROM.
+// In a multi-project store (e.g. one server holding several unrelated
+// products at once), Project is the outermost grouping:
+// every Domain belongs to one Project, and entity namespaces are scoped
+// inside that Project's tree. Convention: id.slug == id.namespace, same
+// rule as Domain -- the namespace IS the project identity.
+//
+// Cross-project write enforcement:
+//   - Domain entities: PutEntity and BatchMutate reject a write where
+//     Domain.project.id.namespace differs from the Domain's own namespace
+//     (FAILED_PRECONDITION). This is the only boundary where a project
+//     association is directly expressed on the entity.
+//   - All other entity kinds (Event, Command, Slice, etc.) carry no project
+//     field; their project membership is derivable only via the
+//     namespace -> BoundedContext -> Subdomain -> Domain -> Project chain,
+//     which cannot be checked atomically at write time without a full graph
+//     traversal. The accepted risk is that a write to a foreign namespace
+//     is not refused at the mutation boundary. Validators (PROJECT_SLUG_MISMATCH,
+//     DOMAIN_MISSING_PROJECT, BC_PROJECT_COLLISION) surface hygiene violations
+//     post-write; a storage-layer rework is required for general enforcement.
+message Project {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  // Optional human-readable upstream repo url / handle, e.g.
+  // "github.com/acme/storefront". Free-form.
+  string source_ref = 4;
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+}
+
+message ProjectRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message Term {
+  trogonatlas.type.v1alpha1.Id id = 1;        // namespace = bounded context, slug = the word
+  string title = 2; // e.g. "review"
+  string doc = 3;   // definition in this context's language
+  repeated EntityRef embodied_by = 4;
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+}
+
+message Ambiguity {
+  trogonatlas.type.v1alpha1.Id id = 1; // problem-space namespace, e.g. marketplace/review-collision
+  Kind kind = 2;
+  repeated TermRef terms = 3;
+  Ruling ruling = 4;
+  string doc = 5;
+  repeated google.protobuf.Any metadata = 6;
+  trogonatlas.type.v1alpha1.Id supersedes = 7;
+
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_HOMONYM = 1;
+    KIND_SYNONYM = 2;
+  }
+
+  enum Ruling {
+    RULING_UNSPECIFIED = 0;
+    RULING_DELIBERATE = 1;
+    RULING_RENAME = 2;
+    RULING_MERGE = 3;
+  }
+}
+
+// One problem the business must be good at. Discovered, not designed -- it
+// exists whether or not software does. The classification is the entire
+// point: it is a budget document disguised as architecture (who builds it,
+// build vs buy, what quality bar, rewrite vs tolerate).
+message Subdomain {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  DomainRef domain = 4;
+  Classification classification = 5;
+  repeated google.protobuf.Any metadata = 6;
+  trogonatlas.type.v1alpha1.Id supersedes = 7;
+
+  enum Classification {
+    CLASSIFICATION_UNSPECIFIED = 0;
+    CLASSIFICATION_CORE = 1;        // where you win or lose; best people; never outsource
+    CLASSIFICATION_SUPPORTING = 2;  // necessary and bespoke; built cheaply
+    CLASSIFICATION_GENERIC = 3;     // a solved problem; buy, never build
+  }
+}

@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+// A typed pointer hit. `from` is the entity that holds the pointer (e.g. a
+// slice), `from_field` is the structural path inside that entity to the
+// reference site (e.g. "emitted_events[2].event"). `to` is the target.
+message Reference {
+  trogonatlas.eventmodel.v1alpha1.EntityRef from = 1;
+  string from_field = 2;
+  trogonatlas.eventmodel.v1alpha1.EntityRef to = 3;
+}
+
+message ImpactNode {
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 1;
+  // Reference hops from the root. 0 = the root itself.
+  uint32 depth = 2;
+  // The chain of references that brought us from root to this entity.
+  // First Reference's `to` equals the root; last Reference's `to` equals
+  // this node. Empty for depth == 0.
+  repeated Reference path = 3;
+}

@@ -1,0 +1,9 @@
+# Intentional breaking changes to the trogonatlas contract, accepted by
+# `mise run proto:check-breaking` (.config/mise/tasks/proto/check-breaking). Each line is one finding copied
+# verbatim from the check output, without the "BREAKING: " prefix:
+#
+#   <RULE> <file>: <message>
+#
+# Only add a line through the procedure in
+# docs/how-to/ship-a-breaking-proto-change.md, and delete it once
+# the baseline contains the change and the check reports it as stale.

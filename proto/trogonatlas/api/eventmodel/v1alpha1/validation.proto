@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/storyboards.proto";
+
+// ---------- Validation -------------------------------------------------------
+//
+// Validation checks the model against the rules this schema cannot express
+// structurally: dangling references, edge-rule violations (the six allowed
+// edges + cardinality), supersession chains pointing at non-existent
+// versions, traces that violate data completeness, etc.
+
+message ValidationIssue {
+  enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    SEVERITY_INFO = 1;
+    SEVERITY_WARNING = 2;
+    SEVERITY_ERROR = 3;
+  }
+  Severity severity = 1;
+  string code = 2;        // stable machine code, e.g. "DANGLING_REF"
+  string message = 3;     // human-readable explanation
+  trogonatlas.eventmodel.v1alpha1.EntityRef subject = 4;  // entity the issue is attached to (optional)
+  string subject_field = 5; // structural path inside the entity (optional)
+
+  // Inline rule context -- denormalized from the static ValidationRule
+  // catalog at issue-emit time so consumers can render a finding
+  // (title, category, default_severity) without a second RPC to
+  // ListValidationRules. Empty when the validator can't resolve the
+  // catalog entry (which should never happen -- the drift test guards
+  // against orphan codes).
+  string rule_title = 6;
+  string rule_category = 7;
+  Severity rule_default_severity = 8;
+}
+
+message ValidateEventModelRequest {
+  // Either validate an in-memory model (supplied here) or validate a stored
+  // one by Id. Exactly one of the two should be set.
+  trogonatlas.eventmodel.v1alpha1.EventModel event_model = 1;
+  trogonatlas.type.v1alpha1.Id event_model_id = 2;
+}
+
+message ValidateEventModelResponse {
+  repeated ValidationIssue issues = 1;
+}
+
+// Static description of a single validation rule. Surfaces the catalog
+// the validator dispatches on: stable machine `code`, canonical
+// `default_severity`, and the "why" explanation lifted from the source
+// comment that documents the rule. Consumers (Studio UI, MCP agents,
+// CI tooling) use this to render legends, link findings to docs, and
+// gate releases on specific severity classes without having to
+// reverse-engineer the validator.
+message ValidationRule {
+  string code = 1;                                  // e.g. "EVENT_UNOBSERVED"
+  ValidationIssue.Severity default_severity = 2;    // canonical severity for the base case
+  string title = 3;                                 // short human label
+  string doc = 4;                                   // the "why" -- what the rule asserts and how to fix it
+  trogonatlas.eventmodel.v1alpha1.EntityKind subject_kind = 5;                      // primary kind this rule attaches to (or ENTITY_KIND_UNSPECIFIED)
+  string subject_field = 6;                         // structural path inside the entity (or empty)
+  string category = 7;                              // grouping: "model" | "scenarios" | "strategic" | "schema" | "storyboard"
+}
+
+message ListValidationRulesRequest {}
+
+message ListValidationRulesResponse {
+  repeated ValidationRule rules = 1;
+}
+
+// Validate every EventModel in a project (or in the entire store) in one
+// pass, instead of N round trips through ValidateEventModel. The
+// validator already has the full entity store in memory per call;
+// looping per-model is pure waste.
+message ValidateProjectRequest {
+  // Scope by Project.id (if your store carries Projects) or by
+  // Domain.id (legacy). One of the two must be set. ENTITY_KIND_UNSPECIFIED
+  // for the full store works only on small dev stores; large stores
+  // should always scope.
+  oneof scope {
+    trogonatlas.type.v1alpha1.Id project_id = 1;
+    trogonatlas.type.v1alpha1.Id domain_id = 2;
+  }
+}
+
+message ValidateProjectResponse {
+  message ModelReport {
+    trogonatlas.type.v1alpha1.Id event_model_id = 1;
+    repeated ValidationIssue issues = 2;
+  }
+  repeated ModelReport reports = 1;
+  // Aggregate counts across all reports -- quick "is the project healthy"
+  // glance without summing on the client.
+  int32 total_errors = 2;
+  int32 total_warnings = 3;
+  int32 total_info = 4;
+}

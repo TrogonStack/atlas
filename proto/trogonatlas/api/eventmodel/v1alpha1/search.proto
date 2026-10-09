@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+
+message SearchResult {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  float score = 2;       // higher = better; comparable only within one response
+  string excerpt = 3;    // optional human-readable snippet
+}

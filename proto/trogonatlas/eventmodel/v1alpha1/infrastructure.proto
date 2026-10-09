@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+// A Component is a living implementation unit: the deployable thing that
+// hosts processors, serves UIs, projects read models, exposes APIs, and owns
+// its technology choices -- including the messaging it relies on (Kafka
+// topics, NATS subjects, webhooks). This is where those facts are
+// documented. Members are a curated listing (same pattern as EventModel:
+// flat keyspace stays canonical, the component only points). Grouping is
+// implementation intent and never affects model-semantics validation.
+message Component {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;                  // responsibilities, APIs exposed, tech relied on
+  repeated string tech = 4;        // e.g. "kafka", "nats", "grpc", "webhook"
+  repeated EntityRef members = 5;  // what it hosts (processors, UIs, read models, ...)
+  repeated google.protobuf.Any metadata = 6;
+  trogonatlas.type.v1alpha1.Id supersedes = 7;
+}
+
+// An ExternalSystem is a living third-party boundary: the APIs and webhooks
+// it exposes, the tech used to integrate with it. ReadModels with an
+// ExternalSource point here, so every external feed shares one documented
+// source of truth about the system behind it.
+message ExternalSystem {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;            // what it is, the APIs/webhooks it exposes
+  repeated string tech = 4;  // e.g. "webhook", "rest", "kafka"
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+}
+
+// Delivery status of a tracked item. Lives ONLY in Trackers -- design
+// entities never carry process state (Decision #25).
+enum TrackStatus {
+  TRACK_STATUS_UNSPECIFIED = 0;
+  TRACK_STATUS_TODO = 1;
+  TRACK_STATUS_IN_PROGRESS = 2;
+  TRACK_STATUS_REVIEW = 3;
+  TRACK_STATUS_BLOCKED = 4;
+  TRACK_STATUS_DONE = 5;
+}
+
+// A Tracker is a project-management overlay: a denormalized list of
+// pointers into the model, each carrying delivery status. It integrates
+// with the model without living inside it -- flipping a status never
+// mutates a design entity, any entity kind can be tracked (slices, read
+// models, components, whole storyboards), and several trackers can overlay
+// the same model (per team, per milestone) without touching each other.
+// "What needs work?" = ListEntities(kind=TRACKER) + read the items.
+message Tracker {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated Item items = 4;
+  message Item {
+    EntityRef subject = 1;     // the model entity this status is ABOUT
+    TrackStatus status = 2;
+    string doc = 3;            // e.g. "blocked on payment SDK upgrade"
+    repeated google.protobuf.Any metadata = 4;
+  }
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+}
+

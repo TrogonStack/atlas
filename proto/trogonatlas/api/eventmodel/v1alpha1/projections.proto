@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/slices.proto";
+import "trogonatlas/eventmodel/v1alpha1/storyboards.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/analysis.proto";
+
+// ---------- Denormalized projections (the "fast map" view) -------------------
+//
+// A projection returns a focal entity plus every entity reachable from it
+// in one hop (or all hops, for full models). The `entities` map is keyed by
+// the canonical Id string for O(1) lookup by callers -- MCP tools can treat
+// the projection as a self-contained graph and traverse it without further
+// RPCs.
+
+message SliceProjection {
+  trogonatlas.eventmodel.v1alpha1.Slice slice = 1;
+  // All entities referenced by the slice and its edges (one hop):
+  // Personas, UIs, Commands, Events, ReadModels, Processors, Swimlanes.
+  map<string, trogonatlas.eventmodel.v1alpha1.Entity> entities = 2;
+}
+
+message GetSliceProjectionRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;          // one of the *_SLICE kinds
+  trogonatlas.type.v1alpha1.Id id = 2;
+}
+
+message GetSliceProjectionResponse {
+  SliceProjection projection = 1;
+  // True when the entity closure exceeded
+  // `GetServerInfo.limits.max_projection_entities` and `projection.entities`
+  // was clipped. Callers should narrow the projection (e.g. switch to
+  // GetSliceProjection on a sub-slice) when this is set.
+  bool truncated = 2;
+}
+
+message StoryboardProjection {
+  trogonatlas.eventmodel.v1alpha1.Storyboard storyboard = 1;
+  // Slices referenced by the storyboard, inlined.
+  repeated trogonatlas.eventmodel.v1alpha1.Slice slices = 2;
+  // All entities transitively referenced (storyboard endpoints, slice
+  // endpoints, scenarios, traces).
+  map<string, trogonatlas.eventmodel.v1alpha1.Entity> entities = 3;
+}
+
+message GetStoryboardProjectionRequest {
+  trogonatlas.type.v1alpha1.Id id = 1;
+}
+
+message GetStoryboardProjectionResponse {
+  StoryboardProjection projection = 1;
+  // True when the entity closure exceeded
+  // `GetServerInfo.limits.max_projection_entities` and `projection.entities`
+  // was clipped.
+  bool truncated = 2;
+}
+
+message EventModelProjection {
+  trogonatlas.eventmodel.v1alpha1.EventModel event_model = 1;
+  // Every entity transitively reachable from the model, including any
+  // cross-namespace references. This is the "load the whole thing into
+  // memory" call for an MCP tool that wants to reason globally.
+  map<string, trogonatlas.eventmodel.v1alpha1.Entity> entities = 2;
+}
+
+message GetEventModelProjectionRequest {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  // If true, follow cross-namespace references and pull in entities from
+  // other models. If false, references outside this model appear in the
+  // map only by Id (as empty Entity placeholders).
+  bool include_cross_model = 2;
+}
+
+message GetEventModelProjectionResponse {
+  EventModelProjection projection = 1;
+  // True when the entity closure exceeded
+  // `GetServerInfo.limits.max_projection_entities` and `projection.entities`
+  // was clipped. With `include_cross_model = true`, this is the most common
+  // case to hit for large models.
+  bool truncated = 2;
+}
+
+// ---------- Subgraph extraction ----------------------------------------------
+//
+// Take a scope (slice / storyboard / event model) and emit a new,
+// self-contained EventModel whose `members` are the transitive closure of
+// the scope. The result is not persisted; the caller PutEntity's it (or
+// some of its members) to materialize.
+
+message ExtractSubgraphRequest {
+  AnalysisScope scope = 1;
+  // Optional Id for the new EventModel. If unset, the service mints one
+  // from the scope's namespace + a derived slug.
+  trogonatlas.type.v1alpha1.Id new_event_model_id = 2;
+  // If true, cross-namespace references are followed and the entities
+  // they point at are pulled into the subgraph (with their original Ids,
+  // including namespace). If false, cross-model refs remain dangling: the
+  // new model points at them but does not include them as members.
+  bool include_cross_model = 3;
+}
+
+message ExtractSubgraphResponse {
+  // The new EventModel listing the closure as members. Not persisted.
+  trogonatlas.eventmodel.v1alpha1.EventModel event_model = 1;
+  // Hydrated entities for every member, keyed by canonical Id.
+  map<string, trogonatlas.eventmodel.v1alpha1.Entity> entities = 2;
+  // True when the closure exceeded
+  // `GetServerInfo.limits.max_projection_entities` and `entities` was clipped.
+  bool truncated = 3;
+}

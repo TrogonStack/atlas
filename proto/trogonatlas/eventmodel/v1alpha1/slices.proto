@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/edges.proto";
+import "trogonatlas/eventmodel/v1alpha1/fields.proto";
+import "trogonatlas/eventmodel/v1alpha1/scenarios.proto";
+import "trogonatlas/eventmodel/v1alpha1/annotations.proto";
+// Command slice: Command -> Event(s)
+//
+// When persona and UI are present, the command is human-issued from that
+// UI. When they are absent, the command is issued elsewhere, typically by an
+// AutomationSlice that emits this command. In both cases this slice owns the
+// command's resulting events.
+//
+// Slices carry NO delivery status: project management layers ON TOP of the
+// design model, never inside it (Decision #25). Status lives in Tracker
+// entities that point at slices (or any entity) from the outside.
+message CommandSlice {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  PersonaEdge persona = 4;
+  UIEdge ui = 5;
+  CommandEdge command = 6;
+  repeated EventEdge emitted_events = 7;
+  repeated CommandScenario scenarios = 8;
+  repeated google.protobuf.Any metadata = 9;
+  trogonatlas.type.v1alpha1.Id supersedes = 10;
+}
+
+// What a ReadModelSlice's projection does to the target row.
+// A slice that both writes field values and removes rows must be
+// split: one slice per role.
+enum ProjectionRole {
+  PROJECTION_ROLE_UNSPECIFIED = 0;
+  PROJECTION_ROLE_UPSERT = 1;  // writes / overwrites field values
+  PROJECTION_ROLE_DELETE = 2;  // removes the row identified by the read model's `key`
+}
+
+// ReadModel slice: Event(s) -> ReadModel
+//
+// The projection alone. Who DISPLAYS the read model is a UiSlice and who
+// ACTS on it is an AutomationSlice; both consume this slice's output by
+// reference, so a projection carries no consumer of its own.
+message ReadModelSlice {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated EventEdge source_events = 4;
+  ReadModelEdge read_model = 5;
+  // The screen this projection renders into moved to UiSlice: displaying
+  // is a moment of its own (the projection runs when the event lands, the
+  // display when the persona looks).
+  repeated ReadModelScenario scenarios = 6;
+  repeated google.protobuf.Any metadata = 7;
+  trogonatlas.type.v1alpha1.Id supersedes = 8;
+  // What this slice's projection does to the target row: UPSERT
+  // writes field values, DELETE removes the row identified by the
+  // read model's `key`. A slice that would do both must be split
+  // into two slices, one per role. UNSPECIFIED is legal during
+  // migration and surfaced as Info when the target RM declares a key
+  // (RM_SLICE_ROLE_MISSING). Roles do not change field-sourcing
+  // rules yet except that keys are required for BOTH roles.
+  ProjectionRole projection_role = 9;
+}
+
+// Automation slice: ReadModel(s) -> Processor -> Command(s)
+//
+// Automation always reads from a ReadModel (which is itself a projection of
+// events, possibly external). A processor never consumes raw events directly,
+// and never emits events directly -- it issues commands, and the command
+// pipeline produces the events.
+//
+// External-system integration ("translation") is not a separate slice kind:
+// the external input is modeled as a ReadModel with an ExternalSource, and
+// the automation slice consumes it like any other ReadModel.
+message AutomationSlice {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated ReadModelEdge source_read_models = 4;
+  ProcessorEdge processor = 5;
+  // At most one command per processor execution. Unset = "do nothing".
+  // Multi-step orchestration is multiple AutomationSlices chained through
+  // the graph, never multiple commands from one processor execution.
+  CommandEdge emitted_command = 6;
+  repeated AutomationScenario scenarios = 7;
+  repeated google.protobuf.Any metadata = 8;
+  trogonatlas.type.v1alpha1.Id supersedes = 9;
+}
+
+// UI slice: ReadModel(s) -> UI
+//
+// The human counterpart of AutomationSlice. Both consume read models; one
+// hands them to a person, the other to a processor. A read model reaches a
+// screen the same way it reaches a processor: by reference to a projection
+// that already happened, never bundled into it.
+//
+// `persona` is who the display is for, mirroring the automation's processor.
+// It is what makes a display-only screen attributable to a swimlane on its
+// own, without a storyboard entry having to vouch for it.
+//
+// A screen shows everything it shows in one slice: `source_read_models` is
+// repeated, so a screen rendering three read models is ONE UiSlice, not the
+// same screen restated in three projections.
+message UiSlice {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  PersonaEdge persona = 4;
+  repeated ReadModelEdge source_read_models = 5;
+  UIEdge ui = 6;
+  // A display asserts nothing a scenario could check today: what the rows
+  // contain is the projection's contract, and what the persona does next is
+  // the command slice's.
+  repeated google.protobuf.Any metadata = 7;
+  trogonatlas.type.v1alpha1.Id supersedes = 8;
+}
+
+message Slice {
+  oneof kind {
+    CommandSlice command = 1;
+    ReadModelSlice read_model = 2;
+    AutomationSlice automation = 3;
+    UiSlice ui = 4;
+  }
+}
+
+message SliceRef {
+  trogonatlas.type.v1alpha1.Id id = 1;
+}

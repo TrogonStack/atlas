@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+#MISE description="Check Atlas protos for unacknowledged breaking changes against the baseline ref (TROGON_ATLAS_PROTO_BASELINE_REF, default main)"
+set -euo pipefail
+
+ROOT="$MISE_PROJECT_ROOT"
+rel="$(git -C "$ROOT" rev-parse --show-prefix)"
+baseline_subdir="${rel}proto"
+ACK_FILE="$ROOT/rsworkspace/crates/trogon-atlas-proto/acknowledged-breaking-changes.txt"
+BASELINE_REF="${TROGON_ATLAS_PROTO_BASELINE_REF:-main}"
+
+if ! git -C "$ROOT" rev-parse --verify --quiet "${BASELINE_REF}^{commit}" >/dev/null; then
+  echo "ERROR: baseline ref ${BASELINE_REF} is not available locally."
+  echo "Fetch it first, e.g. 'git fetch origin main:main' or set TROGON_ATLAS_PROTO_BASELINE_REF."
+  exit 2
+fi
+
+if ! git -C "$ROOT" cat-file -e "${BASELINE_REF}:${baseline_subdir}/buf.yaml" 2>/dev/null; then
+  echo "Baseline ${BASELINE_REF} has no proto tree at ${baseline_subdir}; nothing to compare against."
+  exit 0
+fi
+
+findings_file="$(mktemp)"
+baseline_dir="$(mktemp -d)"
+trap 'rm -rf "$findings_file" "$baseline_dir"' EXIT
+
+git -C "$ROOT" archive "$BASELINE_REF" "proto" | tar -x -C "$baseline_dir"
+
+set +e
+(
+  cd "$ROOT"
+  buf breaking proto --against "$baseline_dir/proto" --error-format json
+) >"$findings_file"
+buf_status=$?
+set -e
+
+if [ "$buf_status" -ne 0 ] && [ "$buf_status" -ne 100 ]; then
+  echo "ERROR: buf breaking failed to run (exit ${buf_status})."
+  cat "$findings_file"
+  exit "$buf_status"
+fi
+
+acknowledged=""
+if [ -f "$ACK_FILE" ]; then
+  acknowledged="$(grep -v '^[[:space:]]*#' "$ACK_FILE" | sed '/^[[:space:]]*$/d' || true)"
+fi
+
+unacknowledged=0
+matched=""
+while IFS= read -r finding; do
+  [ -z "$finding" ] && continue
+  if [ -n "$acknowledged" ] && grep -Fxq -- "$finding" <<<"$acknowledged"; then
+    echo "acknowledged: $finding"
+    matched+="$finding"$'\n'
+  else
+    echo "BREAKING: $finding"
+    unacknowledged=$((unacknowledged + 1))
+  fi
+done < <(jq -r '"\(.type) \(.path): \(.message)"' "$findings_file")
+
+if [ -n "$acknowledged" ]; then
+  while IFS= read -r entry; do
+    if ! grep -Fxq -- "$entry" <<<"$matched"; then
+      echo "stale acknowledgement (no longer breaks against ${BASELINE_REF}, remove it): $entry"
+    fi
+  done <<<"$acknowledged"
+fi
+
+if [ "$unacknowledged" -gt 0 ]; then
+  echo ""
+  echo "${unacknowledged} breaking change(s) against ${BASELINE_REF}."
+  echo "If the break is intentional, follow docs/how-to/ship-a-breaking-proto-change.md."
+  exit 1
+fi
+
+echo "No unacknowledged breaking changes against ${BASELINE_REF}."

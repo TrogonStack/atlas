@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+// Static catalog of every EntityKind the system stores. Same shape and
+// motivation as ListValidationRules: avoids the per-client three-name
+// map (proto enum string ENTITY_KIND_FOO, JSON discriminator `event`,
+// numeric tag 1).
+message EntityKindInfo {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;          // the numeric / proto enum
+  string proto_name = 2;        // e.g. "ENTITY_KIND_EVENT"
+  string json_key = 3;          // e.g. "event" -- the oneof field name in JSON-rendered Entity
+  string title = 4;             // short human label, e.g. "Event"
+  string plural = 5;            // pluralized title, e.g. "Events"
+  string doc = 6;               // what this kind represents
+}

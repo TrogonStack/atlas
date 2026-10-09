@@ -1,0 +1,603 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/struct.proto";
+
+// The schema is split across one file per category so a reader looking
+// for a specific message can open the right file directly. The package
+// name is shared across all of them (`trogonatlas.eventmodel.v1alpha1`), so nothing about
+// the wire format changes vs the historical single-file layout.
+//
+//   trogonatlas/type/v1alpha1/id.proto           Id
+//   trogonatlas/type/v1alpha1/system_meta.proto  SystemMeta
+//   identity.proto       *Ref, EntityRef, EntityKind
+//   edges.proto          *Edge
+//   fields.proto         FieldSpec, FieldType, TypeRef, TypeKind, Schema
+//   moments.proto        Event, Command, ReadModel, Processor, UI, Screen,
+//                        Persona, Swimlane
+//   annotations.proto    Orphan, MixedSurface, SharedConsumers,
+//                        Uuidv5Identity, PinnedRef, DerivedField,
+//                        PersonalData, FailureMode (model-specific findings;
+//                        generic annotations live in trogonatlas.annotation.v1alpha1)
+//   strategic.proto      BoundedContext, Domain, Subdomain, Term, Ambiguity
+//   infrastructure.proto Component, ExternalSystem, Tracker, TrackStatus
+//   slices.proto         CommandSlice, ReadModelSlice, UiSlice, AutomationSlice,
+//                        Slice, SliceRef
+//   storyboards.proto    Storyboard, EventModel, storyboard entry/outcome/traces
+//   scenarios.proto      CommandScenario, ReadModelScenario, AutomationScenario,
+//                        and the Event/Command/ReadModel example messages
+//   reliability.proto    ServiceLevelIndicator, ServiceLevelObjective, AlertPolicy,
+//                        AlertNotificationTarget, Connection, Signal
+//
+// Three more packages build on this one. annotation/v1alpha1 and type/v1alpha1 are
+// leaves; catalog/v1alpha1 and api/eventmodel/v1alpha1 layer on top of all of them
+// (dependency direction: api -> catalog -> eventmodel -> {annotation, type}):
+//
+//   trogonatlas/annotation/v1alpha1/annotations.proto      Note, Link, Tag,
+//                                                     Lifecycle, OpenQuestion,
+//                                                     Assumption, CodeRef
+//
+//   trogonatlas/catalog/v1alpha1/namespaces.proto          NamespaceRecord
+//   trogonatlas/catalog/v1alpha1/branches.proto            BranchInfo, BranchDelta,
+//                                                     BranchDiffEntry, BranchEntryState,
+//                                                     BranchAncestry
+//   trogonatlas/catalog/v1alpha1/changesets.proto          ChangeEvent, ChangesetOp, Changeset,
+//                                                     EntityRevision, OperationReceipt,
+//                                                     DiffOpKind, DiffOp
+//   trogonatlas/catalog/v1alpha1/snapshots.proto           SnapshotEntry
+//
+//   trogonatlas/api/eventmodel/v1alpha1/service.proto      EventModelService + every
+//                                                     request / response message
+//   trogonatlas/api/eventmodel/v1alpha1/validation.proto   ValidationIssue, ValidationRule
+//   trogonatlas/api/eventmodel/v1alpha1/analysis.proto     AnalysisScope, InferredFieldMapping,
+//                                                     CompletenessGap
+//   trogonatlas/api/eventmodel/v1alpha1/projections.proto  SliceProjection, StoryboardProjection,
+//                                                     EventModelProjection
+//   trogonatlas/api/eventmodel/v1alpha1/search.proto       SearchResult
+//   trogonatlas/api/eventmodel/v1alpha1/graph.proto        Reference, ImpactNode
+//   trogonatlas/api/eventmodel/v1alpha1/batch.proto        PreconditionFailure
+//   trogonatlas/api/eventmodel/v1alpha1/entity_kinds.proto EntityKindInfo
+//
+// The Entity union (the oneof over every entity kind) lives at the
+// bottom of THIS file -- it is the discriminator that ties every kind
+// back together, so reflection / code-gen tooling finds it on the entry.
+
+// Aggregation imports: the Entity union below references every entity-kind
+// message, so this file pulls those modules in. trogonatlas/catalog/v1alpha1 and
+// trogonatlas/api/eventmodel/v1alpha1/service.proto import THIS file (for Entity),
+// so we deliberately do not import either of them back -- that would be a
+// circular import.
+import "trogonatlas/eventmodel/v1alpha1/moments.proto";
+import "trogonatlas/eventmodel/v1alpha1/strategic.proto";
+import "trogonatlas/eventmodel/v1alpha1/infrastructure.proto";
+import "trogonatlas/eventmodel/v1alpha1/slices.proto";
+import "trogonatlas/eventmodel/v1alpha1/storyboards.proto";
+import "trogonatlas/eventmodel/v1alpha1/fields.proto";   // for Schema in the Entity union
+import "trogonatlas/type/v1alpha1/system_meta.proto";    // for SystemMeta
+import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
+import "trogonatlas/eventmodel/v1alpha1/type_library.proto";
+
+// =============================================================================
+// Event Modeling schema.
+//
+// PURPOSE -- read this first.
+//
+// This file defines the data schema for Event Modeling -- events, commands,
+// read models, processors, UIs, personas, swim lanes, slices, storyboards.
+// These are design-time descriptions of how a problem behaves, intended to
+// be authored and manipulated by humans and by MCP tools. They are not
+// runtime payloads, not service contracts, not packages.
+//
+// The gRPC service that exposes this schema as a queryable, denormalized
+// keyspace (EventModelService) lives in trogonatlas.api.eventmodel.v1alpha1,
+// layered on top of this package via trogonatlas.catalog.v1alpha1 (dependency
+// direction: api -> catalog -> eventmodel -> {annotation, type}). An MCP tool is
+// implemented as a thin adapter over that gRPC service: MCP tools call
+// gRPC; the service is the source of truth; this schema is the contract
+// between them. There is no second data model.
+//
+// What is explicitly OUT of scope (do not add to this file):
+//   - Package / module / workspace containers.
+//   - Manifests, declared dependencies, or version-resolution rules.
+//   - IAM, ownership, permissions, or tenant boundaries.
+//   - Code-generation, deployment, or wire-protocol concerns of the
+//     modeled domains themselves (this file's job is to describe the model,
+//     not to ship the systems it models).
+//
+// -----------------------------------------------------------------------------
+// DESIGN DECISIONS (rationale for each non-obvious choice).
+//
+// 1.  Problem-modeling, not software-shipping. Everything cosmetic to
+//     distribution lives outside this schema. MCP tools handle storage,
+//     discovery, IAM, and codegen.
+//
+// 2.  Identity = (namespace, slug, version). namespace is a free-form
+//     disambiguator chosen by the model's owner; it is NOT a package name,
+//     dependency target, or resolved path. slug is the human name
+//     ("order.placed"). version is a monotonic uint64 breaking-change
+//     counter (semver-major-only at this layer); doc/scenario tweaks do
+//     NOT bump it. Refs always carry an exact triple; there is no implicit
+//     "latest" in the data itself -- `latest` is a service-level concept
+//     (GetLatestVersion).
+//
+// 3.  Multi-version coexistence. Because version is part of identity, every
+//     version of an entity is a distinct row in the keyspace. A slice can
+//     reference Event v1 and another slice can reference Event v2 in the
+//     same model; both resolve independently. This is the safety property
+//     for linking: refactors never silently retarget existing references.
+//
+// 4.  Version lineage via `Id supersedes`. Every top-level entity declares
+//     which prior version it replaces (if any) as a structural field, not
+//     metadata. This lets tools walk the supersession chain ("what did v3
+//     replace?") without scanning everything. Forward navigation
+//     ("what replaced v1?") is a reverse-index query on the service.
+//
+// 5.  Typed Refs (EventRef, CommandRef, …) instead of a single generic
+//     pointer. Prevents the wire from mixing kinds and keeps the graph
+//     statically checkable without an enum tag in every pointer.
+//
+// 6.  Typed Edges carry metadata. Where a connection can hold design data
+//     (slice endpoints, storyboard entry/outcome), the schema uses Edge
+//     messages (Ref + doc + repeated Any). Distinct from Refs, which are
+//     pure pointers used inside FieldSpec/Example/TypeRef.
+//
+// 7.  Universal metadata extension point. Every top-level entity carries
+//     `repeated google.protobuf.Any metadata`. Notes, links, tags,
+//     lifecycle status (draft/accepted/deprecated), invariants, tool
+//     layout -- all attach here as typed annotations. New annotation kinds
+//     do not require schema changes. FieldSpec and scenarios also carry
+//     `metadata` for their own per-field and per-scenario annotations
+//     (e.g. NoteAnnotation, OpenQuestionAnnotation). Traces do not carry
+//     metadata; annotate the parent entity.
+//
+// 8.  Persona, not Actor. A Persona is a named human profile ("Bob the
+//     manager"), always human. Systems are Processors; external systems
+//     are ReadModels (with ExternalSource). Classic EM has no formal
+//     persona; we add it because the same human profile is referenced
+//     across many slices and needs a stable identifier.
+//
+// 9.  Swimlane = event-sourcing stream (NOT a visual band). It is the
+//     consistency / transaction boundary for the events and commands on
+//     it. Read models, UIs, processors, and personas are cross-cutting
+//     and do not reference a swimlane.
+//
+// 10. Storyboard entry = ReadModel + Observer. Outcome = Events (UI
+//     optional). Universal trigger shape: human-via-UI observes a
+//     ReadModel, or automation observes a ReadModel. External webhooks
+//     and schedules are ReadModels (ExternalSource / Clock-style). No
+//     second category of trigger.
+//
+// 11. Four slice kinds only: CommandSlice, ReadModelSlice, UiSlice,
+//     AutomationSlice. No Translation slice (translation = a ReadModel
+//     with ExternalSource consumed by an AutomationSlice).
+//     AutomationSlice reads ReadModels only (never raw events) and emits
+//     at most ONE command per execution. Multi-step orchestration =
+//     multiple AutomationSlices chained through the graph.
+//     One slice is one moment, which is why displaying a read model is a
+//     UiSlice rather than a field on the projection: a screen consumes a
+//     read model exactly as a processor does, so the two consumers are
+//     the same shape (ReadModel(s) -> UI, ReadModel(s) -> Processor) and
+//     the projection (Event(s) -> ReadModel) owns neither.
+//
+// 12. Six allowed edges. Command->Event, Event->ReadModel, ReadModel->UI,
+//     ReadModel->Processor, UI->Command, Processor->Command. Anything
+//     else is structurally impossible by construction.
+//
+// 13. Scenarios use google.protobuf.Any for payloads (end-to-end proto:
+//     schema and example values share one type system). The Any.type_url
+//     identifies the generated proto for the referenced Event/Command/
+//     ReadModel (codegen target derived from the type's FieldSpec).
+//
+// 14. StoryboardTraces are the data-completeness mechanism (consistent
+//     values flowing through every step). No TraceKind enum -- trace
+//     intent (happy / edge / failure / forbidden) lives in title + doc,
+//     not in a categorization that's always arbitrary at the boundaries.
+//     If a strong-typed "forbidden" assertion is ever needed, add a
+//     separate ForbiddenAssertion message; do not re-introduce the enum.
+//
+// 15. Flat keyspace via `Entity`. Every addressable thing is wrappable in
+//     the `Entity` oneof and uniquely identified by (EntityKind, Id).
+//     This is what makes the service look like a denormalized map: one
+//     bulk-get returns everything reachable, keyed by canonical Id string.
+//
+// 16. The gRPC service is the only contract. There is no separate REST
+//     surface, no separate persistence schema, no separate MCP schema.
+//     The MCP tool is a thin adapter: each MCP tool call maps 1:1 to one
+//     RPC. This keeps a single source of truth and avoids drift.
+//
+// 17. Inference, not declaration. The schema does NOT have structural
+//     FieldMapping / data-flow / completeness fields on slices. Adding
+//     them would push humans into specifying, field by field, where every
+//     value comes from -- which is coding in protobuf and defeats the
+//     purpose of a description language. Instead, data flow and
+//     information completeness are derived by the service from FieldSpec
+//     + doc + graph structure, on demand (InferDataFlow,
+//     CheckInformationCompleteness). The AI does the heavy lifting;
+//     humans describe stickies and review the gaps the AI surfaces.
+//     If a tool wants to cache AI conclusions, it parks them as `Any`
+//     annotations in the existing `metadata` list -- never as new
+//     structural fields. Re-running the analysis always works because
+//     the model is self-describing; the cache is a convenience, not a
+//     contract.
+//
+// 18. Flat keyspace is canonical; EventModel is a curated listing.
+//     Every entity (Event, Command, ReadModel, Processor, UI, Persona,
+//     Swimlane, Slice variants, Storyboard, EventModel) lives in the
+//     flat (EntityKind, Id) keyspace and is fetched independently via
+//     GetEntity. An EventModel does NOT inline its members; it holds
+//     `repeated EntityRef members` -- a curated list of the entities
+//     that conceptually belong together. This removes the two-source-
+//     of-truth risk where an entity inside `EventModel.types` could
+//     drift from the same entity addressed via `GetEntity`.
+//     Projection RPCs (GetSliceProjection, GetStoryboardProjection,
+//     GetEventModelProjection) hydrate the refs into a self-contained
+//     subgraph for callers that want everything in one response.
+//
+// 19. Polling, not streaming, for change notifications. MCP tools issue
+//     unary calls; long-lived streams are awkward over the MCP transport
+//     and complicate tool semantics ("did the stream end? did I miss
+//     events?"). The service exposes ListChanges with an opaque cursor
+//     instead: callers poll, the server records change events, the
+//     cursor advances. Streaming can be added later if a non-MCP
+//     consumer needs it; it would not replace the polling RPC.
+//
+// 20. Canonical annotation baseline. The schema defines a small set of
+//     standard annotation messages (NoteAnnotation, LinkAnnotation,
+//     TagAnnotation, LifecycleAnnotation, OpenQuestionAnnotation,
+//     Uuidv5IdentityAnnotation, CodeRefAnnotation) that
+//     any tool can pack into `metadata`. This is the minimum interop
+//     surface so two tools sharing a model can agree on at least notes,
+//     links, tags, lifecycle status, open questions, and code linkage.
+//     Tools may define additional annotation types beyond this baseline.
+//
+// 21. Optimistic concurrency via opaque etag. Id.version is the
+//     breaking-change counter, not a per-write revision (Decision #2).
+//     Within a single (namespace, slug, version) row, non-breaking edits
+//     (doc tweaks, scenario additions, metadata changes) can still race
+//     between concurrent MCP clients. The service therefore exposes an
+//     opaque `etag` on reads and accepts it as `if_match` on PutEntity
+//     and DeleteEntity. ABORTED is returned on mismatch. The etag is
+//     opaque -- tools must not parse or compare it structurally. This is
+//     the standard gRPC pattern (matches google.api.ResourceInfo) and
+//     keeps concurrency control out of Id semantics.
+//
+// 22. Capabilities and limits are discoverable, not assumed. MCP adapters
+//     bootstrap against an unknown server implementation. A single
+//     GetServerInfo RPC reports which optional RPCs the server actually
+//     implements (search, change feed, AI analysis, diff, impact,
+//     extract-subgraph) and what numeric limits apply (max page size,
+//     max impact depth, max projection size). MCP tools that need any
+//     of these features should probe first rather than catching
+//     UNIMPLEMENTED errors. ListNamespaces complements this for
+//     discovery: tools can enumerate what models exist before issuing
+//     namespace-filtered queries.
+//
+// 23. Multi-entity atomicity via BatchMutate. A real edit usually touches
+//     several entities at once (renaming a field on an Event and
+//     updating every Slice that references it; splitting one Slice into
+//     two). Single-entity PutEntity / DeleteEntity cannot express this
+//     without leaving the model temporarily inconsistent. BatchMutate
+//     takes an ordered list of Put/Delete ops and applies them
+//     all-or-nothing. Per-op if_match is honored. The RPC itself always
+//     returns OK; success or failure is carried in the response's
+//     `status` field along with the index and diagnostics of the failing
+//     op. This keeps MCP tools from having to parse gRPC status codes to
+//     distinguish "the RPC failed" from "one op in the batch failed."
+//     Validate-only mode previews the full batch without persisting,
+//     giving MCP tools a safe way to ask "what would this change set
+//     do?" before committing.
+//
+// 24. TIME ONLY POINTS FORWARD. The model is a timeline: every edge a tool
+//     draws or derives points from an earlier moment to a later one --
+//     never backward. Recurrence of the same TYPE (a screen shown again, a
+//     view updated again, a lifecycle re-entered) is a NEW occurrence, a
+//     new moment of the same entity; it is never an arrow into the past,
+//     because a backward arrow destroys the ability to read time off the
+//     graph. Concretely: read models and UIs repeat per slice (one sticky
+//     per moment), automations observe the LATEST prior occurrence of
+//     their view, projections land adjacent to their emitters (validated:
+//     PROJECTION_BEFORE_EMITTER / PROJECTION_NOT_ADJACENT), scenario
+//     given/emit histories must walk a lane's transitions forward
+//     (validated: SCENARIO_TRANSITION_VIOLATION), and lifecycle cycles
+//     (Swimlane.transitions back to an earlier state) render as forward
+//     re-entry stubs, never as backward edges.
+//
+//     This binds every DERIVED graph too, at every aggregation level --
+//     sitemaps, summaries, roll-ups. Collapsing moments into type-level
+//     nodes is where backward edges sneak in: two types that "point at
+//     each other" claim to be each other's past, and time becomes
+//     unreadable. The rule: collapse by type only as far as the graph
+//     stays forward; the first arrow that would point backward instead
+//     mints a NEW occurrence of its target (Sign-up #1 -> Settings #1 ->
+//     Sign-up #2). Multiple occurrences of one type are grouping, not
+//     duplication.
+//
+// 25. PROJECT MANAGEMENT LAYERS ON TOP, NEVER INSIDE. Delivery status
+//     (todo, in progress, blocked, done) is an opinion ABOUT the model,
+//     not a property OF it: the team's process decides it, not the slice.
+//     Status therefore lives in Tracker entities -- denormalized overlays
+//     holding EntityRef pointers plus TrackStatus -- and design entities
+//     carry no status fields. This keeps status flips from mutating
+//     design history, lets any entity kind be tracked, and lets several
+//     trackers (per team, per milestone) overlay one model independently.
+//
+// 27. A NAMESPACE IS A BOUNDED CONTEXT, AND BoundedContext IS ITS ROOT
+//     DOCUMENT. The namespace is the boundary where the rules bite (slug
+//     uniqueness, free internal refs, the cross-context seam invariant).
+//     Its charter -- title, doc, links, metadata -- lives on a dedicated
+//     BoundedContext entity whose slug EQUALS the namespace (validated),
+//     which makes it naturally unique. Event models remain free-form
+//     curations WITHIN a context -- a feature, a flow, a release -- and a
+//     namespace may hold many of them. The Id field stays `namespace`: it
+//     names the MECHANISM (the scope where slugs are unique and the
+//     coupling rules bite), while declaring a BoundedContext is the
+//     ASSERTION that the scope is a context. The layers may diverge -- a
+//     shared `vendors` namespace holding ExternalSystems for several
+//     consumers is a naming scope that is not a bounded context.
+//
+// 28. THE SCHEMA MODELS DECISIONS AND DATA, NEVER IMPLEMENTATION. The
+//     subject matter is what survives a full rewrite of the codebase:
+//     STRATEGIC design (which bounded contexts exist, their charters, how
+//     they relate through seams, where investment goes) and the BEHAVIORAL
+//     CONTRACT (which facts happen, in what order, carrying which fields --
+//     slices, storyboards, lifecycles, field types). Both layers are data
+//     about the business, and the behavioral layer stays in scope because
+//     it is data about behavior, not technology. The hard floor: nothing
+//     about classes, services, repositories, frameworks, persistence, or
+//     code structure -- tactical DDD patterns live in the code they
+//     organize, and modeling them here would only go stale. The closest
+//     the schema gets is a pointer out (Component.tech, UI.design_ref),
+//     never the design itself. When in doubt ask: would this survive
+//     reimplementing the system in another language? If not, it does not
+//     belong here.
+//
+// 29. THE PROBLEM SPACE IS A KNOWLEDGE GRAPH: Domain and Subdomain are
+//     first-class entities, pure facts about the business with no behavior,
+//     no slices, and no time. Containment is exact and small: a Domain
+//     contains Subdomains (a partition of the problem); a namespace contains
+//     entities (mechanical, slug-scoped); a BoundedContext IS the assertion
+//     about its namespace. A Subdomain NEVER contains bounded contexts --
+//     the spaces meet only through the `realizes` MAPPING on
+//     BoundedContext, pointing solution at problem. Classification
+//     (core/supporting/generic) lives on the SUBDOMAIN, because it is a
+//     property of the problem -- a context inherits "where investment goes"
+//     through realizes, so reclassifying a subdomain reprices every context
+//     realizing it. Cardinality is honest, not idealized: 1:1 is the goal,
+//     one subdomain realized by several contexts is deliberate splitting,
+//     one context realizing several subdomains is a monolith confessing.
+//     Domain/Subdomain live in a namespace named after the domain -- a
+//     naming scope that is deliberately NOT a bounded context (legal per
+//     Decision #27). `realizes` is the SECOND legal cross-namespace ref
+//     class after the event seam: strategic mapping is knowledge, not
+//     behavioral coupling -- no data flows through it. The three lenses:
+//     namespace = mechanics (where rules bite), bounded context = semantics
+//     (what words mean), subdomain = economics (what it is worth).
+//
+// 30. SEAMS CARRY DATA; RELATIONSHIPS CARRY INTENT. The derived context map
+//     proves THAT one context feeds another (event -> subscription view);
+//     it cannot prove the AGREEMENT behind it -- who moves when the
+//     upstream event wants a breaking change. That intent is declared on
+//     the DOWNSTREAM context (the subscriber knows its own posture):
+//     CUSTOMER_SUPPLIER (downstream has a voice in upstream planning),
+//     CONFORMIST (downstream takes what it gets), PARTNERSHIP (the two
+//     succeed or fail together), SEPARATE_WAYS (deliberate
+//     non-integration -- declared so silence reads as a decision, not an
+//     omission). Intent and data must agree: declaring a relationship no
+//     seam supports warns (RELATIONSHIP_WITHOUT_SEAM), declaring
+//     SEPARATE_WAYS while a seam exists is an error
+//     (RELATIONSHIP_CONTRADICTS_SEAM), and a seam with no declared intent
+//     gets an Info nudge (SEAM_WITHOUT_RELATIONSHIP).
+//
+// 31. DISCONNECTS ARE DATA WHEN DECLARED. An entity that is a member of
+//     an EventModel but is not produced by, consumed by, or fed into any
+//     slice in any storyboard of that model is DISCONNECTED. Disconnects
+//     are not always errors -- a subscription view may wait for its
+//     consumer, an audit log may have no UI yet, a niche flow (cancel,
+//     dispute) may be deferred to a later model. The rule is: declare
+//     the disconnect with `OrphanAnnotation` (a canonical Any in the
+//     entity's metadata) carrying a non-empty `doc` that explains why.
+//     A disconnected entity WITHOUT an OrphanAnnotation triggers
+//     ORPHAN_NOT_FLAGGED (Warning): silence is the noise the annotation
+//     replaces. An OrphanAnnotation with an empty `doc` triggers
+//     ORPHAN_DOC_EMPTY (Error): a flag without a reason is worse than
+//     no flag. A FLAGGED entity that IS in fact wired into a slice
+//     triggers ORPHAN_FLAG_OBSOLETE (Info): remove the annotation now
+//     that the entity is connected. The annotation is a humans-only
+//     control surface -- tools never set or clear it.
+//
+// 32. DUPLICATE-SHAPE READ MODELS MUST DECLARE WHY. Two read models in
+//     the same EventModel with the same source-event set AND the same
+//     field signature are visually a clone: the board shows one event
+//     fanning out to several identical-looking stickies and the reader
+//     has to mentally re-link what each one is for. Sometimes the
+//     split is required (the at-most-one-automation-per-RM rule
+//     forces a separate RM per automation consumer; the UI feed can't
+//     share a row with the automation feed without coupling them);
+//     sometimes it's an accidental clone left over from incremental
+//     mapping. Either way the author owes the reader a sentence. The
+//     rule mirrors Decision #31: declare the duplication with
+//     `DuplicateAnnotation` (a canonical Any in the read model's
+//     metadata) carrying a non-empty `doc` that names the
+//     differentiating consumer or the consolidation deferral. A
+//     same-shape RM WITHOUT a DuplicateAnnotation on either side
+//     triggers READ_MODEL_SHAPE_DUPLICATE (Warning). An annotation
+//     with an empty doc triggers READ_MODEL_SHAPE_DUPLICATE_DOC_EMPTY
+//     (Error). An annotation on a read model that no longer
+//     duplicates any other (the shape diverged or the twin was
+//     dropped) triggers READ_MODEL_SHAPE_DUPLICATE_OBSOLETE (Info).
+//
+// 33. SHAPES ARE TYPED, NOT INFERRED. A field-bearing entity (Event,
+//     Command, ReadModel) declares its shape as a `Schema` packed
+//     into `google.protobuf.Any`. Two entities whose `schema` Any
+//     has the same `type_url` AND same bytes are nominally the same
+//     type by declaration. Schemas can also be top-level Schema
+//     entities (set `id`) and referenced by many field-bearing
+//     entities -- the studio renders the schema name on the sticky.
+//     This makes the "different read models, same shape" question
+//     unambiguous: if you mean the same type, point at the same
+//     schema; if you mean different types, point at different
+//     schemas. Decision #32 (DuplicateAnnotation) is retired:
+//     structural inference is replaced by declared identity.
+//     `schema` is the only place an entity's shape lives: the Any
+//     holds a `Schema` or a message declared by a TypeLibrary in
+//     the same namespace. The inline `repeated FieldSpec fields`
+//     these entities once carried is reserved.
+//
+// 34. ONE RM CAN HAVE MANY CONSUMERS WHEN DECLARED. The
+//     at-most-one-automation-per-RM heuristic is right by default:
+//     different automations usually want differently-shaped data,
+//     and per-consumer RMs keep the coupling visible. But when
+//     several consumers genuinely share the same data -- the
+//     captured-payment row read by the ledger recorder, the refund
+//     processor, and the treasury UI -- splitting into clones makes
+//     the board lie. Declare the multi-consumer case with
+//     SharedConsumersAnnotation (Any in the RM's metadata,
+//     non-empty doc) and the validator downgrades
+//     READ_MODEL_MULTIPLE_AUTOMATIONS from Error to Info. Without
+//     the annotation the heuristic still fires; with it, the board
+//     renders one RM sticky with labeled outgoing edges per
+//     consumer.
+//
+// 35. SCREENS ARE COMPOSITION, NOT MOMENTS.
+//     Some user surfaces -- a checkout page, a changeset review view -- are
+//     not the output of a single bounded context. They COMPOSE
+//     contributions (panels, inserts, side rails) authored by
+//     multiple contexts onto one URL-addressable surface. The Event
+//     Modeling primitive `UI` continues to be the slice-grain
+//     moment (one persona, one observation, one trigger); a
+//     separate `Screen` entity sits OUTSIDE the slice graph as pure
+//     composition metadata. The four-block grammar
+//     (UI/Command/Event/ReadModel) is inviolate -- slices and
+//     storyboards reference `UI`, never `Screen`. `UI` gains an
+//     optional `ScreenSlotRef slot` so a UI can declare which
+//     screen slot it fills; the screen's `repeated Slot slots`
+//     declares the contract. The Screen entity lives in a
+//     non-context application namespace (same posture as
+//     `BoundedContext`/`Domain` per Decision #29) so the schema
+//     literally cannot place a Screen inside a BoundedContext.
+//     Validators planned: `STORYBOARD_REFERENCES_SCREEN` (Error),
+//     `SLICE_REFERENCES_SCREEN` (Error), `SCREEN_NAMESPACE_IS_CONTEXT`
+//     (Error), `SLOT_UNFILLED` (Warning),
+//     `SCREEN_MANY_CONTRIBUTORS` (Info). Allowlist gains
+//     `o.from_field.startsWith('slot')` -- the third legitimate
+//     cross-namespace knowledge ref, after the event seam and
+//     `realizes`.
+//     STATUS: implemented as schema, validators, MCP guidance, and
+//     studio support.
+//
+// 36. RELIABILITY ENTITIES ARE OVERLAYS THAT POINT AT CONNECTIONS, NEVER
+//     AT VENDOR QUERIES. SLOs, SLAs, and alerts described a `Connection`
+//     through the graph (command handling, projection, reaction, display,
+//     integration, or cross-storyboard journey) rather than a generic
+//     (from, to) pair, so a target can only be attached to an edge the
+//     model actually has. `ServiceLevelIndicator`, `ServiceLevelObjective`,
+//     `AlertPolicy`, and `AlertNotificationTarget` are overlays (same
+//     posture as `Tracker`, Decision #25): retuning a target or rotating
+//     an on-call target never rewrites a design slice. `Signal` is a
+//     logical pointer (event timestamps or a named span/metric), never a
+//     DataSource query, per Decision #28: the vendor binding belongs to
+//     export configuration, not the model.
+// =============================================================================
+
+// ---------- Identity & references --------------------------------------------
+
+// Universal identity for every top-level entity in the model -- type
+// definitions, slices, storyboards, and the model itself. Nested structures
+// (scenarios, field specs, observer details) are scoped to their parent and
+// do not carry an Id.
+//
+// Three parts:
+//   - namespace: a free-form string chosen by whoever owns the model, used
+//     only to keep one model's slugs from colliding with another model's
+//     slugs. There is no enforced grammar, no resolution mechanism, no
+//     dependency declaration. If you only have one model, the namespace can
+//     be whatever you like (or an empty string). It is NOT a package name.
+//   - slug: human-readable name, e.g. "order.placed".
+//   - version: explicit monotonic breaking-change counter (semver-major-only
+//     at this layer). Doc tweaks, scenario additions, and other non-breaking
+//     edits do not bump it -- git tracks those at the storage layer. Refs
+//     always carry an exact {namespace, slug, version} triple; there is no
+//     implicit "latest" in the data.
+//
+// Storage layer (out of scope for this schema, documented separately):
+// entities live one-file-per-version under a directory-per-kind layout,
+// backed by git. The exact point at which a version becomes immutable (per
+// commit / per merge to main / per explicit publish) is a policy decision
+// not encoded in the schema.
+// Identity conventions (contract for every conforming client):
+//
+//   1. `(namespace, slug, version, kind)` uniquely identifies an entity.
+//      The `kind` is NOT part of `Id` because it is implied by the field's
+//      static type (`EventRef.id`, `CommandRef.id`, etc.) or by the
+//      surrounding `Entity.kind` oneof. Two entities of different kinds may
+//      share the same `(namespace, slug, version)` tuple -- they are still
+//      distinct.
+//
+//   2. `version` is monotonic per `(namespace, slug, kind)` and starts at 1.
+//      It is a breaking-change counter, never a sequence number. Implementations
+//      MUST NOT reuse a version that has ever been written, even after delete.
+//
+//   3. `slug` is lowercase kebab-or-dot-case (e.g. "order.placed",
+//      "place-order-slice"). Maximum length is 200 characters. The schema
+//      does not encode this limit; tools enforce it at write time. Empty
+//      slug is invalid.
+//
+//   4. `namespace` is a required, non-empty id component chosen by the owner
+//      (e.g. "ecommerce", "billing"), validated by the server on write.
+//      Two namespaces are independent: the same `(slug, version, kind)` may
+//      exist under different namespaces.
+//
+//   5. The etag returned alongside an entity covers ONLY that entity's
+//      serialized bytes. It does NOT cover referenced entities, scenario
+//      payloads packed under google.protobuf.Any, or anything reachable
+//      transitively. A stable etag on a slice does not imply that its
+//      referents (events, commands, read models) have not changed.
+//
+//   6. Derived values (NOT stored, computed from the entity):
+//      - `EntityKind` is derived from `Entity.kind` (the oneof variant).
+//        `entity_kind(entity)` is a pure projection over the oneof.
+//      - `EntityRef { kind, id }` for any stored entity is built from
+//        the oneof variant + the inner `id` field of that variant.
+//      - The "stream" of an Event/Command is `swimlane.id.slug` when set,
+//        and otherwise undefined; never derive it from the entity slug.
+//
+//   7. `supersedes` (on every entity) points at the prior version it
+//      replaces. The supersession chain is single-parent and must terminate
+//      at a root version with `supersedes` unset.
+
+message Entity {
+  oneof kind {
+    Event event = 1;
+    Command command = 2;
+    ReadModel read_model = 3;
+    Processor processor = 4;
+    UI ui = 5;
+    Persona persona = 6;
+    Swimlane swimlane = 7;
+    CommandSlice command_slice = 8;
+    ReadModelSlice read_model_slice = 9;
+    AutomationSlice automation_slice = 10;
+    Storyboard storyboard = 11;
+    EventModel event_model = 12;
+    Component component = 13;
+    ExternalSystem external_system = 14;
+    Tracker tracker = 15;
+    BoundedContext bounded_context = 16;
+    Domain domain = 17;
+    Subdomain subdomain = 18;
+    Schema schema = 19;
+    Project project = 20;
+    Screen screen = 21;
+    Term term = 22;
+    Ambiguity ambiguity = 23;
+    UiSlice ui_slice = 24;
+    ServiceLevelIndicator service_level_indicator = 25;
+    ServiceLevelObjective service_level_objective = 26;
+    AlertPolicy alert_policy = 27;
+    AlertNotificationTarget alert_notification_target = 28;
+    TypeLibrary type_library = 30;
+  }
+  trogonatlas.type.v1alpha1.SystemMeta system = 29;
+}

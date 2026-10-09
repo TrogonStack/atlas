@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+
+// The state a mutation was planned against no longer holds. An etag is never
+// empty, so an empty value here means the key is absent.
+message PreconditionFailure {
+  trogonatlas.eventmodel.v1alpha1.EntityRef subject = 1;
+  // Etag the op required. Empty when the op required the key to be absent
+  // (`create_only`).
+  string expected_etag = 2;
+  // Etag the key holds now. Empty when the key is absent.
+  string actual_etag = 3;
+}

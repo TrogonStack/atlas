@@ -1,0 +1,242 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/duration.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/slices.proto";
+import "trogonatlas/eventmodel/v1alpha1/storyboards.proto";
+
+message ComponentRef                { trogonatlas.type.v1alpha1.Id id = 1; }
+message EventModelRef               { trogonatlas.type.v1alpha1.Id id = 1; }
+message ServiceLevelIndicatorRef    { trogonatlas.type.v1alpha1.Id id = 1; }
+message ServiceLevelObjectiveRef    { trogonatlas.type.v1alpha1.Id id = 1; }
+message AlertPolicyRef              { trogonatlas.type.v1alpha1.Id id = 1; }
+message AlertNotificationTargetRef  { trogonatlas.type.v1alpha1.Id id = 1; }
+
+// The span of the graph a measurement covers. Every variant names an edge
+// the validator resolves against the model; there is deliberately no
+// generic (from, to) pair, so a connection that does not exist in the
+// graph cannot be expressed.
+message Connection {
+  oneof kind {
+    CommandHandling command_handling = 1;
+    Projection projection = 2;
+    Reaction reaction = 3;
+    Display display = 4;
+    Integration integration = 5;
+    Journey journey = 6;
+  }
+  // Command issued -> event appended. Resolves against a CommandSlice.
+  message CommandHandling {
+    SliceRef command_slice = 1;
+    repeated EventRef events = 2;   // subset of emitted_events; empty = any
+  }
+  // Event appended -> read model row written. Resolves against a ReadModelSlice.
+  message Projection {
+    SliceRef read_model_slice = 1;
+    repeated EventRef source_events = 2;  // subset of source_events; empty = any
+  }
+  // Read model changed -> processor issued its command. Resolves against an AutomationSlice.
+  message Reaction { SliceRef automation_slice = 1; }
+  // Read model changed -> screen rendered. Resolves against a UiSlice.
+  message Display { SliceRef ui_slice = 1; }
+  // Outbound call. The system must be listed in Processor.calls.
+  message Integration {
+    ProcessorRef processor = 1;
+    ExternalSystemRef system = 2;
+  }
+  // One instance travelling from a start event to an end event, possibly
+  // across chained storyboards (scope = EventModel then).
+  message Journey {
+    oneof scope {
+      StoryboardRef storyboard = 1;
+      EventModelRef event_model = 2;
+    }
+    EventRef start = 3;
+    EventRef end = 4;
+    repeated string correlate_on = 5;  // field names present on both events
+  }
+}
+
+// Where the measurement comes from, as a logical pointer. The vendor
+// binding (DataSource, query) lives in export configuration, never in the
+// model (Decision #28).
+message Signal {
+  oneof source {
+    EventTimestamps event_timestamps = 1;
+    Telemetry telemetry = 2;
+  }
+  // Derived from event store timestamps. Valid only when both ends of the
+  // connection are events or event-sourced writes.
+  message EventTimestamps {}
+  message Telemetry {
+    TelemetryKind kind = 1;
+    string name = 2;  // OpenTelemetry span or metric name
+  }
+}
+
+enum TelemetryKind {
+  TELEMETRY_KIND_UNSPECIFIED = 0;
+  TELEMETRY_KIND_SPAN = 1;
+  TELEMETRY_KIND_METRIC = 2;
+}
+
+// OpenSLO kind: SLI.
+message ServiceLevelIndicator {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  Connection connection = 4;
+  oneof measure {
+    Latency latency = 5;
+    OutcomeRatio outcome_ratio = 6;
+    Completion completion = 7;
+  }
+  Signal signal = 8;
+  repeated google.protobuf.Any metadata = 9;
+  trogonatlas.type.v1alpha1.Id supersedes = 10;
+  // Elapsed time across the connection. Threshold lives on the objective.
+  message Latency {}
+  // good / (good + bad), classified by the event the instance ended in.
+  message OutcomeRatio {
+    repeated EventRef good = 1;
+    repeated EventRef bad = 2;
+  }
+  // Fraction of started instances that reach the end within the bound.
+  message Completion { google.protobuf.Duration within = 1; }
+}
+
+// OpenSLO kind: SLO. Several objectives may share one indicator: that is how
+// an internal SLO and a looser external SLA coexist on the same SLI.
+message ServiceLevelObjective {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  ComponentRef service = 4;  // OpenSLO spec.service
+  ServiceLevelIndicatorRef indicator = 5;
+  repeated Objective objectives = 6;
+  TimeWindow time_window = 7;
+  BudgetingMethod budgeting_method = 8;
+  repeated AlertPolicyRef alert_policies = 9;
+  Commitment commitment = 10;
+  repeated google.protobuf.Any metadata = 11;
+  trogonatlas.type.v1alpha1.Id supersedes = 12;
+  message Objective {
+    string display_name = 1;
+    LatencyThreshold threshold = 2;  // required for Latency, forbidden otherwise
+    Target target = 3;
+    Target time_slice_target = 4;    // TIMESLICES only
+    google.protobuf.Duration time_slice_window = 5;
+  }
+}
+
+message LatencyThreshold {
+  Comparison op = 1;
+  google.protobuf.Duration value = 2;
+}
+
+// A fraction in (0, 1), e.g. 0.999. Wrapped so 99.9 cannot pass for it.
+message Target { double ratio = 1; }
+
+enum Comparison {
+  COMPARISON_UNSPECIFIED = 0;
+  COMPARISON_LT = 1;
+  COMPARISON_LTE = 2;
+  COMPARISON_GT = 3;
+  COMPARISON_GTE = 4;
+}
+
+message TimeWindow {
+  oneof kind {
+    Rolling rolling = 1;
+    Calendar calendar = 2;
+  }
+  message Rolling { google.protobuf.Duration duration = 1; }
+  // Months and quarters are not fixed durations, hence a period enum.
+  message Calendar {
+    CalendarPeriod period = 1;
+    string start_time = 2;  // RFC 3339
+    string time_zone = 3;   // IANA, e.g. "UTC"
+  }
+}
+
+enum CalendarPeriod {
+  CALENDAR_PERIOD_UNSPECIFIED = 0;
+  CALENDAR_PERIOD_WEEK = 1;
+  CALENDAR_PERIOD_MONTH = 2;
+  CALENDAR_PERIOD_QUARTER = 3;
+  CALENDAR_PERIOD_YEAR = 4;
+}
+
+enum BudgetingMethod {
+  BUDGETING_METHOD_UNSPECIFIED = 0;
+  BUDGETING_METHOD_OCCURRENCES = 1;
+  BUDGETING_METHOD_TIMESLICES = 2;
+  BUDGETING_METHOD_RATIO_TIMESLICES = 3;
+}
+
+// Whether someone outside the team can hold you to this objective.
+// External is what people usually mean by SLA.
+message Commitment {
+  oneof kind {
+    Internal internal = 1;
+    External external = 2;
+  }
+  message Internal {}
+  message External {
+    oneof counterparty {
+      ExternalSystemRef system = 1;
+      PersonaRef persona = 2;
+    }
+    string agreement = 3;    // logical pointer to the contract, never its text
+    string consequence = 4;  // e.g. "10% service credit"
+  }
+}
+
+// OpenSLO kind: AlertPolicy, with AlertCondition inlined.
+message AlertPolicy {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated AlertCondition conditions = 4;
+  repeated AlertNotificationTargetRef notification_targets = 5;
+  bool alert_when_no_data = 6;
+  bool alert_when_resolved = 7;
+  bool alert_when_breaching = 8;
+  string runbook = 9;  // logical pointer
+  repeated google.protobuf.Any metadata = 10;
+  trogonatlas.type.v1alpha1.Id supersedes = 11;
+}
+
+message AlertCondition {
+  string display_name = 1;
+  Severity severity = 2;
+  BurnRate burn_rate = 3;
+  message BurnRate {
+    Comparison op = 1;
+    double threshold = 2;  // burn multiple, e.g. 14.4
+    google.protobuf.Duration lookback_window = 3;
+    google.protobuf.Duration alert_after = 4;
+  }
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_PAGE = 1;
+  SEVERITY_TICKET = 2;
+  SEVERITY_INFO = 3;
+}
+
+// OpenSLO kind: AlertNotificationTarget. Logical target name; the
+// PagerDuty/Slack binding stays in export configuration.
+message AlertNotificationTarget {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  string target = 4;
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+}

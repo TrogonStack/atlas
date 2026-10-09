@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package trogonatlas.annotation.v1alpha1;
+
+// Generic annotations: free-form notes, links, tags, lifecycle status, and
+// open questions / assumptions that apply to any entity regardless of
+// domain. Model-specific findings (orphan detection, derived-field marking,
+// personal-data handling, etc.) stay in trogonatlas.eventmodel.v1alpha1
+// annotations.proto, next to the schema they annotate.
+
+// A pinned design note. The classic "sticky on the canvas" annotation.
+message NoteAnnotation {
+  string text = 1;
+  string author = 2;       // free-form attribution
+  string created_at = 3;   // RFC 3339; service does not parse
+}
+
+// An external link to a ticket, ADR, Figma frame, doc, etc.
+message LinkAnnotation {
+  string url = 1;
+  string title = 2;
+  string rel = 3;          // suggested: "ticket", "design", "spec",
+                           // "discussion", "implementation"
+}
+
+// Machine-checkable pointer from a model entity to the code that implements
+// it. This is the structured sibling of LinkAnnotation{rel:"implementation"}:
+// a URL is a bookmark for humans, a CodeRef is a reference tools can verify
+// (drift detection: does the symbol still exist at that path?), query
+// ("everything implemented in repo X"), and render as an editor/forge link.
+//
+// Identity posture matches Swimlane.stream_id / ExternalSource.descriptor
+// (Decision #28: the model holds pointers out, never the implementation):
+//   - `repo` is a LOGICAL name ("umbrella"), never a URL -- hosts, orgs, and
+//     branches are environment-specific and stay in tooling config.
+//   - `symbol` is the preferred anchor: modules/functions outlive line
+//     numbers. There is deliberately no line-number field.
+//   - `ref` pins an exact commit only when exactness matters.
+// An entity may carry several CodeRefAnnotations (e.g. one processor entity
+// standing for two backend-scoped workers). Presence doubles as the
+// as-is/to-be discriminator: PROPOSED entities carry none.
+message CodeRefAnnotation {
+  string repo = 1;    // required: logical repository name
+  string path = 2;    // required: repo-relative file path
+  string symbol = 3;  // recommended: module / function / message name
+  string ref = 4;     // optional: commit SHA pin
+}
+
+// Free-form tags for filtering and grouping.
+message TagAnnotation {
+  repeated string tags = 1;
+}
+
+// Lifecycle status. Status semantics are intentionally a free string;
+// orgs agree on their own vocabulary. Suggested baseline values: "draft",
+// "proposed", "accepted", "deprecated", "superseded".
+message LifecycleAnnotation {
+  string status = 1;
+  string doc = 2;
+}
+
+// An unanswered design question pinned to an entity: the model does not
+// yet say what happens here. The validator surfaces these as Info findings;
+// humans answer by editing the annotation or removing it once resolved.
+// Contrast AssumptionAnnotation, which names something the design already
+// proceeds as if true, rather than something still undecided.
+message OpenQuestionAnnotation {
+  string question = 1;
+  string author = 2;
+  string created_at = 3;
+}
+
+// A belief the design relies on that nobody has confirmed. Unlike an
+// OpenQuestionAnnotation, the model already proceeds as if it were true:
+// this names the load-bearing guess so a human can check it instead of
+// discovering it was wrong downstream. The validator surfaces these as
+// Info findings alongside OpenQuestionAnnotation.
+message AssumptionAnnotation {
+  string statement = 1;
+  string basis = 2;
+  string author = 3;
+  string created_at = 4;
+}

@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+// One typed edge message per type kind. An Edge is a Ref + free-form doc +
+// a typed annotation list (repeated google.protobuf.Any). Edges are used
+// wherever a slice or storyboard endpoint may want to carry design data
+// attached to the connection itself: field mappings, conditions under
+// which an event is emitted, projection rules, validation, etc. Different
+// tools can attach their own annotation types without conflicting.
+message EventEdge {
+  EventRef event = 1;
+  string doc = 2;
+  repeated google.protobuf.Any metadata = 3;
+}
+
+message CommandEdge {
+  CommandRef command = 1;
+  string doc = 2;
+  repeated google.protobuf.Any metadata = 3;
+}
+
+message ReadModelEdge {
+  ReadModelRef read_model = 1;
+  string doc = 2;
+  repeated google.protobuf.Any metadata = 3;
+}
+
+message ProcessorEdge {
+  ProcessorRef processor = 1;
+  string doc = 2;
+  repeated google.protobuf.Any metadata = 3;
+}
+
+message UIEdge {
+  UIRef ui = 1;
+  string doc = 2;
+  repeated google.protobuf.Any metadata = 3;
+}
+
+message PersonaEdge {
+  PersonaRef persona = 1;
+  string doc = 2;
+  repeated google.protobuf.Any metadata = 3;
+}

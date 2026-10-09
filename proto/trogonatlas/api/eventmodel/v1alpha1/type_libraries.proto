@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/type_library.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+
+// Tenant type libraries are stored as proto source text and compiled on
+// demand. These messages let a client check a library and look up the
+// compiled types before it writes anything that depends on them. Every RPC
+// honors the x-trogon-atlas-branch header the same way reads do.
+
+// A compiler error, positioned in the library's own source.
+message TypeLibraryDiagnostic {
+  string path = 1;
+  uint32 line = 2;
+  uint32 column = 3;
+  string message = 4;
+}
+
+// A change that would stop payloads written against the previous version of
+// the library from decoding the same way.
+message TypeLibraryCompatibilityViolation {
+  string message = 1;
+}
+
+message CompileTypeLibraryRequest {
+  trogonatlas.eventmodel.v1alpha1.TypeLibrary library = 1;
+}
+
+// Empty lists mean PutEntity would accept the library as written. Problems
+// that are not about the source itself (an unknown dependency, a package
+// prefix another library owns) fail the call the same way PutEntity would.
+message CompileTypeLibraryResponse {
+  repeated TypeLibraryDiagnostic diagnostics = 1;
+  repeated TypeLibraryCompatibilityViolation compatibility_violations = 2;
+}
+
+message ResolveTypeRequest {
+  string namespace = 1;
+  // A google.protobuf.Any type url. Only the part after the last "/" is read.
+  string type_url = 2;
+}
+
+message ResolveTypeResponse {
+  // The live type library that declares the message. Unset when the message
+  // is built in (a well-known type or one of this service's own).
+  trogonatlas.type.v1alpha1.Id library = 1;
+  // An encoded google.protobuf.FileDescriptorSet holding the message's file
+  // and everything it imports, dependencies first.
+  bytes file_descriptor_set = 2;
+}
+
+message GetTypeLibraryDescriptorSetRequest {
+  string namespace = 1;
+}
+
+// A message a live type library declares.
+message TypeLibraryMessage {
+  string full_name = 1;
+  trogonatlas.type.v1alpha1.Id library = 2;
+}
+
+message GetTypeLibraryDescriptorSetResponse {
+  // An encoded google.protobuf.FileDescriptorSet holding every file of every
+  // live type library in the namespace plus everything they import,
+  // dependencies first.
+  bytes file_descriptor_set = 1;
+  repeated TypeLibraryMessage messages = 2;
+}

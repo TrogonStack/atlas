@@ -1,0 +1,1248 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+import "trogonatlas/catalog/v1alpha1/changesets.proto";
+import "trogonatlas/catalog/v1alpha1/namespaces.proto";
+import "trogonatlas/catalog/v1alpha1/snapshots.proto";
+import "trogonatlas/catalog/v1alpha1/branches.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/validation.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/analysis.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/projections.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/search.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/graph.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/batch.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/entity_kinds.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
+
+
+// =============================================================================
+// Service surface: requests, responses, supporting messages
+// =============================================================================
+//
+// All RPCs are unary except where noted. Map keys for denormalized results
+// are the canonical string form of an Id: "<namespace>/<slug>@<version>".
+// Tools must not parse this key -- it is opaque routing data. Use the
+// returned Entity.id (or the embedded EntityRef) for any semantic decision.
+//
+// ---------- Branch context (Phase 1: Isolation) ------------------------------
+//
+// A branch is a small server-side overlay of copy-on-write deltas over the
+// baseline store (see docs/explanation/branching.md). Branch context is NOT
+// a field on any request message below. Every RPC except CreateBranch /
+// ListBranches / DeleteBranch resolves an optional branch from the gRPC
+// metadata header `x-trogon-atlas-branch` (a plain string, not base64/bin).
+// When absent, the RPC operates against baseline exactly as before this
+// header existed.
+//
+// SearchEntities and DeleteByQuery are included in that rule. Both were
+// carved out when branching first landed -- search because the tantivy
+// index is built over baseline, DeleteByQuery because a full-store sweep
+// has no obvious branch semantics -- and both carve-outs are gone: search
+// under a branch queries a per-branch index over the merged view, and a
+// sweep lands its deletes as branch deltas. The registry RPCs
+// (RegisterNamespace, MoveNamespace) read and write the namespace registry,
+// which is not copy-on-write, so the header changes nothing there.
+//
+// Branch names follow the same charset as an id component
+// (`trogon_atlas_core::validate_id_component`: ASCII alphanumeric, '-', '_',
+// '.', max 200 chars per segment, no leading '.'), with at most one '/'
+// separator allowed to express an owner prefix, e.g. "alex/retention-rework".
+
+// ---------- Direct lookup ----------------------------------------------------
+
+message GetEntityRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  trogonatlas.type.v1alpha1.Id id = 2;
+}
+
+message GetEntityResponse {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  // Opaque revision token (Decision #21). Pass back to PutEntity.if_match
+  // or DeleteEntity.if_match to guard against concurrent mutation. Treat
+  // as opaque; do not parse or order.
+  string etag = 2;
+}
+
+message BatchGetEntitiesRequest {
+  repeated trogonatlas.eventmodel.v1alpha1.EntityRef keys = 1;
+  // If true, the response preserves request order and uses an empty Entity
+  // (kind unset) as a placeholder for not-found entries. If false, missing
+  // entries are simply omitted.
+  bool dense = 2;
+}
+
+message BatchGetEntitiesResponse {
+  repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
+  // Parallel to `entities`; only populated when `dense=true`. The i-th
+  // element is true when the i-th requested key was found and false when
+  // it was not (i.e. the corresponding entity is an empty placeholder).
+  // Callers must check this field instead of `entities[i].kind` to
+  // distinguish missing entries from entities whose kind is UNSPECIFIED.
+  repeated bool found = 2;
+  // Parallel to `entities`: the i-th element is the etag of the i-th entity,
+  // and empty for a dense-mode placeholder. Pass it back as
+  // PutEntity.if_match or DeleteEntity.if_match so a write planned from this
+  // read is refused if the entity changed in between. A server that predates
+  // this field leaves it empty.
+  repeated string etags = 3;
+}
+
+// ---------- Listing & search -------------------------------------------------
+
+message ListEntitiesRequest {
+  // Filter by kind. Empty = all kinds.
+  repeated trogonatlas.eventmodel.v1alpha1.EntityKind kinds = 1;
+  // Filter by namespace. Empty = all namespaces.
+  repeated string namespaces = 2;
+  // Only return the latest version per (namespace, slug). When false,
+  // every version is returned individually.
+  bool latest_versions_only = 3;
+  int32 page_size = 4;
+  string page_token = 5;
+  // Include only entities whose LifecycleAnnotation status, lowercased and
+  // trimmed, appears in this list. The empty string "" matches entities that
+  // carry no LifecycleAnnotation at all. Empty list = no lifecycle filter.
+  repeated string lifecycle_status_in = 6;
+  // Exclude entities whose LifecycleAnnotation status, lowercased and
+  // trimmed, appears in this list. "" excludes entities with no annotation.
+  // When both lifecycle_status_in and lifecycle_status_not_in are set they
+  // compose as AND: an entity must satisfy both conditions to be returned.
+  repeated string lifecycle_status_not_in = 7;
+}
+
+message ListEntitiesResponse {
+  repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
+  string next_page_token = 2;
+}
+
+// SearchEntitiesRequest always searches the baseline index. The
+// `x-trogon-atlas-branch` metadata header (see the branch context note above)
+// is ignored for this RPC in Phase 1.
+message SearchEntitiesRequest {
+  // Free-form query. Implementations may support full-text, semantic, or
+  // both; the schema does not constrain the matching algorithm.
+  string query = 1;
+  repeated trogonatlas.eventmodel.v1alpha1.EntityKind kinds = 2;
+  repeated string namespaces = 3;
+  int32 limit = 4;
+}
+
+message SearchEntitiesResponse {
+  repeated SearchResult results = 1;
+}
+
+// ---------- Versioning -------------------------------------------------------
+
+message ListVersionsRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+  int32 page_size = 4;
+  string page_token = 5;
+}
+
+message ListVersionsResponse {
+  // Every version of (namespace, slug), ordered by version ascending.
+  repeated trogonatlas.eventmodel.v1alpha1.Entity versions = 1;
+  string next_page_token = 2;
+}
+
+message GetLatestVersionRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+}
+
+message GetLatestVersionResponse {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+}
+
+message GetSupersessionChainRequest {
+  enum Direction {
+    DIRECTION_UNSPECIFIED = 0;
+    DIRECTION_ANCESTORS = 1;     // walk supersedes links backward
+    DIRECTION_DESCENDANTS = 2;   // reverse-index "what replaced this?"
+    DIRECTION_BOTH = 3;
+  }
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  trogonatlas.type.v1alpha1.Id id = 2;
+  Direction direction = 3;
+  int32 page_size = 4;
+  string page_token = 5;
+}
+
+message GetSupersessionChainResponse {
+  // Entities ordered oldest -> newest. The requested entity is included.
+  repeated trogonatlas.eventmodel.v1alpha1.Entity chain = 1;
+  string next_page_token = 2;
+}
+
+// ---------- Graph traversal --------------------------------------------------
+
+message GetReferencesRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  trogonatlas.type.v1alpha1.Id id = 2;
+  // Optional: restrict results to references whose other endpoint is one of
+  // these kinds. Empty = all kinds.
+  repeated trogonatlas.eventmodel.v1alpha1.EntityKind filter_kinds = 3;
+  int32 page_size = 4;
+  string page_token = 5;
+}
+
+message GetReferencesResponse {
+  repeated Reference references = 1;
+  string next_page_token = 2;
+}
+
+
+// ---------- Mutation ---------------------------------------------------------
+//
+// Both Put and Delete support optimistic concurrency via opaque `if_match`
+// (Decision #21). Both support `validate_only` / DRY_RUN so MCP tools can
+// preview a write's structural and reference-graph effects without
+// persisting. DeleteEntity additionally takes a referrer policy so the
+// caller is explicit about what should happen to entities pointing at the
+// deleted one.
+
+message PutEntityRequest {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  // If true, the call fails with ALREADY_EXISTS when an entity with the
+  // same (kind, Id) already exists. If false, an existing entry is
+  // replaced.
+  bool create_only = 2;
+  // Optimistic concurrency. If non-empty, the call fails with ABORTED when
+  // the current stored entity's etag differs from this value. Use the
+  // etag returned by a prior GetEntity or PutEntity response. Ignored on
+  // a create (no prior entity to compare against).
+  string if_match = 3;
+  // If true, run validation and reference checks as if writing, but do
+  // not persist. The response echoes the input entity, populates
+  // `validation`, and returns an empty etag because no version was
+  // persisted.
+  bool validate_only = 4;
+  // Idempotency is a store property: when the stored entity is
+  // semantically identical to the proposed one (content equality ignoring
+  // the server-owned `system` block; canonical-JSON comparison, so
+  // nondeterministic proto map encodings compare equal), the write is
+  // skipped -- no new revision, no change event, no mirror commit -- and
+  // the response sets `no_op`. Set `force = true` to overwrite anyway
+  // (e.g. deliberate re-stamp or byte-level repair).
+  bool force = 5;
+  // Idempotency key for this call. When set, a retry that repeats the same
+  // id and the same request replays the stored outcome instead of writing
+  // again; a retry that reuses the id with a different request fails with
+  // ALREADY_EXISTS. Mutually exclusive with validate_only. See
+  // OperationReceipt.
+  string operation_id = 6;
+}
+
+message PutEntityResponse {
+  // The entity as stored, including the server-owned `system` block.
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  // Etag of the persisted entity. Empty when validate_only is true.
+  string etag = 2;
+  // Validation issues for the proposed write. Always populated in
+  // validate_only mode. Outside validate_only mode, populated only when
+  // the server runs synchronous validation as part of the write; an
+  // empty list means no issues were detected.
+  repeated ValidationIssue validation = 3;
+  // True when the write was skipped because the stored entity is
+  // semantically identical (see PutEntityRequest.force). The returned
+  // etag is the existing revision.
+  bool no_op = 4;
+  // Set only when the request carried an operation_id.
+  trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 5;
+}
+
+message DeleteEntityRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  trogonatlas.type.v1alpha1.Id id = 2;
+
+  // What to do about entities that reference the one being deleted.
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    // Default. Fail with FAILED_PRECONDITION if any other entity
+    // references this one. The response's `referrers` field lists the
+    // blocking references; the entity is NOT deleted.
+    MODE_FAIL_IF_REFERENCED = 1;
+    // Delete regardless of referrers. The response's `referrers` field
+    // lists the references that are now dangling so callers can repair
+    // them in a follow-up edit.
+    MODE_FORCE = 2;
+    // Do not delete. Return what would happen: in `referrers`, the set
+    // that would block (under FAIL_IF_REFERENCED) or become orphaned
+    // (under FORCE).
+    MODE_DRY_RUN = 3;
+  }
+  Mode mode = 3;
+
+  // Optimistic concurrency. If non-empty, the call fails with ABORTED
+  // when the current stored entity's etag differs from this value.
+  string if_match = 4;
+
+  // Idempotency key for this call. See PutEntityRequest.operation_id.
+  // Mutually exclusive with MODE_DRY_RUN, which persists nothing.
+  string operation_id = 5;
+}
+
+message DeleteEntityResponse {
+  // References pointing AT the target entity. Semantics depend on mode:
+  //   FAIL_IF_REFERENCED : populated only on failure; blocking references.
+  //                        The entity was not deleted.
+  //   FORCE              : populated with refs that are now dangling.
+  //                        The entity was deleted.
+  //   DRY_RUN            : populated with the would-block / would-orphan
+  //                        set. Nothing was deleted.
+  repeated Reference referrers = 1;
+  // Set only when the request carried an operation_id.
+  trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 2;
+}
+
+// ---------- Batch mutation (atomic multi-entity write) -----------------------
+//
+// Decision #23. One conceptual change often touches several entities;
+// applying them one Put/Delete at a time leaves the model briefly
+// inconsistent. BatchMutate wraps an ordered list of ops in a single
+// apply: every op succeeds or the batch is rolled back. Per-op `if_match`
+// is honored independently. The RPC itself always returns OK; the
+// response's `status` distinguishes success, validate-only success, and
+// per-op failure.
+//
+// Atomicity guarantee: on a single-writer NATS deployment the apply is
+// atomic in the common case. On failure the store performs a best-effort
+// compensating rollback. If rollback itself fails (e.g. a network
+// partition mid-batch), the server returns INTERNAL with a message
+// indicating partial application; the caller must treat the store as
+// potentially inconsistent and contact an operator to reconcile.
+
+// BatchMutateOp and BatchMutateOpResult stay in this file rather than
+// batch.proto: they wrap PutEntityRequest / PutEntityResponse /
+// DeleteEntityRequest / DeleteEntityResponse, which must stay here, so
+// splitting the wrappers out would require service.proto to import
+// batch.proto while batch.proto imports service.proto back -- a cycle.
+message BatchMutateOp {
+  oneof op {
+    PutEntityRequest put = 1;
+    DeleteEntityRequest delete = 2;
+  }
+}
+
+message BatchMutateOpResult {
+  oneof result {
+    PutEntityResponse put = 1;
+    DeleteEntityResponse delete = 2;
+  }
+}
+
+message BatchMutateRequest {
+  // Ops applied in declared order. Order is preserved so that callers
+  // can rely on "delete the old entity after creating its replacement"
+  // sequencing when reading the response; a failure anywhere rolls the
+  // whole batch back. When that rollback cannot finish in line, the RPC
+  // fails with UNAVAILABLE naming the batch journal instead of returning
+  // STATUS_FAILED, and a recovery pass rolls the batch back.
+  repeated BatchMutateOp ops = 1;
+  // If true, every op is treated as validate-only / DRY_RUN regardless
+  // of per-op flags. The response is populated as if executing; nothing
+  // is persisted. Use this to preview a complex change before applying.
+  bool validate_only = 2;
+  // Idempotency key for the whole batch. See PutEntityRequest.operation_id.
+  // Mutually exclusive with validate_only. Setting operation_id on a
+  // nested op (BatchMutateOp.put/delete) is rejected with
+  // INVALID_ARGUMENT: a batch is one unit of idempotency, not several.
+  string operation_id = 3;
+}
+
+message BatchMutateResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    // All ops applied and persisted.
+    STATUS_APPLIED = 1;
+    // validate_only was true; all ops would have applied successfully.
+    // Nothing was persisted.
+    STATUS_VALIDATED = 2;
+    // One op failed; nothing was persisted. See failed_op_index and
+    // failure for diagnostics.
+    STATUS_FAILED = 3;
+  }
+  Status status = 1;
+  // Per-op results. On STATUS_APPLIED / STATUS_VALIDATED: one result per
+  // request op, same order. On STATUS_FAILED: results for ops before the
+  // failure (they would have succeeded but were rolled back); the failed
+  // op's diagnostics are in `failure`.
+  repeated BatchMutateOpResult results = 2;
+  // Zero-based index of the op that failed. Valid only when
+  // status == STATUS_FAILED.
+  int32 failed_op_index = 3;
+  // Diagnostics from the failed op (etag mismatch, validation error,
+  // referrer conflict, etc.). Valid only when status == STATUS_FAILED.
+  repeated ValidationIssue failure = 4;
+  // Set when status == STATUS_FAILED because the failed op's precondition
+  // (`create_only` or `if_match`) no longer holds: the state the caller
+  // planned against has changed. Read fresh state and plan again rather than
+  // retrying the same batch.
+  PreconditionFailure precondition_failure = 5;
+  // Set only when the request carried an operation_id.
+  trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 6;
+}
+
+// Bulk delete by structural query, replacing the "list every entity then
+// build N delete ops" client-side pattern. Filters AND together; unset
+// fields don't filter. Mode is the same enum DeleteEntityRequest uses.
+//
+// Honors the `x-trogon-atlas-branch` metadata header (see the branch context
+// note above): under a branch the victim scan and the referrer gate both read
+// the merged view, and each delete lands as a tombstone delta. A victim that
+// exists only on baseline is hidden from the branch and removed from baseline
+// on merge, never before.
+message DeleteByQueryRequest {
+  // Restrict to one project. Empty = any project.
+  string project = 1;
+  // Restrict to one namespace. Empty = any namespace.
+  string namespace = 2;
+  // Restrict to one kind. ENTITY_KIND_UNSPECIFIED = any kind.
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 3;
+  // Restrict by slug exact-match. Empty = any slug.
+  string slug = 4;
+  // Same semantics as DeleteEntityRequest.Mode.
+  DeleteEntityRequest.Mode mode = 5;
+  // Safety cap: the call is refused when the resolved set is larger than
+  // this. Must be a positive integer: the server rejects 0 (a forgotten cap
+  // must not mean "unlimited") and negative values with INVALID_ARGUMENT.
+  int32 max_deletes = 6;
+}
+
+message DeleteByQueryResponse {
+  message Deleted {
+    trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+    trogonatlas.type.v1alpha1.Id id = 2;
+  }
+  repeated Deleted deleted = 1;
+  // Convenience aggregate.
+  int32 deleted_count = 2;
+  // When mode == MODE_DRY_RUN: nothing was deleted, but `deleted`
+  // lists what WOULD have been.
+  bool dry_run = 3;
+}
+
+// Static catalog of every EntityKind the system stores. Same shape and
+// motivation as ListValidationRules: avoids the per-client three-name
+// map (proto enum string ENTITY_KIND_FOO, JSON discriminator `event`,
+// numeric tag 1).
+message ListEntityKindsRequest {}
+
+message ListEntityKindsResponse {
+  repeated EntityKindInfo kinds = 1;
+}
+
+// Domain-scoped listing: return every entity whose realizes chain
+// traces back to the given Domain (Project once that becomes
+// load-bearing). Saves four client-side getEntity hops (EM → BC →
+// Subdomain → Domain) per filter.
+message ListEntitiesByDomainRequest {
+  // Required. Domain.id to scope by.
+  trogonatlas.type.v1alpha1.Id domain_id = 1;
+  // Optional kinds filter. Empty = all kinds.
+  repeated trogonatlas.eventmodel.v1alpha1.EntityKind kinds = 2;
+  // Pagination.
+  int32 page_size = 3;
+  string page_token = 4;
+  // When true, only the latest version of each (kind, ns, slug) is
+  // included.
+  bool latest_versions_only = 5;
+}
+
+message ListEntitiesByDomainResponse {
+  repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
+  string next_page_token = 2;
+}
+
+
+// ---------- Impact analysis --------------------------------------------------
+//
+// "If I change Event{order.placed v2}, what else is affected?" Walks the
+// reverse-reference index transitively from the root and returns every
+// entity that depends on it, with the path that links them. Refactoring
+// tools use this to scope changes; MCP tools use it before proposing
+// edits to gauge blast radius.
+
+message GetImpactRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityRef root = 1;
+  // Maximum hops from root. 0 = unlimited. Default 0; large models with
+  // dense fan-out should set a bound to keep responses tractable.
+  uint32 max_depth = 2;
+  // Restrict the traversal to entities of these kinds. Empty = all kinds.
+  repeated trogonatlas.eventmodel.v1alpha1.EntityKind filter_kinds = 3;
+  int32 page_size = 4;
+  string page_token = 5;
+}
+
+message GetImpactResponse {
+  // Every entity transitively depending on the root, including the root
+  // at depth 0. Ordered by depth ascending, then canonical Id.
+  repeated ImpactNode nodes = 1;
+  string next_page_token = 2;
+}
+
+// ---------- Bulk reference retargeting (version promotion) -------------------
+//
+// The promotion workflow is: create v+1 with supersedes, call
+// RetargetReferences to rewrite every referrer of the old version in one
+// server-side call, then drain any residual SLICE_STALE_REF findings.
+// This RPC replaces the manual get_incoming_references + batch_mutate loop
+// for the common case where all referrers should be moved to the new version.
+
+// Honors the `x-trogon-atlas-branch` metadata header: under a branch the scan
+// runs over the merged view and every rewrite lands as a branch delta, so a
+// version migration is stageable as one reviewable change set. A referrer
+// visible only on baseline is copied into the branch, since it is still a
+// referrer the branch sees. Baseline is untouched until the merge.
+message RetargetReferencesRequest {
+  // The reference target being replaced. Every stored entity that points at
+  // `from` will have that pointer rewritten to `to`.
+  trogonatlas.eventmodel.v1alpha1.EntityRef from = 1;
+  // The new target. Must be the same EntityKind as `from` (INVALID_ARGUMENT
+  // otherwise) and must already exist in the store (NOT_FOUND otherwise,
+  // checked before any write begins).
+  trogonatlas.eventmodel.v1alpha1.EntityRef to = 2;
+  // When true, compute and return what would change without writing anything.
+  // The response is fully populated; rewritten and failed counts reflect the
+  // dry-run result.
+  bool dry_run = 3;
+  // Restrict which REFERRER kinds are rewritten. Empty means all referrer
+  // kinds are eligible. Only referrers whose EntityKind appears in this list
+  // (when non-empty) are touched; others are left unchanged and do not appear
+  // in `results`.
+  repeated trogonatlas.eventmodel.v1alpha1.EntityKind filter_kinds = 4;
+}
+
+message RetargetReferencesResponse {
+  message Result {
+    // The entity whose stored pointers were examined.
+    trogonatlas.eventmodel.v1alpha1.EntityRef referrer = 1;
+    // Structural field paths inside the referrer where the pointer was
+    // rewritten, using the same path vocabulary as Reference.from_field
+    // (e.g. "emitted_events[2]", "members[0]"). Empty when `error` is set.
+    repeated string fields = 2;
+    // Non-empty when this referrer's write failed. The other referrers are
+    // not affected; the RPC continues and reports each outcome independently.
+    string error = 3;
+  }
+  // One entry per referrer that was examined (matched by the reverse index
+  // and not excluded by filter_kinds). A Result with no fields and no error
+  // means the referrer was found but had no rewritable pointer to `from`
+  // (this should not occur in practice given a correct reverse index, but is
+  // reported for observability).
+  repeated Result results = 1;
+  // Count of referrers whose write succeeded (or would succeed in dry_run).
+  uint32 rewritten = 2;
+  // Count of referrers whose write failed.
+  uint32 failed = 3;
+}
+
+
+// ---------- Diff -------------------------------------------------------------
+//
+// Compare two entities (typically two versions of the same slug, or two
+// candidate variants in a refactor). The response is a typed list of
+// structural changes -- additions, removals, value changes, and engine-
+// guessed renames. Tools render this for human review of model changes.
+
+
+message DiffEntitiesRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityRef a = 1;
+  trogonatlas.eventmodel.v1alpha1.EntityRef b = 2;
+}
+
+message DiffEntitiesResponse {
+  repeated trogonatlas.catalog.v1alpha1.DiffOp ops = 1;
+}
+
+// Durable changeset log: what landed together, who did it, when. See
+// trogonatlas.catalog.v1alpha1 Changeset / ChangesetOp for the stored record
+// these RPCs read.
+message ListChangesetsRequest {
+  // Exclusive cursor: return only changesets ordered strictly before this
+  // id. Empty = start from the newest. Pass back `next_page_token`.
+  string page_token = 1;
+  // Defaults to 50, capped at 500.
+  int32 page_size = 2;
+  // Restrict to changesets that touched this branch. Empty = every
+  // changeset, baseline and branch alike.
+  string branch = 3;
+}
+
+message ListChangesetsResponse {
+  // Newest first.
+  repeated trogonatlas.catalog.v1alpha1.Changeset changesets = 1;
+  // Empty when there is no further page.
+  string next_page_token = 2;
+}
+
+message GetChangesetRequest {
+  string id = 1;
+}
+
+message GetChangesetResponse {
+  trogonatlas.catalog.v1alpha1.Changeset changeset = 1;
+}
+
+// Reads the revision log for one entity, newest first. Honors the
+// `x-trogon-atlas-branch` metadata header: baseline history and a branch's
+// own history are separate logs, because a branch write never touches
+// baseline.
+message GetEntityHistoryRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityRef ref = 1;
+  // Exclusive cursor: return only revisions ordered strictly before this
+  // changeset id. Empty = start from the newest. Pass back
+  // `next_page_token`.
+  string page_token = 2;
+  // Defaults to 50, capped at 500.
+  int32 page_size = 3;
+}
+
+message GetEntityHistoryResponse {
+  // Newest first.
+  repeated trogonatlas.catalog.v1alpha1.EntityRevision revisions = 1;
+  // Empty when there is no further page.
+  string next_page_token = 2;
+}
+
+// Undo a changeset by writing its inverse through the ordinary write path,
+// so the revert validates like any other write and is itself a changeset.
+// Nothing is rewritten or removed from history: reverting a revert is just
+// another revert.
+//
+// All-or-nothing. Refuses with FAILED_PRECONDITION when any op in the
+// changeset has no recorded revision, since the prior content is then
+// unknown and a guess would be worse than a refusal.
+message RevertChangesetRequest {
+  // The changeset to undo.
+  string id = 1;
+  // Compute the inverse and report it without writing anything.
+  bool dry_run = 2;
+  // Idempotency key for this call. See PutEntityRequest.operation_id.
+  // Mutually exclusive with dry_run.
+  string operation_id = 3;
+}
+
+message RevertChangesetResponse {
+  // Every entity the revert restored or removed, in application order.
+  repeated trogonatlas.catalog.v1alpha1.ChangesetOp ops = 1;
+  // The new changeset that performed the revert. Empty on a dry run.
+  string changeset_id = 2;
+  bool dry_run = 3;
+  // Set only when the request carried an operation_id.
+  trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 4;
+}
+
+// See trogonatlas.catalog.v1alpha1 OperationReceipt for the durable receipt
+// record these RPCs read, and GetOperationResponse.status below for its
+// lifecycle states.
+enum OperationStatus {
+  OPERATION_STATUS_UNSPECIFIED = 0;
+  // Claimed, not yet settled. A concurrent call with the same id and digest
+  // should back off rather than retry immediately.
+  OPERATION_STATUS_PENDING = 1;
+  // The mutation completed and produced the given changeset.
+  OPERATION_STATUS_APPLIED = 2;
+  // The mutation completed and failed; retrying with the same id and the
+  // same request replays the same failure.
+  OPERATION_STATUS_REJECTED = 3;
+  // The claim was abandoned (e.g. the server stopped before finishing) and
+  // nothing was ever applied under this id. The same id may be reused.
+  OPERATION_STATUS_NOT_APPLIED = 4;
+  // No claim exists for this id under this caller, or the mutation it
+  // guarded keeps no durable receipt (branch-scoped writes).
+  OPERATION_STATUS_UNKNOWN = 5;
+}
+
+message GetOperationRequest {
+  string operation_id = 1;
+}
+
+message GetOperationResponse {
+  OperationStatus status = 1;
+  // Set when status == OPERATION_STATUS_APPLIED.
+  string changeset_id = 2;
+  // Set when status == OPERATION_STATUS_REJECTED: the gRPC status code name
+  // (e.g. "ALREADY_EXISTS") and message the original call returned.
+  string rejection_code = 3;
+  string rejection_message = 4;
+}
+
+// ---------- Change feed (polling) --------------------------------------------
+//
+// MCP tools issue unary RPCs; long-lived streams complicate tool
+// semantics. Instead of a streaming watch, the service exposes a
+// poll-based change feed (Decision #19). Callers store the returned
+// `next_token` and pass it back on the next call. The token is opaque --
+// do not parse it; treat it as a resumable cursor. Events are
+// trogonatlas.catalog.v1alpha1.ChangeEvent.
+
+message ListChangesRequest {
+  // Empty token = the service returns no events but a current cursor;
+  // pass that cursor on subsequent calls to get changes from that point
+  // onward. Use this on first connect to "start watching from now."
+  //
+  // A token beyond the store's current sequence returns an empty page (not
+  // an error). Clients that poll ahead of the write frontier receive empty
+  // pages until new writes arrive; the echoed next_token can be used to
+  // resume polling.
+  string since_token = 1;
+  // Restrict to changes within these scopes. Empty = global.
+  repeated AnalysisScope scopes = 2;
+  int32 page_size = 3;
+}
+
+message ListChangesResponse {
+  repeated trogonatlas.catalog.v1alpha1.ChangeEvent events = 1;
+  string next_token = 2;
+}
+
+// Server-streaming variant of ListChanges for non-MCP consumers that
+// want push semantics instead of polling. MCP adapters should keep using
+// ListChanges (Decision #19); this RPC exists so gRPC-native agents and
+// dashboards can react to writes without a poll loop.
+//
+// Resume semantics mirror ListChanges:
+//   - empty `after_token` = start from now, replay nothing.
+//   - non-empty token = replay every change strictly after that cursor, then
+//     transition into live mode.
+//
+// Each emitted ChangeEvent carries its own `token`; clients persist the
+// last received token and pass it back on reconnect.
+message StreamChangesRequest {
+  // Resume cursor. Empty = from now (no replay).
+  string after_token = 1;
+  // Restrict to a single namespace. Empty = all namespaces.
+  string namespace = 2;
+  // Restrict to a single entity kind. ENTITY_KIND_UNSPECIFIED = all kinds.
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 3;
+}
+
+// ---------- Server discovery (capabilities, limits, namespaces) --------------
+//
+// MCP adapters bootstrap against an unknown server implementation
+// (Decision #22). These RPCs let a tool ask the server "what do you
+// support and what should I expect?" before issuing real work.
+
+message GetServerInfoRequest {}
+
+message GetServerInfoResponse {
+  // Stable identifier for the schema this server implements. Matches the
+  // proto package, e.g. "trogonatlas.eventmodel.v1alpha1". A mismatch with what
+  // the client expects is a configuration error on one side.
+  string schema_version = 1;
+
+  // Implementation-defined version string for the server binary. Free
+  // form; tools should not parse semantically.
+  string server_version = 2;
+
+  // Which optional RPCs the server actually implements. Absence does NOT
+  // mean the RPC is missing from the service -- it means the server will
+  // return UNIMPLEMENTED if called. Clients should probe here rather
+  // than catching that error.
+  message Features {
+    bool search = 1;                          // SearchEntities
+    bool change_feed = 2;                     // ListChanges
+    bool infer_data_flow = 3;                 // InferDataFlow
+    bool check_information_completeness = 4;  // CheckInformationCompleteness
+    bool diff_entities = 5;                   // DiffEntities
+    bool impact_analysis = 6;                 // GetImpact
+    bool extract_subgraph = 7;                // ExtractSubgraph
+    bool supersession_descendants = 8;        // GetSupersessionChain reverse index
+    // The flags below gate request semantics an older server would silently
+    // drop as unknown fields or metadata, turning the request into a
+    // different operation. A server that predates a flag reports false,
+    // which is exactly the answer a client needs before mutating.
+    bool mutations = 9;                       // PutEntity, DeleteEntity, BatchMutate, branch writes
+    bool validate_only = 10;                  // validate_only / DRY_RUN never persist
+    bool branch_scoped_requests = 11;         // x-trogon-atlas-branch metadata is honored
+    bool state_preconditions = 12;            // BatchGetEntities etags, BatchMutate precondition_failure, ResolveBranchEntry expected_state
+    bool operation_receipts = 13;             // operation_id / OperationReceipt / GetOperation
+    bool single_writer_fencing = 14;          // writer_status is populated; mutations fence on a lease
+    bool namespace_grants = 15;               // ListChangesets, GetChangeset, ListBranches, DiffBranch, StreamChanges filter by namespace visibility instead of refusing a bound caller outright
+    bool owned_branches = 16;                 // "@owner:name" branches are attributed to an owner for delegation and filtering
+    bool who_am_i = 17;                       // WhoAmI; MCP tool listing is filtered by the caller's role
+    bool type_libraries = 18;                 // CompileTypeLibrary, ResolveType, GetTypeLibraryDescriptorSet
+  }
+  Features features = 3;
+
+  // Numeric limits the server applies. Clients use these to size their
+  // requests appropriately and to know when a single call cannot return
+  // everything they need.
+  message Limits {
+    int32 max_page_size = 1;            // ListEntities, SearchEntities
+    int32 default_page_size = 2;
+    uint32 max_impact_depth = 3;        // GetImpact.max_depth ceiling
+    int32 max_projection_entities = 4;  // projection RPCs may truncate beyond
+    int32 max_batch_get_keys = 5;       // BatchGetEntities upper bound
+    int32 max_change_feed_page = 6;     // ListChanges.page_size ceiling
+    uint32 operation_retention_seconds = 7; // how long a GetOperation receipt stays readable
+  }
+  Limits limits = 4;
+
+  // Monotonic revision of the wire contract within `schema_version`. It
+  // rises when a release adds request semantics a client may depend on.
+  // Zero means the server predates contract revisions.
+  uint32 contract_revision = 5;
+
+  // Oldest client contract revision this server accepts mutations from. A
+  // client whose own revision is lower must refuse to mutate rather than
+  // send requests the server would interpret differently.
+  uint32 min_client_contract_revision = 6;
+
+  // This process's posture in the single-writer lease (see
+  // `docs/explanation/single-writer.md`). Unset on a server predating
+  // `features.single_writer_fencing`.
+  enum WriterRole {
+    WRITER_ROLE_UNSPECIFIED = 0;
+    // Holds the lease; mutations proceed.
+    WRITER_ROLE_WRITER = 1;
+    // Configured to compete for the lease but does not currently hold it;
+    // mutations are refused with NOT_WRITER.
+    WRITER_ROLE_STANDBY = 2;
+    // Never competes for the lease; mutations are always refused with
+    // NOT_WRITER.
+    WRITER_ROLE_READER = 3;
+  }
+
+  message WriterStatus {
+    WriterRole role = 1;
+    // Monotonically increasing; bumped each time the lease changes hands.
+    uint64 epoch = 2;
+    // Opaque id of the process that last held (or currently holds) the
+    // lease. Empty when no backend-tracked holder exists.
+    string lease_holder = 3;
+  }
+  WriterStatus writer_status = 7;
+}
+
+// See trogonatlas.catalog.v1alpha1 NamespaceRecord for the registry row these
+// RPCs read and write.
+message ListNamespacesRequest {}
+
+message ListNamespacesResponse {
+  message Namespace {
+    string name = 1;
+    // Approximate count of entities (any kind, any version) in this
+    // namespace. Need not be exact; intended for UI hints.
+    uint32 entity_count = 2;
+    // Registry identity. Empty when the namespace holds entities but has no
+    // registry row, which can only happen on a store whose backfill has not
+    // been run.
+    string id = 3;
+    string parent = 4;
+  }
+  repeated Namespace namespaces = 1;
+}
+
+message RegisterNamespaceRequest {
+  // Human label to claim. Must be unused within the caller's `parent`.
+  string name = 1;
+  // Owning node. Empty means the caller's own node, which is the only value
+  // a non-admin may use.
+  string parent = 2;
+}
+
+message RegisterNamespaceResponse {
+  trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
+  // False when the name was already registered to this same parent, in which
+  // case `namespace` is the existing row. Registering is idempotent so a
+  // client that retries after a timeout does not get a spurious failure.
+  bool created = 2;
+}
+
+message MoveNamespaceRequest {
+  // Namespace id, not name: a move crosses an ownership boundary, and names
+  // are only unique inside one.
+  string id = 1;
+  // Node to move it to.
+  string parent = 2;
+}
+
+message MoveNamespaceResponse {
+  trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
+}
+
+// ---------- Caller identity ---------------------------------------------------
+//
+// Lets a caller learn who it is authenticated as before attempting
+// role-gated work. An MCP agent calls this once after GetServerInfo so it
+// can skip offering tools its own role could never call, instead of
+// discovering the ceiling one PERMISSION_DENIED at a time.
+
+message WhoAmIRequest {}
+
+// Mirrors `trogon_atlas_server::auth::PrincipalKind`.
+enum PrincipalKind {
+  PRINCIPAL_KIND_UNSPECIFIED = 0;
+  PRINCIPAL_KIND_USER = 1;
+  PRINCIPAL_KIND_AGENT = 2;
+}
+
+// Mirrors `trogon_atlas_server::auth::Role`. Ordered: a numerically larger
+// value is strictly more privileged.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_READER = 1;
+  ROLE_WRITER = 2;
+  ROLE_ADMIN = 3;
+}
+
+message WhoAmIResponse {
+  string name = 1;
+  PrincipalKind kind = 2;
+  Role role = 3;
+  // The namespaces this principal may write. Empty means unrestricted (every
+  // namespace), same convention as the token registry's `namespaces` field.
+  repeated string namespaces = 4;
+  // The ownership node this principal is bound to. Empty when the principal
+  // has no owner boundary.
+  string owner = 5;
+  // True for the synthetic principal auth-disabled mode authenticates every
+  // caller as. Mirrors `Principal.is_anonymous`.
+  bool anonymous = 6;
+}
+
+// ---------- Snapshot identity ------------------------------------------------
+//
+// A content-addressable name for "the model as of now". Answers three
+// questions the per-entity etag cannot: pin the state a report or CI run
+// described, detect "did anything change" without walking the change feed,
+// and say which entities differ between two moments.
+//
+// Scoped by the `x-trogon-atlas-branch` metadata header like every other read
+// RPC, so a branch's merged view has its own identity.
+//
+// Identity is over CONTENT, not storage bookkeeping: the server-owned
+// `system` block (uid, created_at) and the etag are excluded, so restoring a
+// model from a manifest reproduces its snapshot id.
+
+message GetSnapshotIdRequest {
+  // Restrict the snapshot to these namespaces. Empty means every namespace.
+  // Two snapshot ids are comparable only when computed over the same
+  // namespace scope.
+  repeated string namespaces = 1;
+  // Include the per-entity hashes in the response. Off by default: the
+  // whole point of the id is that change detection needs one string. Turn
+  // it on to locate *which* entities differ between two ids.
+  bool include_entries = 2;
+}
+
+message GetSnapshotIdResponse {
+  // Lowercase hex SHA-256 over the whole `(key, content_hash)` set. Equal
+  // ids mean equal content under the same namespace scope; unequal ids mean
+  // something changed.
+  string snapshot_id = 1;
+  uint32 entity_count = 2;
+  // True when the server's view hit its entity cap, so this id names a
+  // partial state. Do not compare a truncated id against anything.
+  bool truncated = 3;
+  // Populated only when `include_entries` was set. Sorted by `key`.
+  repeated trogonatlas.catalog.v1alpha1.SnapshotEntry entries = 4;
+}
+
+// ---------- Branching (Phase 1: Isolation) -----------------------------------
+//
+// See the "Branch context" note at the top of this file for how branch
+// scope travels on every other RPC (gRPC metadata, not a message field).
+// These three RPCs manage branch lifecycle only.
+
+message CreateBranchRequest {
+  string name = 1;
+  string doc = 2;
+}
+
+message CreateBranchResponse {
+  trogonatlas.catalog.v1alpha1.BranchInfo branch = 1;
+}
+
+message ListBranchesRequest {}
+
+message ListBranchesResponse {
+  repeated trogonatlas.catalog.v1alpha1.BranchInfo branches = 1;
+}
+
+message DeleteBranchRequest {
+  string name = 1;
+}
+
+message DeleteBranchResponse {}
+
+// ---------- Branching (Phase 2: Review and merge) ----------------------------
+//
+// See docs/explanation/branching.md, "Merge conflicts", for the full
+// semantics summarized here.
+
+message DiffBranchRequest {
+  string name = 1;
+}
+
+message DiffBranchResponse {
+  repeated trogonatlas.catalog.v1alpha1.BranchDiffEntry entries = 1;
+  trogonatlas.catalog.v1alpha1.BranchAncestry ancestry = 2;
+}
+
+message MergeBranchRequest {
+  string name = 1;
+  // When true, run full conflict detection and post-merge validation but
+  // persist nothing (neither to baseline nor to the branch).
+  bool dry_run = 2;
+  // When false (the default), a successful non-dry-run merge deletes the
+  // branch. When true, the branch (now empty of deltas) is kept.
+  bool keep_branch = 3;
+  // When true, a STATUS_CONFLICT_EDIT_EDIT entry carrying `auto_merged`
+  // stops being a conflict and lands that merged entity instead of `ours`.
+  // Entries whose sides collided on a field path stay conflicts either way,
+  // as do the edit/delete and delete/edit classes: neither has a field-level
+  // reading, only a choice between keeping and dropping the key.
+  //
+  // Off by default. Combining two authors' edits without either of them
+  // seeing the result is a judgement call, so the caller makes it.
+  bool auto_merge = 4;
+  // Idempotency key for this call. See PutEntityRequest.operation_id.
+  // Mutually exclusive with dry_run.
+  string operation_id = 5;
+}
+
+message MergeBranchResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    // Landed on baseline (and the branch was deleted unless keep_branch).
+    STATUS_APPLIED = 1;
+    // dry_run was true; the merge would have applied cleanly. Nothing
+    // was persisted.
+    STATUS_VALIDATED = 2;
+    // At least one entry is a conflict class; nothing was persisted.
+    // See `conflicts`.
+    STATUS_CONFLICTS = 3;
+    // No conflicts, but the post-merge world fails validation with at
+    // least one Error-severity issue; nothing was persisted. See
+    // `validation`.
+    STATUS_INVALID = 4;
+  }
+  Status status = 1;
+  repeated trogonatlas.catalog.v1alpha1.BranchDiffEntry conflicts = 2;
+  repeated ValidationIssue validation = 3;
+  // Number of non-CONVERGED entries actually landed on baseline.
+  uint32 applied_count = 4;
+  // Set only when the request carried an operation_id.
+  trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 5;
+}
+
+message UpdateBranchRequest {
+  string name = 1;
+}
+
+message UpdateBranchResponse {
+  // Number of the branch's delta rows whose recorded `base`/`base_etag`
+  // were advanced to the current baseline (CONVERGED entries: the delta
+  // is dropped since baseline already matches `ours`; non-conflicting
+  // entries: `base`/`base_etag` are rebased forward).
+  uint32 rebased_count = 1;
+  repeated trogonatlas.catalog.v1alpha1.BranchDiffEntry conflicts = 2;
+  // The branch's fork point after this call. It advances to the newest
+  // baseline changeset only when `conflicts` is empty: a branch with an
+  // unresolved conflict has not caught up, and claiming otherwise would make
+  // the pointer lie. Unchanged from the previous value in that case.
+  string fork_changeset_id = 3;
+}
+
+message ResolveBranchEntryRequest {
+  string name = 1;
+  trogonatlas.eventmodel.v1alpha1.EntityRef ref = 2;
+  enum Resolution {
+    RESOLUTION_UNSPECIFIED = 0;
+    // Overwrite the branch's delta with the current baseline content
+    // (or remove the delta entirely if baseline no longer has the key).
+    RESOLUTION_TAKE_THEIRS = 1;
+    // Keep the branch's current value, rebasing `base`/`base_etag`
+    // forward to the current baseline so the conflict clears.
+    RESOLUTION_KEEP_OURS = 2;
+    // Take the entry's `auto_merged` entity as the branch's new value,
+    // rebasing `base`/`base_etag` forward so the conflict clears. Fails
+    // with FAILED_PRECONDITION when the entry has no structural merge,
+    // since there is then nothing to take.
+    RESOLUTION_TAKE_MERGED = 3;
+  }
+  Resolution resolution = 3;
+  // The entry state the resolution was decided against, as reported in
+  // BranchDiffEntry.state. When set, the call fails with ABORTED if the
+  // entry's current state differs, so a delayed decision cannot act on
+  // content it never inspected. When unset, the resolution applies to
+  // whatever the entry holds at call time.
+  trogonatlas.catalog.v1alpha1.BranchEntryState expected_state = 4;
+  // Idempotency key for this call. See PutEntityRequest.operation_id. Branch
+  // writes keep no journal, so GetOperation always reports
+  // OPERATION_STATUS_UNKNOWN for an id used here; replay within this call is
+  // still honored for the lifetime of the claim record.
+  string operation_id = 5;
+}
+
+message ResolveBranchEntryResponse {
+  // Set only when the request carried an operation_id.
+  trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 1;
+}
+
+// =============================================================================
+// EventModelService
+// =============================================================================
+//
+// The single contract surface. An MCP tool maps each MCP tool-call onto one
+// RPC here (often the projection RPCs, since they hand back a self-contained
+// subgraph that the LLM can reason over without further round-trips).
+//
+// Operation grouping:
+//   - GetServerInfo / ListNamespaces     : bootstrap (Decision #22)
+//   - GetEntity / BatchGetEntities       : direct lookup
+//   - ListEntities / SearchEntities      : discovery
+//   - ListVersions / GetLatestVersion /
+//     GetSupersessionChain               : version navigation
+//   - GetIncomingReferences /
+//     GetOutgoingReferences /
+//     GetImpact                          : graph edges + transitive closure
+//   - GetSliceProjection /
+//     GetStoryboardProjection /
+//     GetEventModelProjection /
+//     ExtractSubgraph                    : denormalized subgraphs
+//   - DiffEntities                       : structural comparison
+//   - PutEntity / DeleteEntity /
+//     BatchMutate                        : mutation w/ etag + dry-run
+//                                          (BatchMutate is atomic across ops)
+//   - ListChanges                        : poll-based change feed (Decision #19)
+//   - ValidateEventModel                 : structural + edge-rule checks
+//   - InferDataFlow /
+//     CheckInformationCompleteness       : AI-driven analysis (no mutation)
+//   - CreateBranch / ListBranches /
+//     DeleteBranch                       : branch lifecycle (Phase 1: Isolation)
+
+service EventModelService {
+  // Bootstrap. Clients SHOULD call GetServerInfo on connect to learn
+  // which optional features and limits apply (Decision #22).
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
+  rpc ListNamespaces(ListNamespacesRequest) returns (ListNamespacesResponse);
+  // Caller identity. Reader-level: any authenticated principal may learn
+  // its own role, namespaces, and owner boundary.
+  rpc WhoAmI(WhoAmIRequest) returns (WhoAmIResponse);
+  // Namespace registry. Registering claims a human name under an ownership
+  // node and mints the immutable id that storage keys use; moving re-parents
+  // an existing namespace without touching a single entity.
+  rpc RegisterNamespace(RegisterNamespaceRequest) returns (RegisterNamespaceResponse);
+  rpc MoveNamespace(MoveNamespaceRequest) returns (MoveNamespaceResponse);
+  // Content-addressable identity of the current state. Branch-scoped via
+  // the `x-trogon-atlas-branch` header like every other read.
+  rpc GetSnapshotId(GetSnapshotIdRequest) returns (GetSnapshotIdResponse);
+
+  // Direct lookup.
+  rpc GetEntity(GetEntityRequest) returns (GetEntityResponse);
+  rpc BatchGetEntities(BatchGetEntitiesRequest) returns (BatchGetEntitiesResponse);
+
+  // Discovery.
+  rpc ListEntities(ListEntitiesRequest) returns (ListEntitiesResponse);
+  rpc SearchEntities(SearchEntitiesRequest) returns (SearchEntitiesResponse);
+  // Versioning.
+  rpc ListVersions(ListVersionsRequest) returns (ListVersionsResponse);
+  rpc GetLatestVersion(GetLatestVersionRequest) returns (GetLatestVersionResponse);
+  rpc GetSupersessionChain(GetSupersessionChainRequest) returns (GetSupersessionChainResponse);
+
+  // Graph traversal across typed Refs/Edges.
+  rpc GetIncomingReferences(GetReferencesRequest) returns (GetReferencesResponse);
+  rpc GetOutgoingReferences(GetReferencesRequest) returns (GetReferencesResponse);
+  // Transitive reverse-reference closure: "what depends on this?"
+  rpc GetImpact(GetImpactRequest) returns (GetImpactResponse);
+  // Rewrite every stored reference to `from` so it points at `to`. Used as
+  // the rewire step in the promotion workflow: create v+1 with supersedes,
+  // call retarget_references (dry_run first to preview), then drain any
+  // residual SLICE_STALE_REF findings. For partial migrations or when only
+  // a subset of referrers should move, fall back to get_incoming_references
+  // + batch_mutate.
+  rpc RetargetReferences(RetargetReferencesRequest) returns (RetargetReferencesResponse);
+
+  // Denormalized projections. These are the primary RPCs for MCP tools.
+  rpc GetSliceProjection(GetSliceProjectionRequest) returns (GetSliceProjectionResponse);
+  rpc GetStoryboardProjection(GetStoryboardProjectionRequest) returns (GetStoryboardProjectionResponse);
+  rpc GetEventModelProjection(GetEventModelProjectionRequest) returns (GetEventModelProjectionResponse);
+  // Closure-as-new-model: extract a slice/storyboard's reachable graph
+  // into a fresh, self-contained EventModel.
+  rpc ExtractSubgraph(ExtractSubgraphRequest) returns (ExtractSubgraphResponse);
+
+  // Structural comparison of two entities (typically two versions).
+  rpc DiffEntities(DiffEntitiesRequest) returns (DiffEntitiesResponse);
+
+  // Mutation. PutEntity / DeleteEntity are single-entity. BatchMutate is
+  // atomic across an ordered list of ops (Decision #23).
+  rpc PutEntity(PutEntityRequest) returns (PutEntityResponse);
+  rpc DeleteEntity(DeleteEntityRequest) returns (DeleteEntityResponse);
+  rpc BatchMutate(BatchMutateRequest) returns (BatchMutateResponse);
+
+  // Poll-based change feed (Decision #19: unary, not streaming).
+  rpc ListChanges(ListChangesRequest) returns (ListChangesResponse);
+
+  // Server-streaming change feed for non-MCP consumers. Same data as
+  // ListChanges, push semantics. MCP adapters should prefer ListChanges.
+  rpc StreamChanges(StreamChangesRequest) returns (stream trogonatlas.catalog.v1alpha1.ChangeEvent);
+
+  // Durable changeset log: what landed together, who did it, when. Unlike
+  // the change feed these records do not expire and are not dropped when a
+  // publish fails.
+  rpc ListChangesets(ListChangesetsRequest) returns (ListChangesetsResponse);
+  rpc GetChangeset(GetChangesetRequest) returns (GetChangesetResponse);
+  // Per-entity edit log and undo. See docs/explanation/changesets.md.
+  rpc GetEntityHistory(GetEntityHistoryRequest) returns (GetEntityHistoryResponse);
+  rpc RevertChangeset(RevertChangesetRequest) returns (RevertChangesetResponse);
+
+  // Look up the receipt for an operation_id this caller claimed on a prior
+  // mutation call. Scoped to the calling principal.
+  rpc GetOperation(GetOperationRequest) returns (GetOperationResponse);
+
+  // Validation.
+  rpc ValidateEventModel(ValidateEventModelRequest) returns (ValidateEventModelResponse);
+  // Returns the static catalog of every rule the validator can emit.
+  // Stable across runs; the only thing that changes is the codebase
+  // version. Use this to drive UI legends, doc links, and CI severity
+  // gates.
+  rpc ListValidationRules(ListValidationRulesRequest) returns (ListValidationRulesResponse);
+  // Validate every EventModel in a project (or domain) in one call.
+  rpc ValidateProject(ValidateProjectRequest) returns (ValidateProjectResponse);
+
+  // Bulk delete by structural query (project/namespace/kind/slug). One
+  // call replaces the "list-then-batch" client-side pattern.
+  rpc DeleteByQuery(DeleteByQueryRequest) returns (DeleteByQueryResponse);
+
+  // Static catalog of every EntityKind the system stores.
+  rpc ListEntityKinds(ListEntityKindsRequest) returns (ListEntityKindsResponse);
+
+  // List every entity scoped to a Domain (walks the EM->BC->Subdomain->Domain
+  // realizes chain server-side so clients don't have to).
+  rpc ListEntitiesByDomain(ListEntitiesByDomainRequest) returns (ListEntitiesByDomainResponse);
+
+  // Analysis. The AI does the heavy lifting; humans review the gaps it
+  // surfaces. Neither RPC mutates the model.
+  rpc InferDataFlow(InferDataFlowRequest) returns (InferDataFlowResponse);
+  rpc CheckInformationCompleteness(CheckInformationCompletenessRequest) returns (CheckInformationCompletenessResponse);
+
+  // Branch lifecycle (Phase 1: Isolation). See the "Branch context" note
+  // near the top of this file for how every other RPC picks up branch scope.
+  rpc CreateBranch(CreateBranchRequest) returns (CreateBranchResponse);
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse);
+  rpc DeleteBranch(DeleteBranchRequest) returns (DeleteBranchResponse);
+
+  // Branch review and merge (Phase 2). `name` is an explicit request field,
+  // like the three lifecycle RPCs above, since these operate ON a named
+  // branch rather than being scoped BY a branch context.
+  rpc DiffBranch(DiffBranchRequest) returns (DiffBranchResponse);
+  rpc MergeBranch(MergeBranchRequest) returns (MergeBranchResponse);
+  rpc UpdateBranch(UpdateBranchRequest) returns (UpdateBranchResponse);
+  rpc ResolveBranchEntry(ResolveBranchEntryRequest) returns (ResolveBranchEntryResponse);
+
+  // Tenant type libraries, compiled from their stored source on demand.
+  rpc CompileTypeLibrary(CompileTypeLibraryRequest) returns (CompileTypeLibraryResponse);
+  rpc ResolveType(ResolveTypeRequest) returns (ResolveTypeResponse);
+  rpc GetTypeLibraryDescriptorSet(GetTypeLibraryDescriptorSetRequest) returns (GetTypeLibraryDescriptorSetResponse);
+}

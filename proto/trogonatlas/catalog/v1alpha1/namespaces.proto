@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package trogonatlas.catalog.v1alpha1;
+
+// ---------- Namespace registry -----------------------------------------------
+//
+// A namespace has three separable properties that the pre-registry design
+// collapsed into one free-form string:
+//
+//   id      immutable, globally unique, and the thing storage keys are built
+//           from. Server-minted; a caller can never choose one.
+//   name    the human label. Unique only within one `parent`, which is what
+//           lets two owners each have a namespace called "orders".
+//   parent  position in the ownership hierarchy (ADR#6310044131). Mutable.
+//
+// Because the id is in the storage key and the name is not, renaming a
+// namespace or moving it to a different owner rewrites one registry row and
+// zero entity rows.
+//
+// Ids minted after the registry shipped look like `ns_0199…`. Ids belonging
+// to namespaces that predate it are the bare namespace name, because those
+// keys were already written that way and adopting them costs no rewrite. Both
+// are opaque below the registry.
+//
+// See trogonatlas.api.eventmodel.v1alpha1 ListNamespacesRequest / RegisterNamespaceRequest
+// / MoveNamespaceRequest for the RPCs that read and write this registry.
+message NamespaceRecord {
+  // Immutable. `ns_` + 32 lowercase hex (UUIDv7) when minted; a bare legacy
+  // namespace name when adopted by the registry migration.
+  string id = 1;
+  // Human label. Unique per `parent`, not globally.
+  string name = 2;
+  // Owning hierarchy node. The one mutable field, and the only thing a
+  // move writes.
+  string parent = 3;
+  // RFC3339 timestamp.
+  string created_at = 4;
+  // Authenticated principal that claimed the namespace, or `migration` for
+  // rows the registry backfill created.
+  string created_by = 5;
+  // Branch holding this row open, or empty when the row is permanent.
+  //
+  // A namespace enters the registry on its first write, and that write is
+  // either on baseline or on a branch. Baseline work is public the moment it
+  // lands, so the row naming its owner is public too and outlives every
+  // branch. Branch work is invisible outside its branch and disappears when
+  // the branch is deleted, so a row created to hold it disappears with it.
+  // Deleting the branch releases the row; merging the branch clears this
+  // field. Without the distinction, starting a branch and abandoning it would
+  // reserve a namespace name globally and forever.
+  string provisional_branch = 6;
+}

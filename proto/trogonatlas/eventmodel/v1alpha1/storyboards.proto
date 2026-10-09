@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/edges.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/moments.proto";
+import "trogonatlas/eventmodel/v1alpha1/slices.proto";
+import "trogonatlas/eventmodel/v1alpha1/scenarios.proto";
+message StoryboardRef {
+  trogonatlas.type.v1alpha1.Id id = 1;
+}
+
+// Where a storyboard begins. Always a ReadModel being observed, plus the
+// observer doing the observing. This is the universal trigger shape:
+//   - HumanObserver covers UI-driven storyboards (the UI renders the
+//     ReadModel; the persona reacts to what they see).
+//   - AutomationObserver covers processor-driven storyboards, including
+//     external systems (ReadModel with ExternalSource) and schedules
+//     (a Clock-style ReadModel).
+message StoryboardEntry {
+  ReadModelEdge read_model = 1; // what is being observed
+  oneof observer {
+    HumanObserver human = 2;
+    AutomationObserver automation = 3;
+  }
+
+  message HumanObserver {
+    PersonaEdge persona = 1;
+    UIEdge ui = 2;
+  }
+
+  message AutomationObserver {
+    ProcessorEdge processor = 1;
+  }
+}
+
+// Where a storyboard ends. Events are primary -- they are the authoritative
+// new facts produced. A UI rendering is optional and downstream of the
+// events; included here only to anchor closed-loop "user sees the result"
+// stories without re-deriving them by traversal.
+// Forks in the road are NOT declared here: the storyboard fork graph is
+// derived from Swimlane.transitions (the stream's lifecycle decides which
+// outcome events have alternative successors, and which storyboards emit
+// them). Storyboards stay pure narrative.
+message StoryboardOutcome {
+  repeated EventEdge events = 1;
+  UIEdge ui = 2;                // optional: UI shown after the events land
+}
+
+// One step in a trace, pinned to a slice in the storyboard, with concrete
+// data appropriate to that slice's kind.
+message TraceStep {
+  SliceRef slice = 1;
+  oneof execution {
+    CommandStepExec command = 2;
+    ReadModelStepExec read_model = 3;
+    AutomationStepExec automation = 4;
+  }
+}
+
+// Concrete execution of a CommandSlice step: the command issued + its result.
+message CommandStepExec {
+  CommandExample command = 1;
+  oneof result {
+    EmittedEvents emit = 2;
+    Rejection reject = 3;
+  }
+}
+
+// Concrete execution of a ReadModelSlice step: the resulting read model
+// state at this point in the trace. The events that produced this state are
+// the emissions of earlier steps in the same trace.
+message ReadModelStepExec {
+  ReadModelExample state = 1;
+}
+
+// Concrete execution of an AutomationSlice step: the read model(s) the
+// processor observed + the single command it issued. emitted is unset when
+// the correct outcome was "do nothing".
+message AutomationStepExec {
+  repeated ReadModelExample observed = 1;
+  CommandExample emitted = 2;
+}
+
+message StoryboardTrace {
+  string id = 1;
+  string title = 2;
+  string doc = 3;
+
+  // Optional shared data bag -- concrete values that appear across multiple
+  // steps. Useful for trace-wide identifiers (OrderId, CustomerId, etc.).
+  // The exact message type depends on the trace's domain and is supplied by
+  // codegen or by a generic value carrier; Any keeps the schema flexible.
+  google.protobuf.Any data = 4;
+
+  // What the entry observer is looking at when the storyboard begins. Pins
+  // the storyboard's StoryboardEntry.read_model to a concrete state.
+  ReadModelExample initial_observed = 5;
+
+  // Ordered steps. Each step pins one slice to concrete data. A slice may
+  // appear multiple times if the storyboard revisits it.
+  repeated TraceStep steps = 6;
+}
+
+// An ordered, left-to-right narrative of slices. In Event Modeling parlance,
+// this is the "storyboard" that tells a coherent story (a feature, a user
+// journey, an end-to-end scenario) across the model.
+message Storyboard {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  StoryboardEntry entry = 4;
+  StoryboardOutcome outcome = 5;
+  repeated SliceRef slices = 6; // ordered
+  repeated StoryboardTrace traces = 7;
+  repeated google.protobuf.Any metadata = 8;
+  trogonatlas.type.v1alpha1.Id supersedes = 9;
+}
+
+// An EventModel is a named, versioned, curated listing of entities that
+// conceptually belong together -- a feature, a flow, a release, an entire
+// product. A namespace may hold MANY event models; the context's root
+// document is the BoundedContext entity. It is itself addressable as an
+// Entity.
+//
+// EventModel does NOT inline its members; it lists their refs. Each
+// referenced entity lives independently in the flat (EntityKind, Id)
+// keyspace and is fetched via GetEntity (or hydrated in bulk via
+// GetEventModelProjection). This is Decision #18: flat keyspace canonical,
+// EventModel curated listing.
+//
+// Cross-model references are first-class: `members` may include EntityRefs
+// from other namespaces. Tools rendering this model can ask the service to
+// resolve cross-model refs (include_cross_model on the projection RPC).
+message EventModel {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  // The entities that belong to this model. Tools filter by EntityKind
+  // when they need the per-kind view ("show me the events").
+  repeated EntityRef members = 4;
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+}
+

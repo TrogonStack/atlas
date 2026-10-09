@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package trogonatlas.catalog.v1alpha1;
+
+import "trogonatlas/catalog/v1alpha1/changesets.proto";
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+// A branch is a small server-side overlay of copy-on-write deltas over the
+// baseline store (see docs/explanation/branching.md). See
+// trogonatlas.api.eventmodel.v1alpha1 CreateBranchRequest / ListBranchesRequest /
+// DeleteBranchRequest for the lifecycle RPCs that manage this record.
+message BranchInfo {
+  string name = 1;
+  string doc = 2;
+  // RFC3339 timestamp.
+  string created_at = 3;
+  // Opaque change-feed cursor captured at branch creation time. Not
+  // meaningful to compare or parse; Phase 2 (merge) will use it to bound
+  // the baseline range a branch was forked from.
+  string base_change_token = 4;
+  uint32 delta_count = 5;
+  // The baseline changeset this branch forked from, or the one UpdateBranch
+  // last caught it up to. Empty when no baseline changeset had been recorded
+  // at that moment (a branch cut from a store with no attributed write
+  // history). A UUIDv7, so it orders lexicographically against every other
+  // changeset id: everything ordered above it landed after the fork.
+  //
+  // This is the branch's position as a whole. The per-key `base`/`base_etag`
+  // on each BranchDelta stays the fast path for conflict detection; this
+  // pointer answers ancestry ("behind baseline, by how much"), which per-key
+  // bases cannot because they are captured at different moments and rebased
+  // individually.
+  string fork_changeset_id = 6;
+}
+
+// Internal storage envelope for a single copy-on-write delta. Not returned
+// directly by any RPC in Phase 1; defined here for a stable wire encoding
+// usable by any Store backend that persists deltas as encoded protos.
+message BranchDelta {
+  // The baseline entity as it existed the first time this key was touched
+  // on the branch. Absent when baseline did not have this key yet.
+  trogonatlas.eventmodel.v1alpha1.Entity base = 1;
+  string base_etag = 2;
+  // The branch's current value for this key. Ignored when `tombstone` is
+  // true.
+  trogonatlas.eventmodel.v1alpha1.Entity ours = 3;
+  // True when this delta represents a delete: the key is hidden on this
+  // branch regardless of what baseline holds.
+  bool tombstone = 4;
+}
+
+// One entry in a branch's diff against baseline: one (kind, id) key touched
+// by the branch's deltas, classified against the current baseline. See
+// trogonatlas.api.eventmodel.v1alpha1 DiffBranchRequest / MergeBranchRequest /
+// UpdateBranchRequest / ResolveBranchEntryRequest for the RPCs that produce
+// and act on this entry; docs/explanation/branching.md, "Merge conflicts",
+// has the full semantics.
+message BranchDiffEntry {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    // Key exists on the branch (live delta) but not in baseline.
+    STATUS_ADDED = 1;
+    // Key exists in both; baseline is unchanged since `base`, and `ours`
+    // differs from `base`.
+    STATUS_CHANGED = 2;
+    // Tombstone delta: the branch deletes a key baseline still has, and
+    // baseline is unchanged since `base`.
+    STATUS_DELETED = 3;
+    // Baseline moved since `base`, but the new baseline content is
+    // semantically equal to `ours` -- not a conflict. Dropped silently on
+    // merge (nothing to apply; already converged).
+    STATUS_CONVERGED = 4;
+    // Baseline moved since `base` AND the branch has a live (non-tombstone)
+    // edit that semantically differs from the new baseline content.
+    STATUS_CONFLICT_EDIT_EDIT = 5;
+    // Baseline moved since `base` (edited) while the branch tombstones the
+    // key.
+    STATUS_CONFLICT_EDIT_DELETE = 6;
+    // Baseline deleted the key since `base` while the branch has a live
+    // edit.
+    STATUS_CONFLICT_DELETE_EDIT = 7;
+  }
+  trogonatlas.eventmodel.v1alpha1.EntityRef ref = 1;
+  Status status = 2;
+  // The entity as it existed when this key was first touched on the
+  // branch. Absent when the branch created the key (no prior baseline).
+  trogonatlas.eventmodel.v1alpha1.Entity base = 3;
+  // Etag of `base` at capture time. Empty when `base` is absent.
+  string base_etag = 4;
+  // The branch's current value for this key. Absent when `status` is
+  // STATUS_DELETED or STATUS_CONFLICT_EDIT_DELETE (the branch tombstones
+  // the key).
+  trogonatlas.eventmodel.v1alpha1.Entity ours = 5;
+  // The current baseline value for this key. Absent when baseline does
+  // not have the key (STATUS_ADDED) or baseline deleted it since `base`
+  // (STATUS_CONFLICT_DELETE_EDIT).
+  trogonatlas.eventmodel.v1alpha1.Entity theirs = 6;
+  // Canonical-JSON field paths that differ between `ours` and `theirs`.
+  // Populated only for STATUS_CONFLICT_EDIT_EDIT; empty otherwise.
+  repeated string conflict_field_paths = 7;
+  // The structural three-way merge of `base`, `ours` and `theirs`: the two
+  // sides' edits combined field by field. Present only for
+  // STATUS_CONFLICT_EDIT_EDIT entries where the two sides touched disjoint
+  // field paths, so no field has to be chosen between; absent when they
+  // collided, when there is no `base` to merge against, or when the merge
+  // did not produce a representable entity.
+  //
+  // Purely informational here. Nothing accepts it implicitly: MergeBranch
+  // lands it only under `auto_merge`, and ResolveBranchEntry writes it into
+  // the branch only under RESOLUTION_TAKE_MERGED. An entry carrying it is
+  // still a conflict until someone opts in.
+  trogonatlas.eventmodel.v1alpha1.Entity auto_merged = 8;
+  // The revisions this entry was classified from. Pass it back as
+  // ResolveBranchEntryRequest.expected_state so the resolution is refused if
+  // any side moved after it was inspected.
+  BranchEntryState state = 9;
+}
+
+// Revisions of the three inputs to a branch entry's classification. An etag
+// is never empty, so an empty value means that side is absent.
+message BranchEntryState {
+  // Etag of `base` at capture time.
+  string base_etag = 1;
+  // Revision of the branch's delta row for this key. It advances on every
+  // branch write or rebase of the key, including a change to `base`.
+  string ours_etag = 2;
+  // Etag of the current baseline value.
+  string theirs_etag = 3;
+}
+
+// Where a branch sits relative to baseline, as a set rather than per key.
+//
+// The per-key `base`/`base_etag` on each diff entry answers "did THIS key
+// move under me". They are captured at different moments and rebased
+// individually, so they cannot be added up into a statement about the branch
+// as a whole. This message is that statement.
+message BranchAncestry {
+  // BranchInfo.fork_changeset_id: the baseline changeset this branch forked
+  // from, or was last caught up to by UpdateBranch.
+  string fork_changeset_id = 1;
+  // Baseline changesets recorded after the fork point, newest first. Empty
+  // means the branch is up to date with every attributed baseline write.
+  repeated Changeset behind = 2;
+  // True when more baseline changesets landed than `behind` carries, so the
+  // branch is behind by at least `behind.size()` rather than exactly that.
+  bool behind_truncated = 3;
+}

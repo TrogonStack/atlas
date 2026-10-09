@@ -1,0 +1,172 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+// Explanation for why an entity is intentionally disconnected from the
+// model's slice graph (no command slice produces it, no read-model slice
+// consumes it, no automation slice feeds it). The validator's
+// "disconnected" findings recognize this annotation and silence themselves
+// -- a disconnect ON PURPOSE is data, not noise; a disconnect WITHOUT this
+// annotation is a finding worth raising. Use cases:
+//   - a subscription view waiting for its consumer slice ("seam pending")
+//   - an audit log discharging EVENT_UNOBSERVED with no UI yet
+//   - a niche flow (cancel, dispute, refund) deferred to a future model
+//   - a legacy entity kept for back-compat that no current flow touches
+message OrphanAnnotation {
+  // Free-form explanation. Must be non-empty: silence is what the
+  // annotation is meant to replace.
+  string doc = 1;
+}
+
+// Suppresses UI_USED_AS_INPUT_AND_OUTPUT for a UI that legitimately is
+// both a trigger surface and a render target -- e.g. an interactive order
+// book (click to cancel, click to view trades) or an admin dashboard
+// (status display with action buttons). The doc explains why both roles
+// genuinely co-locate on this physical surface.
+message MixedSurfaceAnnotation {
+  string doc = 1;
+}
+
+// Decision #34. The "at most one automation per read model" rule is
+// a useful default -- different automations usually consume
+// differently-shaped data, and splitting RMs per consumer keeps the
+// coupling explicit. But sometimes one RM legitimately serves
+// several consumers: a captured-payment row read by the ledger
+// recorder and the refund processor and the treasury UI carries the
+// same data; forcing a clone per consumer just multiplies the same
+// sticky on the board. Declare the multi-consumer case explicitly
+// with SharedConsumersAnnotation; the validator's
+// READ_MODEL_MULTIPLE_AUTOMATIONS rule downgrades from Error to
+// Info when this annotation is present and its doc is non-empty.
+message SharedConsumersAnnotation {
+  // Free-form explanation naming the consumers and why they share
+  // the same RM rather than each owning a per-consumer view.
+  string doc = 1;
+}
+
+// Single-emitter is an invariant with NO annotation escape, exactly like
+// COMMAND_MULTIPLE_ISSUERS. Designs fix the fan-in structurally (origin
+// split merged by a read model, or a projection + detector automation
+// firing one dedicated completion command). AS-IS mappings of code whose
+// aggregates pair-match keep the fan-in on the board and let
+// EVENT_MULTIPLE_EMITTERS stand as the finding: the error reports the
+// mapped system's own causal ambiguity, and the fix belongs in that
+// system's code. The mechanism explanation lives in the event doc, not in
+// an annotation.
+
+// Structured identity derivation, mirroring trogon.uuid.v1 proto options: a
+// deterministic UUIDv5 over a name template within a namespace. Attach to a
+// Swimlane (whose stream_id shows the human-readable composed form) or to
+// any entity whose id field is derived; codegen consumes it to emit the
+// real identity options (e.g. an IdentityVersion enum with
+// trogon.uuid.v1.enum_value format options).
+message Uuidv5IdentityAnnotation {
+  // Registers the derived identity under this name; stream_id and other
+  // templates reference it as a plain placeholder, e.g. a swimlane with
+  // stream_id "review-eligibility-{eligibility_id}" and an annotation named
+  // "eligibility_id" -- the template is written once, here.
+  string name = 6;
+  // UUIDv5 namespace, mirroring trogon.uuid.v1.Namespace.
+  oneof namespace {
+    string uuid = 1; // a UUID string used directly as the namespace
+    string dns = 2;  // domain hashed with the well-known DNS namespace
+    string url = 3;  // URL hashed with the well-known URL namespace
+  }
+  string template = 4; // name template, e.g. "review_eligibility/{seller_id}/{order_id}/{buyer_id}"
+  uint32 version = 5;  // identity algorithm version, e.g. 1
+}
+
+
+// Decision #24 said "bump the ref or justify staying back" when a slice pins
+// an older version of a command, ui, persona, processor, event, or read model
+// than the latest version present in the loaded set. This message is the
+// justification half: attach it to the slice's metadata to tell the validator
+// that the pinned version is intentional, not an oversight.
+//
+// The validator's SLICE_STALE_REF findings recognize this annotation and
+// silence themselves for every ref it covers:
+//   - When `pinned` is empty and `doc` is non-empty, every stale ref on the
+//     slice is covered (blanket pin).
+//   - When `pinned` is non-empty, only refs whose canonical id string
+//     ("<namespace>/<slug>@<version>", using the OLD pinned version) appears
+//     in the list are silenced; other stale refs on the same slice still fire.
+//
+// An empty `doc` covers nothing: silence without a reason is exactly what
+// this annotation is meant to replace. The same stance applies to
+// OrphanAnnotation. Always explain why staying back is deliberate.
+message PinnedRefAnnotation {
+  // Required. Explain why the slice intentionally pins the old version,
+  // e.g. "waiting for the v3 command stabilization window to close before
+  // bumping all slices in this domain".
+  string doc = 1;
+  // Optional targeted list. Each entry is the canonical id string of a ref
+  // this entity intentionally holds at an older version, formatted as
+  // "<namespace>/<slug>@<version>" where the version is the OLD pinned
+  // version. When the list is empty (and doc is non-empty), every stale ref
+  // on this slice is covered by the blanket pin.
+  repeated string pinned = 2;
+}
+
+// Marks an individual FieldSpec as system-derived: the value is NOT
+// provided by a command payload, NOT pulled from a source ReadModel
+// (in the automation case), and NOT carried by another event/command
+// on the stream -- the runtime computes it from outside the model
+// (clock, generated UUID, workflow context, sequence counter, etc.).
+// Suppresses EVENT_FIELD_UNSOURCED and AUTOMATION_COMMAND_FIELD_UNSOURCED
+// for the annotated field. The doc must be non-empty: silence is what
+// the annotation is meant to replace.
+message DerivedFieldAnnotation {
+  // Required. Explain where the runtime gets this value, e.g.
+  // "now() at activity start" or "Temporal workflow_id from the
+  // activity context".
+  string doc = 1;
+  Kind kind = 2;
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_TIMESTAMP = 1;   // current time at event-emission moment
+    KIND_UUID = 2;        // runtime-generated identifier
+    KIND_SEQUENCE = 3;    // monotonic counter / stream offset
+    KIND_CONTEXT = 4;     // pulled from runtime context (workflow_id, session, principal)
+    KIND_OTHER = 5;
+  }
+}
+
+// Marks a field as personal data: information about an identifiable
+// person. Events are immutable, so a personal-data field on an event needs a
+// declared way to make the value unrecoverable when the person asks to be
+// forgotten.
+message PersonalDataAnnotation {
+  // Required. What personal data this is and whose, e.g. "customer's
+  // shipping address".
+  string doc = 1;
+  Erasure erasure = 2;
+  // Optional. Name of a sibling field in the same field list that
+  // identifies the person the data belongs to (the per-subject key for
+  // crypto-shredding, the row to delete for a projection).
+  string subject_field = 3;
+
+  enum Erasure {
+    ERASURE_UNSPECIFIED = 0;
+    ERASURE_CRYPTO_SHREDDING = 1;    // value encrypted with a per-subject key; deleting the key erases it
+    ERASURE_EXTERNAL_REFERENCE = 2;  // only a reference is stored; the value lives in an erasable store
+    ERASURE_PROJECTION_DELETE = 3;   // read models only: the row is deleted or overwritten on erasure
+    ERASURE_RETENTION_EXPIRY = 4;    // the value is dropped when the stream's retention period lapses
+  }
+}
+
+// Documents an entity's (typically a UI's) behavior under a foreseeable
+// failure mode -- a loading failure, a network disconnect, a stale or
+// partial response -- so the failure path is data on the model instead of
+// tribal knowledge buried in a component's comments. Purely descriptive:
+// unlike OrphanAnnotation or DerivedFieldAnnotation, no validator rule
+// keys off this message today.
+message FailureModeAnnotation {
+  // Required. What causes it, e.g. "network disconnect", "load timeout".
+  string trigger = 1;
+  // Required. What the surface actually does when it happens, e.g.
+  // "shows a banner and freezes the last good render".
+  string behavior = 2;
+  // Optional. How the user or system recovers, e.g. "retry button",
+  // "auto-reconnect with backoff".
+  string recovery = 3;
+}

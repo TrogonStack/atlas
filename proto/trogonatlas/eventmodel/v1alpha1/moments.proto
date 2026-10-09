@@ -1,0 +1,248 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/fields.proto";
+// A swim lane is the event-sourcing stream / aggregate boundary, not just a
+// visual band. It identifies the stream (in the event-sourcing sense) that
+// the events on this lane are appended to and that the commands on this
+// lane target. All events on the same swim lane share the same stream;
+// every resource that has its own stream at runtime has its swim lane as
+// its stream *type*. This makes the swim lane the consistency / transaction
+// boundary for the events and commands assigned to it.
+//
+// Read models, UIs, processors, and personas are cross-cutting and do not
+// belong to a stream -- they have their own dedicated bands on a diagram and
+// do not reference a swim lane.
+message Swimlane {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  uint32 order = 4;             // rendering order, top-to-bottom
+  string color = 5;             // optional hint for visualization
+  repeated google.protobuf.Any metadata = 6;
+  trogonatlas.type.v1alpha1.Id supersedes = 7;            // previous version this entity replaces (optional)
+  // Runtime stream identity, e.g. "order-{order_id}". Placeholders reference
+  // FieldSpec names of the events/commands on this stream, or a derived
+  // identity registered by name in a Uuidv5IdentityAnnotation on this
+  // swimlane (e.g. "review-eligibility-{eligibility_id}" with an annotation
+  // named "eligibility_id" carrying the UUIDv5 template). Conceptual like
+  // ExternalSource.descriptor -- environment-specific prefixes stay out.
+  string stream_id = 8;
+
+  // The stream's lifecycle as data: after `after` lands on a stream
+  // instance, exactly ONE of `next` follows. This is where a fork in the
+  // road is DECIDED. Read models projected from the fork state carry the
+  // condition data each road observes; observers (entries) are the
+  // branches; but exclusivity -- what makes alternatives a fork instead of
+  // a parallel fan-out -- comes from the consistency boundary: competing
+  // commands append to this same stream and the aggregate accepts one
+  // successor. `doc` on each Next is the guard ("registration completes
+  // before expires_at"). Cycles are legal (expired -> reserved): the table
+  // is a state machine, not a tree. Tools DERIVE everything else from it:
+  // the storyboard fork graph (a storyboard whose outcome emits `after`
+  // forks into the storyboards emitting each `next`), and scenario
+  // checking (a GWT may only emit a legal successor of the last given
+  // lifecycle event). Events listed here must belong to this swimlane.
+  repeated Transition transitions = 9;
+  message Transition {
+    EventRef after = 1;
+    repeated Next next = 2;
+    // A Next is a real connection (the fork's branch), so like every other
+    // Edge it carries design data: the guard doc plus Any annotations.
+    message Next {
+      EventRef event = 1;
+      string doc = 2;
+      repeated google.protobuf.Any metadata = 3;
+    }
+  }
+
+  // Aggregate state -- the fields the stream's aggregate carries
+  // internally, beyond what commands pass in. These are values the
+  // runtime sets (a generated UUID, a clock, a context token), values
+  // an upstream actor picks at execution time (an LLM choosing a tool,
+  // a router selecting a partition), or derived projections of the
+  // aggregate's prior events that downstream events read off the
+  // aggregate rather than off any single command.
+  //
+  // The validator counts a name in `state` as a valid source for the
+  // EVENT_FIELD_UNSOURCED check, alongside the command's own fields
+  // and the union of lane-command fields. Declaring a field here is a
+  // load-bearing architectural claim: it says "the aggregate owns
+  // this value." Use it instead of saga-decomposing every runtime
+  // emission into its own command -- one command, many events, with
+  // derived fields anchored to the aggregate they belong to.
+  repeated FieldSpec state = 10;
+}
+
+message Event {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  SwimlaneRef swimlane = 4;
+  reserved 5;
+  reserved "fields";
+  repeated google.protobuf.Any metadata = 6;
+  trogonatlas.type.v1alpha1.Id supersedes = 7;
+  // The payload shape (Decision #33). Holds a `Schema` message
+  // (anonymous when its Id is unset, named when set) or a message
+  // declared by a TypeLibrary in the same namespace. The server
+  // refuses a type no live TypeLibrary declares and a value that does
+  // not decode as that type. Same `type_url` + same bytes across two
+  // events = same payload type by declaration, no structural
+  // inference required.
+  google.protobuf.Any schema = 8;
+}
+
+message Command {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  SwimlaneRef swimlane = 4;
+  reserved 5;
+  reserved "fields";
+  repeated google.protobuf.Any metadata = 6;
+  trogonatlas.type.v1alpha1.Id supersedes = 7;
+  // The argument shape (Decision #33), held the same way as
+  // `Event.schema`.
+  google.protobuf.Any schema = 8;
+}
+
+message ReadModel {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  reserved 4;
+  reserved "fields";
+
+  // Source of the read model. Either internal events or an external source
+  // descriptor for read models projected from outside the system.
+  repeated EventRef source_events = 5;
+  ExternalSource external_source = 6;
+  repeated google.protobuf.Any metadata = 7;
+  trogonatlas.type.v1alpha1.Id supersedes = 8;
+  // The projection shape (Decision #33), held the same way as
+  // `Event.schema`. Two read models pointing at the same `schema`
+  // (same Any bytes OR same named Schema entity) are nominally
+  // same-type -- the historical "twin" question dissolves into the
+  // schema identity.
+  google.protobuf.Any schema = 9;
+
+  // The field names that identify one row of this read model. Every
+  // name here must appear in the `schema` fields; when this list is non-empty,
+  // every ReadModelSlice that projects into this read model must
+  // source ALL key fields from its source events
+  // (validated: RM_SLICE_KEY_UNSOURCED). An empty list means the
+  // row identity is undeclared, surfaced as Info (RM_KEY_MISSING)
+  // during the migration window.
+  repeated string key = 10;
+
+  message ExternalSource {
+    ExternalSystemRef system = 1; // the documented boundary this feed comes from
+    string descriptor = 2;        // free-form, e.g. webhook name, table name
+  }
+}
+
+message Processor {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  string doc_trigger = 4;       // when does this processor fire?
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+  // The OUTBOUND external seam, mirroring ReadModel.external_source
+  // (the inbound seam): the external systems this processor calls as its
+  // side effect. With both declared, an integration round trip is fully
+  // structural -- processor --calls--> ExternalSystem --webhook--> the
+  // ExternalSource views it feeds back into.
+  repeated ExternalSystemRef calls = 7;
+}
+
+message UI {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  string design_ref = 4;        // URL, Figma node id, asset id, etc.
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+
+  // Declared navigation: surface-to-surface transitions that carry NO
+  // command and NO event -- tab bars, back affordances, menu links, deep
+  // links. This is the ONE place pure navigation lives; any hop a command
+  // path already explains is DERIVED from the storyboards and must not be
+  // declared here (validated: UI_TRANSITION_DERIVABLE). Cycles are legal
+  // in the data (Home -> Settings -> Home is a navigation map, like the
+  // Swimlane lifecycle state machine); renderers keep time forward by
+  // unrolling occurrences per Decision #24.
+  repeated Transition transitions = 7;
+  message Transition {
+    UIRef to = 1;
+    string doc = 2;             // "tab bar", "link in confirmation email"
+    repeated google.protobuf.Any metadata = 3;
+  }
+  // Composition metadata only: the UI remains the Event Modeling moment;
+  // Screen declares the URL-addressable surface this UI contributes to.
+  ScreenSlotRef slot = 8;
+}
+
+message ScreenSlotRef {
+  ScreenRef screen = 1;
+  string slot = 2;
+}
+
+message Slot {
+  string name = 1;
+  string doc = 2;
+  bool required = 3;
+}
+
+message Screen {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  string route = 4;
+  string audience = 5;
+  string layout = 6;
+  repeated Slot slots = 7;
+  repeated google.protobuf.Any metadata = 8;
+  trogonatlas.type.v1alpha1.Id supersedes = 9;
+}
+
+// A Persona is a named human profile that uses a UI to issue a Command.
+// Personas are always human. There is no "system persona" -- internal
+// automation is a Processor (AutomationSlice), and external systems are
+// modeled as ReadModels (with ExternalSource).
+//
+// Classic Event Modeling does not have a formal persona entity; the UI swim
+// lane implicitly stands in for "the user." We give it a name (`Persona`)
+// because the same human profile appears across many slices and storyboards
+// and needs a stable reference. Examples: "Bob the manager", "Billy the
+// customer", "Alice the support agent". The persona is the unit of reuse:
+// every slice that needs a manager-issuing-a-command references the same
+// `Persona{slug:"bob-the-manager"}`, so refinements propagate everywhere.
+//
+// One role per Persona. The role is a descriptive label on the persona
+// ("manager", "customer", "admin"), not a separate entity, and not a list.
+// Rationale: a Persona represents an *intent in context*, not a real-world
+// human's full identity. If the same real person acts as a manager in one
+// flow and as a customer in another, model them as two distinct personas
+// ("Bob the manager", "Bob the customer") because the behavior, permissions,
+// and UI they touch are different. Multi-role personas would force every
+// reference site to disambiguate which role is active, defeating the point
+// of a stable PersonaRef. Finer-grained context (tenant tier, seniority,
+// etc.) belongs in `doc`.
+//
+// A Persona does NOT belong to a Swimlane. Swimlanes here are event-sourcing
+// streams (a server-side concept). Personas are on the human/UI side of the
+// model and are cross-cutting across streams.
+message Persona {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;   // human-readable persona name, e.g. "Bob"
+  string role = 3;    // single role label, e.g. "manager"
+  string doc = 4;
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+}
