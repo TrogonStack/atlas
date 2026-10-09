@@ -1,0 +1,21 @@
+[package]
+name = "trogon-atlas-testsupport"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+description = "Test helpers: ephemeral NATS JetStream instances via testcontainers."
+
+[dependencies]
+trogon-atlas-store = { path = "../trogon-atlas-store" }
+trogon-atlas-proto = { workspace = true }
+tonic = { workspace = true }
+tokio-stream = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "net"] }
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["nats"] }
+libc = "0.2"
+
+[lints]
+workspace = true

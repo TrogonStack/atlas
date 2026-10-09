@@ -1,0 +1,33 @@
+[package]
+name = "trogon-atlas-store"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "Storage trait and NATS JetStream KV implementation for the Event Modeling service."
+
+[dependencies]
+trogon-atlas-proto = { workspace = true }
+trogon-atlas-core = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+bytes = { workspace = true }
+async-nats = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+metrics = "0.24"
+uuid = { workspace = true, features = ["v7"] }
+
+[dev-dependencies]
+trogon-atlas-testsupport = { path = "../trogon-atlas-testsupport" }
+async-nats = { workspace = true }
+proptest = "1"
+
+[lints]
+workspace = true
