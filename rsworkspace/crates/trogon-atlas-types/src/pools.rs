@@ -60,7 +60,29 @@ pub struct PoolMember<K> {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PoolKey<K> {
     scope: PoolScope,
-    libraries: Vec<(K, TypeLibraryDigest)>,
+    libraries: Vec<MemberFingerprint<K>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct MemberFingerprint<K> {
+    key: K,
+    prefix: ProtoPackagePrefix,
+    digest: TypeLibraryDigest,
+    dependencies: Vec<K>,
+}
+
+impl<K: Clone + Ord> MemberFingerprint<K> {
+    fn of(member: &PoolMember<K>) -> Self {
+        let mut dependencies = member.dependencies.clone();
+        dependencies.sort();
+        dependencies.dedup();
+        Self {
+            key: member.key.clone(),
+            prefix: member.source.prefix().clone(),
+            digest: member.source.digest(),
+            dependencies,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -131,10 +153,8 @@ where
         scope: PoolScope,
         members: Vec<PoolMember<K>>,
     ) -> Result<Arc<DescriptorPool>, PoolError<K>> {
-        let mut libraries: Vec<(K, TypeLibraryDigest)> = members
-            .iter()
-            .map(|m| (m.key.clone(), m.source.digest()))
-            .collect();
+        let mut libraries: Vec<MemberFingerprint<K>> =
+            members.iter().map(MemberFingerprint::of).collect();
         libraries.sort();
         let key = PoolKey { scope, libraries };
         if let Some(pool) = self.cached(&key) {

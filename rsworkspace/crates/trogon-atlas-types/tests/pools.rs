@@ -158,6 +158,52 @@ async fn pools_are_reused_until_the_live_set_changes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_cached_pool_does_not_hide_a_dropped_dependency() {
+    let pools = pools();
+    pools
+        .get_or_build(scope(None), vec![money(), billing()])
+        .await
+        .unwrap();
+
+    let mut without_dependency = billing();
+    without_dependency.dependencies.clear();
+    let err = pools
+        .get_or_build(scope(None), vec![money(), without_dependency])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, PoolError::Compile { library, .. } if library == "billing"),
+        "{err}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cached_pool_does_not_hide_a_changed_prefix() {
+    let pools = pools();
+    let shadow = |prefix: &str| {
+        member(
+            "shadow",
+            prefix,
+            &[(
+                "acme/shadow/v1/shadow.proto",
+                "syntax = \"proto3\";\npackage acme.shadow.v1;\nmessage Shadow {}\n",
+            )],
+            &[],
+        )
+    };
+    pools
+        .get_or_build(scope(None), vec![money(), shadow("acme.shadow")])
+        .await
+        .unwrap();
+
+    let err = pools
+        .get_or_build(scope(None), vec![money(), shadow("acme")])
+        .await
+        .unwrap_err();
+    assert!(matches!(&err, PoolError::PrefixOverlap { .. }), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn least_recently_used_pools_are_evicted() {
     let pools: TypePools<String> =
         TypePools::with_capacity(CompileRunner::default(), CompileLimits::default(), 1);
