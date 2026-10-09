@@ -40,9 +40,12 @@
 //!    happening to be a `BTreeMap`. That backing type is a build-time
 //!    feature (`preserve_order`) of a shared dependency, and content
 //!    identity must not be decided by feature unification.
-//! 3. **Floats format as shortest round-trip with a mandatory decimal
-//!    point** (`1.0`, never `1`), so a `double` field never collides
-//!    textually with an integer. Non-finite floats are rejected;
+//! 3. **Floats format as shortest round-trip, always carrying a decimal
+//!    point or an exponent** (`1.0`, `1e16`, never `1`), so a `double`
+//!    field never collides textually with an integer. The standard library
+//!    does not promise this output across releases, so
+//!    `canonical_json_pins_float_formatting` pins it; a toolchain that
+//!    changes it fails that test instead of silently rehashing every entity. Non-finite floats are rejected;
 //!    proto3 JSON renders those as the strings `"NaN"` / `"Infinity"`, so
 //!    reaching the number branch with one means the input was not proto3
 //!    JSON.
@@ -222,7 +225,8 @@ fn write_canonical(value: &serde_json::Value, out: &mut String) -> Result<(), Co
                     return Err(ContentHashError::NonFiniteNumber);
                 }
                 // Debug for f64 is shortest-round-trip and always emits a
-                // decimal point, so `1.0` never renders as `1`. Writing to
+                // decimal point or an exponent, so `1.0` never renders as
+                // `1`. Writing to
                 // a String is infallible; the Result is the fmt::Write
                 // trait's, not a failure this code can encounter.
                 let _ = write!(out, "{f:?}");
@@ -513,8 +517,30 @@ mod tests {
 
     #[test]
     fn canonical_json_pins_float_formatting() {
-        let v = serde_json::json!({ "f": 1.0, "g": 0.1, "i": 1 });
-        assert_eq!(canonical_json(&v).unwrap(), r#"{"f":1.0,"g":0.1,"i":1}"#);
+        let cases: &[(f64, &str)] = &[
+            (1.0, "1.0"),
+            (0.1, "0.1"),
+            (-0.5, "-0.5"),
+            (0.1 + 0.2, "0.30000000000000004"),
+            (123_456_789.0, "123456789.0"),
+            (1e15, "1000000000000000.0"),
+            (1e16, "1e16"),
+            (1.5e300, "1.5e300"),
+            (1e-4, "0.0001"),
+            (1e-7, "1e-7"),
+            (f64::MAX, "1.7976931348623157e308"),
+            (f64::MIN_POSITIVE, "2.2250738585072014e-308"),
+        ];
+        for (f, expected) in cases {
+            let v = serde_json::json!({ "f": f });
+            assert_eq!(
+                canonical_json(&v).unwrap(),
+                format!(r#"{{"f":{expected}}}"#),
+                "float {f:e} changed its canonical form"
+            );
+        }
+        let v = serde_json::json!({ "i": 1 });
+        assert_eq!(canonical_json(&v).unwrap(), r#"{"i":1}"#);
     }
 
     #[test]
