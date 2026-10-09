@@ -7,6 +7,7 @@ mise run proto:generate
 
 paths=(
   rsworkspace/crates/trogon-atlas-proto/src/gen
+  rsworkspace/crates/trogon-atlas-authzed/src/gen
 )
 drift="$(git status --porcelain -- "${paths[@]}")"
 if [ -n "$drift" ]; then
