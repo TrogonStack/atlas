@@ -11,14 +11,29 @@ server-side adapters implement.
 
 ## Modules
 
-- `refs`: `outbound_refs`, `entity_id`, `entity_kind`, `OutboundRef`.
-  Given an `Entity`, enumerate every `(target, path)` pair where the
-  entity points at another addressable thing. Used by the reverse-
-  reference index, `GetIncomingReferences`, `GetImpact`, and validation
-  pass after validation pass.
+- `content_hash`: a content hash per entity and per whole-model snapshot.
+- `id_component`: `validate_id_component`, the shared rule for what makes
+  a safe namespace or slug component.
+- `namespace`: namespace identity, display name, and hierarchy position.
+- `operation_id`: idempotency-key primitives behind `OperationReceipt`.
+- `refs`: `outbound_refs`, `retarget_refs`, `entity_id`, `entity_kind`,
+  `OutboundRef`. Given an `Entity`, enumerate every `(target, path)` pair
+  where the entity points at another addressable thing. Used by the
+  reverse-reference index, `GetIncomingReferences`, `GetImpact`, and
+  validation pass after validation pass.
+- `schema`: the field list behind an entity's `schema` Any.
+- `semantic_eq`: `semantically_equal`, the equality behind idempotent puts.
 - `system_meta`: `stamp_system(prev, entity)`. Mints / preserves the
   server-owned `SystemMeta` block (UUIDv7 + ISO-8601 `created_at`,
   Kubernetes `metadata.uid` style). Custom storage backends should call
   this before writing so the contract stays uniform.
+- `transcode`: the single proto to JSON transcode path.
+- `writer_lease`: `WriterRole` and `Epoch`, the single-writer vocabulary.
 
-The crate has zero runtime dependencies outside `uuid` and `chrono`.
+## Dependencies
+
+Beyond `trogon-atlas-proto`, the crate depends on `prost`, `prost-types`,
+`prost-reflect`, `serde_json`, `sha2`, `uuid`, `chrono`, `thiserror`, and
+`tracing`. It does not depend on `async-nats` or `trogon-atlas-store`; the
+only async stack it carries is `tonic`, which comes with the generated
+types in `trogon-atlas-proto`.
