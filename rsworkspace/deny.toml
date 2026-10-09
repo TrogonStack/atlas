@@ -31,13 +31,28 @@ allow-wildcard-paths = true
 # third-party dependencies. These are not security concerns; skip them
 # until the direct deps align on a common version.
 skip = [
+  { name = "axum" },
+  { name = "axum-core" },
   { name = "getrandom" },
   { name = "hashbrown" },
   { name = "indexmap" },
+  { name = "matchit" },
+  { name = "prost" },
+  { name = "prost-derive" },
+  { name = "prost-types" },
+  { name = "rand" },
+  { name = "rand_chacha" },
+  { name = "rand_core" },
+  { name = "rustix" },
   { name = "socket2" },
   { name = "thiserror" },
   { name = "thiserror-impl" },
+  { name = "tonic" },
   { name = "tower" },
+  # Tiny transitive duplicates from testcontainers/getrandom version spread.
+  { name = "cpufeatures" },
+  { name = "linux-raw-sys" },
+  { name = "r-efi" },
   { name = "windows-sys" },
   { name = "windows-targets" },
   { name = "windows_aarch64_gnullvm" },
