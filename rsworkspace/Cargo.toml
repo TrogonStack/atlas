@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
   "crates/trogon-atlas-proto",
+  "crates/trogon-atlas-core",
+  "crates/trogon-atlas-types",
 ]
 
 [workspace.package]
@@ -11,10 +13,21 @@ publish = false
 repository = "https://github.com/TrogonStack/atlas"
 
 [workspace.dependencies]
+trogon-atlas-proto = { path = "crates/trogon-atlas-proto" }
+
 prost = "0.13"
 prost-types = "0.13"
 tonic = "0.12"
+tokio = { version = "1.49", features = ["rt-multi-thread", "macros"] }
+
 tracing = "0.1"
+
+serde_json = "1.0"
+
+thiserror = "2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v7"] }
 
 [workspace.lints.rust]
 unused_must_use = "deny"

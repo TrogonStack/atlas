@@ -31,11 +31,23 @@ allow-wildcard-paths = true
 # third-party dependencies. These are not security concerns; skip them
 # until the direct deps align on a common version.
 skip = [
+  { name = "getrandom" },
   { name = "hashbrown" },
   { name = "indexmap" },
   { name = "socket2" },
+  { name = "thiserror" },
+  { name = "thiserror-impl" },
   { name = "tower" },
   { name = "windows-sys" },
+  { name = "windows-targets" },
+  { name = "windows_aarch64_gnullvm" },
+  { name = "windows_aarch64_msvc" },
+  { name = "windows_i686_gnu" },
+  { name = "windows_i686_gnullvm" },
+  { name = "windows_i686_msvc" },
+  { name = "windows_x86_64_gnu" },
+  { name = "windows_x86_64_gnullvm" },
+  { name = "windows_x86_64_msvc" },
 ]
 
 [sources]

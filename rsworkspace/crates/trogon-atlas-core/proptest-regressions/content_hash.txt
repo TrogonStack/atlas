@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c7bb38ddb5fa349eda4258d7004beb4698e316922627fc5df5b3635ed388f315 # shrinks to entities = [Entity { system: None, kind: Some(Event(Event { id: Some(Id { namespace: "a", slug: "a", version: 1 }), title: "", doc: "", swimlane: None, fields: [], metadata: [], supersedes: None, schema: None })) }]
+cc e998d1dabe2ee2683d58386aaaa115f0f62931929b446d62e3562d4e6ed6ceda # shrinks to e = Entity { system: None, kind: Some(Event(Event { id: Some(Id { namespace: "a", slug: "a", version: 1 }), title: "", doc: "", swimlane: None, fields: [], metadata: [], supersedes: None, schema: None })) }
+cc d131aae8b1926a9e6d48bd04c964ef1229618a48a073fdc9dc5536813fea6cf1 # shrinks to a = Entity { system: None, kind: Some(Event(Event { id: Some(Id { namespace: "a", slug: "a", version: 1 }), title: "", doc: "", swimlane: None, fields: [], metadata: [], supersedes: None, schema: None })) }, b = Entity { system: None, kind: Some(Event(Event { id: Some(Id { namespace: "a", slug: "a", version: 1 }), title: "", doc: "", swimlane: None, fields: [], metadata: [], supersedes: None, schema: None })) }
