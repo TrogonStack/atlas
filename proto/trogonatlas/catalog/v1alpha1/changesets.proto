@@ -1,0 +1,176 @@
+syntax = "proto3";
+
+package trogonatlas.catalog.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+// One entity-level change. The payload of the poll-based change feed
+// exposed by trogonatlas.api.eventmodel.v1alpha1 ListChanges / StreamChanges
+// (see those RPCs for the polling and resume-cursor design).
+message ChangeEvent {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_PUT     = 1;   // entity created or replaced
+    KIND_DELETED = 2;   // entity removed
+  }
+  Kind kind = 1;
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 2;
+  // RFC 3339 timestamp string of when the change was recorded. Service
+  // does not parse; treat as opaque ordering metadata if you need it.
+  string at = 3;
+  // Opaque resume cursor for this specific change. Pass back as
+  // ListChangesRequest.since_token or StreamChangesRequest.after_token to
+  // resume after this event. Treat as opaque; do not parse or compare.
+  string token = 4;
+  // Monotonic Unix-epoch microseconds when the change was recorded.
+  // Convenience field for non-MCP consumers that want a numeric ordering
+  // key without parsing `at`. Not guaranteed to match `at` exactly
+  // (millisecond vs microsecond precision).
+  int64 timestamp_micros = 5;
+  // Server-minted id of the changeset this event belongs to: every event
+  // produced by one mutation RPC carries the same value, so a consumer can
+  // reconstruct what landed together. Join to GetChangeset for the durable
+  // record.
+  //
+  // Empty when the write was not attributed (a store used directly, outside
+  // a mutation RPC). Never trust it as proof a changeset row exists: the
+  // change feed is a transport with retention, the changeset bucket is the
+  // record. See docs/explanation/changesets.md.
+  string changeset_id = 6;
+  // Authenticated principal that produced the change, copied from the
+  // changeset. Empty when unattributed. Denormalised onto the event so a
+  // feed consumer can attribute without a second call.
+  string author = 7;
+}
+
+// ---------- Changesets (durable grouping and attribution) --------------------
+//
+// A changeset is the unit a mutation RPC applies: one PutEntity, one
+// DeleteEntity, one BatchMutate, one MergeBranch. Changesets live in their
+// own durable, unexpiring bucket, NOT on the change stream, because the
+// stream is a lossy transport with retention (a failed publish drops an
+// event; retention deletes old ones). Learn that something changed from the
+// feed; read what changed from here.
+
+message ChangesetOp {
+  ChangeEvent.Kind kind = 1;
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 2;
+}
+
+message Changeset {
+  // UUIDv7: lexicographic order is chronological order.
+  string id = 1;
+  // Authenticated principal name. Never caller-supplied.
+  string author = 2;
+  // RFC 3339 timestamp of when the changeset was recorded.
+  string at = 3;
+  // Human-readable summary of the mutation, server-generated from the RPC.
+  string message = 4;
+  // Branch the mutation applied to. Empty = baseline.
+  string branch = 5;
+  // Every entity the mutation actually changed, in application order. A
+  // no-op write contributes nothing.
+  repeated ChangesetOp ops = 6;
+  // Name of the RPC that produced this changeset (e.g. "PutEntity").
+  string rpc = 7;
+  // The operation_id the mutation carried, if any. Empty for unattributed
+  // or non-idempotent writes.
+  string operation_id = 8;
+}
+
+// ---------- Entity revision log (per-entity history and revert) -------------
+//
+// A changeset says what landed together. A revision says what one entity
+// looked like on either side of that landing. Together they are `git log
+// <path>`: the log is the index, the revisions are the content.
+//
+// One row per (entity, changeset) pair, in the same unexpiring bucket class
+// as the changeset log and for the same reason: the change feed is a
+// transport with retention, and history built on it would inherit that.
+//
+// A write that reaches the store outside a mutation RPC (`trogon-atlas-server
+// import-git`, a direct `Store` user, a test) mints no changeset and therefore
+// records no revision. That is the same documented unattributed case the
+// changeset log has, and it is why RevertChangeset refuses rather than
+// guesses when a revision row is missing.
+message EntityRevision {
+  // Changeset this revision belongs to. UUIDv7, so ordering these
+  // lexicographically orders them chronologically.
+  string changeset_id = 1;
+  // Authenticated principal that produced the write.
+  string author = 2;
+  // RFC 3339 timestamp of the write.
+  string at = 3;
+  // Name of the RPC that produced it, e.g. "PutEntity".
+  string rpc = 4;
+  // Branch the write applied to. Empty = baseline.
+  string branch = 5;
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 6;
+  ChangeEvent.Kind kind = 7;
+  // The entity as it stood immediately before this write. Absent when the
+  // write created the key.
+  trogonatlas.eventmodel.v1alpha1.Entity before = 8;
+  // The entity as it stood immediately after. Absent when the write deleted
+  // the key.
+  trogonatlas.eventmodel.v1alpha1.Entity after = 9;
+}
+
+// ---------- Operation receipts (idempotent retry safety) --------------------
+//
+// A mutation whose caller supplies `operation_id` can be retried safely: the
+// same id replayed with the same request short-circuits to the stored
+// outcome instead of executing again. Reusing the id with a different
+// request fails with ALREADY_EXISTS, because the id would otherwise silently
+// mean two different things. `operation_id` must match `[A-Za-z0-9_-]{1,128}`.
+//
+// Receipts are scoped to the caller: GetOperation can only read back an id
+// the same principal claimed. Branch-scoped mutations keep no journal, so
+// GetOperation reports OPERATION_STATUS_UNKNOWN for them; the retry safety
+// those calls get is purely "same id, same digest, same branch-overlay
+// result", not a durable receipt. See trogonatlas.api.eventmodel.v1alpha1
+// GetOperationRequest / GetOperationResponse and its OperationStatus enum
+// for the lookup RPC and the receipt's lifecycle states.
+message OperationReceipt {
+  // Echoes the caller-supplied id.
+  string operation_id = 1;
+  // The changeset the operation produced. Empty when the operation has not
+  // settled yet or made no change.
+  string changeset_id = 2;
+  // True when this response was served from a previously claimed outcome
+  // rather than by executing the mutation again.
+  bool replayed = 3;
+}
+
+// ---------- Structural diff vocabulary --------------------------------------
+//
+// Shared by trogonatlas.api.eventmodel.v1alpha1 DiffEntities: a typed list of
+// structural changes between two entities -- additions, removals, value
+// changes, and engine-guessed renames.
+
+enum DiffOpKind {
+  DIFF_OP_KIND_UNSPECIFIED = 0;
+  DIFF_OP_KIND_ADDED   = 1;  // present in b, absent in a
+  DIFF_OP_KIND_REMOVED = 2;  // present in a, absent in b
+  DIFF_OP_KIND_CHANGED = 3;  // value changed at the same path
+  DIFF_OP_KIND_RENAMED = 4;  // engine inferred a rename across paths
+}
+
+message DiffOp {
+  DiffOpKind kind = 1;
+  // Structural path inside the entity, e.g. "fields[3].name" or
+  // "scenarios[0].when.payload". Tools must not parse semantically;
+  // treat as opaque hierarchical key.
+  string path = 2;
+  // For RENAMED, the path in entity b. Empty for other kinds.
+  string path_b = 3;
+  // Best-effort textual representations. The engine emits a stable
+  // canonical form (e.g. proto text format for messages, the raw value
+  // for scalars). For binary or large fields, the engine may emit a
+  // hash or a placeholder.
+  string before = 4;
+  string after = 5;
+  // Engine commentary explaining the op (e.g. "field renamed; same
+  // FieldSpec.kind and doc text").
+  string doc = 6;
+}

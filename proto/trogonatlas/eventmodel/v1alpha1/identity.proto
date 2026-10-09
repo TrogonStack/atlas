@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/id.proto";
+
+// One typed reference message per type kind. They all wrap an Id but the
+// distinct message types prevent mixing kinds at the schema level.
+//
+// Refs are used wherever the model needs to *name* an entity without
+// attaching data to the act of naming it (inside FieldSpec, inside
+// EventExample/CommandExample/ReadModelExample, inside TypeRef, etc.).
+// Where a connection between entities can carry data (slice endpoints,
+// storyboard entry/outcome), the schema uses Edge messages instead.
+message EventRef      { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message CommandRef    { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message ReadModelRef  { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message ProcessorRef  { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message UIRef         { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message ScreenRef     { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message PersonaRef      { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message SwimlaneRef   { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message ExternalSystemRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message DomainRef         { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message SubdomainRef      { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message BoundedContextRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message TermRef           { trogonatlas.type.v1alpha1.Id id = 1; }
+
+// A universal pointer to any addressable entity. Used by service operations
+// that take "any entity" (GetEntity, BatchGetEntities, GetReferences). The
+// typed Refs (EventRef, CommandRef, …) remain the in-graph pointer type
+// because they prevent kind confusion at write time. EntityRef is the
+// read-time uniform handle.
+message EntityRef {
+  EntityKind kind = 1;
+  trogonatlas.type.v1alpha1.Id id = 2;
+}
+
+// Discriminated union over every addressable thing. The shape of the inner
+// message determines the kind unambiguously; EntityKind is provided
+// separately on the service surface so callers don't need to inspect the
+// oneof tag to route a request.
+enum EntityKind {
+  ENTITY_KIND_UNSPECIFIED = 0;
+  ENTITY_KIND_EVENT = 1;
+  ENTITY_KIND_COMMAND = 2;
+  ENTITY_KIND_READ_MODEL = 3;
+  ENTITY_KIND_PROCESSOR = 4;
+  ENTITY_KIND_UI = 5;
+  ENTITY_KIND_PERSONA = 6;
+  ENTITY_KIND_SWIMLANE = 7;
+  ENTITY_KIND_COMMAND_SLICE = 8;
+  ENTITY_KIND_READ_MODEL_SLICE = 9;
+  ENTITY_KIND_AUTOMATION_SLICE = 10;
+  ENTITY_KIND_STORYBOARD = 11;
+  ENTITY_KIND_EVENT_MODEL = 12;
+  ENTITY_KIND_COMPONENT = 13;
+  ENTITY_KIND_EXTERNAL_SYSTEM = 14;
+  ENTITY_KIND_TRACKER = 15;
+  ENTITY_KIND_BOUNDED_CONTEXT = 16;
+  ENTITY_KIND_DOMAIN = 17;
+  ENTITY_KIND_SUBDOMAIN = 18;
+  ENTITY_KIND_SCHEMA = 19;
+  ENTITY_KIND_PROJECT = 20;
+  ENTITY_KIND_SCREEN = 21;
+  ENTITY_KIND_TERM = 22;
+  ENTITY_KIND_AMBIGUITY = 23;
+  ENTITY_KIND_UI_SLICE = 24;
+  ENTITY_KIND_SERVICE_LEVEL_INDICATOR = 25;
+  ENTITY_KIND_SERVICE_LEVEL_OBJECTIVE = 26;
+  ENTITY_KIND_ALERT_POLICY = 27;
+  ENTITY_KIND_ALERT_NOTIFICATION_TARGET = 28;
+  ENTITY_KIND_TYPE_LIBRARY = 29;
+}

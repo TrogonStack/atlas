@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+
+message TypeLibraryRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
+// A tenant-owned set of protobuf definitions, stored as source text and
+// compiled by the server on demand. `id.slug` is the package prefix the
+// library owns: every file's `package` must equal it or start with it
+// followed by a dot, and no two live libraries in the same namespace and
+// branch may own overlapping prefixes.
+//
+// The source is the only stored form. The compiled descriptors are derived
+// state the server rebuilds whenever it needs them.
+message TypeLibrary {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated ProtoSourceFile files = 4;
+  // Libraries whose files these files may import, in the same namespace.
+  repeated TypeLibraryRef dependencies = 5;
+  TypeLibraryProvenance provenance = 6;
+  repeated google.protobuf.Any metadata = 7;
+  trogonatlas.type.v1alpha1.Id supersedes = 8;
+}
+
+message ProtoSourceFile {
+  // Relative import path, e.g. "acme/orders/v1/orders.proto".
+  string path = 1;
+  string content = 2;
+}
+
+// Where the source text came from. A record only: the server never fetches
+// anything it names. Remote origins are pulled client-side and arrive as
+// `TypeLibrary.files`.
+message TypeLibraryProvenance {
+  oneof source {
+    InlineSource inline = 1;
+    BufModuleSnapshot buf_module = 2;
+    GitSnapshot git = 3;
+  }
+
+  message InlineSource {}
+
+  message BufModuleSnapshot {
+    string remote = 1;
+    string owner = 2;
+    string module = 3;
+    string commit = 4;
+  }
+
+  message GitSnapshot {
+    string repository_url = 1;
+    string ref = 2;
+    string commit = 3;
+    string subdirectory = 4;
+  }
+}

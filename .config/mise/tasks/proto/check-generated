@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+#MISE description="Fail when the committed generated proto code is out of date with the protos"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+mise run proto:generate
+
+paths=(
+  rsworkspace/crates/trogon-atlas-proto/src/gen
+)
+drift="$(git status --porcelain -- "${paths[@]}")"
+if [ -n "$drift" ]; then
+  echo "ERROR: generated proto code is out of date:"
+  echo "$drift"
+  echo ""
+  echo "Run 'mise run proto:generate' and commit the result."
+  exit 1
+fi
+
+echo "Generated proto code is up to date."

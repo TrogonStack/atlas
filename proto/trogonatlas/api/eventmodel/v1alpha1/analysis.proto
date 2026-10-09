@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+// ---------- Analysis (AI-driven) ---------------------------------------------
+//
+// These RPCs do NOT mutate the model. They are how the service answers
+// "where does this field come from?" and "is this model information-
+// complete?" -- questions that, if encoded structurally, would force humans
+// to author per-field mappings (i.e., code) inside the schema.
+//
+// The model stays purely descriptive: humans write entities, FieldSpec,
+// doc, slices, storyboards. The analysis side reads that description and
+// returns its best understanding, with a confidence score and a rationale
+// for every conclusion. Anything the AI cannot determine becomes a
+// CompletenessGap for human review -- never a required field the human has
+// to fill in just to make the schema validate.
+//
+// Caching: if a tool wants to remember an analysis result across calls, it
+// parks the result as a typed `Any` annotation in the parent entity's
+// metadata list. This is optional. Re-running the analysis is always
+// valid; the cache is a convenience.
+
+// What to analyze. Exactly one of the scope fields must be set.
+message AnalysisScope {
+  oneof scope {
+    trogonatlas.eventmodel.v1alpha1.EntityRef slice = 1;
+    trogonatlas.eventmodel.v1alpha1.EntityRef storyboard = 2;
+    trogonatlas.eventmodel.v1alpha1.EntityRef event_model = 3;
+  }
+}
+
+// Origin classifications the inference engine can assign when a value
+// doesn't come from another field. Parallels what a human would write in
+// a sticky's narrative when explaining "where does this come from?"
+enum InferredOrigin {
+  INFERRED_ORIGIN_UNSPECIFIED = 0;
+  INFERRED_ORIGIN_USER_INPUT   = 1;  // persona typed/picked it in a UI
+  INFERRED_ORIGIN_GENERATED    = 2;  // server-assigned (uuid, autoincrement)
+  INFERRED_ORIGIN_CLOCK        = 3;  // current time at execution
+  INFERRED_ORIGIN_CONSTANT     = 4;  // literal baked into the slice
+  INFERRED_ORIGIN_DERIVED      = 5;  // computed from other fields; rationale explains
+  INFERRED_ORIGIN_PASS_THROUGH = 6;  // whole upstream payload copied as-is
+  INFERRED_ORIGIN_AGGREGATED   = 7;  // sum/count/group over a collection
+  INFERRED_ORIGIN_OPAQUE       = 8;  // vendor blob; structure not modeled
+  INFERRED_ORIGIN_UNKNOWN      = 9;  // engine could not determine; needs human input
+}
+
+// A point-source citation: an upstream entity + a path inside its FieldSpec.
+message InferredFieldSource {
+  trogonatlas.eventmodel.v1alpha1.EntityRef from_entity = 1;
+  string field_path = 2;            // e.g. "line_items[].sku"
+}
+
+// The engine's best understanding of where one downstream field's value
+// comes from. Either traceable to an upstream field, or classified as
+// having a non-field origin. confidence and rationale let humans decide
+// whether to trust it or pin a correction in metadata.
+message InferredFieldMapping {
+  trogonatlas.eventmodel.v1alpha1.EntityRef target_entity = 1;
+  string target_field = 2;          // path inside target_entity's FieldSpec
+
+  oneof source {
+    InferredFieldSource from_field = 3;
+    InferredOrigin origin = 4;
+  }
+
+  float confidence = 5;             // 0.0 - 1.0
+  string rationale = 6;             // why the engine reached this conclusion
+}
+
+message InferDataFlowRequest {
+  AnalysisScope scope = 1;
+}
+
+// LLM covers learned inference, including typed evaluation models. Callers
+// need this distinction because provider failures can use deterministic results.
+enum AnalysisProvenance {
+  ANALYSIS_PROVENANCE_UNSPECIFIED   = 0;
+  ANALYSIS_PROVENANCE_DETERMINISTIC = 1;
+  ANALYSIS_PROVENANCE_LLM           = 2;
+}
+
+message InferDataFlowResponse {
+  repeated InferredFieldMapping mappings = 1;
+  AnalysisProvenance provenance = 2;
+  // Stable reason codes when a preferred analyzer could not answer, including
+  // "jev_uncertain", "jev_timeout", or "llm_error". Multiple failed stages
+  // are comma-separated in attempt order. No provider error content is exposed.
+  string fallback_reason = 3;
+}
+
+// A field-flow information-completeness problem the engine surfaced.
+// Trigger-story authoring invariants, such as missing or ambiguous command
+// issuers, are reported as ValidationIssue entries instead.
+message CompletenessGap {
+  enum Kind {
+    KIND_UNSPECIFIED       = 0;
+    KIND_MISSING_SOURCE    = 1;  // output field has no traceable upstream source
+    KIND_AMBIGUOUS_SOURCE  = 2;  // multiple plausible sources, engine can't pick
+    KIND_DANGLING_INPUT    = 3;  // input field is never consumed downstream
+    KIND_NAME_MISMATCH     = 4;  // probable rename across stickies (e.g. customer_id vs buyer_id)
+    KIND_SHAPE_MISMATCH    = 5;  // upstream and downstream shapes incompatible
+    KIND_UNDECLARED_FIELDS = 6;  // entity used in flow has empty FieldSpec
+  }
+  Kind kind = 1;
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 2;
+  string field_path = 3;
+  string explanation = 4;
+  float confidence = 5;
+}
+
+message CheckInformationCompletenessRequest {
+  AnalysisScope scope = 1;
+}
+
+message CheckInformationCompletenessResponse {
+  repeated CompletenessGap gaps = 1;
+  // Aggregate completeness for the scope. 1.0 means every downstream
+  // field has a traceable origin and every input is consumed; lower
+  // values indicate gaps proportional to their severity.
+  float overall_score = 2;
+  AnalysisProvenance provenance = 3;
+  // Non-empty only when the LLM path failed and the handler fell back to
+  // the deterministic engine. Contains a stable short reason code such as
+  // "llm_error" or "llm_timeout". The detailed error is kept server-side
+  // in logs and is never surfaced here.
+  string fallback_reason = 4;
+}

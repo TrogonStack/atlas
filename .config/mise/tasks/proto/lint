@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Lint Atlas protos with buf"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT" && exec buf lint proto "$@"

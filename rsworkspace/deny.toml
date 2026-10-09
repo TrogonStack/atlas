@@ -1,0 +1,43 @@
+[graph]
+targets = []
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "0BSD",
+  "CC0-1.0",
+  "MPL-2.0",
+  "CDLA-Permissive-2.0",
+]
+private = { ignore = true }
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+# Workspace path dependencies carry no version requirement by design; only
+# external wildcard requirements are a hygiene problem.
+allow-wildcard-paths = true
+# Benign duplicate crate versions pulled in by different versions of
+# third-party dependencies. These are not security concerns; skip them
+# until the direct deps align on a common version.
+skip = [
+  { name = "hashbrown" },
+  { name = "indexmap" },
+  { name = "socket2" },
+  { name = "tower" },
+  { name = "windows-sys" },
+]
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"

@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package trogonatlas.catalog.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
+// One row of a content-addressable snapshot of the model. See
+// trogonatlas.api.eventmodel.v1alpha1 GetSnapshotIdRequest / GetSnapshotIdResponse
+// for how this entry is produced and what the snapshot id over it means.
+message SnapshotEntry {
+  // Storage key, the same form used by the change feed and branch deltas.
+  string key = 1;
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 2;
+  // Lowercase hex SHA-256 over the entity's canonical JSON.
+  string content_hash = 3;
+}

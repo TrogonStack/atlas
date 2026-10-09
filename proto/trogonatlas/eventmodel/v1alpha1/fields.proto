@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+// Generic reference to any type definition. Used by FieldSpec when a payload
+// field references another type and the kind is unknown ahead of time.
+message TypeRef {
+  oneof ref {
+    EventRef event = 1;
+    CommandRef command = 2;
+    ReadModelRef read_model = 3;
+    ProcessorRef processor = 4;
+    UIRef ui = 5;
+    PersonaRef persona = 6;
+    SwimlaneRef swimlane = 7;
+  }
+}
+
+// A field's type: a CLOSED vocabulary (the oneof is the finite, checkable
+// kind set -- the interop floor a flat enum used to provide) where every
+// kind carries its own configuration message and can grow parameters
+// without breaking anything. A bare enum cannot say `uuid { version: 5 }`;
+// this can. Empty configs cost zero bytes on the wire.
+message FieldType {
+  oneof kind {
+    StringType string = 1;
+    BoolType bool = 2;
+    IntType int = 3;
+    FloatType float = 4;
+    TimestampType timestamp = 5;
+    UuidType uuid = 6;
+    BytesType bytes = 7;
+    EnumType enumeration = 8;
+    ObjectType object = 9;
+    RefType ref = 10;
+  }
+
+  message StringType {}
+  message BoolType {}
+  message IntType {}
+  message FloatType {}
+  message TimestampType {}
+  message UuidType {
+    // 0 = unspecified. 5 = name-derived (the derivation itself is
+    // registered by name in a Uuidv5IdentityAnnotation on the owning
+    // swimlane); 7 = time-sortable.
+    uint32 version = 1;
+  }
+  message BytesType {}
+  message EnumType {
+    repeated string values = 1;
+  }
+  message ObjectType {
+    repeated FieldSpec fields = 1;
+  }
+  message RefType {
+    TypeRef ref = 1;
+  }
+}
+
+message FieldSpec {
+  string name = 1;
+  FieldType type = 2;
+  bool repeated = 3;
+  bool optional = 4;
+  string doc = 5;
+  // Per-field annotations (e.g. DerivedFieldAnnotation marking the
+  // field as system-generated so it suppresses information-completeness
+  // errors). Each entry is an Any whose type_url identifies the
+  // annotation's schema.
+  repeated google.protobuf.Any metadata = 6;
+}
+
+// Decision #33. A field-bearing entity (Event, Command, ReadModel,
+// ObjectType field) carries its shape as a `Schema` packed into a
+// `google.protobuf.Any`. Two entities whose `schema` Any has the
+// same `type_url` AND same bytes are NOMINALLY the same type --
+// no structural comparison, no twin annotation needed. Schemas can
+// also be top-level Schema entities (set `id`) and referenced by
+// multiple field-bearing entities; the studio renders the schema
+// name on the sticky, the drawer links to the named definition.
+//
+// The `schema` Any may instead hold a message declared by a
+// TypeLibrary in the entity's namespace; the store keeps that
+// library's proto source text and compiles it on demand.
+message Schema {
+  // Optional identity. When set, this Schema can also exist as a
+  // top-level entity in the store; many field-bearing entities can
+  // ref it. When unset, the Schema is inline / anonymous.
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated FieldSpec fields = 4;
+  repeated google.protobuf.Any metadata = 5;
+  trogonatlas.type.v1alpha1.Id supersedes = 6;
+}
+
+enum TypeKind {
+  TYPE_KIND_UNSPECIFIED = 0;
+  TYPE_KIND_EVENT = 1;
+  TYPE_KIND_COMMAND = 2;
+  TYPE_KIND_READ_MODEL = 3;
+  TYPE_KIND_PROCESSOR = 4;
+  TYPE_KIND_UI = 5;
+  TYPE_KIND_PERSONA = 6;
+  TYPE_KIND_SWIMLANE = 7;
+}
+

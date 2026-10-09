@@ -1,0 +1,62 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/trogon-atlas-proto",
+]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+repository = "https://github.com/TrogonStack/atlas"
+
+[workspace.dependencies]
+prost = "0.13"
+prost-types = "0.13"
+tonic = "0.12"
+tracing = "0.1"
+
+[workspace.lints.rust]
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+pedantic = { level = "warn", priority = -1 }
+
+# --- Deliberate noise-lint allows (pedantic subset) ---
+# doc_markdown warnings come from the buf-generated code under trogon-atlas-proto/src/gen,
+# which is regenerated from the proto sources and cannot be edited by hand.
+doc_markdown = "allow"
+# Internal gRPC service: callers see tonic::Status, not free-form error docs.
+# Requiring # Errors sections on every RPC handler is ceremony with no reader benefit.
+missing_errors_doc = "allow"
+# Builder-style getters and pipeline methods on internal types; spurious must_use
+# fires on return values that are routinely used in chained expressions.
+must_use_candidate = "allow"
+# Same rationale as must_use_candidate.
+return_self_not_must_use = "allow"
+# Proto-generated dispatch tables and test bodies declare helpers after setup
+# statements; forcing hoisting harms readability without improving correctness.
+items_after_statements = "allow"
+# Large generated dispatch functions and service handlers; mechanical splitting
+# adds line count without improving comprehension for an internal service.
+too_many_lines = "allow"
+# Short variable names (r, id, ns) are domain convention in proto-handling code.
+similar_names = "allow"
+# Documenting panics in #[test] bodies is pure noise.
+missing_panics_doc = "allow"
+# Both occurrences are in prost-generated code; not editable.
+default_trait_access = "allow"
+# Independent boolean flags whose semantics do not collapse into a meaningful enum.
+struct_excessive_bools = "allow"
+# Every gRPC handler and its helpers return tonic::Status, which is what trips this;
+# boxing it would fight the framework's own signatures, generated code included.
+result_large_err = "allow"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

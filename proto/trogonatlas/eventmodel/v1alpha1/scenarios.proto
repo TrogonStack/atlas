@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "google/protobuf/struct.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/fields.proto";
+// Concrete instance of a typed payload, used in Given / When / Then sections
+// and in storyboard traces.
+//
+// Payloads are carried as google.protobuf.Any so the model stays end-to-end
+// protobuf -- schema (this file) and example values share one type system.
+// The Any.type_url identifies the generated proto message for the referenced
+// Event/Command/ReadModel (codegen target derived from the type's FieldSpec).
+// Tools without generated types can still construct payloads via dynamic
+// descriptors built from FieldSpec, then Any.Pack the result. The Ref next
+// to payload is redundant with type_url but kept for human readability and
+// for tooling that wants to validate consistency.
+//
+// Pre-codegen convention: until generated domain messages exist, payloads
+// are packed as google.protobuf.Struct whose keys mirror the referenced
+// type's FieldSpec names. Tools accept both forms, discriminated by
+// Any.type_url; Struct payloads graduate to generated messages without any
+// schema change here.
+message EventExample {
+  EventRef event = 1;
+  google.protobuf.Any payload = 2;
+}
+
+message CommandExample {
+  CommandRef command = 1;
+  google.protobuf.Any payload = 2;
+}
+
+message ReadModelExample {
+  ReadModelRef read_model = 1;
+  google.protobuf.Any payload = 2;
+}
+
+// A set of events emitted at one step / scenario outcome. Wrapped so it can
+// participate in a oneof.
+message EmittedEvents {
+  repeated EventExample events = 1;
+}
+
+// A command rejected by a CommandSlice. reason_code is machine-readable
+// (e.g. "ORDER_ALREADY_PLACED"); doc is the human explanation.
+message Rejection {
+  string reason_code = 1;
+  string doc = 2;
+}
+
+// Scenario for a CommandSlice.
+//   Given: prior events on the relevant stream(s) that establish state.
+//   When : this command is issued (with concrete payload).
+//   Then : either events emitted, or the command is rejected with a reason.
+message CommandScenario {
+  string id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated EventExample given = 4;
+  CommandExample when = 5;
+
+  oneof then {
+    EmittedEvents emit = 6;
+    Rejection reject = 7;
+  }
+
+  // Per-scenario annotations (e.g. NoteAnnotation, OpenQuestionAnnotation).
+  // Each entry is an Any whose type_url identifies the annotation's schema.
+  repeated google.protobuf.Any metadata = 8;
+}
+
+// Scenario for a ReadModelSlice.
+//   When: these events have occurred.
+//   Then: the read model is in this state.
+// No Given -- the events are the When; the read model has no prior state of
+// its own that isn't itself a projection of the same event history.
+message ReadModelScenario {
+  string id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated EventExample when = 4;
+  ReadModelExample then = 5;
+
+  // Per-scenario annotations (e.g. NoteAnnotation, OpenQuestionAnnotation).
+  // Each entry is an Any whose type_url identifies the annotation's schema.
+  repeated google.protobuf.Any metadata = 6;
+}
+
+// Scenario for an AutomationSlice.
+//   Given: read model state(s) the processor is observing.
+//   When : the trigger condition (free-form doc; e.g. "threshold exceeded",
+//          "every Monday 09:00", "row count > 100").
+//   Then : at most one command issued. Unset = "do nothing" (a valid
+//          outcome that should be documented explicitly for at least one
+//          scenario when relevant).
+message AutomationScenario {
+  string id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated ReadModelExample given = 4;
+  string when_doc = 5;
+  CommandExample then = 6;
+
+  // Per-scenario annotations (e.g. NoteAnnotation, OpenQuestionAnnotation).
+  // Each entry is an Any whose type_url identifies the annotation's schema.
+  repeated google.protobuf.Any metadata = 7;
+}
+
