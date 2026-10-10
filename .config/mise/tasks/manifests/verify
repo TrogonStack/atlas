@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+#MISE description="Verify the manifests match the store: `live [endpoint]` diffs against a running server, `bootstrap` rebuilds an empty store from them"
+# Verify the manifests <-> store guarantees hold.
+#
+#   mise run manifests:verify -- live [endpoint]
+#       Diff every namespace directory under examples/manifests/
+#       against a running server (default http://127.0.0.1:50069).
+#       Exit 1 on any drift. Cheap; run any time.
+#
+#   mise run manifests:verify -- bootstrap
+#       Prove the manifests can rebuild an EMPTY store: ephemeral NATS +
+#       local server, apply namespaces until stable (dependencies cross
+#       namespaces, so one pass is not always enough), then diff everything
+#       and compare entity counts. Requires Docker and a debug build
+#       (cargo build -p trogon-atlas-cli -p trogon-atlas-server).
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ATLAS_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+MANIFESTS="$ATLAS_DIR/examples/manifests"
+TARGET_DIR="$(cd "$ATLAS_DIR/rsworkspace" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+TROGON_ATLAS_BIN="${TROGON_ATLAS_BIN:-$TARGET_DIR/debug/trogon-atlas}"
+SERVER_BIN="${SERVER_BIN:-$TARGET_DIR/debug/trogon-atlas-server}"
+
+[ -x "$TROGON_ATLAS_BIN" ] || { echo "trogon-atlas not built: $TROGON_ATLAS_BIN (cargo build -p trogon-atlas-cli)"; exit 2; }
+
+MANIFEST_ROOTS=("$MANIFESTS")
+if [ -n "${TROGON_ATLAS_EXTRA_FIXTURE_DIRS:-}" ]; then
+  IFS=':' read -r -a extra_roots <<< "$TROGON_ATLAS_EXTRA_FIXTURE_DIRS"
+  for d in "${extra_roots[@]}"; do
+    [ -d "$d" ] && MANIFEST_ROOTS+=("$d")
+  done
+fi
+
+diff_all() {
+  local endpoint="$1" drift=0 out rc ns
+  for root in "${MANIFEST_ROOTS[@]}"; do
+  for d in "$root"/*/; do
+    ns="$(basename "$d")"
+    set +e
+    out="$("$TROGON_ATLAS_BIN" --endpoint "$endpoint" diff -f "$d" 2>&1)"
+    rc=$?
+    set -e
+    if [ $rc -ne 0 ] || [ -n "$out" ]; then
+      echo "DRIFT: $ns"
+      echo "$out" | head -5
+      drift=1
+    fi
+  done
+  done
+  return $drift
+}
+
+mode="${1:-live}"
+case "$mode" in
+  live)
+    endpoint="${2:-http://127.0.0.1:50069}"
+    if diff_all "$endpoint"; then
+      echo "OK: every namespace matches the store at $endpoint"
+    else
+      echo "FAIL: manifests and store have drifted"
+      exit 1
+    fi
+    ;;
+  bootstrap)
+    [ -x "$SERVER_BIN" ] || { echo "server not built: $SERVER_BIN (cargo build -p trogon-atlas-server)"; exit 2; }
+    nats_name="verify-manifests-nats-$$"
+    nats_port="$((20000 + RANDOM % 10000))"
+    grpc_port="$((30000 + RANDOM % 10000))"
+    docker run -d --rm --name "$nats_name" -p "127.0.0.1:$nats_port:4222" nats:2.10.22-alpine -js >/dev/null
+    server_pid=""
+    cleanup() {
+      [ -n "$server_pid" ] && kill "$server_pid" 2>/dev/null || true
+      docker rm -f "$nats_name" >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+    sleep 2
+    TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS=true RUST_LOG=error \
+      "$SERVER_BIN" --store nats --nats-url "127.0.0.1:$nats_port" \
+      --listen "127.0.0.1:$grpc_port" >/dev/null 2>&1 &
+    server_pid=$!
+    sleep 4
+    endpoint="http://127.0.0.1:$grpc_port"
+
+    # Apply until stable: scenario refs cross namespaces, so a namespace can
+    # fail until its dependencies land. Bounded retries; must converge.
+    pending=()
+    for root in "${MANIFEST_ROOTS[@]}"; do
+      for d in "$root"/*/; do pending+=("$d"); done
+    done
+    for _ in 1 2 3 4 5; do
+      next=()
+      for d in "${pending[@]}"; do
+        "$TROGON_ATLAS_BIN" --endpoint "$endpoint" apply -f "$d" >/dev/null 2>&1 || next+=("$d")
+      done
+      [ ${#next[@]} -eq 0 ] && break
+      pending=("${next[@]}")
+    done
+    if [ ${#pending[@]} -gt 0 ] && [ ${#next[@]} -gt 0 ]; then
+      echo "FAIL: namespaces never converged:"
+      for d in "${next[@]}"; do
+        echo "--- $(basename "$d")"
+        "$TROGON_ATLAS_BIN" --endpoint "$endpoint" apply -f "$d" 2>&1 | head -4
+      done
+      exit 1
+    fi
+
+    if diff_all "$endpoint"; then
+      echo "OK: empty store rebuilt from manifests, zero drift"
+    else
+      echo "FAIL: rebuild drifted from manifests"
+      exit 1
+    fi
+    ;;
+  *)
+    echo "usage: mise run manifests:verify -- live [endpoint] | bootstrap"
+    exit 2
+    ;;
+esac

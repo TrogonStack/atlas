@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#MISE description="Build one or all trogon-atlas shipped images (optional first argument names a single image)"
+set -euo pipefail
+
+root="$MISE_PROJECT_ROOT"
+only="${1:-}"
+[ $# -gt 0 ] && shift
+
+for dockerfile in "$root"/devops/docker/images/*/Dockerfile; do
+  dir="$(dirname "$dockerfile")"
+  name="$(basename "$dir")"
+  if [ -n "$only" ] && [ "$only" != "$name" ]; then
+    continue
+  fi
+  if grep -q -- '--mount=type=bind,source=' "$dockerfile"; then
+    ctx="$root"
+  else
+    ctx="$dir"
+  fi
+  echo "building $name (context: $ctx)" >&2
+  docker buildx build --file "$dockerfile" --tag "trogon-atlas/$name:local" "$ctx" "$@"
+done

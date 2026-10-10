@@ -1,0 +1,385 @@
+#!/usr/bin/env bash
+#MISE description="Isolated backup and restore drill for the trogon-atlas store"
+#
+# Isolated backup and restore drill for the trogon-atlas store.
+#
+# Seeds a throwaway source stack, quiesces its writer, backs up every
+# JetStream stream and the SpiceDB relationships, restores them into a second
+# stack built from empty volumes, and verifies the restored deployment. Both
+# stacks get generated compose project names, fresh volumes and synthetic
+# credentials, and are removed on exit. The shared `trogon-atlas` project is
+# never addressed.
+#
+# Requires docker (compose v2), python3, grpcurl, openssl and trogon-atlas.
+#
+#   TROGON_ATLAS_BIN=path                  trogon-atlas binary (default: trogon-atlas on PATH)
+#   TROGON_ATLAS_DRILL_SERVER_IMAGE=image  reuse a server image instead of building one
+#   TROGON_ATLAS_DRILL_WORKDIR=dir         where backups and captures go (default: mktemp)
+#   TROGON_ATLAS_DRILL_KEEP=1              keep the work directory after the run
+
+set -euo pipefail
+unset TROGON_ATLAS_BRANCH TROGON_ATLAS_ENDPOINT TROGON_ATLAS_AUTH_TOKEN
+
+atlas="$MISE_PROJECT_ROOT"
+drill_dir="$atlas/devops/docker/compose/restore-drill"
+manifests="$atlas/examples/manifests"
+proto_dir="$(cd "$atlas/proto" && pwd)"
+
+NATS_BOX_IMAGE="natsio/nats-box:0.18.1"
+ZED_IMAGE="authzed/zed:v1.2.1"
+EXPECTED_STREAMS="TROGON_ATLAS_CHANGES
+KV_trogon-atlas-batches
+KV_trogon-atlas-branches
+KV_trogon-atlas-changesets
+KV_trogon-atlas-entities
+KV_trogon-atlas-namespaces
+KV_trogon-atlas-operations
+KV_trogon-atlas-revisions
+KV_trogon-atlas-writer-lease"
+PRINCIPALS="drill-admin acme-agent globex-agent partner-reader"
+BRANCH="drill-pending"
+TROGON_ATLAS_BIN="${TROGON_ATLAS_BIN:-trogon-atlas}"
+
+run_id="$(openssl rand -hex 4)"
+src="trogon-atlas-drill-$run_id-src"
+dst="trogon-atlas-drill-$run_id-dst"
+work="${TROGON_ATLAS_DRILL_WORKDIR:-$(mktemp -d "${TMPDIR:-/tmp}/trogon-atlas-drill.XXXXXX")}"
+work="$(mkdir -p "$work" && cd "$work" && pwd)/$run_id"
+mkdir -p "$work/backup/nats" "$work/edits"
+touched=""
+
+log() { printf '\033[1;36m[restore-drill]\033[0m %s\n' "$*" >&2; }
+die() { log "FAIL: $*"; exit 1; }
+now() { python3 -c 'import time; print(f"{time.time():.3f}")'; }
+elapsed() { python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.1f}')" "$1" "$2"; }
+
+teardown() {
+  local status=$?
+  for p in $touched; do
+    log "removing project $p and its volumes"
+    dc "$p" down -v --remove-orphans >/dev/null 2>&1 || log "could not remove $p; run: docker compose -p $p down -v"
+  done
+  if [ "${TROGON_ATLAS_DRILL_KEEP:-0}" = "1" ]; then
+    log "kept $work"
+  else
+    rm -rf "$work"
+  fi
+  exit "$status"
+}
+trap teardown EXIT
+trap 'log "FAILED at line $LINENO"' ERR
+
+dc() {
+  local p="$1"
+  shift
+  docker compose -p "$p" --env-file "$work/$p/compose.env" -f "$drill_dir/compose.yaml" "$@"
+}
+
+guard_project() {
+  local p="$1"
+  case "$p" in
+    trogon-atlas-drill-*) ;;
+    *) die "refusing project name '$p': the drill only runs under generated trogon-atlas-drill-* names" ;;
+  esac
+  [ "$p" != "trogon-atlas" ] || die "refusing to target the shared trogon-atlas project"
+  [ -z "$(docker ps -aq --filter "label=com.docker.compose.project=$p")" ] || die "containers for $p already exist"
+  [ -z "$(docker volume ls -q --filter "label=com.docker.compose.project=$p")" ] || die "volumes for $p already exist"
+  for v in nats-data spicedb-data trogon-atlas-mirror; do
+    if docker volume inspect "${p}_$v" >/dev/null 2>&1; then die "volume ${p}_$v already exists"; fi
+  done
+}
+
+secret() { cat "$work/$1/$2"; }
+
+provision() {
+  local p="$1"
+  mkdir -p "$work/$p/secrets"
+  chmod 755 "$work/$p/secrets"
+  for s in nats-password pg-password spicedb-key; do
+    openssl rand -hex 24 >"$work/$p/$s"
+  done
+  : >"$work/$p/secrets/tokens.toml"
+  printf '{' >"$work/$p/tokens.json"
+  local sep="" principal tok
+  for principal in $PRINCIPALS; do
+    tok="$(openssl rand -hex 32)"
+    printf '%s' "$tok" >"$work/$p/token.$principal"
+    printf '%s"%s": "%s"' "$sep" "$principal" "$tok" >>"$work/$p/tokens.json"
+    sep=", "
+    {
+      printf '[principals.%s]\n' "$principal"
+      case "$principal" in
+        drill-admin) printf 'role = "admin"\n' ;;
+        acme-agent) printf 'role = "writer"\nparent = "acme"\n' ;;
+        globex-agent) printf 'role = "writer"\nparent = "globex"\n' ;;
+        partner-reader) printf 'role = "reader"\nparent = "partner"\n' ;;
+      esac
+      printf 'tokens = ["%s"]\n\n' "$tok"
+    } >>"$work/$p/secrets/tokens.toml"
+  done
+  printf '}\n' >>"$work/$p/tokens.json"
+  chmod 644 "$work/$p/secrets/tokens.toml"
+  cat >"$work/$p/compose.env" <<EOF
+TROGON_ATLAS_DRILL_NATS_PASSWORD=$(secret "$p" nats-password)
+TROGON_ATLAS_DRILL_PG_PASSWORD=$(secret "$p" pg-password)
+TROGON_ATLAS_DRILL_SPICEDB_KEY=$(secret "$p" spicedb-key)
+TROGON_ATLAS_DRILL_SECRETS_DIR=$work/$p/secrets
+TROGON_ATLAS_DRILL_SERVER_IMAGE=$server_image
+EOF
+}
+
+natsbox() {
+  local p="$1"
+  shift
+  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp --network "${p}_default" \
+    -v "$work/backup:/backup" "$NATS_BOX_IMAGE" \
+    nats -s "nats://service:$(secret "$p" nats-password)@nats:4222" "$@"
+}
+
+zed() {
+  local p="$1"
+  shift
+  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp --network "${p}_default" \
+    -v "$work/backup:/backup" "$ZED_IMAGE" \
+    --endpoint spicedb:50051 --insecure --token "$(secret "$p" spicedb-key)" "$@"
+}
+
+use_stack() {
+  local p="$1" port
+  port="$(dc "$p" port trogon-atlas-server 50069)"
+  export TROGON_ATLAS_DRILL_ADDR="$port"
+  export TROGON_ATLAS_DRILL_PROTO_DIR="$proto_dir"
+  export TROGON_ATLAS_DRILL_TOKENS="$work/$p/tokens.json"
+  current="$p"
+}
+
+quiet() {
+  "$@" >>"$work/drill.log" 2>&1 || {
+    tail -n 30 "$work/drill.log" >&2
+    return 1
+  }
+}
+
+drill() { python3 "$atlas/.config/mise/lib/restore-drill/drill.py" "$@"; }
+
+trogon_atlas_as() {
+  local who="$1"
+  shift
+  TROGON_ATLAS_AUTH_TOKEN="$(secret "$current" "token.$who")" "$TROGON_ATLAS_BIN" --endpoint "http://$TROGON_ATLAS_DRILL_ADDR" "$@"
+}
+
+edit_manifest() {
+  python3 - "$@" <<'EOF'
+import sys
+source, slug, doc, target = sys.argv[1:]
+docs = open(source).read().split("\n---\n")
+picked = next(d for d in docs if f"\n  name: {slug}\n" in d)
+lines = [f"  doc: {doc}" if l.startswith("  doc: ") else l for l in picked.splitlines()]
+open(target, "w").write("\n".join(lines) + "\n")
+EOF
+}
+
+stream_states() {
+  local p="$1" out="$2" s
+  : >"$out"
+  for s in $EXPECTED_STREAMS; do
+    natsbox "$p" stream info "$s" --json |
+      python3 -c 'import json, sys; i = json.load(sys.stdin); s = i["state"]; print(i["config"]["name"], s["messages"], s["bytes"], s["first_seq"], s["last_seq"])' >>"$out"
+  done
+}
+
+assert_scopes() {
+  python3 - "$1" <<'EOF'
+import json, sys
+from pathlib import Path
+d = Path(sys.argv[1])
+names = lambda p: sorted(n[0] for n in json.loads((d / f"scope.{p}.json").read_text())["namespaces"])
+expect = {
+    "acme-agent": ["acme-customer-data-deletion", "acme-reviews", "acme-storefront"],
+    "globex-agent": ["globex-orders", "ledger"],
+    "partner-reader": ["acme-reviews"],
+}
+for principal, want in expect.items():
+    got = names(principal)
+    if got != want:
+        sys.exit(f"scope for {principal}: expected {want}, got {got}")
+ledger = [n for n in json.loads((d / "scope.globex-agent.json").read_text())["namespaces"] if n[0] == "ledger"][0]
+if not ledger[1].startswith("ns_"):
+    sys.exit(f"ledger should carry a minted id, got {ledger[1]}")
+print("scoped access as expected:", ", ".join(f"{p} -> {len(w)} namespace(s)" for p, w in expect.items()))
+EOF
+}
+
+check_denials() {
+  local body
+  body="$(drill call GetEntity drill-admin '{"kind":"ENTITY_KIND_PERSONA","id":{"namespace":"acme-storefront","slug":"support-agent","version":1}}' |
+    python3 -c 'import json, sys; print(json.dumps({"entity": json.load(sys.stdin)["entity"], "force": True}))')"
+  drill expect-denied PutEntity globex-agent "$body"
+  drill expect-denied PutEntity partner-reader "$body"
+  log "cross-tenant writes refused"
+}
+
+for tool in docker python3 grpcurl openssl "$TROGON_ATLAS_BIN"; do
+  command -v "$tool" >/dev/null 2>&1 || die "missing prerequisite: $tool"
+done
+
+guard_project "$src"
+guard_project "$dst"
+
+if [ -n "${TROGON_ATLAS_DRILL_SERVER_IMAGE:-}" ]; then
+  server_image="$TROGON_ATLAS_DRILL_SERVER_IMAGE"
+  docker image inspect "$server_image" >/dev/null 2>&1 || die "image $server_image not found"
+else
+  server_image="trogon-atlas-restore-drill-server:local"
+  log "building $server_image from the working tree (kept for reuse)"
+  docker build -q -t "$server_image" -f "$atlas/devops/docker/images/trogon-atlas-server/Dockerfile" "$atlas" >/dev/null
+fi
+docker pull -q "$NATS_BOX_IMAGE" >/dev/null
+docker pull -q "$ZED_IMAGE" >/dev/null
+
+provision "$src"
+provision "$dst"
+log "work dir $work, source $src, target $dst"
+
+log "starting source stack"
+touched="$src"
+quiet dc "$src" up -d --wait --wait-timeout 300
+use_stack "$src"
+
+log "seeding acme fixtures as acme-agent (claims acme-* namespaces)"
+trogon_atlas_as acme-agent apply -f "$manifests/acme-storefront" "$manifests/acme-reviews" "$manifests/acme-customer-data-deletion" >/dev/null
+
+log "registering a minted namespace and seeding a second tenant as globex-agent"
+drill call RegisterNamespace globex-agent '{"name":"ledger"}' >/dev/null
+cat >"$work/edits/globex.yaml" <<'EOF'
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: buyer
+  namespace: globex-orders
+spec:
+  doc: Synthetic second tenant written by the restore drill.
+  role: customer
+  title: Buyer
+EOF
+trogon_atlas_as globex-agent apply -f "$work/edits/globex.yaml" >/dev/null
+
+log "sharing acme-reviews with partner-reader directly in SpiceDB"
+quiet zed "$src" relationship create namespace:acme-reviews viewer user:partner-reader
+
+drill cursor >"$work/cursor"
+
+log "editing and reverting a baseline entity to build changeset history"
+edit_manifest "$manifests/acme-reviews/persona.yaml" reviewer "Edited by the restore drill, then reverted." "$work/edits/reviewer.yaml"
+trogon_atlas_as acme-agent apply -f "$work/edits/reviewer.yaml" >/dev/null
+edit_id="$(drill call ListChangesets drill-admin '{"pageSize":1}' | python3 -c 'import json, sys; print(json.load(sys.stdin)["changesets"][0]["id"])')"
+drill call RevertChangeset drill-admin "{\"id\":\"$edit_id\"}" >/dev/null
+
+log "leaving a pending change on branch $BRANCH"
+branch_doc="Pending on $BRANCH, merged only after restore."
+edit_manifest "$manifests/acme-storefront/persona.yaml" shopper "$branch_doc" "$work/edits/shopper.yaml"
+trogon_atlas_as drill-admin branch create "$BRANCH" --doc "restore drill" >/dev/null
+trogon_atlas_as drill-admin --branch "$BRANCH" apply -f "$work/edits/shopper.yaml" >/dev/null
+
+log "capturing source state"
+drill capture "$work/pre" "$work/cursor"
+assert_scopes "$work/pre"
+check_denials
+
+log "quiescing the writer"
+t_quiesce="$(now)"
+quiet dc "$src" stop trogon-atlas-server
+
+streams="$(natsbox "$src" stream ls --names | tr -s ' \t' '\n' | sed '/^$/d' | sort)"
+[ "$streams" = "$EXPECTED_STREAMS" ] || die "stream inventory changed; update the drill and RUNBOOK.md. found: $(echo $streams)"
+
+log "backing up JetStream streams"
+for s in $EXPECTED_STREAMS; do
+  quiet natsbox "$src" stream backup "$s" "/backup/nats/$s" --no-progress
+done
+stream_states "$src" "$work/pre/streams.txt"
+
+log "backing up SpiceDB schema and relationships"
+quiet zed "$src" backup create /backup/spicedb.zedbackup
+t_backup_done="$(now)"
+zed "$src" backup parse-relationships /backup/spicedb.zedbackup | sort >"$work/pre/relationships.txt"
+
+log "removing the source stack before restoring"
+quiet dc "$src" down -v --remove-orphans
+touched=""
+
+log "restoring into $dst"
+t_restore="$(now)"
+touched="$dst"
+quiet dc "$dst" up -d --wait --wait-timeout 300 spicedb
+quiet zed "$dst" backup restore /backup/spicedb.zedbackup
+quiet dc "$dst" up -d --wait --wait-timeout 300 nats
+for s in $EXPECTED_STREAMS; do
+  quiet natsbox "$dst" stream restore "/backup/nats/$s" --no-progress
+done
+stream_states "$dst" "$work/post-streams.txt"
+quiet dc "$dst" up -d --wait --wait-timeout 300 trogon-atlas-server
+t_serving="$(now)"
+use_stack "$dst"
+
+log "capturing restored state"
+drill capture "$work/post" "$work/cursor"
+t_verified="$(now)"
+cp "$work/post-streams.txt" "$work/post/streams.txt"
+quiet zed "$dst" backup create /backup/restored.zedbackup
+zed "$dst" backup parse-relationships /backup/restored.zedbackup | sort >"$work/post/relationships.txt"
+
+log "comparing source and restored state"
+diff -ru "$work/pre" "$work/post" || die "restored state differs from the source"
+assert_scopes "$work/post"
+check_denials
+
+log "merging the restored pending branch"
+trogon_atlas_as drill-admin branch merge "$BRANCH" >/dev/null
+merged_doc="$(drill call GetEntity drill-admin '{"kind":"ENTITY_KIND_PERSONA","id":{"namespace":"acme-storefront","slug":"shopper","version":1}}' |
+  python3 -c 'import json, sys; print(json.load(sys.stdin)["entity"]["persona"]["doc"])')"
+[ "$merged_doc" = "$branch_doc" ] || die "merged shopper doc is '$merged_doc'"
+
+log "resuming the change feed from the pre-backup cursor"
+python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["next"])' "$work/post/changes.json" >"$work/resume"
+drill feed-since "$work/resume" >"$work/resumed.json"
+python3 - "$work/resumed.json" "$work/pre/changes.json" <<'EOF'
+import json, sys
+resumed = json.load(open(sys.argv[1]))["events"]
+before = json.load(open(sys.argv[2]))["events"]
+if not resumed:
+    sys.exit("no events after the restored cursor; the merge did not reach the feed")
+slugs = {e["entity"]["id"]["slug"] for e in resumed}
+if slugs != {"shopper"}:
+    sys.exit(f"unexpected entities after the restored cursor: {slugs}")
+seen = {e["token"] for e in before}
+if any(e["token"] in seen for e in resumed):
+    sys.exit("resumed feed replayed pre-backup events")
+print(f"feed resumed: {len(before)} pre-backup events replayed identically, {len(resumed)} new event(s) after the cursor")
+EOF
+
+log "rebuilding the git mirror from the restored store (mirror is derived, not backed up)"
+quiet dc "$dst" stop trogon-atlas-server
+quiet dc "$dst" run --rm --no-deps trogon-atlas-server export-git /var/lib/trogon-atlas/mirror
+quiet dc "$dst" run --rm --no-deps trogon-atlas-server reconcile --mirror /var/lib/trogon-atlas/mirror ||
+  die "mirror rebuilt from the restored store does not reconcile"
+
+entities="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["entityCount"])' "$work/post/snapshot.json")"
+snapshot="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["snapshotId"])' "$work/post/snapshot.json")"
+changesets="$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1]))))' "$work/pre/changesets.json")"
+relationships="$(wc -l <"$work/pre/relationships.txt" | tr -d ' ')"
+backup_size="$(du -sh "$work/backup/nats" | cut -f1) nats + $(du -h "$work/backup/spicedb.zedbackup" | cut -f1) spicedb"
+
+cat >&2 <<EOF
+
+restore drill passed
+  snapshot id            $snapshot
+  entities               $entities
+  changesets             $changesets
+  spicedb relationships  $relationships
+  backup size            $backup_size
+  writer quiesced        $(elapsed "$t_quiesce" "$t_backup_done")s (writes refused while backing up)
+  restore to serving     $(elapsed "$t_restore" "$t_serving")s
+  verification capture   $(elapsed "$t_serving" "$t_verified")s
+  data-loss window       everything written after the last completed backup
+EOF
