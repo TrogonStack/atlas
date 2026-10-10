@@ -49,7 +49,10 @@ mkdir -p "$work/backup/nats" "$work/edits"
 touched=""
 
 log() { printf '\033[1;36m[restore-drill]\033[0m %s\n' "$*" >&2; }
-die() { log "FAIL: $*"; exit 1; }
+die() {
+  log "FAIL: $*"
+  exit 1
+}
 now() { python3 -c 'import time; print(f"{time.time():.3f}")'; }
 elapsed() { python3 -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.1f}')" "$1" "$2"; }
 
@@ -291,7 +294,7 @@ t_quiesce="$(now)"
 quiet dc "$src" stop trogon-atlas-server
 
 streams="$(natsbox "$src" stream ls --names | tr -s ' \t' '\n' | sed '/^$/d' | LC_ALL=C sort)"
-[ "$streams" = "$(LC_ALL=C sort <<<"$EXPECTED_STREAMS")" ] || die "stream inventory changed; update the drill and RUNBOOK.md. found: $(echo $streams)"
+[ "$streams" = "$(LC_ALL=C sort <<<"$EXPECTED_STREAMS")" ] || die "stream inventory changed; update the drill and RUNBOOK.md. found: $streams"
 
 log "backing up JetStream streams"
 for s in $EXPECTED_STREAMS; do

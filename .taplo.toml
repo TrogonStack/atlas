@@ -1,0 +1,9 @@
+exclude = [
+  "rsworkspace/Cargo.lock",
+  "proto/buf.lock",
+  "rsworkspace/crates/trogon-atlas-proto/src/gen/**",
+  "rsworkspace/crates/trogon-atlas-authzed/src/gen/**",
+]
+
+[formatting]
+column_width = 120

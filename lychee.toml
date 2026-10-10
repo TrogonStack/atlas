@@ -1,0 +1,2 @@
+exclude_loopback = true
+no_progress = true

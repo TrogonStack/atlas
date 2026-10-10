@@ -22,6 +22,11 @@ const sharedEnv = {
   TROGON_ATLAS_GRPC: grpcUrl,
   PORT: '8787',
   HOST: '127.0.0.1',
+  // No NATS WebSocket listener exists in this hermetic stack. Setting this
+  // routes /api/nats-auth to the sse transport (server/index.mjs), which
+  // polls listChanges through the fake gRPC backend instead of the browser
+  // dialing a NATS server that isn't there.
+  NATS_WS_AUTH_TOKEN: 'e2e-fixture-no-direct-nats',
 };
 
 /** @type {import('node:child_process').ChildProcess[]} */
