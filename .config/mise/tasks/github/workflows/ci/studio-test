@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run the Studio workspace test suite"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/tsworkspace"
+exec pnpm test

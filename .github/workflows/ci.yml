@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust - fmt / clippy / test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: Reclaim runner disk
+        run: mise run github:workflows:ci:reclaim-disk
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rsworkspace
+
+      - name: cargo fmt --check
+        run: mise run github:workflows:ci:rust-fmt
+
+      - name: cargo clippy
+        run: mise run github:workflows:ci:rust-clippy
+
+      - name: cargo test
+        env:
+          TROGON_ATLAS_TEST_NATS_URL: ""
+        run: mise run github:workflows:ci:rust-test
+
+  proto:
+    name: Proto - lint / breaking
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: buf lint
+        run: mise run github:workflows:ci:proto-lint
+
+      - name: generated code is up to date
+        run: mise run github:workflows:ci:proto-generated
+
+      - name: buf breaking against main
+        if: github.event_name == 'pull_request'
+        env:
+          TROGON_ATLAS_PROTO_BASELINE_REF: origin/main
+        run: mise run github:workflows:ci:proto-breaking
+
+  studio:
+    name: Studio - typecheck / lint / test / build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: pnpm install
+        run: mise run github:workflows:ci:studio-install
+
+      - name: typecheck
+        run: mise run github:workflows:ci:studio-typecheck
+
+      - name: lint
+        run: mise run github:workflows:ci:studio-lint
+
+      # build before test: the server suite asserts container-mode behaviour
+      # that only exists once dist/ is present.
+      - name: build
+        run: mise run github:workflows:ci:studio-build
+
+      - name: test
+        run: mise run github:workflows:ci:studio-test

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run cargo fmt --all --check across the Rust workspace"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/rsworkspace"
+exec cargo fmt --all --check

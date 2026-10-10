@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="CI entrypoint for the generated proto code drift check"
+set -euo pipefail
+
+exec mise run proto:check-generated

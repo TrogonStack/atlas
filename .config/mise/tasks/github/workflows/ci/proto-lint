@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="CI entrypoint for buf lint on the protos"
+set -euo pipefail
+
+exec mise run proto:lint
