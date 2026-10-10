@@ -17,7 +17,5 @@ tonic = { workspace = true, features = ["tls", "tls-roots"] }
 thiserror = { workspace = true }
 tonic-types = { workspace = true }
 
-tracing = { workspace = true }
-
 [lints]
 workspace = true

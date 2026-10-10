@@ -66,7 +66,7 @@ pub fn validate_id_component(label: &str, value: &str) -> Result<(), Status> {
 /// form (`@<owner>:<name>`, see `crate::ownership::OwnedBranchName`). An
 /// owned-shaped name is validated by `OwnedBranchName::try_parse` itself
 /// (owner charset, then the name half through
-/// [`validate_classic_branch_name`]); anything else falls through to the
+/// `validate_classic_branch_name`); anything else falls through to the
 /// classic grammar unchanged.
 pub fn validate_branch_name(name: &str) -> Result<(), Status> {
     if let Some(result) = crate::ownership::OwnedBranchName::try_parse(name) {

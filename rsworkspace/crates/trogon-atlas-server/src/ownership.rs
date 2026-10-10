@@ -549,7 +549,7 @@ impl NamespaceAuthorizer for RegistryAuthorizer {
 /// this cannot delegate to the existing branch-name validator on the whole
 /// string. It splits on the two delimiters first and validates each half
 /// with the existing per-component rules instead: [`OwnerId::parse`] for the
-/// owner, [`crate::conv::validate_classic_branch_name`] for the name.
+/// owner, `crate::conv::validate_classic_branch_name` for the name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct OwnedBranchName {
     owner: OwnerId,

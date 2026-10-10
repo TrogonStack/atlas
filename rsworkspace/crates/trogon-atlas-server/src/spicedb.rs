@@ -6,7 +6,7 @@
 //! namespace's id, its human name, and whether it exists at all; those are
 //! storage facts, and a permission system is the wrong place to keep them.
 //! What SpiceDB takes over is the single question
-//! [`NamespaceAuthorizer`](crate::ownership::NamespaceAuthorizer) asks: may
+//! [`NamespaceAuthorizer`] asks: may
 //! this caller see, or write, this namespace.
 //!
 //! The gain is not a different answer to today's question. It is that the

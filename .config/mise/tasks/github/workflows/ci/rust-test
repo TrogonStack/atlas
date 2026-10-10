@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-#MISE description="Run cargo test across the Rust workspace (reads TROGON_ATLAS_TEST_NATS_URL and TROGON_ATLAS_EXTRA_FIXTURE_DIRS from the environment)"
+#MISE description="Run cargo nextest and doctests across the Rust workspace (reads TROGON_ATLAS_TEST_NATS_URL and TROGON_ATLAS_EXTRA_FIXTURE_DIRS from the environment)"
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT/rsworkspace"
-exec cargo test --workspace
+cargo nextest run --workspace --profile ci
+cargo test --doc --workspace

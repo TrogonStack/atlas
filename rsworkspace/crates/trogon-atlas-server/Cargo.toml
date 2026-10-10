@@ -48,7 +48,6 @@ toml = "0.8"
 tower = "0.5"
 http = "1"
 http-body = "1"
-pin-project-lite = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tantivy = "0.26"
 prost-reflect = { version = "0.14", features = ["text-format"] }

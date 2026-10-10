@@ -784,7 +784,7 @@ pub struct GetTypeLibraryDescriptorSetResponse {
 // =============================================================================
 //
 // All RPCs are unary except where noted. Map keys for denormalized results
-// are the canonical string form of an Id: "<namespace>/<slug>@<version>".
+// are the canonical string form of an Id: `"<namespace>/<slug>@<version>"`.
 // Tools must not parse this key -- it is opaque routing data. Use the
 // returned Entity.id (or the embedded EntityRef) for any semantic decision.
 //

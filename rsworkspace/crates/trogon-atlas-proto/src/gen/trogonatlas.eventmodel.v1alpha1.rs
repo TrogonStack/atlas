@@ -1544,7 +1544,7 @@ pub mod uuidv5_identity_annotation {
 ///    - When `pinned` is empty and `doc` is non-empty, every stale ref on the
 ///      slice is covered (blanket pin).
 ///    - When `pinned` is non-empty, only refs whose canonical id string
-///      ("<namespace>/<slug>@<version>", using the OLD pinned version) appears
+///      (`"<namespace>/<slug>@<version>"`, using the OLD pinned version) appears
 ///      in the list are silenced; other stale refs on the same slice still fire.
 ///
 /// An empty `doc` covers nothing: silence without a reason is exactly what
@@ -1560,7 +1560,7 @@ pub struct PinnedRefAnnotation {
     pub doc: ::prost::alloc::string::String,
     /// Optional targeted list. Each entry is the canonical id string of a ref
     /// this entity intentionally holds at an older version, formatted as
-    /// "<namespace>/<slug>@<version>" where the version is the OLD pinned
+    /// `"<namespace>/<slug>@<version>"` where the version is the OLD pinned
     /// version. When the list is empty (and doc is non-empty), every stale ref
     /// on this slice is covered by the blanket pin.
     #[prost(string, repeated, tag="2")]

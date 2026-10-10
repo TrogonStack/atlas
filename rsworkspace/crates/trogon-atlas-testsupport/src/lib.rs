@@ -62,7 +62,7 @@ impl TestNats {
     ///
     /// Returns an error when Docker is unavailable or the container fails to
     /// bind. Callers that want a panicking convenience shim should use
-    /// [`TestNats::start_or_panic`].
+    /// [`TestNats::start`].
     pub async fn try_start() -> Result<Self, String> {
         use testcontainers::runners::AsyncRunner;
         let cmd = NatsServerCmd::default().with_jetstream();

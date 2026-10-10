@@ -98,7 +98,7 @@ const LIVE_TAIL_CHANNEL_CAPACITY: usize = 1024;
 /// entity.
 const SCHEMA_VERSION_KEY: &str = "_schema";
 
-/// Value of [`SCHEMA_VERSION_KEY`] for a store whose Event, Command and
+/// Value of `SCHEMA_VERSION_KEY` for a store whose Event, Command and
 /// ReadModel rows declare their fields only through `schema`. A binary that
 /// predates it reads this as a foreign version and refuses to open the store,
 /// so an old server cannot write the retired layout back.
@@ -283,11 +283,11 @@ pub struct NatsStoreConfig {
     pub role: WriterRole,
     /// How long a held writer lease stays valid before another process may
     /// take it over. Every process sharing a `lease_bucket` must agree on
-    /// this value; defaults to [`writer_lease::DEFAULT_LEASE_DURATION`].
+    /// this value; defaults to `writer_lease::DEFAULT_LEASE_DURATION`.
     pub lease_duration: Duration,
     /// How often this process attempts to create, renew, or take over the
     /// writer lease. Defaults to
-    /// [`writer_lease::DEFAULT_LEASE_RENEW_INTERVAL`].
+    /// `writer_lease::DEFAULT_LEASE_RENEW_INTERVAL`.
     pub lease_renew_interval: Duration,
     /// `JetStream` stream holding the change log.
     pub stream: String,

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run cargo llvm-cov with nextest across the Rust workspace, producing lcov output (reads TROGON_ATLAS_TEST_NATS_URL and TROGON_ATLAS_EXTRA_FIXTURE_DIRS from the environment)"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/rsworkspace"
+exec cargo llvm-cov nextest --workspace --lcov --output-path lcov.info
