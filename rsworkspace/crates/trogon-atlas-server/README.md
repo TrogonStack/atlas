@@ -59,7 +59,7 @@ Load a Vercel AI Gateway key into `AI_GATEWAY_API_KEY` through your secret
 manager, then enable `TROGON_ATLAS_JEV=true` on the server. The key stays on
 the server; clients continue using the existing `InferDataFlow` RPC and
 MCP `infer_data_flow` tool. Jev uses Gateway's
-[evaluation API](https://vercel.com/docs/ai-gateway/modalities/evaluation)
+[evaluation API](https://vercel.com/docs/ai-gateway/modalities/decision)
 with `typesafe-ai/jev` and requests zero data retention.
 
 From the `atlas` directory, rebuild the local Compose service after

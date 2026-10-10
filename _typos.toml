@@ -1,0 +1,29 @@
+[files]
+extend-exclude = [
+  "rsworkspace/Cargo.lock",
+  "proto/buf.lock",
+  "tsworkspace/pnpm-lock.yaml",
+  "rsworkspace/crates/trogon-atlas-proto/src/gen",
+  "rsworkspace/crates/trogon-atlas-authzed/src/gen",
+]
+
+[default.extend-words]
+# "unparsable" is the dictionary spelling; "unparseable" is used consistently
+# across this codebase's comments and error messages.
+unparseable = "unparseable"
+# "catch-alls" in a comment, split by the tokenizer into "catch" + "alls".
+alls = "alls"
+# "reordered, recommented, respaced": re-commented, not a misspelling of recommended.
+recommented = "recommented"
+# Deliberate misspellings used as test fixtures for error-path assertions.
+titel = "titel"
+correc = "correc"
+froce = "froce"
+strin = "strin"
+# Short identifiers (variable/field names, synthetic test ids), not words.
+ba = "ba"
+ba1 = "ba1"
+pn = "pn"
+anc = "anc"
+ue = "ue"
+aa = "aa"
