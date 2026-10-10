@@ -102,6 +102,7 @@ non-command logic:
 The wire call is `PutEntity(PutEntityRequest { entity, validate_only, if_match, create_only })`.
 
 The EM command is one of:
+
 - **create-entity** (when `create_only=true`): a request to mint a new entity.
   The `entity` field is the payload. `validate_only` and `if_match` are transport guards.
 - **update-entity** (when `if_match` is set): a request to replace an existing

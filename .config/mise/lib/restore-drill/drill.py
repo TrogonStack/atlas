@@ -29,7 +29,9 @@ class RpcError(Exception):
 
 
 def token(principal):
-    return json.loads(Path(os.environ["TROGON_ATLAS_DRILL_TOKENS"]).read_text())[principal]
+    return json.loads(Path(os.environ["TROGON_ATLAS_DRILL_TOKENS"]).read_text())[
+        principal
+    ]
 
 
 def call(method, principal, body=None):
@@ -57,7 +59,9 @@ def call(method, principal, body=None):
     return json.loads(done.stdout) if done.stdout.strip() else {}
 
 
-def paged(method, principal, body, items, token_in="pageToken", token_out="nextPageToken"):
+def paged(
+    method, principal, body, items, token_in="pageToken", token_out="nextPageToken"
+):
     out, page_token = [], ""
     while True:
         resp = call(method, principal, {**body, token_in: page_token})
@@ -82,7 +86,9 @@ def entity_ref(kind, namespace, slug):
 def change_feed(since):
     events, cursor = [], since
     while True:
-        resp = call("ListChanges", "drill-admin", {"sinceToken": cursor, "pageSize": PAGE})
+        resp = call(
+            "ListChanges", "drill-admin", {"sinceToken": cursor, "pageSize": PAGE}
+        )
         page = resp.get("events", [])
         events.extend(page)
         cursor = resp.get("nextToken", cursor)
@@ -100,16 +106,25 @@ def capture(out_dir, cursor_file):
     write("snapshot", call("GetSnapshotId", "drill-admin", {"includeEntries": True}))
     write(
         "entities",
-        sorted_by_json(paged("ListEntities", "drill-admin", {"pageSize": PAGE}, "entities")),
+        sorted_by_json(
+            paged("ListEntities", "drill-admin", {"pageSize": PAGE}, "entities")
+        ),
     )
     write(
         "namespaces",
-        sorted(call("ListNamespaces", "drill-admin").get("namespaces", []), key=lambda n: n["id"]),
+        sorted(
+            call("ListNamespaces", "drill-admin").get("namespaces", []),
+            key=lambda n: n["id"],
+        ),
     )
     write(
         "etags",
         [
-            call("GetEntity", "drill-admin", {"kind": k, "id": {"namespace": n, "slug": s, "version": 1}})
+            call(
+                "GetEntity",
+                "drill-admin",
+                {"kind": k, "id": {"namespace": n, "slug": s, "version": 1}},
+            )
             for k, n, s in PROBES
         ],
     )
@@ -119,7 +134,9 @@ def capture(out_dir, cursor_file):
         write(
             f"scope.{principal}",
             {
-                "namespaces": sorted((n["name"], n["id"], n.get("parent", "")) for n in namespaces),
+                "namespaces": sorted(
+                    (n["name"], n["id"], n.get("parent", "")) for n in namespaces
+                ),
                 "snapshot_id": snap.get("snapshotId"),
                 "entity_count": snap.get("entityCount", 0),
             },
@@ -135,7 +152,10 @@ def capture(out_dir, cursor_file):
         paged(
             "GetEntityHistory",
             "drill-admin",
-            {"ref": entity_ref("ENTITY_KIND_PERSONA", "acme-reviews", "reviewer"), "pageSize": PAGE},
+            {
+                "ref": entity_ref("ENTITY_KIND_PERSONA", "acme-reviews", "reviewer"),
+                "pageSize": PAGE,
+            },
             "revisions",
         ),
     )

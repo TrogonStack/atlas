@@ -127,7 +127,7 @@ already answers "which entities differ" without it.
 
 ## Using it
 
-```
+```text
 # Pin the state a report describes.
 GetSnapshotId(namespaces: ["billing"])
   -> snapshot_id: "9f2c...", entity_count: 412, truncated: false

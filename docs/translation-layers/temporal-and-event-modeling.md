@@ -109,7 +109,7 @@ not one atomic moment.
 
 The honest decomposition: four commands, three automations, one loop edge:
 
-```
+```text
 [workflow-started-view RM]
     ↓ automation: turn-runner
 run-agent (command)

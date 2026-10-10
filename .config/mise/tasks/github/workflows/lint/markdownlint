@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run markdownlint-cli2 on docs and READMEs"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+exec markdownlint-cli2

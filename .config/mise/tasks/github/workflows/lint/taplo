@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run taplo fmt --check across the repository's TOML files"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+exec taplo fmt --check

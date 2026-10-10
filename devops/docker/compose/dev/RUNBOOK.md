@@ -244,7 +244,7 @@ The `.env` file is gitignored and never committed.
   the whole deployment to whoever reaches it, so the listener binds the
   container's loopback; a published port would not have confined it, because
   OrbStack resolves every container by DNS regardless.
-- trogon-atlas-server metrics: http://127.0.0.1:9100/metrics
+- trogon-atlas-server metrics: <http://127.0.0.1:9100/metrics>
 
 ## Rolling deploys and batch recovery
 
