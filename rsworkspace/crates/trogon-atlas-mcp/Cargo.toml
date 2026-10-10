@@ -1,0 +1,45 @@
+[package]
+name = "trogon-atlas-mcp"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "MCP stdio adapter mapping each EventModelService RPC to an MCP tool."
+
+[[bin]]
+name = "trogon-atlas-mcp"
+path = "src/main.rs"
+
+[dependencies]
+trogon-atlas-client = { workspace = true }
+trogon-atlas-core = { workspace = true }
+trogon-atlas-proto = { workspace = true }
+tonic = { workspace = true, features = ["tls", "tls-roots"] }
+prost = { workspace = true }
+prost-reflect = { version = "0.14", features = ["serde"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = "1"
+rmcp = { version = "2", features = ["server", "transport-io"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+base64 = { workspace = true }
+
+[dev-dependencies]
+prost-types = { workspace = true }
+trogon-atlas-server = { workspace = true }
+trogon-atlas-store = { workspace = true }
+trogon-atlas-testsupport = { workspace = true }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true }
+tower = "0.5"
+toml = "0.8"
+rmcp = { version = "2", features = ["server", "client", "transport-io"] }
+
+[lints]
+workspace = true
