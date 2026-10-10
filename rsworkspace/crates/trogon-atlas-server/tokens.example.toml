@@ -1,0 +1,76 @@
+# trogon-atlas token registry -- EXAMPLE FILE, NOT FOR PRODUCTION USE
+#
+# Copy this file to a location outside the repository (e.g.
+# ~/.config/trogon-atlas/tokens.toml or a Docker secret mount) and populate
+# it with real tokens generated via:
+#
+#   openssl rand -hex 32
+#
+# Then point the server at it:
+#
+#   TROGON_ATLAS_AUTH_TOKENS_FILE=/path/to/tokens.toml
+#
+# Roles: reader < writer < admin
+#   reader  -- read-only RPCs (Get*, List*, Search*, Diff*, projections, etc.)
+#   writer  -- reader + PutEntity, BatchMutate, LLM inference RPCs
+#   admin   -- writer + DeleteByQuery and future destructive RPCs
+#
+# Two tokens under one principal support rotation: add the new token, switch
+# the client, remove the old token. Both tokens are valid during the window.
+#
+# Edits to this file, and to any secret it names, are picked up by a running
+# server within TROGON_ATLAS_AUTH_TOKENS_RELOAD_INTERVAL seconds (5 by default,
+# 0 to pin the registry to whatever startup read). Nothing here needs a
+# restart, so that interval is also the worst case for a revocation to take
+# effect. A file that fails to parse or validate is refused with the previous
+# one left in force, and the server logs why.
+#
+# Where the key itself lives. `tokens` puts it inline, which is fine for a
+# dev stack. `token_files` points at a file holding one key, which is what an
+# orchestrator's secret mount gives you and what keeps the key out of this
+# file, out of the environment, and out of `docker inspect`. A relative path
+# resolves against the directory holding *this* file, not the server's working
+# directory. A trailing newline in the secret file is ignored. A principal
+# must declare at least one of the two, and the server refuses to start if a
+# named secret file is missing or empty.
+#
+# `namespaces` is an optional write allow-list: exact names and a trailing
+# wildcard (`orders`, `shop-*`). Omit it, and the principal writes anywhere.
+# It never restricts reads -- a bounded context is only useful to its
+# neighbours if they can read across the seam. See
+# docs/explanation/authorization.md, "Namespace scope".
+
+[principals.studio-gateway]
+role = "reader"
+tokens = ["9f2c4a8e1b7d3f6a0c5e8b2d4f7a9c1e3b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a"]
+
+[principals.orders-team-agent]
+role = "writer"
+tokens = ["3d5f7a9c1e4b6d8f0a2c5e7b9d1f3a5c7e9b0d2f4a6c8e0b1a3c5e7b9d2f4a6c"]
+# Writes its own context only; still reads the whole model.
+namespaces = ["orders", "orders-*"]
+
+[principals.mcp]
+role = "writer"
+tokens = [
+  "1a3c5e7b9d2f4a6c8e0b3d5f7a9c1e4b6d8f0a2c5e7b9d1f3a5c7e9b0d2f4a6c",
+  # rotation in progress: remove after the MCP host switches over
+  "7e9b1d3f5a8c0e2b4d6f9a1c3e5b7d0f2a4c6e8b1d3f5a7c9e0b2d4f6a8c1e3b",
+]
+
+[principals.alex-cli]
+role = "admin"
+tokens = ["4b6d8f0a2c4e6b8d0f2a4c6e8b0d2f4a9f2c4a8e1b7d3f6a0c5e8b2d4f7a9c1e"]
+
+# The same principal shape, with the key read from a mounted secret instead of
+# written above. Generate one with:
+#
+#   openssl rand -hex 32 > /run/secrets/trogon-atlas-ci.key
+#   chmod 0600 /run/secrets/trogon-atlas-ci.key
+#
+[principals.ci]
+role = "writer"
+token_files = ["/run/secrets/trogon-atlas-ci.key"]
+namespaces = ["orders"]
+parent = "acme"
+
