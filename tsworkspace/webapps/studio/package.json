@@ -26,7 +26,7 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "express": "5.2.1",
-    "lucide-react": "0.475.0",
+    "lucide-react": "1.52.0",
     "nats.ws": "1.30.3",
     "nuqs": "2.9.0",
     "protobufjs": "7.6.5",
