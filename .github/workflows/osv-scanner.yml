@@ -1,0 +1,48 @@
+name: OSV-Scanner
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  schedule:
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: osv-scanner
+        id: scan
+        continue-on-error: true
+        run: mise run github:workflows:osv-scanner:scan
+
+      - name: Upload SARIF
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: results.sarif
+
+      - name: Fail on vulnerabilities
+        if: ${{ steps.scan.outcome == 'failure' }}
+        run: exit 1
