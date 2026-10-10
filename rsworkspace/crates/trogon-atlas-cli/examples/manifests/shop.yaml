@@ -1,0 +1,90 @@
+# A tiny end-to-end model showing the manifest format trogon-atlas applies.
+# Try it:
+#   trogon-atlas apply -f rsworkspace/crates/trogon-atlas-cli/examples/manifests/ --dry-run
+#   trogon-atlas apply -f rsworkspace/crates/trogon-atlas-cli/examples/manifests/
+#   trogon-atlas diff  -f rsworkspace/crates/trogon-atlas-cli/examples/manifests/
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata: { namespace: trogon-atlas-example, name: buyer }
+spec:
+  title: Buyer
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata: { namespace: trogon-atlas-example, name: order }
+spec:
+  title: Order
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: trogon-atlas-example, name: order.placed }
+spec:
+  title: Order placed
+  swimlane: order # bare string = ref shorthand; expands to {id: {namespace, slug, version: 1}}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata: { namespace: trogon-atlas-example, name: place-order }
+spec:
+  title: Place order
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata: { namespace: trogon-atlas-example, name: checkout }
+spec:
+  title: Checkout
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata: { namespace: trogon-atlas-example, name: place-order-slice }
+spec:
+  title: Place order
+  doc: The buyer confirms the cart.
+  persona: buyer
+  ui: checkout
+  command: place-order
+  emittedEvents: [order.placed]
+  scenarios:
+    - id: happy
+      title: Order accepted
+      when: place-order
+      emit:
+        events: [order.placed]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata: { namespace: trogon-atlas-example, name: order-status }
+spec:
+  title: Order status
+  sourceEvents:
+    # Cross-namespace and version-pinned refs use the long string form.
+    - order.placed
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata: { namespace: trogon-atlas-example, name: order-status-slice }
+spec:
+  title: Order status renders
+  readModel: order-status
+  sourceEvents: [order.placed]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata: { namespace: trogon-atlas-example, name: buy-flow }
+spec:
+  title: Buy flow
+  entry:
+    human:
+      persona: buyer
+      ui: checkout
+  slices:
+    - id: place-order-slice
+    - id: order-status-slice
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata: { namespace: trogon-atlas-example, name: shop }
+spec:
+  title: Shop
+  members:
+    - { kind: storyboard, id: buy-flow } # enum shorthand: storyboard == ENTITY_KIND_STORYBOARD

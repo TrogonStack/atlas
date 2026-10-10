@@ -1,0 +1,33 @@
+[package]
+name = "trogon-atlas-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+description = "kubectl-style CLI (trogon-atlas): apply declarative YAML manifests of event-model entities to the trogon-atlas server."
+
+[[bin]]
+name = "trogon-atlas"
+path = "src/main.rs"
+
+[dependencies]
+trogon-atlas-client = { workspace = true }
+trogon-atlas-core = { workspace = true }
+trogon-atlas-proto = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+trogon-atlas-server = { workspace = true }
+trogon-atlas-store = { workspace = true }
+trogon-atlas-testsupport = { workspace = true }
+tokio-stream = { workspace = true, features = ["net"] }
+tonic = { workspace = true }
+
+[lints]
+workspace = true

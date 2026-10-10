@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/trogon-atlas-authzed",
+  "crates/trogon-atlas-cli",
   "crates/trogon-atlas-client",
   "crates/trogon-atlas-core",
   "crates/trogon-atlas-proto",
