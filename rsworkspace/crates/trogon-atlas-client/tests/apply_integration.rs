@@ -1292,3 +1292,80 @@ async fn a_manifest_set_can_introduce_a_type_and_its_first_event_together() {
     let (diff, changed) = apply::render_diff(&plan, &resolved.types).unwrap();
     assert!(!changed, "{diff}");
 }
+
+/// A principal bound to one owner, same shape as
+/// `trogon-atlas-server/tests/namespace_ownership.rs`: a real tonic server
+/// with the ownership axis of authorization switched on over the client's
+/// own `BearerAuth` interceptor, so a payload naming a namespace that has
+/// never been written exercises `require_visible`'s NotFound exactly as a
+/// scoped `trogon-atlas apply` would.
+const OWNED_TOKEN: &str = "owned-writer-token";
+
+async fn start_owner_scoped_server() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let grpc = EventModelServiceServer::new(svc);
+
+    let toml = format!(
+        r#"
+[principals.owned-writer]
+role = "writer"
+tokens = ["{OWNED_TOKEN}"]
+parent = "acme"
+"#
+    );
+    let file: trogon_atlas_server::auth::RegistryFile =
+        toml::from_str(&toml).expect("valid registry TOML");
+    let registry =
+        trogon_atlas_server::auth::TokenRegistry::from_file_contents(file).expect("valid registry");
+    let auth = trogon_atlas_server::auth::BearerAuth::new(Arc::new(registry));
+    let data_plane = tonic::service::interceptor::InterceptedService::new(
+        tower::ServiceBuilder::new()
+            .layer(trogon_atlas_server::auth::AuthzLayer)
+            .service(grpc),
+        auth,
+    );
+
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(data_plane)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+
+    format!("http://{addr}")
+}
+
+const UNCLAIMED_NAMESPACE_MANIFEST: &str = r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata: { namespace: acme-customer-data-deletion, name: requester }
+spec: { title: Requester }
+";
+
+/// Regression test: a scoped principal's first apply into a namespace
+/// nobody has written yet must not fail just because
+/// `GetTypeLibraryDescriptorSet` reports the namespace NotFound. The server
+/// still gets the final word on whether the write itself is allowed; this
+/// only checks that fetching type libraries for an invisible-because-new
+/// namespace does not short-circuit the apply before that write happens.
+#[tokio::test]
+async fn apply_into_an_unclaimed_namespace_succeeds_for_a_scoped_principal() {
+    let endpoint = start_owner_scoped_server().await;
+    let mut client = client::connect(&endpoint, Some(OWNED_TOKEN), 30)
+        .await
+        .unwrap();
+
+    let documents = manifest::read_str(UNCLAIMED_NAMESPACE_MANIFEST, "t").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .expect("an unclaimed namespace must transcode as having no served type libraries yet");
+    let plan = apply::plan(&mut client, resolved.manifests).await.unwrap();
+    let out = apply::apply(&mut client, plan, false, None).await.unwrap();
+    for line in &out.lines {
+        assert!(line.ends_with(" created"), "{line}");
+    }
+}
