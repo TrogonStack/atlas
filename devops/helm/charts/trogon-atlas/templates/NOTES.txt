@@ -37,4 +37,7 @@ trogon-atlas-studio (HTTP):
 {{- end }}
 
 The chart does not deploy NATS JetStream. Point server.config.natsUrl at an
-existing NATS installation (current value: {{ .Values.server.config.natsUrl }}).
+existing NATS installation
+{{- if .Values.server.config.natsUrlSecret.name }} (from Secret {{ .Values.server.config.natsUrlSecret.name }}).
+{{- else }} (current value: {{ regexReplaceAll "://[^/@]+@" .Values.server.config.natsUrl "://***@" }}).
+{{- end }}

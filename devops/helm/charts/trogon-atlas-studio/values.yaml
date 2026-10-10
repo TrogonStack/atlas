@@ -54,11 +54,14 @@ config:
   # Only used when the server runs with insecureAllowAnonymous: that
   # listener hands every browser the same read of every namespace, so a
   # studio holding any credential routes the feed through the bridge
-  # instead, where it is authorized per caller.
+  # instead. That routing is authorized per caller only when
+  # auth.passthrough is also true; otherwise it is scoped to the bridge's
+  # one principal.
   natsWsUrl: ""
   # Credential the listener requires, if you closed it. The bridge never
   # hands it to a browser (one shared token is one shared permission set),
-  # so setting it only forces that same per-caller routing.
+  # so setting it only forces that same bridge-scoped (or, with
+  # auth.passthrough, per-caller) routing.
   natsWsAuthToken:
     value: ""
     existingSecret: ""

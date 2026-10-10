@@ -72,7 +72,7 @@ Container artifacts live next to this README:
 
 ```sh
 # Build static-musl images and stand up server + NATS + MCP adapter.
-docker compose -f experiments/eventmodeling-data/docker-compose.yml up --build
+docker compose -f devops/docker/compose/dev/compose.yaml up --build
 ```
 
 The compose file is the recommended deployment shape: NATS JetStream is the
@@ -93,7 +93,7 @@ The fast path is to drive `trogon-atlas-mcp` from an LLM. The slow path is to
 craft `Entity` messages directly via gRPC. A fully populated e-commerce model
 (2 swimlanes, 2 personas, 3 events, 3 commands, 2 read models, 2 UIs, 2
 processors, 7 slices, 1 storyboard, 1 event model) is built programmatically
-in `atlas/rsworkspace/crates/trogon-atlas-server/tests/phase10_ecommerce_fixture.rs` and
+in `rsworkspace/crates/trogon-atlas-server/tests/phase10_ecommerce_fixture.rs` and
 serves as the reference for what a complete model looks like.
 
 Each mutation flows through the same path:

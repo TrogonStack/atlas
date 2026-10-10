@@ -57,7 +57,9 @@ every namespace. So the bridge offers it only when nothing on the
 deployment is scoped: the server runs with `insecureAllowAnonymous` and
 studio has no `auth.token` configured. Any other configuration gives
 studio a credential, and it routes the feed through its own change stream
-instead, which the server authorizes per caller. `config.natsWsUrl` is the
+instead. That stream is authorized per caller only when `auth.passthrough`
+is also `true`; otherwise every upstream call uses the bridge's one
+principal, same as the gRPC calls above. `config.natsWsUrl` is the
 browser-reachable WebSocket URL for that anonymous path.
 `config.natsWsAuthToken` closes the listener but is never handed to a
 browser, so setting it forces that same per-caller routing rather than

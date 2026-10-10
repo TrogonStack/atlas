@@ -18,13 +18,11 @@ const atlasRoot = path.resolve(studioRoot, '..', '..', '..');
 const fixturesCompose = path.join(atlasRoot, 'devops', 'docker', 'compose', 'dev', 'compose.yaml');
 const fixturesOverride = path.join(atlasRoot, 'devops', 'docker', 'compose', 'dev', 'compose.override.yaml');
 const chartDir = path.join(atlasRoot, 'devops', 'helm', 'charts', 'trogon-atlas');
+const serverChartDir = path.join(atlasRoot, 'devops', 'helm', 'charts', 'trogon-atlas-server');
+const studioChartDir = path.join(atlasRoot, 'devops', 'helm', 'charts', 'trogon-atlas-studio');
 const studioDockerfile = path.join(atlasRoot, 'devops', 'docker', 'images', 'trogon-atlas-studio', 'Dockerfile');
 
 const HELM_TIMEOUT_MS = 30_000;
-
-beforeAll(() => {
-  execFileSync('helm', ['dependency', 'update', chartDir], { encoding: 'utf8', stdio: 'pipe' });
-}, HELM_TIMEOUT_MS);
 
 function loadServiceCtor(protoPath, includeDir) {
   const definition = protoLoader.loadSync(protoPath, {
@@ -99,34 +97,39 @@ describe('dev compose PROTO_PATH', () => {
   });
 });
 
-describe('helm studio auth with tokensFile', { timeout: HELM_TIMEOUT_MS }, () => {
-  it('renders TROGON_ATLAS_AUTH_TOKEN for studio when server uses tokensFile and studio.auth.token is set', () => {
-    const tokensFile = path.join(os.tmpdir(), `trogon-atlas-tokens-${process.pid}.toml`);
-    fs.writeFileSync(
-      tokensFile,
-      `[[tokens]]\ntoken = "srv-secret"\nprincipal = "studio"\nroles = ["admin"]\n`,
-    );
-    try {
-      const rendered = execFileSync(
-        'helm',
-        [
-          'template',
-          'test',
-          chartDir,
-          '--set-file',
-          `server.auth.tokensFile.content=${tokensFile}`,
-          '--set',
-          'studio.auth.token.value=srv-secret',
-          '--set',
-          'server.config.natsUrl=nats://svc:pw@nats:4222',
-        ],
-        { encoding: 'utf8' },
+describe('helm chart contract', () => {
+  beforeAll(() => {
+    execFileSync('helm', ['dependency', 'update', chartDir], { encoding: 'utf8', stdio: 'pipe' });
+  }, HELM_TIMEOUT_MS);
+
+  describe('helm studio auth with tokensFile', { timeout: HELM_TIMEOUT_MS }, () => {
+    it('renders TROGON_ATLAS_AUTH_TOKEN for studio when server uses tokensFile and studio.auth.token is set', () => {
+      const tokensFile = path.join(os.tmpdir(), `trogon-atlas-tokens-${process.pid}.toml`);
+      fs.writeFileSync(
+        tokensFile,
+        `[[tokens]]\ntoken = "srv-secret"\nprincipal = "studio"\nroles = ["admin"]\n`,
       );
-      const out = execFileSync(
-        'python3',
-        [
-          '-c',
-          `import sys,yaml
+      try {
+        const rendered = execFileSync(
+          'helm',
+          [
+            'template',
+            'test',
+            chartDir,
+            '--set-file',
+            `server.auth.tokensFile.content=${tokensFile}`,
+            '--set',
+            'studio.auth.token.value=srv-secret',
+            '--set',
+            'server.config.natsUrl=nats://svc:pw@nats:4222',
+          ],
+          { encoding: 'utf8' },
+        );
+        const out = execFileSync(
+          'python3',
+          [
+            '-c',
+            `import sys,yaml
 docs=list(yaml.safe_load_all(sys.stdin))
 found=False
 for d in docs:
@@ -137,28 +140,197 @@ for d in docs:
     found=any(e.get("name")=="TROGON_ATLAS_AUTH_TOKEN" for e in env)
 print("yes" if found else "no")
 `,
-        ],
-        { encoding: 'utf8', input: rendered },
-      ).trim();
-      expect(
-        out,
-        'studio.enabled defaults true; tokensFile is the recommended server auth; studio.auth.token must supply TROGON_ATLAS_AUTH_TOKEN',
-      ).toBe('yes');
-    } finally {
-      fs.unlinkSync(tokensFile);
-    }
+          ],
+          { encoding: 'utf8', input: rendered },
+        ).trim();
+        expect(
+          out,
+          'studio.enabled defaults true; tokensFile is the recommended server auth; studio.auth.token must supply TROGON_ATLAS_AUTH_TOKEN',
+        ).toBe('yes');
+      } finally {
+        fs.unlinkSync(tokensFile);
+      }
+    });
+
+    it('template-fails when studio.enabled and tokensFile without studio.auth.token', () => {
+      const tokensFile = path.join(os.tmpdir(), `trogon-atlas-tokens-fail-${process.pid}.toml`);
+      fs.writeFileSync(
+        tokensFile,
+        `[[tokens]]\ntoken = "srv-secret"\nprincipal = "studio"\nroles = ["admin"]\n`,
+      );
+      try {
+        let err;
+        try {
+          execFileSync(
+            'helm',
+            [
+              'template',
+              'test',
+              chartDir,
+              '--set-file',
+              `server.auth.tokensFile.content=${tokensFile}`,
+              '--set',
+              'server.config.natsUrl=nats://svc:pw@nats:4222',
+            ],
+            { encoding: 'utf8' },
+          );
+        } catch (e) {
+          err = e;
+        }
+        expect(err, 'helm template must fail without studio.auth.token').toBeTruthy();
+        const msg = String(err.stderr || err.message || err);
+        expect(msg).toMatch(/studio\.auth\.token|TROGON_ATLAS_AUTH_TOKEN/);
+      } finally {
+        fs.unlinkSync(tokensFile);
+      }
+    });
+
+    it('template-fails when the server authenticates callers but reaches NATS anonymously', () => {
+      // Ownership lives in a KV bucket in that store, so an open NATS is a way
+      // around the server rather than a way into it: the lens keeps enforcing
+      // against a registry anyone may rewrite.
+      const tokensFile = path.join(os.tmpdir(), `trogon-atlas-tokens-store-${process.pid}.toml`);
+      fs.writeFileSync(
+        tokensFile,
+        `[[tokens]]\ntoken = "srv-secret"\nprincipal = "studio"\nroles = ["admin"]\n`,
+      );
+      const base = [
+        'template',
+        'test',
+        chartDir,
+        '--set-file',
+        `server.auth.tokensFile.content=${tokensFile}`,
+        '--set',
+        'studio.auth.token.value=srv-secret',
+      ];
+      try {
+        let err;
+        try {
+          execFileSync('helm', base, { encoding: 'utf8' });
+        } catch (e) {
+          err = e;
+        }
+        expect(err, 'helm template must fail on a credential-less natsUrl').toBeTruthy();
+        expect(String(err.stderr || err.message || err)).toMatch(/natsUrl carries no credentials/);
+
+        // The escape hatch, for a store closed some other way.
+        expect(() =>
+          execFileSync('helm', [...base, '--set', 'server.config.acknowledgeUnauthenticatedStore=true'], {
+            encoding: 'utf8',
+          }),
+        ).not.toThrow();
+      } finally {
+        fs.unlinkSync(tokensFile);
+      }
+    });
   });
 
-  it('template-fails when studio.enabled and tokensFile without studio.auth.token', () => {
-    const tokensFile = path.join(os.tmpdir(), `trogon-atlas-tokens-fail-${process.pid}.toml`);
-    fs.writeFileSync(
-      tokensFile,
-      `[[tokens]]\ntoken = "srv-secret"\nprincipal = "studio"\nroles = ["admin"]\n`,
-    );
-    try {
-      let err;
+  describe('helm spicedb wiring', { timeout: HELM_TIMEOUT_MS }, () => {
+    const base = ['template', 'test', chartDir, '--set', 'server.auth.insecureAllowAnonymous=true'];
+
+    function render(extra) {
+      return execFileSync('helm', [...base, ...extra], { encoding: 'utf8' });
+    }
+
+    // helm only renders NOTES.txt on install, and `install --dry-run=client`
+    // still calls the cluster. A throwaway manifest that includes the same
+    // template keeps the assertion on the real notes without one.
+    function renderNotes(extra) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trogon-atlas-notes-'));
       try {
-        execFileSync(
+        const chartCopy = path.join(dir, 'trogon-atlas');
+        fs.cpSync(chartDir, chartCopy, { recursive: true });
+        fs.writeFileSync(
+          path.join(chartCopy, 'templates', 'zz-notes-probe.yaml'),
+          'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notes-probe\ndata:\n  notes: |\n{{ include "trogon-atlas/templates/NOTES.txt" . | indent 4 }}\n',
+        );
+        return execFileSync(
+          'helm',
+          [
+            'template',
+            'test',
+            chartCopy,
+            '-s',
+            'templates/zz-notes-probe.yaml',
+            '--set',
+            'server.auth.insecureAllowAnonymous=true',
+            ...extra,
+          ],
+          { encoding: 'utf8' },
+        );
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    function refusal(extra) {
+      try {
+        execFileSync('helm', [...base, ...extra], { encoding: 'utf8' });
+      } catch (e) {
+        return String(e.stderr || e.message || e);
+      }
+      return null;
+    }
+
+    const on = [
+      '--set',
+      'server.spicedb.endpoint=http://spicedb:50051',
+      '--set',
+      'server.spicedb.presharedKey.value=sekret',
+    ];
+
+    it('leaves the server on the registry authorizer by default, and says so', () => {
+      // The gap this closes: before, a chart install could not turn SpiceDB on
+      // at all, so every cluster silently answered visibility from the registry.
+      const rendered = render([]);
+      expect(rendered).not.toMatch(/TROGON_ATLAS_SPICEDB_ENDPOINT/);
+
+      expect(renderNotes([])).toMatch(/registry's own parent column/);
+    });
+
+    it('passes the endpoint, the freshness and a secret-backed key to the server', () => {
+      const rendered = render([...on, '--set', 'server.spicedb.freshness=fully-consistent']);
+      expect(rendered).toMatch(/TROGON_ATLAS_SPICEDB_ENDPOINT/);
+      expect(rendered).toMatch(/value: "fully-consistent"/);
+      // The key reaches the container through a Secret reference, never as a
+      // literal in the pod spec.
+      expect(rendered).toMatch(/name: TROGON_ATLAS_SPICEDB_PRESHARED_KEY\n\s+valueFrom:/);
+    });
+
+    it('refuses a key with no endpoint, the way the server itself does', () => {
+      // The server bails on exactly this pair. Rendering it would trade a
+      // helm error for a CrashLoopBackOff.
+      const msg = refusal(['--set', 'server.spicedb.presharedKey.value=sekret']);
+      expect(msg).toMatch(/presharedKey is set without server\.spicedb\.endpoint/);
+    });
+
+    it('refuses an endpoint with no key', () => {
+      const msg = refusal(['--set', 'server.spicedb.endpoint=http://spicedb:50051']);
+      expect(msg).toMatch(/endpoint is set without server\.spicedb\.presharedKey/);
+    });
+
+    it('refuses a freshness the server would reject', () => {
+      const msg = refusal([...on, '--set', 'server.spicedb.freshness=whenever']);
+      expect(msg).toMatch(/not one of minimize-latency, fully-consistent/);
+    });
+
+    it('refuses to skip the startup sync with nothing else publishing grants', () => {
+      // Startup sync and the token-file reload are one code path. Skipping it
+      // means SpiceDB never learns about any principal, so every check answers
+      // no and every caller sees an empty model.
+      const msg = refusal([...on, '--set', 'server.spicedb.skipStartupSync=true']);
+      expect(msg).toMatch(/nothing would ever publish grants/);
+
+      expect(() =>
+        render([...on, '--set', 'server.spicedb.skipStartupSync=true', '--set', 'server.spicedb.sync.enabled=true']),
+      ).not.toThrow();
+    });
+
+    it('gives the sync CronJob the token file, because membership comes from there', () => {
+      const tokensFile = path.join(os.tmpdir(), `trogon-atlas-tokens-spicedb-${process.pid}.toml`);
+      fs.writeFileSync(tokensFile, `[principals.ci]\nrole = "writer"\ntokens = ["a"]\nparent = "acme"\n`);
+      try {
+        const rendered = execFileSync(
           'helm',
           [
             'template',
@@ -167,189 +339,20 @@ print("yes" if found else "no")
             '--set-file',
             `server.auth.tokensFile.content=${tokensFile}`,
             '--set',
+            'studio.auth.token.value=t',
+            '--set',
             'server.config.natsUrl=nats://svc:pw@nats:4222',
+            ...on,
+            '--set',
+            'server.spicedb.sync.enabled=true',
           ],
           { encoding: 'utf8' },
         );
-      } catch (e) {
-        err = e;
-      }
-      expect(err, 'helm template must fail without studio.auth.token').toBeTruthy();
-      const msg = String(err.stderr || err.message || err);
-      expect(msg).toMatch(/studio\.auth\.token|TROGON_ATLAS_AUTH_TOKEN/);
-    } finally {
-      fs.unlinkSync(tokensFile);
-    }
-  });
-
-  it('template-fails when the server authenticates callers but reaches NATS anonymously', () => {
-    // Ownership lives in a KV bucket in that store, so an open NATS is a way
-    // around the server rather than a way into it: the lens keeps enforcing
-    // against a registry anyone may rewrite.
-    const tokensFile = path.join(os.tmpdir(), `trogon-atlas-tokens-store-${process.pid}.toml`);
-    fs.writeFileSync(
-      tokensFile,
-      `[[tokens]]\ntoken = "srv-secret"\nprincipal = "studio"\nroles = ["admin"]\n`,
-    );
-    const base = [
-      'template',
-      'test',
-      chartDir,
-      '--set-file',
-      `server.auth.tokensFile.content=${tokensFile}`,
-      '--set',
-      'studio.auth.token.value=srv-secret',
-    ];
-    try {
-      let err;
-      try {
-        execFileSync('helm', base, { encoding: 'utf8' });
-      } catch (e) {
-        err = e;
-      }
-      expect(err, 'helm template must fail on a credential-less natsUrl').toBeTruthy();
-      expect(String(err.stderr || err.message || err)).toMatch(/natsUrl carries no credentials/);
-
-      // The escape hatch, for a store closed some other way.
-      expect(() =>
-        execFileSync('helm', [...base, '--set', 'server.config.acknowledgeUnauthenticatedStore=true'], {
-          encoding: 'utf8',
-        }),
-      ).not.toThrow();
-    } finally {
-      fs.unlinkSync(tokensFile);
-    }
-  });
-});
-
-describe('helm spicedb wiring', { timeout: HELM_TIMEOUT_MS }, () => {
-  const base = ['template', 'test', chartDir, '--set', 'server.auth.insecureAllowAnonymous=true'];
-
-  function render(extra) {
-    return execFileSync('helm', [...base, ...extra], { encoding: 'utf8' });
-  }
-
-  // helm only renders NOTES.txt on install, and `install --dry-run=client`
-  // still calls the cluster. A throwaway manifest that includes the same
-  // template keeps the assertion on the real notes without one.
-  function renderNotes(extra) {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trogon-atlas-notes-'));
-    try {
-      const chartCopy = path.join(dir, 'trogon-atlas');
-      fs.cpSync(chartDir, chartCopy, { recursive: true });
-      fs.writeFileSync(
-        path.join(chartCopy, 'templates', 'zz-notes-probe.yaml'),
-        'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notes-probe\ndata:\n  notes: |\n{{ include "trogon-atlas/templates/NOTES.txt" . | indent 4 }}\n',
-      );
-      return execFileSync(
-        'helm',
-        [
-          'template',
-          'test',
-          chartCopy,
-          '-s',
-          'templates/zz-notes-probe.yaml',
-          '--set',
-          'server.auth.insecureAllowAnonymous=true',
-          ...extra,
-        ],
-        { encoding: 'utf8' },
-      );
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  }
-
-  function refusal(extra) {
-    try {
-      execFileSync('helm', [...base, ...extra], { encoding: 'utf8' });
-    } catch (e) {
-      return String(e.stderr || e.message || e);
-    }
-    return null;
-  }
-
-  const on = [
-    '--set',
-    'server.spicedb.endpoint=http://spicedb:50051',
-    '--set',
-    'server.spicedb.presharedKey.value=sekret',
-  ];
-
-  it('leaves the server on the registry authorizer by default, and says so', () => {
-    // The gap this closes: before, a chart install could not turn SpiceDB on
-    // at all, so every cluster silently answered visibility from the registry.
-    const rendered = render([]);
-    expect(rendered).not.toMatch(/TROGON_ATLAS_SPICEDB_ENDPOINT/);
-
-    expect(renderNotes([])).toMatch(/registry's own parent column/);
-  });
-
-  it('passes the endpoint, the freshness and a secret-backed key to the server', () => {
-    const rendered = render([...on, '--set', 'server.spicedb.freshness=fully-consistent']);
-    expect(rendered).toMatch(/TROGON_ATLAS_SPICEDB_ENDPOINT/);
-    expect(rendered).toMatch(/value: "fully-consistent"/);
-    // The key reaches the container through a Secret reference, never as a
-    // literal in the pod spec.
-    expect(rendered).toMatch(/name: TROGON_ATLAS_SPICEDB_PRESHARED_KEY\n\s+valueFrom:/);
-  });
-
-  it('refuses a key with no endpoint, the way the server itself does', () => {
-    // The server bails on exactly this pair. Rendering it would trade a
-    // helm error for a CrashLoopBackOff.
-    const msg = refusal(['--set', 'server.spicedb.presharedKey.value=sekret']);
-    expect(msg).toMatch(/presharedKey is set without server\.spicedb\.endpoint/);
-  });
-
-  it('refuses an endpoint with no key', () => {
-    const msg = refusal(['--set', 'server.spicedb.endpoint=http://spicedb:50051']);
-    expect(msg).toMatch(/endpoint is set without server\.spicedb\.presharedKey/);
-  });
-
-  it('refuses a freshness the server would reject', () => {
-    const msg = refusal([...on, '--set', 'server.spicedb.freshness=whenever']);
-    expect(msg).toMatch(/not one of minimize-latency, fully-consistent/);
-  });
-
-  it('refuses to skip the startup sync with nothing else publishing grants', () => {
-    // Startup sync and the token-file reload are one code path. Skipping it
-    // means SpiceDB never learns about any principal, so every check answers
-    // no and every caller sees an empty model.
-    const msg = refusal([...on, '--set', 'server.spicedb.skipStartupSync=true']);
-    expect(msg).toMatch(/nothing would ever publish grants/);
-
-    expect(() =>
-      render([...on, '--set', 'server.spicedb.skipStartupSync=true', '--set', 'server.spicedb.sync.enabled=true']),
-    ).not.toThrow();
-  });
-
-  it('gives the sync CronJob the token file, because membership comes from there', () => {
-    const tokensFile = path.join(os.tmpdir(), `trogon-atlas-tokens-spicedb-${process.pid}.toml`);
-    fs.writeFileSync(tokensFile, `[principals.ci]\nrole = "writer"\ntokens = ["a"]\nparent = "acme"\n`);
-    try {
-      const rendered = execFileSync(
-        'helm',
-        [
-          'template',
-          'test',
-          chartDir,
-          '--set-file',
-          `server.auth.tokensFile.content=${tokensFile}`,
-          '--set',
-          'studio.auth.token.value=t',
-          '--set',
-          'server.config.natsUrl=nats://svc:pw@nats:4222',
-          ...on,
-          '--set',
-          'server.spicedb.sync.enabled=true',
-        ],
-        { encoding: 'utf8' },
-      );
-      const out = execFileSync(
-        'python3',
-        [
-          '-c',
-          `import sys,yaml
+        const out = execFileSync(
+          'python3',
+          [
+            '-c',
+            `import sys,yaml
 docs=list(yaml.safe_load_all(sys.stdin))
 for d in docs:
   if not d: continue
@@ -360,18 +363,88 @@ for d in docs:
     mounts={m["name"] for m in c.get("volumeMounts") or []}
     print(",".join(c["args"]), "TROGON_ATLAS_AUTH_TOKENS_FILE" in env, "auth-tokens" in mounts)
 `,
-        ],
-        { encoding: 'utf8', input: rendered },
-      ).trim();
-      expect(out).toBe('sync-spicedb True True');
-    } finally {
-      fs.unlinkSync(tokensFile);
-    }
+          ],
+          { encoding: 'utf8', input: rendered },
+        ).trim();
+        expect(out).toBe('sync-spicedb True True');
+      } finally {
+        fs.unlinkSync(tokensFile);
+      }
+    });
+
+    it('refuses a sync CronJob with nothing to sync to', () => {
+      const msg = refusal(['--set', 'server.spicedb.sync.enabled=true']);
+      expect(msg).toMatch(/sync\.enabled=true without server\.spicedb\.endpoint/);
+    });
+  });
+});
+
+describe('helm server chart NOTES redact NATS credentials', () => {
+  function renderNotes(extra) {
+    const out = execFileSync(
+      'helm',
+      ['install', 'test', serverChartDir, '--dry-run=client', '--set', 'auth.insecureAllowAnonymous=true', ...extra],
+      { encoding: 'utf8' },
+    );
+    // NOTES.txt comes last; the pod spec above it carries the real
+    // credentialed URL, which is not what redaction is about.
+    return out.slice(out.indexOf('NOTES:'));
+  }
+
+  it('redacts userinfo from a plain natsUrl', () => {
+    const notes = renderNotes(['--set', 'config.natsUrl=nats://svc:pw@nats:4222']);
+    expect(notes).toMatch(/nats:\/\/\*\*\*@nats:4222/);
+    expect(notes).not.toMatch(/svc:pw/);
   });
 
-  it('refuses a sync CronJob with nothing to sync to', () => {
-    const msg = refusal(['--set', 'server.spicedb.sync.enabled=true']);
-    expect(msg).toMatch(/sync\.enabled=true without server\.spicedb\.endpoint/);
+  it('prints the secret name instead of the URL when natsUrlSecret is set', () => {
+    const notes = renderNotes(['--set', 'config.natsUrlSecret.name=my-nats-creds']);
+    expect(notes).toMatch(/from Secret my-nats-creds/);
+  });
+});
+
+describe('helm studio chart readiness and token mount', () => {
+  function render(extra) {
+    return execFileSync('helm', ['template', 'test', studioChartDir, ...extra], { encoding: 'utf8' });
+  }
+
+  function studioDeploymentField(rendered, pythonExpr) {
+    return execFileSync(
+      'python3',
+      [
+        '-c',
+        `import sys,yaml
+docs=list(yaml.safe_load_all(sys.stdin))
+d=next(x for x in docs if x and x.get("kind")=="Deployment")
+print(${pythonExpr})
+`,
+      ],
+      { encoding: 'utf8', input: rendered },
+    ).trim();
+  }
+
+  it('does not automount the service account token', () => {
+    const rendered = render([]);
+    const out = studioDeploymentField(rendered, 'd["spec"]["template"]["spec"]["automountServiceAccountToken"]');
+    expect(out).toBe('False');
+  });
+
+  it('falls back to a tcpSocket readiness probe when passthrough has no bridge credential', () => {
+    const rendered = render(['--set', 'auth.passthrough=true']);
+    const out = studioDeploymentField(
+      rendered,
+      '"tcpSocket" if "tcpSocket" in d["spec"]["template"]["spec"]["containers"][0]["readinessProbe"] else "httpGet"',
+    );
+    expect(out).toBe('tcpSocket');
+  });
+
+  it('keeps the /api/info readiness probe when a bridge credential is configured', () => {
+    const rendered = render(['--set', 'auth.passthrough=true', '--set', 'auth.token.value=srv-secret']);
+    const out = studioDeploymentField(
+      rendered,
+      '"tcpSocket" if "tcpSocket" in d["spec"]["template"]["spec"]["containers"][0]["readinessProbe"] else "httpGet"',
+    );
+    expect(out).toBe('httpGet');
   });
 });
 

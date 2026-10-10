@@ -30,6 +30,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "trogon-atlas-studio.serviceAccountName" . }}
+      automountServiceAccountToken: false
       {{- with $studio.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -97,6 +98,16 @@ spec:
               port: http
             periodSeconds: 2
             failureThreshold: 30
+          {{- if and $studio.auth.passthrough (not $studio.auth.token.value) (not $studio.auth.token.existingSecret) }}
+          # Passthrough with no bridge credential means /api/info has no
+          # caller token to forward, so an authenticated server answers the
+          # probe's bearer-less request with UNAUTHENTICATED. Fall back to a
+          # TCP check; readiness no longer tracks upstream availability.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          {{- else }}
           # /api/info proxies the gRPC server, so readiness tracks upstream
           # availability while liveness stays local to avoid restart loops
           # during a server outage.
@@ -105,6 +116,7 @@ spec:
               path: /api/info
               port: http
             periodSeconds: 10
+          {{- end }}
           livenessProbe:
             tcpSocket:
               port: http

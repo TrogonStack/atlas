@@ -53,7 +53,7 @@ backup with every `trogon-atlas-server` replica stopped. With no writer,
 neither side moves while the other is copied.
 
 ```sh
-docker compose -f atlas/devops/docker/compose/dev/compose.yaml stop trogon-atlas-server
+docker compose -f devops/docker/compose/dev/compose.yaml stop trogon-atlas-server
 
 export NATS_URL=nats://service:${TROGON_ATLAS_NATS_PASSWORD:-localdevpass}@nats.trogon-atlas.orb.local:4222
 backup=./backup-$(date +%Y%m%d%H%M)
@@ -70,7 +70,7 @@ docker run --rm --network trogon-atlas_trogon-atlas -v "$PWD/$backup/spicedb:/ba
   --token "${TROGON_ATLAS_SPICEDB_PRESHARED_KEY:-localdevkey}" \
   backup create /backup/spicedb.zedbackup
 
-docker compose -f atlas/devops/docker/compose/dev/compose.yaml start trogon-atlas-server
+docker compose -f devops/docker/compose/dev/compose.yaml start trogon-atlas-server
 ```
 
 If `nats stream ls` shows a stream not in the table, stop and find out what
@@ -116,7 +116,7 @@ down. A NATS snapshot without the matching SpiceDB snapshot loses every
 share.
 
 ```sh
-docker compose -f atlas/devops/docker/compose/dev/compose.yaml down
+docker compose -f devops/docker/compose/dev/compose.yaml down
 for v in nats-data spicedb-data; do
   docker run --rm -v "trogon-atlas_$v:/data" -v "$(pwd)/backups":/backup \
     alpine tar czf "/backup/$v-$(date +%Y%m%d).tar.gz" -C /data .
@@ -140,10 +140,13 @@ If the volume is lost, rebuild it from the store with `export-git`. Live
 mirroring only ever appends as writes arrive, so a fresh mirror otherwise
 starts empty and fills in from the next mutation onward:
 
+This and the other commands below inherit `--store` and the credentialed
+`--nats-url` from the container's environment; passing either flag
+explicitly overrides the credentialed URL and fails auth.
+
 ```sh
-docker compose -f atlas/devops/docker/compose/dev/compose.yaml exec trogon-atlas-server \
-  trogon-atlas-server --store=nats --nats-url=nats://nats:4222 \
-    export-git /var/lib/trogon-atlas/mirror
+docker compose -f devops/docker/compose/dev/compose.yaml exec trogon-atlas-server \
+  trogon-atlas-server export-git /var/lib/trogon-atlas/mirror
 ```
 
 `export-git` writes a snapshot, not an accumulation: an entity the store no
@@ -160,7 +163,7 @@ entities into the store, which is the restore path when the *store* is the
 thing that was lost:
 
 ```sh
-docker compose -f atlas/devops/docker/compose/dev/compose.yaml exec trogon-atlas-server \
+docker compose -f devops/docker/compose/dev/compose.yaml exec trogon-atlas-server \
   trogon-atlas-server import-git /var/lib/trogon-atlas/mirror
 ```
 
@@ -176,7 +179,7 @@ A mirror produced by `export-git` carries the owners too, in
 `namespaces.json`. Add `--restore-namespaces` to put them back:
 
 ```sh
-docker compose -f atlas/devops/docker/compose/dev/compose.yaml exec trogon-atlas-server \
+docker compose -f devops/docker/compose/dev/compose.yaml exec trogon-atlas-server \
   trogon-atlas-server import-git /var/lib/trogon-atlas/mirror --restore-namespaces
 ```
 
@@ -199,9 +202,8 @@ migration has needed it) the mirror is stale until every modified entity
 is no-op read-write through the server. To verify, run:
 
 ```sh
-docker compose -f atlas/devops/docker/compose/dev/compose.yaml exec trogon-atlas-server \
-  trogon-atlas-server --store=nats --nats-url=nats://nats:4222 \
-    reconcile --mirror /var/lib/trogon-atlas/mirror
+docker compose -f devops/docker/compose/dev/compose.yaml exec trogon-atlas-server \
+  trogon-atlas-server reconcile --mirror /var/lib/trogon-atlas/mirror
 ```
 
 The command walks both sides, compares them by `(kind, ns, slug,
@@ -217,7 +219,7 @@ branch to catch silent divergence.
 ### Volume snapshot
 
 ```sh
-docker compose -f atlas/devops/docker/compose/dev/compose.yaml down
+docker compose -f devops/docker/compose/dev/compose.yaml down
 docker run --rm \
   -v trogon-atlas_trogon-atlas-mirror:/data \
   -v "$(pwd)/backups":/backup \
@@ -229,7 +231,7 @@ docker run --rm \
 Copy `.env.example` to `.env` and fill in values before starting the stack:
 
 ```sh
-cp atlas/devops/docker/compose/dev/.env.example atlas/devops/docker/compose/dev/.env
+cp devops/docker/compose/dev/.env.example devops/docker/compose/dev/.env
 ```
 
 The `.env` file is gitignored and never committed.
