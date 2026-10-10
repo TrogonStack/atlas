@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run cargo clippy across the Rust workspace with warnings as errors"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/rsworkspace"
+exec cargo clippy --workspace --all-targets -- -D warnings

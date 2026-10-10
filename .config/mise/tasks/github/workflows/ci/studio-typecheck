@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Typecheck the Studio workspace"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/tsworkspace"
+exec pnpm typecheck
