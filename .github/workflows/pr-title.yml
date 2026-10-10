@@ -1,0 +1,17 @@
+name: SemConv
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions: {}
+
+jobs:
+  lint-pr-title:
+    name: Validate PR Title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: TrogonStack/github-actions/actions/semconv/pull-request@87e6ef38afa59f9abf63ed6997d076163a02e4fa # semconv-pull-request@v0.0.1
