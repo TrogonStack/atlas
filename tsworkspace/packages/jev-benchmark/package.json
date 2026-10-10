@@ -1,0 +1,22 @@
+{
+  "name": "trogon-atlas-jev-benchmark",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "benchmark": "node --experimental-transform-types src/benchmark.ts",
+    "test": "node --experimental-transform-types --test src/benchmark.test.ts",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "4.2.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.10",
+    "@types/node": "22.20.5",
+    "typescript": "5.9.3"
+  }
+}
