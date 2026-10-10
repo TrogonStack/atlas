@@ -117,13 +117,24 @@ pub async fn transcode_pool(client: &mut Client, scope: &TypeScope) -> Result<Tr
     }
     let mut files = TenantFiles::default();
     for namespace in &scope.namespaces {
-        let served = client
+        let served = match client
             .get_type_library_descriptor_set(pb::GetTypeLibraryDescriptorSetRequest {
                 namespace: namespace.clone(),
             })
             .await
-            .with_context(|| format!("GetTypeLibraryDescriptorSet for namespace {namespace:?}"))?
-            .into_inner();
+        {
+            Ok(response) => response.into_inner(),
+            // A namespace nobody has claimed yet is invisible to a scoped
+            // caller; the write itself decides whether it may claim it.
+            Err(status) if status.code() == tonic::Code::NotFound => {
+                pb::GetTypeLibraryDescriptorSetResponse::default()
+            }
+            Err(status) => {
+                return Err(anyhow::Error::new(status).context(format!(
+                    "GetTypeLibraryDescriptorSet for namespace {namespace:?}"
+                )))
+            }
+        };
         let served = FileDescriptorSet::decode(served.file_descriptor_set.as_slice())
             .with_context(|| format!("decoding the type libraries of namespace {namespace:?}"))?;
         let pending: Vec<TypeLibrarySource> =
