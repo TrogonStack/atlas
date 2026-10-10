@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Install Playwright's Chromium browser for the Studio e2e suite"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/tsworkspace/webapps/studio"
+exec pnpm exec playwright install --with-deps chromium
