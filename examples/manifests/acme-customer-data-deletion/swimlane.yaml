@@ -1,0 +1,18 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: deletion
+  namespace: acme-customer-data-deletion
+spec:
+  doc: One customer's deletion request through to completion.
+  order: 1
+  state:
+  - name: status
+    type:
+      enumeration:
+        values:
+        - requested
+        - in-progress
+        - completed
+  streamId: customer-{customer_id}
+  title: Deletion

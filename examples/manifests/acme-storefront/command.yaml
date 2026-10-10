@@ -1,0 +1,108 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: add-item-to-cart
+  namespace: acme-storefront
+spec:
+  doc: Add a product to the shopper's cart.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: cart_id
+      type:
+        uuid: {}
+    - name: product_id
+      type:
+        uuid: {}
+    - name: quantity
+      type:
+        int: {}
+  swimlane:
+    id:
+      namespace: acme-storefront
+      slug: cart
+      version: '1'
+  title: Add item to cart
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: place-order
+  namespace: acme-storefront
+spec:
+  doc: Place an order from the shopper's cart.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: cart_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-storefront
+      slug: order
+      version: '1'
+  title: Place order
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: capture-payment
+  namespace: acme-storefront
+spec:
+  doc: Worker-issued. Records that Acme Payments captured the order's payment.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the worker records the outcome
+        kind: KIND_TIMESTAMP
+      name: paid_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-storefront
+      slug: order
+      version: '1'
+  title: Capture payment
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: mark-fulfilled
+  namespace: acme-storefront
+spec:
+  doc: Worker-issued. Records that Acme Shipping Carrier confirmed delivery.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the worker records the outcome
+        kind: KIND_TIMESTAMP
+      name: fulfilled_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-storefront
+      slug: fulfillment
+      version: '1'
+  title: Mark fulfilled

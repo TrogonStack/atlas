@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata:
+  name: retail-commerce
+  namespace: acme-storefront
+spec:
+  doc: Buying, paying for, and fulfilling physical goods sold through the Acme storefront.
+  title: Retail Commerce

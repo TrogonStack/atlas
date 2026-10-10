@@ -1,0 +1,87 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: capture-payment-auto
+  namespace: acme-storefront
+spec:
+  doc: Calls Acme Payments to capture the order's payment.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-storefront
+        slug: capture-payment
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-storefront
+        slug: payment-capture-worker
+        version: '1'
+  scenarios:
+  - doc: Queue row.
+    given:
+    - readModel:
+        id:
+          namespace: acme-storefront
+          slug: pending-payments
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-storefront
+          slug: capture-payment
+          version: '1'
+    title: Payment captured
+    whenDoc: Acme Payments returns a successful capture.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-storefront
+        slug: pending-payments
+        version: '1'
+  title: Capture payment
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: mark-fulfilled-auto
+  namespace: acme-storefront
+spec:
+  doc: Calls Acme Shipping Carrier to dispatch the order and records delivery confirmation.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-storefront
+        slug: mark-fulfilled
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-storefront
+        slug: carrier-dispatch-worker
+        version: '1'
+  scenarios:
+  - doc: Queue row.
+    given:
+    - readModel:
+        id:
+          namespace: acme-storefront
+          slug: fulfillment-queue
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-storefront
+          slug: mark-fulfilled
+          version: '1'
+    title: Delivery confirmed
+    whenDoc: Acme Shipping Carrier confirms delivery.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-storefront
+        slug: fulfillment-queue
+        version: '1'
+  title: Dispatch to carrier

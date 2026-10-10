@@ -1,0 +1,193 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: add-item-to-cart-slice
+  namespace: acme-storefront
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-storefront
+        slug: add-item-to-cart
+        version: '1'
+  doc: The shopper adds a product to their cart.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: cart.item-added
+        version: '1'
+  persona:
+    persona:
+      id:
+        namespace: acme-storefront
+        slug: shopper
+        version: '1'
+  scenarios:
+  - doc: First item added.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-storefront
+            slug: cart.item-added
+            version: '1'
+    id: first-item
+    title: Item added
+    when:
+      command:
+        id:
+          namespace: acme-storefront
+          slug: add-item-to-cart
+          version: '1'
+  title: Add item to cart
+  ui:
+    ui:
+      id:
+        namespace: acme-storefront
+        slug: storefront-checkout
+        version: '1'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: place-order-slice
+  namespace: acme-storefront
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-storefront
+        slug: place-order
+        version: '1'
+  doc: The shopper places an order from their cart.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.placed
+        version: '1'
+  persona:
+    persona:
+      id:
+        namespace: acme-storefront
+        slug: shopper
+        version: '1'
+  scenarios:
+  - doc: Cart has at least one item.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-storefront
+            slug: order.placed
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: acme-storefront
+          slug: cart.item-added
+          version: '1'
+    id: has-items
+    title: Order placed
+    when:
+      command:
+        id:
+          namespace: acme-storefront
+          slug: place-order
+          version: '1'
+  title: Place order
+  ui:
+    ui:
+      id:
+        namespace: acme-storefront
+        slug: storefront-checkout
+        version: '1'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: capture-payment-slice
+  namespace: acme-storefront
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-storefront
+        slug: capture-payment
+        version: '1'
+  doc: Acme Payments captured the order's payment.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.paid
+        version: '1'
+  scenarios:
+  - doc: Payment captured.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-storefront
+            slug: order.paid
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: acme-storefront
+          slug: order.placed
+          version: '1'
+    id: captured
+    title: Payment captured
+    when:
+      command:
+        id:
+          namespace: acme-storefront
+          slug: capture-payment
+          version: '1'
+  title: Capture payment
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: mark-fulfilled-slice
+  namespace: acme-storefront
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-storefront
+        slug: mark-fulfilled
+        version: '1'
+  doc: Acme Shipping Carrier confirmed delivery.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.fulfilled
+        version: '1'
+  scenarios:
+  - doc: Delivery confirmed.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-storefront
+            slug: order.fulfilled
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: acme-storefront
+          slug: order.paid
+          version: '1'
+    id: delivered
+    title: Delivery confirmed
+    when:
+      command:
+        id:
+          namespace: acme-storefront
+          slug: mark-fulfilled
+          version: '1'
+  title: Mark fulfilled

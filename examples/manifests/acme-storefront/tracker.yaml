@@ -1,0 +1,45 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Tracker
+metadata:
+  name: storefront-buildout
+  namespace: acme-storefront
+spec:
+  doc: Delivery tracking for the storefront model. The tracker points at the model; the model never points back.
+  items:
+  - status: TRACK_STATUS_DONE
+    subject:
+      id:
+        namespace: acme-storefront
+        slug: add-item-to-cart-slice
+        version: '1'
+      kind: ENTITY_KIND_COMMAND_SLICE
+  - status: TRACK_STATUS_DONE
+    subject:
+      id:
+        namespace: acme-storefront
+        slug: place-order-slice
+        version: '1'
+      kind: ENTITY_KIND_COMMAND_SLICE
+  - status: TRACK_STATUS_IN_PROGRESS
+    subject:
+      id:
+        namespace: acme-storefront
+        slug: capture-payment-auto
+        version: '1'
+      kind: ENTITY_KIND_AUTOMATION_SLICE
+  - doc: waiting on carrier sandbox credentials
+    status: TRACK_STATUS_BLOCKED
+    subject:
+      id:
+        namespace: acme-storefront
+        slug: mark-fulfilled-auto
+        version: '1'
+      kind: ENTITY_KIND_AUTOMATION_SLICE
+  - status: TRACK_STATUS_TODO
+    subject:
+      id:
+        namespace: acme-storefront
+        slug: order-tracking-ui-slice
+        version: '1'
+      kind: ENTITY_KIND_UI_SLICE
+  title: Storefront buildout

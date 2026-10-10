@@ -1,0 +1,29 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: ordering
+  namespace: acme-storefront
+spec:
+  classification: CLASSIFICATION_CORE
+  doc: Cart, checkout, and payment capture for a single order.
+  domain:
+    id:
+      namespace: acme-storefront
+      slug: retail-commerce
+      version: '1'
+  title: Ordering
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: fulfillment
+  namespace: acme-storefront
+spec:
+  classification: CLASSIFICATION_SUPPORTING
+  doc: Dispatching a paid order to the shipping carrier and confirming delivery.
+  domain:
+    id:
+      namespace: acme-storefront
+      slug: retail-commerce
+      version: '1'
+  title: Fulfillment

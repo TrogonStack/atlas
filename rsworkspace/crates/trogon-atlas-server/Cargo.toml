@@ -61,6 +61,7 @@ tracing-opentelemetry = "0.33"
 wiremock = "0.6"
 trogon-atlas-testsupport = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+trogon-atlas-client = { workspace = true }
 proptest = "1"
 async-trait = { workspace = true }
 

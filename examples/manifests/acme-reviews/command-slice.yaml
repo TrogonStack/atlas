@@ -1,0 +1,99 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: grant-review-eligibility-slice
+  namespace: acme-reviews
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-reviews
+        slug: grant-review-eligibility
+        version: '1'
+  doc: Worker-issued once a delivered order clears the no-review window.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-reviews
+        slug: review-eligibility.granted
+        version: '1'
+  scenarios:
+  - doc: Order delivered.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-reviews
+            slug: review-eligibility.granted
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: acme-storefront
+          slug: order.fulfilled
+          version: '1'
+    id: delivered
+    title: Eligibility granted
+    when:
+      command:
+        id:
+          namespace: acme-reviews
+          slug: grant-review-eligibility
+          version: '1'
+  title: Grant review eligibility
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: submit-review-slice
+  namespace: acme-reviews
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-reviews
+        slug: submit-review
+        version: '1'
+  doc: The reviewer rates and comments on a delivered order.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-reviews
+        slug: review.submitted
+        version: '1'
+  persona:
+    persona:
+      id:
+        namespace: acme-reviews
+        slug: reviewer
+        version: '1'
+  scenarios:
+  - doc: Eligibility granted.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-reviews
+            slug: review.submitted
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: acme-reviews
+          slug: review-eligibility.granted
+          version: '1'
+    id: eligible
+    title: Review submitted
+    when:
+      command:
+        id:
+          namespace: acme-reviews
+          slug: submit-review
+          version: '1'
+  title: Submit review
+  ui:
+    ui:
+      id:
+        namespace: acme-reviews
+        slug: review-form
+        version: '1'

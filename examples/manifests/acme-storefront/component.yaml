@@ -1,0 +1,23 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Component
+metadata:
+  name: payment-capture-module
+  namespace: acme-storefront
+spec:
+  doc: Code module housing the payment-capture-worker's retry and backoff logic.
+  tech:
+  - worker
+  - queue
+  title: Payment Capture Module
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Component
+metadata:
+  name: carrier-dispatch-module
+  namespace: acme-storefront
+spec:
+  doc: Code module housing the carrier-dispatch-worker's retry and backoff logic.
+  tech:
+  - worker
+  - queue
+  title: Carrier Dispatch Module

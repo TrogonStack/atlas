@@ -1,0 +1,186 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: request-customer-data-deletion-slice
+  namespace: acme-customer-data-deletion
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: request-customer-data-deletion
+        version: '1'
+  doc: The account owner requests deletion of their personal data.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: customer-data-deletion.requested
+        version: '1'
+  persona:
+    persona:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: account-owner
+        version: '1'
+  scenarios:
+  - doc: First request.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-customer-data-deletion
+            slug: customer-data-deletion.requested
+            version: '1'
+    id: requested
+    title: Deletion requested
+    when:
+      command:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: request-customer-data-deletion
+          version: '1'
+  title: Request customer data deletion
+  ui:
+    ui:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: deletion-request-form
+        version: '1'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: start-analytics-deletion-slice
+  namespace: acme-customer-data-deletion
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: start-analytics-deletion
+        version: '1'
+  doc: Worker-issued once the request reaches the analytics dispatcher.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: analytics-deletion.started
+        version: '1'
+  scenarios:
+  - doc: Deletion requested.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-customer-data-deletion
+            slug: analytics-deletion.started
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: customer-data-deletion.requested
+          version: '1'
+    id: requested
+    title: Analytics deletion started
+    when:
+      command:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: start-analytics-deletion
+          version: '1'
+  title: Start analytics deletion
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: start-crm-deletion-slice
+  namespace: acme-customer-data-deletion
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: start-crm-deletion
+        version: '1'
+  doc: Worker-issued once the request reaches the CRM dispatcher.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: crm-deletion.started
+        version: '1'
+  scenarios:
+  - doc: Deletion requested.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-customer-data-deletion
+            slug: crm-deletion.started
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: customer-data-deletion.requested
+          version: '1'
+    id: requested
+    title: CRM deletion started
+    when:
+      command:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: start-crm-deletion
+          version: '1'
+  title: Start CRM deletion
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: complete-customer-data-deletion-slice
+  namespace: acme-customer-data-deletion
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: complete-customer-data-deletion
+        version: '1'
+  doc: Worker-issued once both vendors confirm deletion.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: customer-data-deletion.completed
+        version: '1'
+  scenarios:
+  - doc: Both vendors confirmed.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-customer-data-deletion
+            slug: customer-data-deletion.completed
+            version: '1'
+    given:
+    - event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: analytics-deletion.started
+          version: '1'
+    - event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: crm-deletion.started
+          version: '1'
+    id: confirmed
+    title: Deletion completed
+    when:
+      command:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: complete-customer-data-deletion
+          version: '1'
+  title: Complete customer data deletion

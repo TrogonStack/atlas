@@ -1,0 +1,269 @@
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+  name: reliability-checkout-latency
+  displayName: Checkout latency
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/connection: '{"commandHandling":{"commandSlice":{"id":{"namespace":"reliability","slug":"place-order","version":"1"}}}}'
+spec:
+  thresholdMetric:
+    metricSource:
+      metricSourceRef: tracing-backend
+      spec:
+        query: p95:trace.checkout.duration{service:checkout}
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+  name: reliability-checkout-success-ratio
+  displayName: Checkout success ratio
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/connection: '{"projection":{"readModelSlice":{"id":{"namespace":"reliability","slug":"order-status","version":"1"}}}}'
+spec:
+  ratioMetric:
+    counter: true
+    good:
+      metricSource:
+        metricSourceRef: event-store
+        spec:
+          query: events in order-approved
+    total:
+      metricSource:
+        metricSourceRef: event-store
+        spec:
+          query: events in order-approved,order-rejected
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+  name: reliability-checkout-completion
+  displayName: Checkout completion
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/connection: '{"reaction":{"automationSlice":{"id":{"namespace":"reliability","slug":"notify-warehouse","version":"1"}}}}'
+spec:
+  ratioMetric:
+    counter: true
+    good:
+      metricSource:
+        metricSourceRef: journey-tracing
+        spec:
+          query: span.duration:checkout.journey{within:5m}
+    total:
+      metricSource:
+        metricSourceRef: journey-tracing
+        spec:
+          query: span.started:checkout.journey
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+  name: reliability-checkout-latency-display
+  displayName: Checkout latency (display)
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/connection: '{"display":{"uiSlice":{"id":{"namespace":"reliability","slug":"checkout-screen","version":"1"}}}}'
+spec:
+  thresholdMetric:
+    metricSource:
+      metricSourceRef: metrics-backend
+      spec:
+        query: histogram_quantile(0.95, checkout_duration_seconds)
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+  name: reliability-checkout-payment-integration
+  displayName: Checkout payment integration
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/connection: '{"integration":{"processor":{"id":{"namespace":"reliability","slug":"charge-card","version":"1"}},"system":{"id":{"namespace":"reliability","slug":"payment-gateway","version":"1"}}}}'
+spec:
+  ratioMetric:
+    counter: true
+    good:
+      metricSource:
+        metricSourceRef: event-store
+        spec:
+          query: events in payment-captured
+    total:
+      metricSource:
+        metricSourceRef: event-store
+        spec:
+          query: events in payment-captured
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+  name: reliability-checkout-failure-ratio
+  displayName: Checkout failure ratio
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/connection: '{"projection":{"readModelSlice":{"id":{"namespace":"reliability","slug":"order-status","version":"1"}}}}'
+spec:
+  ratioMetric:
+    counter: true
+    bad:
+      metricSource:
+        metricSourceRef: event-store
+        spec:
+          query: events in order-timed-out
+    total:
+      metricSource:
+        metricSourceRef: event-store
+        spec:
+          query: events in order-timed-out
+---
+apiVersion: openslo/v1
+kind: SLI
+metadata:
+  name: reliability-checkout-journey-completion
+  displayName: Checkout journey completion
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/connection: '{"journey":{"correlateOn":["order_id"],"end":{"id":{"namespace":"reliability","slug":"order-fulfilled","version":"1"}},"start":{"id":{"namespace":"reliability","slug":"order-placed","version":"1"}},"storyboard":{"id":{"namespace":"reliability","slug":"place-order-journey","version":"1"}}}}'
+spec:
+  ratioMetric:
+    counter: true
+    good:
+      metricSource:
+        metricSourceRef: journey-tracing
+        spec:
+          query: span.duration:checkout.journey{within:1h}
+    total:
+      metricSource:
+        metricSourceRef: journey-tracing
+        spec:
+          query: span.started:checkout.journey
+---
+apiVersion: openslo/v1
+kind: Service
+metadata:
+  name: reliability-checkout
+  displayName: Checkout
+spec:
+  description: Owns checkout order placement and fulfillment.
+---
+apiVersion: openslo/v1
+kind: SLO
+metadata:
+  name: reliability-checkout-latency-slo
+  displayName: Checkout latency SLO
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/commitment: '{"internal":{}}'
+spec:
+  service: reliability-checkout
+  indicatorRef: reliability-checkout-latency
+  timeWindow:
+  - duration: 28d
+    isRolling: true
+  budgetingMethod: Occurrences
+  objectives:
+  - displayName: P95 under 300ms
+    op: lte
+    value: 0.3
+    target: 0.95
+  alertPolicies:
+  - alertPolicyRef: reliability-checkout-burn-policy
+---
+apiVersion: openslo/v1
+kind: SLO
+metadata:
+  name: reliability-checkout-success-slo
+  displayName: Checkout success SLO
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/commitment: '{"external":{"agreement":"msa-2024","consequence":"10% service credit","persona":{"id":{"namespace":"reliability","slug":"vp-eng","version":"1"}}}}'
+spec:
+  service: reliability-checkout
+  indicatorRef: reliability-checkout-success-ratio
+  timeWindow:
+  - duration: 1M
+    calendar:
+      startTime: 2024-01-01 00:00:00
+      timeZone: UTC
+    isRolling: false
+  budgetingMethod: Timeslices
+  objectives:
+  - displayName: Success ratio
+    target: 0.999
+    timeSliceTarget: 0.98
+    timeSliceWindow: 5m
+---
+apiVersion: openslo/v1
+kind: AlertPolicy
+metadata:
+  name: reliability-checkout-burn-policy
+  displayName: Checkout burn policy
+  annotations:
+    trogonatlas.eventmodel.v1alpha1/runbook: https://runbooks.internal/checkout-burn
+spec:
+  description: Pages on fast burn, tickets on slow burn.
+  alertWhenNoData: true
+  alertWhenResolved: true
+  alertWhenBreaching: true
+  conditions:
+  - kind: AlertCondition
+    metadata:
+      name: reliability-checkout-burn-policy-cond-1
+      displayName: Fast burn
+    spec:
+      severity: page
+      condition:
+        kind: burnrate
+        op: gt
+        threshold: 14.4
+        lookbackWindow: 1h
+        alertAfter: 5m
+  - kind: AlertCondition
+    metadata:
+      name: reliability-checkout-burn-policy-cond-2
+      displayName: Slow burn
+    spec:
+      severity: ticket
+      condition:
+        kind: burnrate
+        op: gt
+        threshold: 2.0
+        lookbackWindow: 1d
+  notificationTargets:
+  - targetRef: reliability-oncall-pagerduty
+---
+apiVersion: openslo/v1
+kind: AlertNotificationTarget
+metadata:
+  name: reliability-oncall-pagerduty
+  displayName: On-call PagerDuty
+spec:
+  target: pagerduty:service-123
+  description: Pages the checkout on-call rotation.
+---
+apiVersion: openslo/v1
+kind: DataSource
+metadata:
+  name: event-store
+spec:
+  type: EventStore
+  connectionDetails:
+    endpoint: https://events.internal
+---
+apiVersion: openslo/v1
+kind: DataSource
+metadata:
+  name: journey-tracing
+spec:
+  type: Datadog
+  connectionDetails:
+    site: datadoghq.com
+---
+apiVersion: openslo/v1
+kind: DataSource
+metadata:
+  name: metrics-backend
+spec:
+  type: Prometheus
+  connectionDetails:
+    url: http://prometheus.internal:9090
+---
+apiVersion: openslo/v1
+kind: DataSource
+metadata:
+  name: tracing-backend
+spec:
+  type: Datadog
+  connectionDetails:
+    site: datadoghq.com

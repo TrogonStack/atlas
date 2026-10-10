@@ -1,0 +1,107 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: cart-summary
+  namespace: acme-storefront
+spec:
+  doc: Running item count per cart.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: cart_id
+      type:
+        uuid: {}
+    - name: item_count
+      type:
+        int: {}
+  key:
+  - cart_id
+  sourceEvents:
+  - id:
+      namespace: acme-storefront
+      slug: cart.item-added
+      version: '1'
+  title: Cart summary
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: pending-payments
+  namespace: acme-storefront
+spec:
+  doc: 'Worker feed: orders awaiting payment capture.'
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+  key:
+  - order_id
+  sourceEvents:
+  - id:
+      namespace: acme-storefront
+      slug: order.placed
+      version: '1'
+  title: Pending payments (queue)
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: fulfillment-queue
+  namespace: acme-storefront
+spec:
+  doc: 'Worker feed: paid orders awaiting carrier dispatch.'
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+  key:
+  - order_id
+  sourceEvents:
+  - id:
+      namespace: acme-storefront
+      slug: order.paid
+      version: '1'
+  title: Fulfillment queue
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: order-status
+  namespace: acme-storefront
+spec:
+  doc: Current status of an order for the shopper-facing tracking page.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: status
+      type:
+        string: {}
+  key:
+  - order_id
+  sourceEvents:
+  - id:
+      namespace: acme-storefront
+      slug: order.placed
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: order.paid
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: order.fulfilled
+      version: '1'
+  title: Order status

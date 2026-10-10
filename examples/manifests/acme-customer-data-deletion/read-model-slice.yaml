@@ -1,0 +1,131 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: pending-deletions-upsert-rms
+  namespace: acme-customer-data-deletion
+spec:
+  doc: A deletion request appears on the queue.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: pending-deletions
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: customer-data-deletion.requested
+        version: '1'
+  title: 'Queue: pending deletions'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: pending-deletions-delete-rms
+  namespace: acme-customer-data-deletion
+spec:
+  doc: The request drops off the queue once every vendor confirms deletion.
+  projectionRole: PROJECTION_ROLE_DELETE
+  readModel:
+    readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: pending-deletions
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: customer-data-deletion.completed
+        version: '1'
+  title: 'Queue: deletion completed'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: analytics-deletion-queue-upsert-rms
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Pending row.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: analytics-deletion-queue
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: analytics-deletion.started
+        version: '1'
+  title: 'Queue: analytics deletion'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: analytics-deletion-queue-delete-rms
+  namespace: acme-customer-data-deletion
+spec:
+  doc: The row is forgotten once the overall deletion completes.
+  projectionRole: PROJECTION_ROLE_DELETE
+  readModel:
+    readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: analytics-deletion-queue
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: customer-data-deletion.completed
+        version: '1'
+  title: 'Queue: analytics deletion forgotten'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: crm-deletion-queue-upsert-rms
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Pending row.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: crm-deletion-queue
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: crm-deletion.started
+        version: '1'
+  title: 'Queue: CRM deletion'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: crm-deletion-queue-delete-rms
+  namespace: acme-customer-data-deletion
+spec:
+  doc: The row is forgotten once the overall deletion completes.
+  projectionRole: PROJECTION_ROLE_DELETE
+  readModel:
+    readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: crm-deletion-queue
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: customer-data-deletion.completed
+        version: '1'
+  title: 'Queue: CRM deletion forgotten'

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/trogon-atlas-authzed",
+  "crates/trogon-atlas-client",
   "crates/trogon-atlas-core",
   "crates/trogon-atlas-proto",
   "crates/trogon-atlas-server",
@@ -21,6 +22,8 @@ trogon-atlas-proto = { path = "crates/trogon-atlas-proto" }
 trogon-atlas-core = { path = "crates/trogon-atlas-core" }
 trogon-atlas-types = { path = "crates/trogon-atlas-types" }
 trogon-atlas-authzed = { path = "crates/trogon-atlas-authzed" }
+trogon-atlas-client = { path = "crates/trogon-atlas-client" }
+trogon-atlas-server = { path = "crates/trogon-atlas-server" }
 trogon-atlas-store = { path = "crates/trogon-atlas-store" }
 trogon-atlas-testsupport = { path = "crates/trogon-atlas-testsupport" }
 
@@ -49,6 +52,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22"
 chacha20poly1305 = "0.10"
+jsonschema = { version = "0.56", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v7"] }

@@ -1,0 +1,105 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: checkout-flow
+  namespace: acme-storefront
+spec:
+  doc: The shopper fills a cart and places an order.
+  entry:
+    human:
+      persona:
+        persona:
+          id:
+            namespace: acme-storefront
+            slug: shopper
+            version: '1'
+      ui:
+        ui:
+          id:
+            namespace: acme-storefront
+            slug: storefront-checkout
+            version: '1'
+  outcome:
+    events:
+    - event:
+        id:
+          namespace: acme-storefront
+          slug: order.placed
+          version: '1'
+  slices:
+  - id:
+      namespace: acme-storefront
+      slug: add-item-to-cart-slice
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: cart-summary-rms
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: place-order-slice
+      version: '1'
+  title: Checkout
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: fulfillment-flow
+  namespace: acme-storefront
+spec:
+  doc: A placed order is captured, dispatched, and confirmed delivered.
+  entry:
+    automation:
+      processor:
+        processor:
+          id:
+            namespace: acme-storefront
+            slug: payment-capture-worker
+            version: '1'
+    readModel:
+      readModel:
+        id:
+          namespace: acme-storefront
+          slug: pending-payments
+          version: '1'
+  outcome:
+    events:
+    - event:
+        id:
+          namespace: acme-storefront
+          slug: order.fulfilled
+          version: '1'
+  slices:
+  - id:
+      namespace: acme-storefront
+      slug: pending-payments-rms
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: capture-payment-auto
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: capture-payment-slice
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: fulfillment-queue-rms
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: mark-fulfilled-auto
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: mark-fulfilled-slice
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: order-status-rms
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: order-tracking-ui-slice
+      version: '1'
+  title: Fulfillment

@@ -1,0 +1,13 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata:
+  name: acme-reviews
+  namespace: acme-reviews
+spec:
+  doc: Owns review eligibility and review submission once a storefront order is delivered.
+  realizes:
+  - id:
+      namespace: acme-reviews
+      slug: seller-reputation
+      version: '1'
+  title: Acme Reviews

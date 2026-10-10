@@ -1,0 +1,57 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: review-eligibility.granted
+  namespace: acme-reviews
+spec:
+  doc: A delivered order became eligible for a buyer review.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - name: granted_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-reviews
+      slug: review
+      version: '1'
+  title: Review eligibility granted
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: review.submitted
+  namespace: acme-reviews
+spec:
+  doc: A buyer submitted a review for a delivered order.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: rating
+      type:
+        int: {}
+    - name: comment
+      type:
+        string: {}
+    - name: submitted_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-reviews
+      slug: review
+      version: '1'
+  title: Review submitted

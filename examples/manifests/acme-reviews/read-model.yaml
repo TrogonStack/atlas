@@ -1,0 +1,66 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: orders.delivered-unreviewed
+  namespace: acme-reviews
+spec:
+  doc: 'Worker feed: delivered orders without a review-eligibility grant yet.'
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+  key:
+  - order_id
+  sourceEvents:
+  - id:
+      namespace: acme-storefront
+      slug: order.fulfilled
+      version: '1'
+  - id:
+      namespace: acme-reviews
+      slug: review-eligibility.granted
+      version: '1'
+  title: Delivered orders awaiting eligibility
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: eligible-reviews
+  namespace: acme-reviews
+spec:
+  doc: Orders the reviewer-facing form can still collect a review for.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - name: granted_at
+      type:
+        timestamp: {}
+  key:
+  - order_id
+  sourceEvents:
+  - id:
+      namespace: acme-reviews
+      slug: review-eligibility.granted
+      version: '1'
+  - id:
+      namespace: acme-reviews
+      slug: review.submitted
+      version: '1'
+  title: Eligible reviews

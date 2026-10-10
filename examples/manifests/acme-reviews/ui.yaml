@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata:
+  name: review-form
+  namespace: acme-reviews
+spec:
+  doc: 'Reviewer-facing: rate and comment on a delivered order.'
+  title: Review form

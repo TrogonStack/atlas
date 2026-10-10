@@ -1,0 +1,13 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata:
+  name: acme-customer-data-deletion
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Owns the request-to-completion lifecycle of a customer data deletion, and dispatch to every downstream vendor.
+  realizes:
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: data-deletion
+      version: '1'
+  title: Acme Customer Data Deletion

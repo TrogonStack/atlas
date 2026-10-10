@@ -1,0 +1,9 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: reviewer
+  namespace: acme-reviews
+spec:
+  doc: A buyer eligible to rate a delivered order.
+  role: customer
+  title: Reviewer

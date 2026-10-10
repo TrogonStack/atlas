@@ -1,0 +1,17 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata:
+  name: acme-storefront
+  namespace: acme-storefront
+spec:
+  doc: Owns the cart-to-delivery lifecycle of a storefront order, the payment capture worker, and the carrier dispatch worker.
+  realizes:
+  - id:
+      namespace: acme-storefront
+      slug: ordering
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: fulfillment
+      version: '1'
+  title: Acme Storefront

@@ -1,0 +1,111 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: customer-data-deletion.requested
+  namespace: acme-customer-data-deletion
+spec:
+  doc: An account owner requested deletion of their personal data.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder the event is about (the event is immutable, so erasure relies on crypto shredding of the encryption key).
+        erasure: ERASURE_CRYPTO_SHREDDING
+      name: customer_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the request is recorded
+        kind: KIND_TIMESTAMP
+      name: requested_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: deletion
+      version: '1'
+  title: Customer data deletion requested
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: analytics-deletion.started
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Acme Analytics began deleting the customer's profile.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder the event is about (the event is immutable, so erasure relies on crypto shredding of the encryption key).
+        erasure: ERASURE_CRYPTO_SHREDDING
+      name: customer_id
+      type:
+        uuid: {}
+    - name: started_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: deletion
+      version: '1'
+  title: Analytics deletion started
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: crm-deletion.started
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Acme CRM began deleting the customer's contact and support history.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder the event is about (the event is immutable, so erasure relies on crypto shredding of the encryption key).
+        erasure: ERASURE_CRYPTO_SHREDDING
+      name: customer_id
+      type:
+        uuid: {}
+    - name: started_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: deletion
+      version: '1'
+  title: CRM deletion started
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: customer-data-deletion.completed
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Every downstream vendor confirmed the customer's personal data was deleted.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder the event is about (the event is immutable, so erasure relies on crypto shredding of the encryption key).
+        erasure: ERASURE_CRYPTO_SHREDDING
+      name: customer_id
+      type:
+        uuid: {}
+    - name: completed_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: deletion
+      version: '1'
+  title: Customer data deletion completed
