@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   analysis:
-    name: Scorecard analysis
+    name: Scorecard
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   dependency-review:
+    name: Review
     runs-on: ubuntu-latest
     permissions:
       contents: read

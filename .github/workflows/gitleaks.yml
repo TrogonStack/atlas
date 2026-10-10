@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   scan:
-    name: Secret scan
+    name: Secrets
     runs-on: ubuntu-latest
 
     steps:
