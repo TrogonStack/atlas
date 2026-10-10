@@ -141,10 +141,12 @@ impl RelationshipFilter {
             optional_subject_filter: self.subject.as_ref().map(|subject| v1::SubjectFilter {
                 subject_type: subject.object.object_type.as_str().to_string(),
                 optional_subject_id: subject.object.object_id.as_str().to_string(),
-                optional_relation: subject.relation.as_ref().map(|relation| {
-                    v1::subject_filter::RelationFilter {
-                        relation: relation.as_str().to_string(),
-                    }
+                optional_relation: Some(v1::subject_filter::RelationFilter {
+                    relation: subject
+                        .relation
+                        .as_ref()
+                        .map(|relation| relation.as_str().to_string())
+                        .unwrap_or_default(),
                 }),
             }),
         }
@@ -166,5 +168,46 @@ impl std::fmt::Display for RelationshipFilter {
             Some(subject) => write!(f, "@{subject}"),
             None => f.write_str("@*"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn alice() -> ObjectRef {
+        ObjectRef::new(
+            ObjectType::parse("user").unwrap(),
+            ObjectId::parse("alice").unwrap(),
+        )
+    }
+
+    fn subject_relation_of(filter: &RelationshipFilter) -> Option<String> {
+        filter
+            .to_proto()
+            .optional_subject_filter
+            .unwrap()
+            .optional_relation
+            .map(|relation| relation.relation)
+    }
+
+    #[test]
+    fn a_direct_subject_filter_matches_only_the_direct_subject() {
+        let filter = RelationshipFilter::new(ObjectType::parse("organization").unwrap())
+            .with_subject(SubjectRef::new(alice()));
+
+        assert_eq!(subject_relation_of(&filter), Some(String::new()));
+    }
+
+    #[test]
+    fn a_subject_set_filter_matches_that_relation() {
+        let filter =
+            RelationshipFilter::new(ObjectType::parse("organization").unwrap()).with_subject(
+                SubjectRef::with_relation(alice(), Relation::parse("member").unwrap()),
+            );
+
+        assert_eq!(subject_relation_of(&filter), Some("member".to_string()));
     }
 }
