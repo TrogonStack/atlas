@@ -290,8 +290,8 @@ log "quiescing the writer"
 t_quiesce="$(now)"
 quiet dc "$src" stop trogon-atlas-server
 
-streams="$(natsbox "$src" stream ls --names | tr -s ' \t' '\n' | sed '/^$/d' | sort)"
-[ "$streams" = "$EXPECTED_STREAMS" ] || die "stream inventory changed; update the drill and RUNBOOK.md. found: $(echo $streams)"
+streams="$(natsbox "$src" stream ls --names | tr -s ' \t' '\n' | sed '/^$/d' | LC_ALL=C sort)"
+[ "$streams" = "$(LC_ALL=C sort <<<"$EXPECTED_STREAMS")" ] || die "stream inventory changed; update the drill and RUNBOOK.md. found: $(echo $streams)"
 
 log "backing up JetStream streams"
 for s in $EXPECTED_STREAMS; do
