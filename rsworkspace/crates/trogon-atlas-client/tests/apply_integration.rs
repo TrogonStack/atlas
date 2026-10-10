@@ -1370,4 +1370,21 @@ async fn apply_into_an_unclaimed_namespace_succeeds_for_a_scoped_principal() {
     for line in &out.lines {
         assert!(line.ends_with(" created"), "{line}");
     }
+
+    let stored = client
+        .get_entity(pb::GetEntityRequest {
+            kind: pb::EntityKind::Persona as i32,
+            id: Some(pb::Id {
+                namespace: "acme-customer-data-deletion".into(),
+                slug: "requester".into(),
+                version: 1,
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let Some(pb::entity::Kind::Persona(persona)) = stored.entity.unwrap().kind else {
+        panic!("expected persona");
+    };
+    assert_eq!(persona.title, "Requester");
 }
