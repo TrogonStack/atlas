@@ -1,0 +1,130 @@
+{{- if and .Values.gitMirror.enabled .Values.gitMirror.reconcile.enabled }}
+{{- $server := .Values }}
+{{- $reconcile := $server.gitMirror.reconcile }}
+{{/*
+  A mirror write can fail while the store commit succeeds: mirror_apply logs a
+  warning, increments git_mirror_failures_total, and lets the RPC succeed. That
+  is the right call (the mirror must never fail a write) but it means the store
+  and the mirror diverge silently, and the mirror is the documented restore
+  path. Nothing else detects this, so schedule the detector.
+
+  Exits non-zero on drift, which surfaces as a failed Job. Alert on
+  kube_job_status_failed for this CronJob, and on git_mirror_failures_total.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "trogon-atlas-server.fullname" . }}-reconcile
+  labels:
+    {{- include "trogon-atlas-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server-reconcile
+spec:
+  schedule: {{ $reconcile.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ $reconcile.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $reconcile.failedJobsHistoryLimit }}
+  startingDeadlineSeconds: {{ $reconcile.startingDeadlineSeconds }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      {{- with $reconcile.activeDeadlineSeconds }}
+      activeDeadlineSeconds: {{ . }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "trogon-atlas-server.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: server-reconcile
+        spec:
+          restartPolicy: Never
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "trogon-atlas-server.serviceAccountName" . }}
+          {{- with $server.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- /*
+            The mirror PVC defaults to ReadWriteOnce, so this pod can only
+            mount it from the node already running the server pod. Co-locate
+            unless the operator has provisioned a ReadWriteMany volume.
+          */}}
+          {{- if $reconcile.colocateWithServer }}
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      {{- include "trogon-atlas-server.selectorLabels" . | nindent 22 }}
+                      app.kubernetes.io/component: server
+          {{- else }}
+          {{- with $server.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- end }}
+          {{- with $server.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $server.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: reconcile
+              image: {{ include "trogon-atlas-server.image" (dict "root" . "image" $server.image) }}
+              imagePullPolicy: {{ $server.image.pullPolicy }}
+              {{- with $server.containerSecurityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              args:
+                - reconcile
+                - --mirror
+                - /var/lib/trogon-atlas/mirror
+              env:
+                {{- /*
+                  reconcile dispatches before the auth registry is built, so it
+                  needs store configuration only, no bearer token.
+                */}}
+                - name: TROGON_ATLAS_STORE
+                  value: nats
+                {{- if $server.config.natsUrlSecret.name }}
+                - name: TROGON_ATLAS_NATS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $server.config.natsUrlSecret.name }}
+                      key: {{ $server.config.natsUrlSecret.key }}
+                {{- else }}
+                - name: TROGON_ATLAS_NATS_URL
+                  value: {{ $server.config.natsUrl | quote }}
+                {{- end }}
+                - name: TROGON_ATLAS_NATS_BUCKET
+                  value: {{ $server.config.natsBucket | quote }}
+                - name: TROGON_ATLAS_NATS_STREAM
+                  value: {{ $server.config.natsStream | quote }}
+                - name: TROGON_ATLAS_NATS_SUBJECT_ROOT
+                  value: {{ $server.config.natsSubjectRoot | quote }}
+                - name: RUST_LOG
+                  value: {{ $server.config.logLevel | quote }}
+                {{- with $reconcile.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              {{- with $reconcile.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: git-mirror
+                  mountPath: /var/lib/trogon-atlas/mirror
+                  readOnly: true
+          volumes:
+            - name: git-mirror
+              persistentVolumeClaim:
+                claimName: {{ default (printf "%s-mirror" (include "trogon-atlas-server.fullname" .)) $server.gitMirror.persistence.existingClaim }}
+                readOnly: true
+{{- end }}

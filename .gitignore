@@ -34,3 +34,6 @@ tsworkspace/webapps/studio/node_modules/
 tsworkspace/webapps/studio/test-results/
 tsworkspace/webapps/studio/playwright-report/
 .vite/
+
+# Locally generated API keys
+*.key

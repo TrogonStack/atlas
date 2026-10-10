@@ -1,0 +1,127 @@
+{{- if .Values.spicedb.sync.enabled }}
+{{- include "trogon-atlas-server.validateSpicedb" . }}
+{{- $server := .Values }}
+{{- $sync := $server.spicedb.sync }}
+{{- $tokensSecret := include "trogon-atlas-server.tokensSecretName" . }}
+{{- $spicedbSecret := include "trogon-atlas-server.spicedbSecretName" . }}
+{{/*
+  `sync-spicedb` installs the schema and re-derives every grant from the
+  namespace registry and the token file. It is idempotent, and it is the
+  repair path for the case the server cannot repair itself: a registry write
+  that lands while the matching SpiceDB write fails leaves a namespace whose
+  owner nobody can prove, and SpiceDB answers no to a check it has no
+  relationship for. The server only re-derives at startup and on a token-file
+  reload, so without something on a schedule that gap closes at the next
+  restart and not before.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "trogon-atlas-server.fullname" . }}-spicedb-sync
+  labels:
+    {{- include "trogon-atlas-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server-spicedb-sync
+spec:
+  schedule: {{ $sync.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ $sync.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $sync.failedJobsHistoryLimit }}
+  startingDeadlineSeconds: {{ $sync.startingDeadlineSeconds }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      {{- with $sync.activeDeadlineSeconds }}
+      activeDeadlineSeconds: {{ . }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "trogon-atlas-server.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: server-spicedb-sync
+        spec:
+          restartPolicy: Never
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "trogon-atlas-server.serviceAccountName" . }}
+          {{- with $server.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $server.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $server.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: spicedb-sync
+              image: {{ include "trogon-atlas-server.image" (dict "root" . "image" $server.image) }}
+              imagePullPolicy: {{ $server.image.pullPolicy }}
+              {{- with $server.containerSecurityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              args:
+                - sync-spicedb
+              env:
+                - name: TROGON_ATLAS_STORE
+                  value: nats
+                {{- if $server.config.natsUrlSecret.name }}
+                - name: TROGON_ATLAS_NATS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $server.config.natsUrlSecret.name }}
+                      key: {{ $server.config.natsUrlSecret.key }}
+                {{- else }}
+                - name: TROGON_ATLAS_NATS_URL
+                  value: {{ $server.config.natsUrl | quote }}
+                {{- end }}
+                - name: TROGON_ATLAS_NATS_BUCKET
+                  value: {{ $server.config.natsBucket | quote }}
+                - name: TROGON_ATLAS_NATS_STREAM
+                  value: {{ $server.config.natsStream | quote }}
+                - name: TROGON_ATLAS_NATS_SUBJECT_ROOT
+                  value: {{ $server.config.natsSubjectRoot | quote }}
+                - name: TROGON_ATLAS_SPICEDB_ENDPOINT
+                  value: {{ $server.spicedb.endpoint | quote }}
+                - name: TROGON_ATLAS_SPICEDB_PRESHARED_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ $spicedbSecret }}
+                      key: {{ $server.spicedb.presharedKey.key }}
+                {{- /*
+                  Membership is derived from the token file, so a sync without
+                  it would publish namespace ownership and no principals, and
+                  every check would answer no. The registry alone is not the
+                  whole picture.
+                */}}
+                {{- if $tokensSecret }}
+                - name: TROGON_ATLAS_AUTH_TOKENS_FILE
+                  value: /etc/trogon-atlas/auth/{{ $server.auth.tokensFile.key }}
+                {{- end }}
+                - name: RUST_LOG
+                  value: {{ $server.config.logLevel | quote }}
+                {{- with $sync.extraEnv }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
+              {{- with $sync.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- if $tokensSecret }}
+              volumeMounts:
+                - name: auth-tokens
+                  mountPath: /etc/trogon-atlas/auth
+                  readOnly: true
+              {{- end }}
+          {{- if $tokensSecret }}
+          volumes:
+            - name: auth-tokens
+              secret:
+                secretName: {{ $tokensSecret }}
+          {{- end }}
+{{- end }}

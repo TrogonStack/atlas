@@ -1,0 +1,269 @@
+{{- include "trogon-atlas-server.validateAuth" . }}
+{{- include "trogon-atlas-server.validateReplicas" . }}
+{{- include "trogon-atlas-server.validateStoreCredential" . }}
+{{- include "trogon-atlas-server.validateSpicedb" . }}
+{{- $server := .Values }}
+{{- $tokensSecret := include "trogon-atlas-server.tokensSecretName" . }}
+{{- $tokenSecret := include "trogon-atlas-server.tokenSecretName" . }}
+{{- $spicedbSecret := include "trogon-atlas-server.spicedbSecretName" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trogon-atlas-server.fullname" . }}
+  labels:
+    {{- include "trogon-atlas-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  replicas: {{ $server.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "trogon-atlas-server.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: server
+  template:
+    metadata:
+      labels:
+        {{- include "trogon-atlas-server.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: server
+        {{- with $server.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $server.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "trogon-atlas-server.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ $server.terminationGracePeriodSeconds }}
+      {{- with $server.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      {{- with $server.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: server
+          image: {{ include "trogon-atlas-server.image" (dict "root" . "image" $server.image) }}
+          imagePullPolicy: {{ $server.image.pullPolicy }}
+          {{- with $server.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ $server.service.grpcPort }}
+              protocol: TCP
+            {{- if $server.metrics.enabled }}
+            - name: metrics
+              containerPort: {{ $server.metrics.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: TROGON_ATLAS_LISTEN
+              value: 0.0.0.0:{{ $server.service.grpcPort }}
+            - name: TROGON_ATLAS_STORE
+              value: nats
+            {{- if $server.config.natsUrlSecret.name }}
+            - name: TROGON_ATLAS_NATS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $server.config.natsUrlSecret.name }}
+                  key: {{ $server.config.natsUrlSecret.key }}
+            {{- else }}
+            - name: TROGON_ATLAS_NATS_URL
+              value: {{ $server.config.natsUrl | quote }}
+            {{- end }}
+            - name: TROGON_ATLAS_NATS_BUCKET
+              value: {{ $server.config.natsBucket | quote }}
+            - name: TROGON_ATLAS_NATS_STREAM
+              value: {{ $server.config.natsStream | quote }}
+            - name: TROGON_ATLAS_NATS_SUBJECT_ROOT
+              value: {{ $server.config.natsSubjectRoot | quote }}
+            - name: TROGON_ATLAS_CHANGES_MAX_AGE_DAYS
+              value: {{ $server.config.changesMaxAgeDays | quote }}
+            - name: TROGON_ATLAS_CHANGES_MAX_MSGS
+              value: {{ $server.config.changesMaxMsgs | quote }}
+            - name: TROGON_ATLAS_CHANGES_MAX_BYTES
+              value: {{ $server.config.changesMaxBytes | quote }}
+            - name: TROGON_ATLAS_MAX_MESSAGE_BYTES
+              value: {{ $server.config.maxMessageBytes | quote }}
+            - name: TROGON_ATLAS_CONCURRENCY_LIMIT
+              value: {{ $server.config.concurrencyLimit | quote }}
+            - name: TROGON_ATLAS_RPC_TIMEOUT_SECS
+              value: {{ $server.config.rpcTimeoutSecs | quote }}
+            - name: TROGON_ATLAS_SHUTDOWN_DRAIN_SECS
+              value: {{ $server.config.shutdownDrainSecs | quote }}
+            - name: RUST_LOG
+              value: {{ $server.config.logLevel | quote }}
+            {{- with $server.config.otlpEndpoint }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $server.config.changeCursorKey.existingSecret }}
+            - name: TROGON_ATLAS_CHANGE_CURSOR_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $server.config.changeCursorKey.existingSecret }}
+                  key: {{ $server.config.changeCursorKey.key }}
+            {{- end }}
+            {{- if $server.metrics.enabled }}
+            - name: TROGON_ATLAS_METRICS_LISTEN
+              value: 0.0.0.0:{{ $server.metrics.port }}
+            - name: TROGON_ATLAS_METRICS_ALLOW_EXTERNAL
+              value: "true"
+            {{- end }}
+            {{- if $tokensSecret }}
+            - name: TROGON_ATLAS_AUTH_TOKENS_FILE
+              value: /etc/trogon-atlas/auth/{{ $server.auth.tokensFile.key }}
+            {{- else if $tokenSecret }}
+            - name: TROGON_ATLAS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $tokenSecret }}
+                  key: {{ $server.auth.token.key }}
+            {{- else if $server.auth.insecureAllowAnonymous }}
+            - name: TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS
+              value: "true"
+            {{- end }}
+            {{- if $server.spicedb.endpoint }}
+            - name: TROGON_ATLAS_SPICEDB_ENDPOINT
+              value: {{ $server.spicedb.endpoint | quote }}
+            - name: TROGON_ATLAS_SPICEDB_PRESHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $spicedbSecret }}
+                  key: {{ $server.spicedb.presharedKey.key }}
+            - name: TROGON_ATLAS_SPICEDB_FRESHNESS
+              value: {{ $server.spicedb.freshness | quote }}
+            {{- if $server.spicedb.skipStartupSync }}
+            - name: TROGON_ATLAS_SPICEDB_SKIP_STARTUP_SYNC
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- if $server.auth.protectBaseline }}
+            - name: TROGON_ATLAS_PROTECT_BASELINE
+              value: "true"
+            {{- end }}
+            {{- with $server.auth.protectBaselineNamespaces }}
+            - name: TROGON_ATLAS_PROTECT_BASELINE_NAMESPACES
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if $server.tls.existingSecret }}
+            - name: TROGON_ATLAS_TLS_CERT
+              value: /etc/trogon-atlas/tls/tls.crt
+            - name: TROGON_ATLAS_TLS_KEY
+              value: /etc/trogon-atlas/tls/tls.key
+            {{- end }}
+            {{- if ne $server.llm.provider "disabled" }}
+            - name: TROGON_ATLAS_LLM
+              value: {{ $server.llm.provider | quote }}
+            {{- with $server.llm.model }}
+            - name: TROGON_ATLAS_LLM_MODEL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $server.llm.baseUrl }}
+            - name: TROGON_ATLAS_LLM_BASE_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $server.llm.apiKey.existingSecret }}
+            - name: TROGON_ATLAS_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $server.llm.apiKey.existingSecret }}
+                  key: {{ $server.llm.apiKey.key }}
+            {{- end }}
+            {{- end }}
+            {{- if $server.gitMirror.enabled }}
+            - name: TROGON_ATLAS_GIT_MIRROR
+              value: /var/lib/trogon-atlas/mirror
+            - name: TROGON_ATLAS_GIT_AUTHOR_NAME
+              value: {{ $server.gitMirror.authorName | quote }}
+            - name: TROGON_ATLAS_GIT_AUTHOR_EMAIL
+              value: {{ $server.gitMirror.authorEmail | quote }}
+            {{- end }}
+            {{- with $server.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- if $server.tls.existingSecret }}
+          startupProbe:
+            tcpSocket:
+              port: grpc
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            tcpSocket:
+              port: grpc
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: grpc
+            periodSeconds: 15
+          {{- else }}
+          startupProbe:
+            grpc:
+              port: {{ $server.service.grpcPort }}
+            periodSeconds: 2
+            failureThreshold: 30
+          readinessProbe:
+            grpc:
+              port: {{ $server.service.grpcPort }}
+            periodSeconds: 10
+          livenessProbe:
+            grpc:
+              port: {{ $server.service.grpcPort }}
+            periodSeconds: 15
+            failureThreshold: 6
+          {{- end }}
+          {{- with $server.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            {{- if $tokensSecret }}
+            - name: auth-tokens
+              mountPath: /etc/trogon-atlas/auth
+              readOnly: true
+            {{- end }}
+            {{- if $server.tls.existingSecret }}
+            - name: tls
+              mountPath: /etc/trogon-atlas/tls
+              readOnly: true
+            {{- end }}
+            {{- if $server.gitMirror.enabled }}
+            - name: git-mirror
+              mountPath: /var/lib/trogon-atlas/mirror
+            {{- end }}
+      volumes:
+        {{- if $tokensSecret }}
+        - name: auth-tokens
+          secret:
+            secretName: {{ $tokensSecret }}
+        {{- end }}
+        {{- if $server.tls.existingSecret }}
+        - name: tls
+          secret:
+            secretName: {{ $server.tls.existingSecret }}
+        {{- end }}
+        {{- if $server.gitMirror.enabled }}
+        - name: git-mirror
+          persistentVolumeClaim:
+            claimName: {{ default (printf "%s-mirror" (include "trogon-atlas-server.fullname" .)) $server.gitMirror.persistence.existingClaim }}
+        {{- end }}
+      {{- with $server.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $server.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $server.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

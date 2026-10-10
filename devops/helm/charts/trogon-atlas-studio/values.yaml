@@ -1,0 +1,94 @@
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  # Prepended to every image repository below.
+  imageRegistry: ghcr.io/trogonstack
+  imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+replicaCount: 1
+
+image:
+  repository: atlas/trogon-atlas-studio
+  tag: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  annotations: {}
+
+# Bearer token the studio gateway uses when calling the server. Studio is
+# observation only, so give it a `reader` principal's key from the server's
+# auth.tokensFile rather than an unrestricted caller's key.
+auth:
+  token:
+    value: ""
+    existingSecret: ""
+    key: token
+  # Forward each caller's own bearer token to the server instead of the
+  # bridge's. Off means every upstream call is made as one principal, so
+  # every browser sees the same namespaces whatever key it holds; on means
+  # the server scopes each person by their own key. Turn this on for any
+  # deployment with more than one user.
+  passthrough: false
+
+# The gRPC server this studio talks to. Leaving host empty targets the
+# trogon-atlas-server Service from the same release (see fullname rules in
+# _helpers.tpl); set it to reach a server deployed separately. config.grpcUrl
+# below is the explicit full override and always wins when set.
+server:
+  host: ""
+  grpcPort: 50069
+
+config:
+  # gRPC address of the server; defaults to http://<server.host>:<server.grpcPort>.
+  grpcUrl: ""
+  corsOrigins: ""
+  # Browser-reachable NATS WebSocket URL for the realtime change feed.
+  # Only used when the server runs with insecureAllowAnonymous: that
+  # listener hands every browser the same read of every namespace, so a
+  # studio holding any credential routes the feed through the bridge
+  # instead, where it is authorized per caller.
+  natsWsUrl: ""
+  # Credential the listener requires, if you closed it. The bridge never
+  # hands it to a browser (one shared token is one shared permission set),
+  # so setting it only forces that same per-caller routing.
+  natsWsAuthToken:
+    value: ""
+    existingSecret: ""
+    key: token
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: trogon-atlas-studio.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+extraEnv: []
+resources: {}
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL

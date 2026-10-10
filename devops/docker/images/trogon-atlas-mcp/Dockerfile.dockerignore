@@ -1,0 +1,12 @@
+**/target
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+**/playwright-report
+**/.env
+**/.env.*
+.git
+docs
+examples
+tsworkspace

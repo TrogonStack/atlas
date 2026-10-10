@@ -1,0 +1,24 @@
+# Token registry for the reference compose stack's authenticated mode.
+#
+# Applied by `compose.auth.yaml`; see
+# `docs/how-to/issue-an-api-key.md` for the full procedure.
+#
+# The key itself lives in `api.key` next to this file, which is generated
+# locally and never committed. `token_files` resolves relative to the
+# directory holding this file, not the server's working directory.
+#
+# `parent` is deliberately absent. Binding the reference stack to one owner
+# would hide every namespace the other fixtures write, and this principal is
+# the local operator rather than a tenant. Add a `parent` when you want to
+# rehearse tenancy; the how-to shows what that looks like.
+[principals.local]
+role = "admin"
+token_files = ["api.key"]
+
+# The key people use to look at the studio, and the one the studio bridge
+# holds. A reader, because people observe and agents edit: anyone who copies
+# it out of a browser and calls the server directly is still refused every
+# write.
+[principals.studio]
+role = "reader"
+token_files = ["studio.key"]

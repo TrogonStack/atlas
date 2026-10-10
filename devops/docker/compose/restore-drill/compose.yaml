@@ -1,0 +1,103 @@
+# Stack used by the compose:restore-drill mise task. It has no `name:` on purpose: the
+# drill always passes a generated project name, so every volume and network
+# here is created fresh for that run and can never resolve to the shared
+# `trogon-atlas` stack's volumes. Nothing is published except the gRPC port, on
+# an ephemeral loopback port. Every credential comes from the drill.
+
+services:
+  nats:
+    image: nats:2.10.22-alpine
+    command: ["-c", "/etc/nats-server.conf"]
+    environment:
+      TROGON_ATLAS_DRILL_NATS_PASSWORD: ${TROGON_ATLAS_DRILL_NATS_PASSWORD:?set by mise run compose:restore-drill}
+    volumes:
+      - nats-data:/data
+      - ./services/nats/nats-server.conf:/etc/nats-server.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  spicedb-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: spicedb
+      POSTGRES_PASSWORD: ${TROGON_ATLAS_DRILL_PG_PASSWORD:?set by mise run compose:restore-drill}
+      POSTGRES_DB: spicedb
+    volumes:
+      - spicedb-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spicedb -d spicedb"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  spicedb-migrate:
+    image: authzed/spicedb:v1.53.0
+    command:
+      - datastore
+      - migrate
+      - head
+      - --datastore-engine
+      - postgres
+      - --datastore-conn-uri
+      - "postgres://spicedb:${TROGON_ATLAS_DRILL_PG_PASSWORD}@spicedb-db:5432/spicedb?sslmode=disable"
+    depends_on:
+      spicedb-db:
+        condition: service_healthy
+    restart: on-failure
+
+  spicedb:
+    image: authzed/spicedb:v1.53.0
+    command:
+      - serve
+      - --grpc-addr
+      - 0.0.0.0:50051
+      - --datastore-engine
+      - postgres
+      - --datastore-conn-uri
+      - "postgres://spicedb:${TROGON_ATLAS_DRILL_PG_PASSWORD}@spicedb-db:5432/spicedb?sslmode=disable"
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: ${TROGON_ATLAS_DRILL_SPICEDB_KEY:?set by mise run compose:restore-drill}
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=127.0.0.1:50051"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  trogon-atlas-server:
+    image: ${TROGON_ATLAS_DRILL_SERVER_IMAGE:?set by mise run compose:restore-drill}
+    environment:
+      TROGON_ATLAS_LISTEN: 0.0.0.0:50069
+      TROGON_ATLAS_STORE: nats
+      TROGON_ATLAS_NATS_URL: nats://service:${TROGON_ATLAS_DRILL_NATS_PASSWORD}@nats:4222
+      TROGON_ATLAS_METRICS_LISTEN: 127.0.0.1:9100
+      TROGON_ATLAS_AUTH_TOKENS_FILE: /run/trogon-atlas-drill/tokens.toml
+      TROGON_ATLAS_SPICEDB_ENDPOINT: http://spicedb:50051
+      TROGON_ATLAS_SPICEDB_PRESHARED_KEY: ${TROGON_ATLAS_DRILL_SPICEDB_KEY}
+      TROGON_ATLAS_SPICEDB_FRESHNESS: fully-consistent
+      RUST_LOG: info
+    volumes:
+      - ${TROGON_ATLAS_DRILL_SECRETS_DIR:?set by mise run compose:restore-drill}:/run/trogon-atlas-drill:ro
+      - trogon-atlas-mirror:/var/lib/trogon-atlas/mirror
+    ports:
+      - "127.0.0.1::50069"
+    depends_on:
+      nats:
+        condition: service_healthy
+      spicedb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9100/metrics"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  nats-data:
+  spicedb-data:
+  trogon-atlas-mirror:

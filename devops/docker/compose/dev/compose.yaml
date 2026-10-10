@@ -1,0 +1,287 @@
+# Explicit project name so OrbStack DNS is stable:
+#   trogon-atlas-studio.trogon-atlas.orb.local, trogon-atlas-server.trogon-atlas.orb.local
+name: trogon-atlas
+
+services:
+  nats:
+    image: nats:2.10.22-alpine
+    # JetStream + WebSocket for the studio. The WS listener is anonymous
+    # and lands on a read-only identity; the tcp listener requires the
+    # password below, because OrbStack DNS makes 4222 reachable from the
+    # host whether or not it is published here. JWT auth for the browser
+    # is tracked in the realtime backlog item.
+    command: ["-c", "/etc/nats-server.conf"]
+    environment:
+      # Published default, same bargain as SpiceDB's below: a fresh clone
+      # comes up with no setup, and in exchange anything that can reach 4222
+      # can connect as `service` and rewrite the registries the server's
+      # authorization is read from. compose.auth.yaml requires a real
+      # one.
+      TROGON_ATLAS_NATS_PASSWORD: ${TROGON_ATLAS_NATS_PASSWORD:-localdevpass}
+    ports:
+      # 8222 (monitoring) is deliberately absent: the listener binds the
+      # container's loopback, because publishing it on `127.0.0.1` would not
+      # have confined it. See the comment on `http:` in nats-server.conf.
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - nats-data:/data
+      - ./services/nats/nats-server.conf:/etc/nats-server.conf:ro
+    networks:
+      - trogon-atlas
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  trogon-atlas-server:
+    build:
+      context: ../../../..
+      dockerfile: devops/docker/images/trogon-atlas-server/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TROGON_ATLAS_LISTEN: 0.0.0.0:50069
+      TROGON_ATLAS_STORE: nats
+      TROGON_ATLAS_JEV: ${TROGON_ATLAS_JEV:-false}
+      AI_GATEWAY_API_KEY: ${AI_GATEWAY_API_KEY:-}
+      TROGON_ATLAS_JEV_TIMEOUT_SECS: ${TROGON_ATLAS_JEV_TIMEOUT_SECS:-8}
+      TROGON_ATLAS_JEV_MIN_PROBABILITY: ${TROGON_ATLAS_JEV_MIN_PROBABILITY:-0.95}
+      # Credentials in the URL are lifted into the connect options and
+      # stripped before anything logs the URL. Same default as the nats
+      # service above; override both together.
+      TROGON_ATLAS_NATS_URL: nats://service:${TROGON_ATLAS_NATS_PASSWORD:-localdevpass}@nats:4222
+      TROGON_ATLAS_GIT_MIRROR: /var/lib/trogon-atlas/mirror
+      TROGON_ATLAS_METRICS_LISTEN: 0.0.0.0:9100
+      # /metrics must bind non-loopback for the host port mapping to work;
+      # the published port stays on 127.0.0.1, so this opt-in exposes
+      # nothing beyond the local machine and the compose network.
+      TROGON_ATLAS_METRICS_ALLOW_EXTERNAL: "true"
+      # Deliberately not defaulted to the empty string. clap reads a
+      # set-but-empty env var as a value, which sends the server down the
+      # legacy-token path and makes it reject the anonymous callers this
+      # stack is built around. Set it in the shell or .env to use a token.
+      # The reference compose stack is the local-development front door.
+      # No token + this opt-in lets the studio bridge and MCP adapter
+      # reach the server; outside trusted local networks, set a real
+      # token and drop this flag.
+      TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS: ${TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS:-true}
+      # Namespace visibility is answered by SpiceDB rather than the
+      # registry's own `parent` column. Ownership stays opt-in either way:
+      # a principal with no `parent` in the token file still sees
+      # everything, and this stack runs anonymous by default.
+      TROGON_ATLAS_SPICEDB_ENDPOINT: http://spicedb:50051
+      TROGON_ATLAS_SPICEDB_PRESHARED_KEY: ${TROGON_ATLAS_SPICEDB_PRESHARED_KEY:-localdevkey}
+      RUST_LOG: info
+    volumes:
+      - trogon-atlas-mirror:/var/lib/trogon-atlas/mirror
+    ports:
+      - "127.0.0.1:50069:50069"
+      - "127.0.0.1:9100:9100"
+    networks:
+      - trogon-atlas
+    depends_on:
+      nats:
+        condition: service_healthy
+      spicedb:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "2.0"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9100/metrics"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # SpiceDB, self-contained to this stack rather than shared with other
+  # local stacks, so trogon-atlas's authorization state cannot be disturbed
+  # by them and vice versa.
+  #
+  # Postgres rather than the `memory` engine the other stacks use for tests.
+  # memdb drops read-your-writes under concurrent writes at every consistency
+  # level, and it forgets everything on restart. The startup reconcile would
+  # re-derive namespace grants and memberships either way, but shares and
+  # organisation hierarchies are written directly against SpiceDB and are not
+  # re-derivable, so a wipe would silently discard them.
+  spicedb-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: spicedb
+      POSTGRES_PASSWORD: spicedb
+      POSTGRES_DB: spicedb
+    volumes:
+      - spicedb-data:/var/lib/postgresql/data
+    networks:
+      - trogon-atlas
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spicedb -d spicedb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # One-shot: SpiceDB refuses to serve against an unmigrated datastore, and
+  # the migration is idempotent, so it runs to completion on every `up`.
+  spicedb-migrate:
+    image: authzed/spicedb:v1.53.0
+    command:
+      - datastore
+      - migrate
+      - head
+      - --datastore-engine
+      - postgres
+      - --datastore-conn-uri
+      - "postgres://spicedb:spicedb@spicedb-db:5432/spicedb?sslmode=disable"
+    networks:
+      - trogon-atlas
+    depends_on:
+      spicedb-db:
+        condition: service_healthy
+    restart: on-failure
+
+  spicedb:
+    image: authzed/spicedb:v1.53.0
+    command:
+      - serve
+      - --grpc-addr
+      - 0.0.0.0:50051
+      - --datastore-engine
+      - postgres
+      - --datastore-conn-uri
+      - "postgres://spicedb:spicedb@spicedb-db:5432/spicedb?sslmode=disable"
+    # As an environment variable rather than `--grpc-preshared-key`, because a
+    # flag wins over the variable and there would be no way for the auth
+    # overlay to replace it.
+    #
+    # This default is a published one, and it is the whole of SpiceDB's
+    # authentication: anything that can reach this service can grant itself
+    # `organization:default#member` and, through `parent->membership`, edit on
+    # every namespace under it. Unpublishing the port below would not change
+    # that -- OrbStack resolves `spicedb.trogon-atlas.orb.local:50051` whether or
+    # not compose publishes anything. So the base stack is for one operator on
+    # one machine, and compose.auth.yaml refuses to start without a real
+    # key.
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: ${TROGON_ATLAS_SPICEDB_PRESHARED_KEY:-localdevkey}
+    ports:
+      - "127.0.0.1:50070:50051"
+    networks:
+      - trogon-atlas
+    depends_on:
+      spicedb-migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/grpc_health_probe", "-addr=127.0.0.1:50051"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  trogon-atlas-studio:
+    # Vite dev server + API bridge against the mounted host source; edits in
+    # webapps/studio/src/** hot-reload, no `up --build` per change.
+    build:
+      context: ../../../../tsworkspace
+      dockerfile_inline: |
+        FROM node:22-alpine
+        WORKDIR /app
+        RUN corepack enable && corepack prepare pnpm@10.3.0 --activate
+        COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+        COPY webapps/studio/package.json webapps/studio/
+        RUN pnpm install --frozen-lockfile
+    working_dir: /app/webapps/studio
+    command:
+      - sh
+      - -c
+      - "PORT=8787 node server/index.mjs & exec pnpm exec vite --host 0.0.0.0 --port 80"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TROGON_ATLAS_GRPC: http://trogon-atlas-server:50069
+      TROGON_ATLAS_AUTH_TOKEN: ${TROGON_ATLAS_AUTH_TOKEN:-}
+      # service.proto defines EventModelService; event_model.proto alone does not.
+      PROTO_PATH: /app/proto/trogonatlas/api/eventmodel/v1alpha1/service.proto
+    volumes:
+      - ../../../../tsworkspace:/app
+      - /app/node_modules
+      - /app/webapps/studio/node_modules
+      - ../../../../proto:/app/proto:ro
+    ports:
+      - "127.0.0.1:8788:80"
+    networks:
+      - trogon-atlas
+    depends_on:
+      trogon-atlas-server:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80/api/info"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  trogon-atlas-mcp:
+    build:
+      context: ../../../..
+      dockerfile: devops/docker/images/trogon-atlas-mcp/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      TROGON_ATLAS_GRPC: http://trogon-atlas-server:50069
+      TROGON_ATLAS_AUTH_TOKEN: ${TROGON_ATLAS_AUTH_TOKEN:-}
+      RUST_LOG: info
+    stdin_open: true
+    tty: true
+    networks:
+      - trogon-atlas
+    depends_on:
+      trogon-atlas-server:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.5"
+
+networks:
+  trogon-atlas:
+    internal: false
+
+volumes:
+  trogon-atlas-mirror:
+  nats-data:
+  spicedb-data:

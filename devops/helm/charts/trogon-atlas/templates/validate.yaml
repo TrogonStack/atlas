@@ -1,0 +1,18 @@
+{{/*
+  The studio needs a bearer token whenever the server authenticates callers,
+  and used to fall back to the server's own shared token Secret when studio
+  had none configured. A subchart cannot see a sibling subchart's values, so
+  that fallback cannot survive the split: each subchart only sees its own
+  values.yaml plus whatever this umbrella passes it through its alias. This
+  check replaces the fallback with an explicit refusal, so the gap surfaces
+  at `helm install` instead of as a readiness failure on the studio pod.
+*/}}
+{{- if .Values.studio.enabled }}
+{{- $serverAuth := .Values.server.auth }}
+{{- $hasServerAuth := or (or $serverAuth.tokensFile.content $serverAuth.tokensFile.existingSecret) (or $serverAuth.token.value $serverAuth.token.existingSecret) }}
+{{- $studioAuth := .Values.studio.auth }}
+{{- $hasStudioToken := or $studioAuth.token.value $studioAuth.token.existingSecret }}
+{{- if and $hasServerAuth (not $serverAuth.insecureAllowAnonymous) (not $hasStudioToken) }}
+{{- fail "studio.auth.token: required when studio.enabled and server.auth is configured. Set studio.auth.token.value or studio.auth.token.existingSecret so the studio Deployment gets TROGON_ATLAS_AUTH_TOKEN; otherwise /api/info readiness fails with UNAUTHENTICATED. Standalone trogon-atlas-server and trogon-atlas-studio installs cannot share a Secret implicitly; set studio.auth.token.existingSecret to the same Secret if you want to share the server's token." }}
+{{- end }}
+{{- end }}

@@ -1,0 +1,3 @@
+# The key is generated per machine and never shared. Belt and braces: the
+# repo root ignores `*.key` too.
+*.key

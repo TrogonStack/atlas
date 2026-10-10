@@ -1,0 +1,12 @@
+apiVersion: v2
+name: trogon-atlas-server
+description: Event model gRPC server backed by NATS JetStream
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - trogon-atlas
+  - event-modeling
+  - grpc
+sources:
+  - https://github.com/TrogonStack/atlas
