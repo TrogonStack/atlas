@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Lint GitHub Actions workflows with actionlint"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+exec actionlint

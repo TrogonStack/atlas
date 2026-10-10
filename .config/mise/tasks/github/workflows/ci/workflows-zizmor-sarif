@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Generate a zizmor SARIF report for GitHub Actions workflows"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+zizmor --format=sarif .github/workflows > zizmor-results.sarif
