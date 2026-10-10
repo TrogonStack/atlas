@@ -1,0 +1,32 @@
+name: Runner selection
+
+on:
+  workflow_call:
+    outputs:
+      runs-on:
+        description: Runner label for the selected pool
+        value: ${{ jobs.select.outputs.runs-on }}
+      pool-name:
+        description: Selected runner pool
+        value: ${{ jobs.select.outputs.pool-name }}
+
+permissions: {}
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      runs-on: ${{ steps.pick.outputs.runs-on }}
+      pool-name: ${{ steps.pick.outputs.pool-name }}
+    steps:
+      - id: pick
+        uses: TrogonStack/github-actions/actions/runs-on-selector@266fc0eaedf8ec0711fa87f8de24d3ba18087a85
+        with:
+          default-pool-name: github
+          pools-json: |
+            {
+              "github": "ubuntu-latest",
+              "blacksmith": "blacksmith-4vcpu-ubuntu-2404"
+            }

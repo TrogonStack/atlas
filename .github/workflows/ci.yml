@@ -5,6 +5,12 @@ on:
     branches:
       - main
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
   workflow_dispatch:
 
 concurrency:
@@ -18,9 +24,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  runner:
+    uses: ./.github/workflows/runner.yml
+
   rust:
     name: Rust - fmt / clippy / test
-    runs-on: ubuntu-latest
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runs-on }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -48,7 +58,8 @@ jobs:
 
   proto:
     name: Proto - lint / breaking
-    runs-on: ubuntu-latest
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runs-on }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -72,7 +83,8 @@ jobs:
 
   studio:
     name: Studio - typecheck / lint / test / build
-    runs-on: ubuntu-latest
+    needs: runner
+    runs-on: ${{ needs.runner.outputs.runs-on }}
 
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
