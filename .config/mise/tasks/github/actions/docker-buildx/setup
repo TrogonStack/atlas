@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Set up QEMU and a buildx builder for cross-platform image builds"
+set -euo pipefail
+
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+docker buildx create --use

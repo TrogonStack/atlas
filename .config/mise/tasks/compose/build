@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+#MISE description="Build the trogon-atlas compose stack's images (TROGON_ATLAS_COMPOSE_ENV selects the environment, default dev)"
+set -euo pipefail
+cd "$MISE_PROJECT_ROOT/devops/docker/compose/${TROGON_ATLAS_COMPOSE_ENV:-dev}" && docker compose build "$@"
