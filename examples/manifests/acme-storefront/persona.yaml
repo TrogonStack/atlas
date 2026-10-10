@@ -1,0 +1,19 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: shopper
+  namespace: acme-storefront
+spec:
+  doc: The customer building a cart and placing an order.
+  role: customer
+  title: Shopper
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: support-agent
+  namespace: acme-storefront
+spec:
+  doc: Internal operator who answers order-status questions.
+  role: operator
+  title: Support Agent

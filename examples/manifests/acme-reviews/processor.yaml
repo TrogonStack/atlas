@@ -1,0 +1,9 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: eligibility-granter
+  namespace: acme-reviews
+spec:
+  doc: Grants review eligibility once a delivered order has waited out the no-review window.
+  docTrigger: A delivered-unreviewed queue row appears.
+  title: Eligibility granter

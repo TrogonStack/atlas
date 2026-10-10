@@ -1,0 +1,14 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: seller-reputation
+  namespace: acme-reviews
+spec:
+  classification: CLASSIFICATION_SUPPORTING
+  doc: Collecting buyer reviews of a seller once an order is delivered.
+  domain:
+    id:
+      namespace: acme-reviews
+      slug: customer-trust
+      version: '1'
+  title: Seller Reputation

@@ -1,0 +1,21 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ExternalSystem
+metadata:
+  name: acme-analytics
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Acme Analytics. Holds a customer behavior profile keyed by customer_id.
+  tech:
+  - webhook
+  title: Acme Analytics
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ExternalSystem
+metadata:
+  name: acme-crm
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Acme CRM. Holds customer contact and support history keyed by customer_id.
+  tech:
+  - webhook
+  title: Acme CRM

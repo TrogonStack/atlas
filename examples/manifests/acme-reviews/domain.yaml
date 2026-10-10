@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata:
+  name: customer-trust
+  namespace: acme-reviews
+spec:
+  doc: Keeping buyer confidence high after a sale closes, including seller reputation.
+  title: Customer Trust

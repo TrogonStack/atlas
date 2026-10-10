@@ -1,0 +1,17 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: review
+  namespace: acme-reviews
+spec:
+  doc: Review eligibility and submission for a single delivered order.
+  order: 1
+  state:
+  - name: status
+    type:
+      enumeration:
+        values:
+        - eligible
+        - reviewed
+  streamId: order-{order_id}
+  title: Review

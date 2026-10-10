@@ -1,0 +1,25 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: UiSlice
+metadata:
+  name: review-form-ui-slice
+  namespace: acme-reviews
+spec:
+  persona:
+    persona:
+      id:
+        namespace: acme-reviews
+        slug: reviewer
+        version: '1'
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-reviews
+        slug: eligible-reviews
+        version: '1'
+  title: Review form display
+  ui:
+    ui:
+      id:
+        namespace: acme-reviews
+        slug: review-form
+        version: '1'

@@ -1,0 +1,50 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: cart
+  namespace: acme-storefront
+spec:
+  doc: A shopper's in-progress cart.
+  order: 1
+  state:
+  - name: item_count
+    type:
+      int: {}
+  streamId: cart-{cart_id}
+  title: Cart
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: order
+  namespace: acme-storefront
+spec:
+  doc: A placed order through payment capture.
+  order: 2
+  state:
+  - name: status
+    type:
+      enumeration:
+        values:
+        - placed
+        - paid
+  streamId: order-{order_id}
+  title: Order
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Swimlane
+metadata:
+  name: fulfillment
+  namespace: acme-storefront
+spec:
+  doc: Dispatch and delivery of a paid order.
+  order: 3
+  state:
+  - name: status
+    type:
+      enumeration:
+        values:
+        - pending
+        - fulfilled
+  streamId: order-{order_id}
+  title: Fulfillment

@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata:
+  name: customer-privacy
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Honoring an account owner's request to delete the personal data Acme holds about them.
+  title: Customer Privacy

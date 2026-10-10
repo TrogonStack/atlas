@@ -1,0 +1,19 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: account-owner
+  namespace: acme-customer-data-deletion
+spec:
+  doc: The customer requesting deletion of their own personal data.
+  role: customer
+  title: Account Owner
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: privacy-ops
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Internal operator who monitors deletion requests to completion.
+  role: operator
+  title: Privacy Ops

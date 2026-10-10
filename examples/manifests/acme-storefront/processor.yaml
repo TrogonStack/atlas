@@ -1,0 +1,29 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: payment-capture-worker
+  namespace: acme-storefront
+spec:
+  calls:
+  - id:
+      namespace: acme-storefront
+      slug: acme-payments
+      version: '1'
+  doc: Captures the order's payment and records the outcome.
+  docTrigger: A pending-payments queue row appears.
+  title: Payment capture worker
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: carrier-dispatch-worker
+  namespace: acme-storefront
+spec:
+  calls:
+  - id:
+      namespace: acme-storefront
+      slug: acme-shipping-carrier
+      version: '1'
+  doc: Dispatches the order to the carrier and records delivery confirmation.
+  docTrigger: A fulfillment queue row appears.
+  title: Carrier dispatch worker

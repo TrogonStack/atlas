@@ -1,0 +1,43 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: grant-eligibility-auto
+  namespace: acme-reviews
+spec:
+  doc: Grants review eligibility for a delivered order sitting on the queue.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-reviews
+        slug: grant-review-eligibility
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-reviews
+        slug: eligibility-granter
+        version: '1'
+  scenarios:
+  - doc: Queue row.
+    given:
+    - readModel:
+        id:
+          namespace: acme-reviews
+          slug: orders.delivered-unreviewed
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-reviews
+          slug: grant-review-eligibility
+          version: '1'
+    title: Eligibility granted
+    whenDoc: The no-review window since delivery has elapsed.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-reviews
+        slug: orders.delivered-unreviewed
+        version: '1'
+  title: Grant review eligibility

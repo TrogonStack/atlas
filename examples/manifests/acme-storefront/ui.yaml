@@ -1,0 +1,17 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata:
+  name: storefront-checkout
+  namespace: acme-storefront
+spec:
+  doc: 'Shopper-facing: cart contents and the place-order button.'
+  title: Storefront checkout
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata:
+  name: order-tracking
+  namespace: acme-storefront
+spec:
+  doc: 'Shopper-facing: order status from placed through delivery.'
+  title: Order tracking

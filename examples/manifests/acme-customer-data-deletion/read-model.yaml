@@ -1,0 +1,131 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: pending-deletions
+  namespace: acme-customer-data-deletion
+spec:
+  doc: 'Worker feed: deletion requests awaiting vendor dispatch.'
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder represented by this row (removed via projection delete when the deletion completes).
+        erasure: ERASURE_PROJECTION_DELETE
+      name: customer_id
+      type:
+        uuid: {}
+    - name: status
+      type:
+        enumeration:
+          values:
+          - requested
+          - in-progress
+          - completed
+    - name: requested_at
+      type:
+        timestamp: {}
+    - name: completed_at
+      type:
+        timestamp: {}
+  key:
+  - customer_id
+  metadata:
+  - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.SharedConsumersAnnotation
+    doc: Both the analytics dispatcher and the CRM dispatcher read the same queued row to kick off their own vendor call.
+  sourceEvents:
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: customer-data-deletion.requested
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: customer-data-deletion.completed
+      version: '1'
+  title: Pending deletions (queue)
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: analytics-deletion-queue
+  namespace: acme-customer-data-deletion
+spec:
+  doc: 'Worker feed: delete the customer profile at Acme Analytics.'
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder represented by this row (removed via projection delete when the account is forgotten).
+        erasure: ERASURE_PROJECTION_DELETE
+      name: customer_id
+      type:
+        uuid: {}
+    - name: status
+      type:
+        enumeration:
+          values:
+          - requested
+          - in-progress
+          - completed
+    - name: started_at
+      type:
+        timestamp: {}
+    - name: completed_at
+      type:
+        timestamp: {}
+  key:
+  - customer_id
+  sourceEvents:
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: analytics-deletion.started
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: customer-data-deletion.completed
+      version: '1'
+  title: Analytics deletion pending (queue)
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: crm-deletion-queue
+  namespace: acme-customer-data-deletion
+spec:
+  doc: 'Worker feed: delete the customer record at Acme CRM.'
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder represented by this row (removed via projection delete when the account is forgotten).
+        erasure: ERASURE_PROJECTION_DELETE
+      name: customer_id
+      type:
+        uuid: {}
+    - name: status
+      type:
+        enumeration:
+          values:
+          - requested
+          - in-progress
+          - completed
+    - name: started_at
+      type:
+        timestamp: {}
+    - name: completed_at
+      type:
+        timestamp: {}
+  key:
+  - customer_id
+  sourceEvents:
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: crm-deletion.started
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: customer-data-deletion.completed
+      version: '1'
+  title: CRM deletion pending (queue)

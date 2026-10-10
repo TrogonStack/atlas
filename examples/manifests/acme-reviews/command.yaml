@@ -1,0 +1,58 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: grant-review-eligibility
+  namespace: acme-reviews
+spec:
+  doc: Worker-issued. Grants review eligibility for a delivered order.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the worker grants eligibility
+        kind: KIND_TIMESTAMP
+      name: granted_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-reviews
+      slug: review
+      version: '1'
+  title: Grant review eligibility
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: submit-review
+  namespace: acme-reviews
+spec:
+  doc: A buyer rates and comments on a delivered order.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: rating
+      type:
+        int: {}
+    - name: comment
+      type:
+        string: {}
+  swimlane:
+    id:
+      namespace: acme-reviews
+      slug: review
+      version: '1'
+  title: Submit review

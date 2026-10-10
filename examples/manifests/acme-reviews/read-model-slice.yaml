@@ -1,0 +1,87 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: orders-delivered-unreviewed-upsert-rms
+  namespace: acme-reviews
+spec:
+  doc: A delivered order appears on the queue.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-reviews
+        slug: orders.delivered-unreviewed
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.fulfilled
+        version: '1'
+  title: 'Queue: delivered unreviewed'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: orders-delivered-unreviewed-delete-rms
+  namespace: acme-reviews
+spec:
+  doc: The order drops off the queue once eligibility is granted.
+  projectionRole: PROJECTION_ROLE_DELETE
+  readModel:
+    readModel:
+      id:
+        namespace: acme-reviews
+        slug: orders.delivered-unreviewed
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-reviews
+        slug: review-eligibility.granted
+        version: '1'
+  title: 'Queue: eligibility granted'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: eligible-reviews-upsert-rms
+  namespace: acme-reviews
+spec:
+  doc: An eligibility grant adds the order to the reviewable list.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-reviews
+        slug: eligible-reviews
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-reviews
+        slug: review-eligibility.granted
+        version: '1'
+  title: 'Projection: eligible reviews'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: eligible-reviews-delete-rms
+  namespace: acme-reviews
+spec:
+  doc: The order drops off the reviewable list once the review is submitted.
+  projectionRole: PROJECTION_ROLE_DELETE
+  readModel:
+    readModel:
+      id:
+        namespace: acme-reviews
+        slug: eligible-reviews
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-reviews
+        slug: review.submitted
+        version: '1'
+  title: 'Projection: review submitted'

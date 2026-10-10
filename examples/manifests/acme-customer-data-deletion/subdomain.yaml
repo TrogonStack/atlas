@@ -1,0 +1,14 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: data-deletion
+  namespace: acme-customer-data-deletion
+spec:
+  classification: CLASSIFICATION_SUPPORTING
+  doc: Coordinating deletion of a customer's personal data across every downstream vendor that holds it.
+  domain:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: customer-privacy
+      version: '1'
+  title: Data Deletion

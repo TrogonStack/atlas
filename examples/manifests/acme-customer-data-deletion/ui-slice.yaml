@@ -1,0 +1,35 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: UiSlice
+metadata:
+  name: privacy-ops-dashboard-ui-slice
+  namespace: acme-customer-data-deletion
+spec:
+  persona:
+    persona:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: privacy-ops
+        version: '1'
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: pending-deletions
+        version: '1'
+  - readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: analytics-deletion-queue
+        version: '1'
+  - readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: crm-deletion-queue
+        version: '1'
+  title: Privacy ops dashboard display
+  ui:
+    ui:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: privacy-ops-dashboard
+        version: '1'

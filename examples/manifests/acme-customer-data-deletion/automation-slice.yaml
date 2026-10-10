@@ -1,0 +1,141 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: analytics-deletion-dispatch-auto
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Calls Acme Analytics to delete the customer's profile.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: start-analytics-deletion
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: analytics-deletion-dispatcher
+        version: '1'
+  scenarios:
+  - doc: Queue row.
+    given:
+    - readModel:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: pending-deletions
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: start-analytics-deletion
+          version: '1'
+    title: Analytics deletion started
+    whenDoc: Acme Analytics accepts the deletion request.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: pending-deletions
+        version: '1'
+  title: Dispatch to Acme Analytics
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: crm-deletion-dispatch-auto
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Calls Acme CRM to delete the customer's record.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: start-crm-deletion
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: crm-deletion-dispatcher
+        version: '1'
+  scenarios:
+  - doc: Queue row.
+    given:
+    - readModel:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: pending-deletions
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: start-crm-deletion
+          version: '1'
+    title: CRM deletion started
+    whenDoc: Acme CRM accepts the deletion request.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: pending-deletions
+        version: '1'
+  title: Dispatch to Acme CRM
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: deletion-completion-auto
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Closes out the request once both vendors confirm deletion.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: complete-customer-data-deletion
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: deletion-completion-worker
+        version: '1'
+  scenarios:
+  - doc: Both vendor rows present.
+    given:
+    - readModel:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: analytics-deletion-queue
+          version: '1'
+    - readModel:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: crm-deletion-queue
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: complete-customer-data-deletion
+          version: '1'
+    title: Deletion completed
+    whenDoc: Both Acme Analytics and Acme CRM confirm the customer's data has been deleted.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: analytics-deletion-queue
+        version: '1'
+  - readModel:
+      id:
+        namespace: acme-customer-data-deletion
+        slug: crm-deletion-queue
+        version: '1'
+  title: Complete customer data deletion

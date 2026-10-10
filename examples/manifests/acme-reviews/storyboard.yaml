@@ -1,0 +1,93 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: review-eligibility-grant
+  namespace: acme-reviews
+spec:
+  doc: A delivered order clears the no-review window and becomes reviewable.
+  entry:
+    automation:
+      processor:
+        processor:
+          id:
+            namespace: acme-reviews
+            slug: eligibility-granter
+            version: '1'
+    readModel:
+      readModel:
+        id:
+          namespace: acme-reviews
+          slug: orders.delivered-unreviewed
+          version: '1'
+  outcome:
+    events:
+    - event:
+        id:
+          namespace: acme-reviews
+          slug: review-eligibility.granted
+          version: '1'
+  slices:
+  - id:
+      namespace: acme-reviews
+      slug: orders-delivered-unreviewed-upsert-rms
+      version: '1'
+  - id:
+      namespace: acme-reviews
+      slug: grant-eligibility-auto
+      version: '1'
+  - id:
+      namespace: acme-reviews
+      slug: grant-review-eligibility-slice
+      version: '1'
+  - id:
+      namespace: acme-reviews
+      slug: orders-delivered-unreviewed-delete-rms
+      version: '1'
+  - id:
+      namespace: acme-reviews
+      slug: eligible-reviews-upsert-rms
+      version: '1'
+  title: Grant review eligibility
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: review-submission-flow
+  namespace: acme-reviews
+spec:
+  doc: The reviewer rates a delivered order once eligible.
+  entry:
+    human:
+      persona:
+        persona:
+          id:
+            namespace: acme-reviews
+            slug: reviewer
+            version: '1'
+      ui:
+        ui:
+          id:
+            namespace: acme-reviews
+            slug: review-form
+            version: '1'
+  outcome:
+    events:
+    - event:
+        id:
+          namespace: acme-reviews
+          slug: review.submitted
+          version: '1'
+  slices:
+  - id:
+      namespace: acme-reviews
+      slug: review-form-ui-slice
+      version: '1'
+  - id:
+      namespace: acme-reviews
+      slug: submit-review-slice
+      version: '1'
+  - id:
+      namespace: acme-reviews
+      slug: eligible-reviews-delete-rms
+      version: '1'
+  title: Submit review

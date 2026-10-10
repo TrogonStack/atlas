@@ -1,0 +1,22 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ExternalSystem
+metadata:
+  name: acme-payments
+  namespace: acme-storefront
+spec:
+  doc: Acme Payments gateway. Captures card payments and issues refunds over a webhook-callback API.
+  tech:
+  - card-network
+  - webhook
+  title: Acme Payments
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ExternalSystem
+metadata:
+  name: acme-shipping-carrier
+  namespace: acme-storefront
+spec:
+  doc: Acme Shipping Carrier. Dispatches parcels and confirms delivery over a polled tracking API.
+  tech:
+  - carrier-api
+  title: Acme Shipping Carrier

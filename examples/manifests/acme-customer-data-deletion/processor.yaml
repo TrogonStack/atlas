@@ -1,0 +1,39 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: analytics-deletion-dispatcher
+  namespace: acme-customer-data-deletion
+spec:
+  calls:
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: acme-analytics
+      version: '1'
+  doc: Calls Acme Analytics to delete the customer's profile.
+  docTrigger: A pending-deletions queue row appears.
+  title: Analytics deletion dispatcher
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: crm-deletion-dispatcher
+  namespace: acme-customer-data-deletion
+spec:
+  calls:
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: acme-crm
+      version: '1'
+  doc: Calls Acme CRM to delete the customer's record.
+  docTrigger: A pending-deletions queue row appears.
+  title: CRM deletion dispatcher
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata:
+  name: deletion-completion-worker
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Confirms both vendors finished deleting the customer's data and closes out the request.
+  docTrigger: A row appears on both the analytics and CRM deletion queues.
+  title: Deletion completion worker

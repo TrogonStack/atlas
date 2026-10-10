@@ -1,0 +1,25 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: UiSlice
+metadata:
+  name: order-tracking-ui-slice
+  namespace: acme-storefront
+spec:
+  persona:
+    persona:
+      id:
+        namespace: acme-storefront
+        slug: shopper
+        version: '1'
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-storefront
+        slug: order-status
+        version: '1'
+  title: Order tracking display
+  ui:
+    ui:
+      id:
+        namespace: acme-storefront
+        slug: order-tracking
+        version: '1'

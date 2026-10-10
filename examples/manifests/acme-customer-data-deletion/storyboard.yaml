@@ -1,0 +1,86 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: customer-data-deletion-flow
+  namespace: acme-customer-data-deletion
+spec:
+  doc: An account owner's deletion request is dispatched to every downstream vendor and confirmed complete.
+  entry:
+    human:
+      persona:
+        persona:
+          id:
+            namespace: acme-customer-data-deletion
+            slug: account-owner
+            version: '1'
+      ui:
+        ui:
+          id:
+            namespace: acme-customer-data-deletion
+            slug: deletion-request-form
+            version: '1'
+  outcome:
+    events:
+    - event:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: customer-data-deletion.completed
+          version: '1'
+  slices:
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: request-customer-data-deletion-slice
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: pending-deletions-upsert-rms
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: analytics-deletion-dispatch-auto
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: start-analytics-deletion-slice
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: analytics-deletion-queue-upsert-rms
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: crm-deletion-dispatch-auto
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: start-crm-deletion-slice
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: crm-deletion-queue-upsert-rms
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: deletion-completion-auto
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: complete-customer-data-deletion-slice
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: pending-deletions-delete-rms
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: analytics-deletion-queue-delete-rms
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: crm-deletion-queue-delete-rms
+      version: '1'
+  - id:
+      namespace: acme-customer-data-deletion
+      slug: privacy-ops-dashboard-ui-slice
+      version: '1'
+  title: Customer data deletion

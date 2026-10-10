@@ -1,0 +1,97 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: cart-summary-rms
+  namespace: acme-storefront
+spec:
+  doc: An item added to the cart updates the running count.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-storefront
+        slug: cart-summary
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: cart.item-added
+        version: '1'
+  title: 'Projection: cart summary'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: pending-payments-rms
+  namespace: acme-storefront
+spec:
+  doc: Pending row.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-storefront
+        slug: pending-payments
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.placed
+        version: '1'
+  title: 'Queue: pending payments'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: fulfillment-queue-rms
+  namespace: acme-storefront
+spec:
+  doc: Pending row.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-storefront
+        slug: fulfillment-queue
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.paid
+        version: '1'
+  title: 'Queue: fulfillment'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: order-status-rms
+  namespace: acme-storefront
+spec:
+  doc: Each lifecycle event updates the shopper-facing status.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-storefront
+        slug: order-status
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.placed
+        version: '1'
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.paid
+        version: '1'
+  - event:
+      id:
+        namespace: acme-storefront
+        slug: order.fulfilled
+        version: '1'
+  title: 'Projection: order status'

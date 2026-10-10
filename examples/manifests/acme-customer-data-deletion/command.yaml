@@ -1,0 +1,116 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: request-customer-data-deletion
+  namespace: acme-customer-data-deletion
+spec:
+  doc: The account owner requests deletion of their personal data.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder issuing the request (the command is transient and not stored, but is annotated for downstream audit tooling).
+        erasure: ERASURE_CRYPTO_SHREDDING
+      name: customer_id
+      type:
+        uuid: {}
+  swimlane:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: deletion
+      version: '1'
+  title: Request customer data deletion
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: start-analytics-deletion
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Worker-issued. Starts deleting the customer's profile at Acme Analytics.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder issuing the request (the command is transient and not stored, but is annotated for downstream audit tooling).
+        erasure: ERASURE_CRYPTO_SHREDDING
+      name: customer_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the worker starts the vendor call
+        kind: KIND_TIMESTAMP
+      name: started_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: deletion
+      version: '1'
+  title: Start analytics deletion
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: start-crm-deletion
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Worker-issued. Starts deleting the customer's record at Acme CRM.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder issuing the request (the command is transient and not stored, but is annotated for downstream audit tooling).
+        erasure: ERASURE_CRYPTO_SHREDDING
+      name: customer_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the worker starts the vendor call
+        kind: KIND_TIMESTAMP
+      name: started_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: deletion
+      version: '1'
+  title: Start CRM deletion
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Command
+metadata:
+  name: complete-customer-data-deletion
+  namespace: acme-customer-data-deletion
+spec:
+  doc: Worker-issued. Records that every downstream vendor confirmed deletion.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation
+        doc: Identifies the account holder issuing the request (the command is transient and not stored, but is annotated for downstream audit tooling).
+        erasure: ERASURE_CRYPTO_SHREDDING
+      name: customer_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the worker records completion
+        kind: KIND_TIMESTAMP
+      name: completed_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: deletion
+      version: '1'
+  title: Complete customer data deletion

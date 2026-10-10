@@ -1,0 +1,103 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: cart.item-added
+  namespace: acme-storefront
+spec:
+  doc: A shopper added a product to their cart.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: cart_id
+      type:
+        uuid: {}
+    - name: product_id
+      type:
+        uuid: {}
+    - name: quantity
+      type:
+        int: {}
+  swimlane:
+    id:
+      namespace: acme-storefront
+      slug: cart
+      version: '1'
+  title: Item added to cart
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: order.placed
+  namespace: acme-storefront
+spec:
+  doc: A shopper placed an order from their cart.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: cart_id
+      type:
+        uuid: {}
+    - name: placed_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-storefront
+      slug: order
+      version: '1'
+  title: Order placed
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: order.paid
+  namespace: acme-storefront
+spec:
+  doc: Acme Payments captured the order's payment.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: paid_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-storefront
+      slug: order
+      version: '1'
+  title: Order paid
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: order.fulfilled
+  namespace: acme-storefront
+spec:
+  doc: Acme Shipping Carrier confirmed the order was delivered.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - name: fulfilled_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-storefront
+      slug: fulfillment
+      version: '1'
+  title: Order fulfilled

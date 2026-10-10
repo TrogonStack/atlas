@@ -1,0 +1,17 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata:
+  name: deletion-request-form
+  namespace: acme-customer-data-deletion
+spec:
+  doc: 'Account-owner-facing: request deletion of personal data.'
+  title: Deletion request form
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Ui
+metadata:
+  name: privacy-ops-dashboard
+  namespace: acme-customer-data-deletion
+spec:
+  doc: 'Privacy-ops-facing: status of every deletion request and vendor queue.'
+  title: Privacy ops dashboard
