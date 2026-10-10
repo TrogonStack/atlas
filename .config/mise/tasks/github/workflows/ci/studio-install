@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Install Studio dependencies with a frozen lockfile"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/tsworkspace"
+exec pnpm install --frozen-lockfile

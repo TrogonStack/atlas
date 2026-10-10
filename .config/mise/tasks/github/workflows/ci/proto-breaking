@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="CI entrypoint for the proto breaking-change check against the baseline ref"
+set -euo pipefail
+
+exec mise run proto:check-breaking

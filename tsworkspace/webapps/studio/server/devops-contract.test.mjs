@@ -20,6 +20,7 @@ const fixturesOverride = path.join(atlasRoot, 'devops', 'docker', 'compose', 'de
 const chartDir = path.join(atlasRoot, 'devops', 'helm', 'charts', 'trogon-atlas');
 const serverChartDir = path.join(atlasRoot, 'devops', 'helm', 'charts', 'trogon-atlas-server');
 const studioChartDir = path.join(atlasRoot, 'devops', 'helm', 'charts', 'trogon-atlas-studio');
+const workflowPath = path.join(atlasRoot, '.github', 'workflows', 'ci.yml');
 const studioDockerfile = path.join(atlasRoot, 'devops', 'docker', 'images', 'trogon-atlas-studio', 'Dockerfile');
 
 const HELM_TIMEOUT_MS = 30_000;
@@ -450,6 +451,30 @@ print(${pythonExpr})
 
 describe('studio CI lockfile contract', () => {
   const tsRoot = path.resolve(studioRoot, '..', '..');
+  const studioInstallTask = path.join(
+    atlasRoot,
+    '.config',
+    'mise',
+    'tasks',
+    'github',
+    'workflows',
+    'ci',
+    'studio-install',
+  );
+
+  it('CI installs against tsworkspace/pnpm-lock.yaml with a frozen lockfile', () => {
+    const workflow = fs.readFileSync(workflowPath, 'utf8');
+    expect(workflow).toMatch(/run:\s*mise run github:workflows:ci:studio-install/);
+
+    const task = fs.readFileSync(studioInstallTask, 'utf8');
+    expect(task).toMatch(/cd\s+"\$MISE_PROJECT_ROOT\/tsworkspace"/);
+    expect(task).toMatch(/pnpm install --frozen-lockfile/);
+
+    expect(
+      fs.existsSync(path.join(tsRoot, 'pnpm-lock.yaml')),
+      'studio-install installs from tsworkspace/pnpm-lock.yaml but the file is missing',
+    ).toBe(true);
+  });
 
   it('declares the tsworkspace as its own pnpm workspace', () => {
     // pnpm resolves the workspace from the nearest pnpm-workspace.yaml, so
