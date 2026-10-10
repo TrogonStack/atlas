@@ -5,6 +5,7 @@ members = [
   "crates/trogon-atlas-cli",
   "crates/trogon-atlas-client",
   "crates/trogon-atlas-core",
+  "crates/trogon-atlas-mcp",
   "crates/trogon-atlas-proto",
   "crates/trogon-atlas-server",
   "crates/trogon-atlas-store",
