@@ -87,7 +87,7 @@ jobs:
         with:
           workspaces: rsworkspace
 
-      - name: cargo llvm-cov nextest
+      - name: cargo llvm-cov
         env:
           TROGON_ATLAS_TEST_NATS_URL: ""
         run: mise run github:workflows:ci:rust-coverage
