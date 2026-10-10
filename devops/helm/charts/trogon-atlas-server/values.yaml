@@ -1,0 +1,241 @@
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  # Prepended to every image repository below.
+  imageRegistry: ghcr.io/trogonstack
+  imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# The server is single-writer: its mutation lock is process-local, so extra
+# replicas break BatchMutate/MergeBranch atomicity and serve stale reads from
+# a stale per-process snapshot cache, with nothing surfaced to the caller.
+# The chart refuses to render replicaCount > 1 unless the flag below is set.
+replicaCount: 1
+# Explicit override for replicaCount > 1. Only set this when every replica is
+# effectively read-only and mutations are routed elsewhere.
+acknowledgeSingleWriter: false
+
+image:
+  repository: atlas/trogon-atlas-server
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  grpcPort: 50069
+  annotations: {}
+
+# The server refuses to start without authentication unless anonymous
+# access is explicitly allowed. Configure exactly one of the options
+# below (tokensFile takes precedence over token).
+auth:
+  # Per-principal token registry (TOML, see rsworkspace/crates/trogon-atlas-server/examples/tokens.toml).
+  tokensFile:
+    # Inline TOML content; the chart creates a Secret from it.
+    content: ""
+    # Name of a pre-existing Secret holding the tokens file.
+    existingSecret: ""
+    key: tokens.toml
+  # Single shared bearer token (deprecated upstream, still supported).
+  token:
+    value: ""
+    existingSecret: ""
+    key: token
+  # Opt-in to running without any authentication.
+  insecureAllowAnonymous: false
+  # Refuse direct writes to baseline, so changes arrive by branch and merge.
+  # Authenticated admins keep a break-glass path.
+  protectBaseline: false
+  # Narrow the above to named namespaces. Entries are exact (`orders`) or
+  # prefix (`shop-*`). A non-empty list wins over protectBaseline: only these
+  # namespaces are protected, the rest still accept direct baseline writes.
+  protectBaselineNamespaces: []
+
+config:
+  # Credentials may be embedded as userinfo (nats://user:pass@host:4222).
+  # The server lifts them out of the URL before anything logs it, but this
+  # value lands in the Deployment's env in plaintext, readable by anyone
+  # who can `get deployment`. Use natsUrlSecret below for a real cluster.
+  natsUrl: nats://nats:4222
+  # Read the whole URL, credentials included, from an existing Secret.
+  # Takes precedence over natsUrl when name is set.
+  natsUrlSecret:
+    name: ""
+    key: url
+  # The registry that decides who owns which namespace is a KV bucket in
+  # this store, so an unauthenticated NATS is a way around the server
+  # rather than a way into it. The chart refuses to render an authenticated
+  # server against a credential-less natsUrl; set this when the store is
+  # closed some other way (mesh mTLS, NetworkPolicy).
+  acknowledgeUnauthenticatedStore: false
+  natsBucket: trogon-atlas-entities
+  natsStream: TROGON_ATLAS_CHANGES
+  natsSubjectRoot: atlas.changes
+  changesMaxAgeDays: 90
+  changesMaxMsgs: 1000000
+  changesMaxBytes: 0
+  maxMessageBytes: 4194304
+  concurrencyLimit: 32
+  rpcTimeoutSecs: 60
+  shutdownDrainSecs: 30
+  logLevel: info
+  # OTLP endpoint for trace export, e.g. http://otel-collector:4317
+  otlpEndpoint: ""
+  # Standard-base64, 32-byte key sealing ListChanges pagination cursors.
+  # Safe to leave unset for a single-process deployment; required once more
+  # than one replica can serve the same poll, or a cursor minted by one
+  # process fails to open on another. The chart never generates this key,
+  # only references a Secret the operator supplies.
+  changeCursorKey:
+    existingSecret: ""
+    key: change-cursor-key
+
+# Delegate the "who may see this namespace" question to SpiceDB.
+#
+# Left off, the server answers it from the registry's own `parent` column:
+# a namespace belongs to exactly one owner, and only that owner sees it.
+# That is a complete answer for single-tenant-per-namespace deployments and
+# needs nothing here. It cannot express a namespace shared between two
+# owners, which is the reason to turn this on.
+#
+# The registry stays authoritative for whether a namespace exists and what
+# its id is. Only the permission question moves.
+spicedb:
+  # gRPC endpoint, e.g. http://spicedb:50051. Empty means the registry
+  # decides, and NOTES.txt says so after every install.
+  endpoint: ""
+  # The key SpiceDB was started with. Required whenever endpoint is set,
+  # and refused when it is not, because a key with no endpoint is an
+  # operator who believes SpiceDB is on when it is not.
+  presharedKey:
+    value: ""
+    existingSecret: ""
+    key: preshared-key
+  # minimize-latency reads from whichever replica answers first, floored by
+  # this process's own writes. fully-consistent quorum-reads every check,
+  # which is what makes a grant revoked through another process stop working
+  # immediately rather than at the end of SpiceDB's quantization window.
+  freshness: minimize-latency
+  # Do not install the schema or publish grants from this process.
+  #
+  # Startup sync and the token-file reload are the same code path, so this
+  # also stops a token file edit from ever reaching SpiceDB. A deployment
+  # that sets this has to run `sync-spicedb` somewhere; the CronJob below
+  # is that somewhere, and the chart refuses to render without one.
+  skipStartupSync: false
+  # Runs `sync-spicedb`, which installs the schema and re-derives every
+  # grant from the registry and the token file. Idempotent.
+  #
+  # Off by default because the server already does this at startup and on
+  # every token-file reload. Turn it on with skipStartupSync, or as a repair
+  # loop for a deployment where a registry write can land while the matching
+  # SpiceDB write fails.
+  sync:
+    enabled: false
+    schedule: "*/15 * * * *"
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 5
+    startingDeadlineSeconds: 300
+    activeDeadlineSeconds: 600
+    resources: {}
+    extraEnv: []
+
+metrics:
+  enabled: true
+  port: 9100
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+
+# Serve gRPC over in-process TLS from a kubernetes.io/tls Secret.
+# Note: with TLS enabled the probes fall back to tcpSocket because the
+# kubelet gRPC probe does not support TLS.
+tls:
+  existingSecret: ""
+
+llm:
+  # anthropic or disabled
+  provider: disabled
+  model: ""
+  baseUrl: ""
+  apiKey:
+    existingSecret: ""
+    key: api-key
+
+gitMirror:
+  enabled: false
+  authorName: trogon-atlas-server
+  authorEmail: trogon-atlas@local
+  persistence:
+    existingClaim: ""
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    # Every mutation is a commit and every entity a blob, and nothing prunes.
+    # Size this against your write rate, and alert on volume utilization.
+    size: 1Gi
+
+  # Detects store/mirror divergence. A mirror write can fail while the store
+  # commit succeeds (git_mirror_failures_total), and the mirror is the
+  # documented restore path, so nothing else catches it before restore day.
+  # Exits non-zero on drift: alert on the resulting failed Job.
+  reconcile:
+    enabled: true
+    schedule: "17 3 * * *"
+    # The mirror PVC is ReadWriteOnce by default, so this pod can only mount
+    # it from the node already running the server. Set false only with a
+    # ReadWriteMany volume.
+    colocateWithServer: true
+    successfulJobsHistoryLimit: 3
+    failedJobsHistoryLimit: 5
+    startingDeadlineSeconds: 300
+    activeDeadlineSeconds: 1800
+    resources: {}
+    extraEnv: []
+
+  # Repacks the mirror repository. The server never runs `git gc`, so without
+  # this the object store grows unbounded against a fixed PVC.
+  gc:
+    enabled: true
+    schedule: "43 4 * * 0"
+    colocateWithServer: true
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 3
+    activeDeadlineSeconds: 3600
+    extraArgs:
+      - --auto
+    resources: {}
+
+  # Pushing off-box is deliberately NOT done by the server: a long-running
+  # daemon holding push credentials is a different security posture, and a
+  # push that can fail is a push that could eventually fail a write. The
+  # supported pattern is a sidecar or CronJob that mounts the same PVC with
+  # its own credentials. See rsworkspace/crates/trogon-atlas-server/README.md.
+
+extraEnv: []
+resources: {}
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+terminationGracePeriodSeconds: 40
+priorityClassName: ""
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL

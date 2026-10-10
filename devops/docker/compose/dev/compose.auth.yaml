@@ -1,0 +1,79 @@
+# Overlay that turns the reference stack's authentication on.
+#
+#   cd devops/docker/compose/dev
+#   auth=services/trogon-atlas-server/auth
+#   openssl rand -hex 32 > $auth/api.key
+#   openssl rand -hex 32 > $auth/studio.key
+#   openssl rand -hex 32 > $auth/spicedb.key
+#   openssl rand -hex 32 > $auth/nats.key
+#   chmod 0600 $auth/*.key
+#   export TROGON_ATLAS_AUTH_TOKEN=$(cat $auth/api.key)
+#   export TROGON_ATLAS_STUDIO_AUTH_TOKEN=$(cat $auth/studio.key)
+#   export TROGON_ATLAS_SPICEDB_PRESHARED_KEY=$(cat $auth/spicedb.key)
+#   export TROGON_ATLAS_NATS_PASSWORD=$(cat $auth/nats.key)
+#   docker compose -f compose.yaml -f compose.auth.yaml up -d
+#
+# An overlay rather than the default, because the base stack has to come up
+# with no local state at all. Requiring a key file there would mean a fresh
+# clone fails at `docker compose up`, which is the first thing anybody does
+# with this repo.
+services:
+  trogon-atlas-server:
+    environment:
+      TROGON_ATLAS_AUTH_TOKENS_FILE: /auth/tokens.toml
+      TROGON_ATLAS_SPICEDB_PRESHARED_KEY: ${TROGON_ATLAS_SPICEDB_PRESHARED_KEY:?export it as the contents of services/trogon-atlas-server/auth/spicedb.key}
+      TROGON_ATLAS_NATS_URL: nats://service:${TROGON_ATLAS_NATS_PASSWORD:?export it as the contents of services/trogon-atlas-server/auth/nats.key}@nats:4222
+      # A registry file already takes precedence over this flag, so setting
+      # it false changes no behaviour. It is here because leaving the base
+      # file's `true` in place would describe a stack that anybody reading
+      # `docker compose config` would believe is open.
+      TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS: "false"
+    volumes:
+      - ./services/trogon-atlas-server/auth:/auth:ro
+
+  # The studio bridge and the MCP adapter are clients of the server, not
+  # peers of it. A server that now demands a token rejects them as failing
+  # health checks rather than as an auth error, which is the failure mode
+  # that costs an afternoon. `:?` turns the missing variable into a refusal
+  # to start, with the reason printed.
+  #
+  # The studio gets the `studio` reader key, not the agents' one. People
+  # observe and agents edit, so a key that reaches a browser must be one the
+  # server refuses every write from.
+  trogon-atlas-studio:
+    environment:
+      TROGON_ATLAS_AUTH_TOKEN: ${TROGON_ATLAS_STUDIO_AUTH_TOKEN:?export it as the contents of services/trogon-atlas-server/auth/studio.key}
+      # Each browser's own key reaches the server, rather than this bridge's
+      # standing in for everyone. With it off, one token is both the bridge's
+      # upstream credential and the secret its own guard compares against, so
+      # the only key that opens the studio is the one the bridge holds and
+      # every visitor holding it is indistinguishable upstream. On is what a
+      # deployment with more than one person needs, and the reference stack
+      # should demonstrate that rather than the shortcut.
+      #
+      # Paste studio.key when the studio asks for a key on the first refusal.
+      # It belongs to the `studio` reader principal in auth/tokens.toml.
+      TROGON_ATLAS_AUTH_PASSTHROUGH: "true"
+
+  trogon-atlas-mcp:
+    environment:
+      TROGON_ATLAS_AUTH_TOKEN: ${TROGON_ATLAS_AUTH_TOKEN:?export it as the contents of services/trogon-atlas-server/auth/api.key}
+
+  # Every decision the server makes about who owns what is read from here, so
+  # a stack whose decision store still answers to the base file's published
+  # default has no authorization at all -- a caller who cannot read a
+  # namespace through the server can simply write itself an `editor` grant and
+  # then read it. This is the only control: the service is reachable by
+  # container DNS regardless of what compose publishes.
+  spicedb:
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: ${TROGON_ATLAS_SPICEDB_PRESHARED_KEY:?export it as the contents of services/trogon-atlas-server/auth/spicedb.key}
+
+  # The `service` user is every write in the system and every read behind
+  # them, so the base file's published default is a way around the server
+  # rather than a way into it: connect as `service` and the token registry,
+  # the namespace registry, and the lens are all just rows you can edit.
+  # Reachable by container DNS on 4222 whether or not compose publishes it.
+  nats:
+    environment:
+      TROGON_ATLAS_NATS_PASSWORD: ${TROGON_ATLAS_NATS_PASSWORD:?export it as the contents of services/trogon-atlas-server/auth/nats.key}

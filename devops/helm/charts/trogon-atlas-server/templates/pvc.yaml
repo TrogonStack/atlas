@@ -1,0 +1,18 @@
+{{- if and .Values.gitMirror.enabled (not .Values.gitMirror.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "trogon-atlas-server.fullname" . }}-mirror
+  labels:
+    {{- include "trogon-atlas-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+spec:
+  accessModes:
+    {{- toYaml .Values.gitMirror.persistence.accessModes | nindent 4 }}
+  {{- with .Values.gitMirror.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.gitMirror.persistence.size }}
+{{- end }}

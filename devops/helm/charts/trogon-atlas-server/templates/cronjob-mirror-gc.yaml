@@ -1,0 +1,96 @@
+{{- if and .Values.gitMirror.enabled .Values.gitMirror.gc.enabled }}
+{{- $server := .Values }}
+{{- $gc := $server.gitMirror.gc }}
+{{/*
+  The server never runs `git gc`: it only ever commits. Every mutation is a
+  commit and every entity a blob, so a mirror grows without bound against a
+  fixed PVC (default 1Gi). Repacking is left to this job rather than the write
+  path so it can never slow down or fail a mutation.
+
+  This must not run while the server is mid-commit, hence Forbid plus the
+  co-location constraint (the PVC is ReadWriteOnce by default). `git gc` takes
+  its own lock and is safe against a concurrent commit, but a failed gc that
+  leaves a stale gc.pid is easier to reason about when it is the only job.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "trogon-atlas-server.fullname" . }}-mirror-gc
+  labels:
+    {{- include "trogon-atlas-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server-mirror-gc
+spec:
+  schedule: {{ $gc.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ $gc.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ $gc.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      {{- with $gc.activeDeadlineSeconds }}
+      activeDeadlineSeconds: {{ . }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "trogon-atlas-server.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: server-mirror-gc
+        spec:
+          restartPolicy: Never
+          {{- with .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          serviceAccountName: {{ include "trogon-atlas-server.serviceAccountName" . }}
+          {{- with $server.podSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if $gc.colocateWithServer }}
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      {{- include "trogon-atlas-server.selectorLabels" . | nindent 22 }}
+                      app.kubernetes.io/component: server
+          {{- end }}
+          {{- with $server.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $server.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: gc
+              image: {{ include "trogon-atlas-server.image" (dict "root" . "image" $server.image) }}
+              imagePullPolicy: {{ $server.image.pullPolicy }}
+              {{- with $server.containerSecurityContext }}
+              securityContext:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              {{- /* Override the server ENTRYPOINT; git ships in the runtime image. */}}
+              command:
+                - git
+              args:
+                - -C
+                - /var/lib/trogon-atlas/mirror
+                - gc
+                {{- range $gc.extraArgs }}
+                - {{ . | quote }}
+                {{- end }}
+              {{- with $gc.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+              volumeMounts:
+                - name: git-mirror
+                  mountPath: /var/lib/trogon-atlas/mirror
+          volumes:
+            - name: git-mirror
+              persistentVolumeClaim:
+                claimName: {{ default (printf "%s-mirror" (include "trogon-atlas-server.fullname" .)) $server.gitMirror.persistence.existingClaim }}
+{{- end }}

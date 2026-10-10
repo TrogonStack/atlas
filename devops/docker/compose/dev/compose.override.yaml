@@ -1,0 +1,4 @@
+services:
+  trogon-atlas-studio:
+    environment:
+      PROTO_PATH: /app/proto/trogonatlas/api/eventmodel/v1alpha1/service.proto

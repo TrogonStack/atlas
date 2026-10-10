@@ -1,0 +1,29 @@
+trogon-atlas-server (gRPC):
+  {{ include "trogon-atlas-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}
+{{- if .Values.auth.insecureAllowAnonymous }}
+
+  WARNING: the server is running WITHOUT authentication
+  (auth.insecureAllowAnonymous=true). Do not expose it outside the
+  cluster in this mode.
+{{- end }}
+
+Namespace visibility is decided by:
+{{- if .Values.spicedb.endpoint }}
+  SpiceDB at {{ .Values.spicedb.endpoint }} ({{ .Values.spicedb.freshness }})
+{{- if .Values.spicedb.skipStartupSync }}
+  The server publishes nothing to it. Grants come only from the CronJob
+  {{ include "trogon-atlas-server.fullname" . }}-spicedb-sync, so a principal
+  added to the token file stays invisible until that Job next runs.
+{{- end }}
+{{- else }}
+  the namespace registry's own parent column. Each namespace belongs to
+  exactly one owner and is visible to that owner alone. Sharing a namespace
+  between two owners is not expressible this way; set spicedb.endpoint
+  to move the permission question to SpiceDB.
+{{- end }}
+
+The chart does not deploy NATS JetStream. Point config.natsUrl at an
+existing NATS installation
+{{- if .Values.config.natsUrlSecret.name }} (from Secret {{ .Values.config.natsUrlSecret.name }}).
+{{- else }} (current value: {{ regexReplaceAll "://[^/@]+@" .Values.config.natsUrl "://***@" }}).
+{{- end }}

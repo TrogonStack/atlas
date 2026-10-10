@@ -1,0 +1,13 @@
+global:
+  # Prepended to every image repository below.
+  imageRegistry: ghcr.io/trogonstack
+  imagePullSecrets: []
+
+# Full value reference lives in each subchart's values.yaml:
+#   ../trogon-atlas-server/values.yaml  (under the server.* alias here)
+#   ../trogon-atlas-studio/values.yaml  (under the studio.* alias here)
+server:
+  enabled: true
+
+studio:
+  enabled: true

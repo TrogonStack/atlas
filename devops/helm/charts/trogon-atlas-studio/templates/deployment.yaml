@@ -1,0 +1,139 @@
+{{- $studio := .Values }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "trogon-atlas-studio.fullname" . }}
+  labels:
+    {{- include "trogon-atlas-studio.labels" . | nindent 4 }}
+    app.kubernetes.io/component: studio
+spec:
+  replicas: {{ $studio.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "trogon-atlas-studio.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: studio
+  template:
+    metadata:
+      labels:
+        {{- include "trogon-atlas-studio.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: studio
+        {{- with $studio.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with $studio.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "trogon-atlas-studio.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with $studio.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: studio
+          image: {{ include "trogon-atlas-studio.image" (dict "root" . "image" $studio.image) }}
+          imagePullPolicy: {{ $studio.image.pullPolicy }}
+          {{- with $studio.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: TROGON_ATLAS_GRPC
+              value: {{ include "trogon-atlas-studio.grpcUrl" . | quote }}
+            {{- if $studio.auth.token.value }}
+            - name: TROGON_ATLAS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "trogon-atlas-studio.fullname" . }}-auth
+                  key: {{ $studio.auth.token.key }}
+            {{- else if $studio.auth.token.existingSecret }}
+            - name: TROGON_ATLAS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $studio.auth.token.existingSecret }}
+                  key: {{ $studio.auth.token.key }}
+            {{- end }}
+            {{- if $studio.auth.passthrough }}
+            - name: TROGON_ATLAS_AUTH_PASSTHROUGH
+              value: "true"
+            {{- end }}
+            {{- with $studio.config.corsOrigins }}
+            - name: TROGON_ATLAS_STUDIO_CORS_ORIGINS
+              value: {{ . | quote }}
+            {{- end }}
+            {{- with $studio.config.natsWsUrl }}
+            - name: TROGON_ATLAS_STUDIO_NATS_WS_URL
+              value: {{ . | quote }}
+            {{- end }}
+            {{- if $studio.config.natsWsAuthToken.value }}
+            - name: NATS_WS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "trogon-atlas-studio.fullname" . }}-auth
+                  key: nats-ws-token
+            {{- else if $studio.config.natsWsAuthToken.existingSecret }}
+            - name: NATS_WS_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $studio.config.natsWsAuthToken.existingSecret }}
+                  key: {{ $studio.config.natsWsAuthToken.key }}
+            {{- end }}
+            {{- with $studio.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          {{- if and $studio.auth.passthrough (not $studio.auth.token.value) (not $studio.auth.token.existingSecret) }}
+          # Passthrough with no bridge credential means /api/info has no
+          # caller token to forward, so an authenticated server answers the
+          # probe's bearer-less request with UNAUTHENTICATED. Fall back to a
+          # TCP check; readiness no longer tracks upstream availability.
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+          {{- else }}
+          # /api/info proxies the gRPC server, so readiness tracks upstream
+          # availability while liveness stays local to avoid restart loops
+          # during a server outage.
+          readinessProbe:
+            httpGet:
+              path: /api/info
+              port: http
+            periodSeconds: 10
+          {{- end }}
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 15
+          {{- with $studio.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $studio.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $studio.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $studio.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

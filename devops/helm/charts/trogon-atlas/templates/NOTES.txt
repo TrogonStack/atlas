@@ -1,0 +1,43 @@
+{{- if .Values.server.enabled }}
+trogon-atlas-server (gRPC):
+  {{ include "trogon-atlas.server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.server.service.grpcPort }}
+{{- if .Values.server.auth.insecureAllowAnonymous }}
+
+  WARNING: the server is running WITHOUT authentication
+  (server.auth.insecureAllowAnonymous=true). Do not expose it outside the
+  cluster in this mode.
+{{- end }}
+
+Namespace visibility is decided by:
+{{- if .Values.server.spicedb.endpoint }}
+  SpiceDB at {{ .Values.server.spicedb.endpoint }} ({{ .Values.server.spicedb.freshness }})
+{{- if .Values.server.spicedb.skipStartupSync }}
+  The server publishes nothing to it. Grants come only from the CronJob
+  {{ include "trogon-atlas.server.fullname" . }}-spicedb-sync, so a principal
+  added to the token file stays invisible until that Job next runs.
+{{- end }}
+{{- else }}
+  the namespace registry's own parent column. Each namespace belongs to
+  exactly one owner and is visible to that owner alone. Sharing a namespace
+  between two owners is not expressible this way; set server.spicedb.endpoint
+  to move the permission question to SpiceDB.
+{{- end }}
+{{- end }}
+{{- if .Values.studio.enabled }}
+
+trogon-atlas-studio (HTTP):
+{{- if .Values.studio.ingress.enabled }}
+{{- range .Values.studio.ingress.hosts }}
+  http{{ if $.Values.studio.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "trogon-atlas.studio.fullname" . }} 8787:{{ .Values.studio.service.port }}
+  then open http://127.0.0.1:8787
+{{- end }}
+{{- end }}
+
+The chart does not deploy NATS JetStream. Point server.config.natsUrl at an
+existing NATS installation
+{{- if .Values.server.config.natsUrlSecret.name }} (from Secret {{ .Values.server.config.natsUrlSecret.name }}).
+{{- else }} (current value: {{ regexReplaceAll "://[^/@]+@" .Values.server.config.natsUrl "://***@" }}).
+{{- end }}

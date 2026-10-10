@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "trogon-atlas-server.fullname" . }}
+  labels:
+    {{- include "trogon-atlas-server.labels" . | nindent 4 }}
+    app.kubernetes.io/component: server
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: grpc
+      port: {{ .Values.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      appProtocol: grpc
+    {{- if .Values.metrics.enabled }}
+    - name: metrics
+      port: {{ .Values.metrics.port }}
+      targetPort: metrics
+      protocol: TCP
+    {{- end }}
+  selector:
+    {{- include "trogon-atlas-server.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: server
