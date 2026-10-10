@@ -3,6 +3,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  type Edge,
   Handle,
   type Node,
   type NodeChange,
@@ -134,7 +135,7 @@ export function PlanBoard({
       }),
     [nodes, keys, focus],
   );
-  const displayEdges = useMemo(() => {
+  const displayEdges = useMemo((): Edge[] => {
     if (!focus) return edges;
     return edges.map((e) =>
       focus.has(e.source) && focus.has(e.target)
