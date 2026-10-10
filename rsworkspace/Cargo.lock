@@ -4379,7 +4379,7 @@ name = "trogon-atlas-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "clap",
  "prost 0.13.5",
  "prost-reflect",
@@ -4420,7 +4420,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chacha20poly1305",
  "chrono",
  "clap",
