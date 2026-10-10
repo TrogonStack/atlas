@@ -4,4 +4,5 @@ set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
 buf generate --template .config/buf/buf.gen.yaml
+buf generate --template .config/buf/buf.gen.authzed.yaml
 buf build proto -o rsworkspace/crates/trogon-atlas-proto/src/gen/descriptor.binpb --as-file-descriptor-set

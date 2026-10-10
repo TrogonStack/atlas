@@ -1,0 +1,20 @@
+version: v2
+clean: true
+inputs:
+  - module: buf.build/authzed/api:v1.57.0
+    paths:
+      - authzed/api/v1
+plugins:
+  - remote: buf.build/community/neoeinstein-prost:v0.4.0
+    out: rsworkspace/crates/trogon-atlas-authzed/src/gen
+    opt:
+      - extern_path=.google.rpc=::tonic_types::pb
+  - remote: buf.build/community/neoeinstein-tonic:v0.4.1
+    out: rsworkspace/crates/trogon-atlas-authzed/src/gen
+    opt:
+      - extern_path=.google.rpc=::tonic_types::pb
+      - no_server
+  - remote: buf.build/community/neoeinstein-prost-crate:v0.4.1
+    out: rsworkspace/crates/trogon-atlas-authzed/src/gen
+    opt:
+      - no_features

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/trogon-atlas-authzed",
   "crates/trogon-atlas-proto",
   "crates/trogon-atlas-core",
   "crates/trogon-atlas-types",
@@ -21,6 +22,7 @@ trogon-atlas-core = { path = "crates/trogon-atlas-core" }
 prost = "0.13"
 prost-types = "0.13"
 tonic = "0.12"
+tonic-types = "0.12"
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1"
 
