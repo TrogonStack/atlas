@@ -5,6 +5,8 @@
 FROM --platform=$BUILDPLATFORM rust:1.94-bookworm AS builder
 ARG TARGETARCH
 ARG BUILDARCH
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# hadolint ignore=SC2086
 RUN case "$TARGETARCH" in \
       amd64) triple=x86_64-unknown-linux-musl; gnu=x86_64-linux-gnu; pkg="gcc-x86-64-linux-gnu libc6-dev-amd64-cross" ;; \
       arm64) triple=aarch64-unknown-linux-musl; gnu=aarch64-linux-gnu; pkg="gcc-aarch64-linux-gnu libc6-dev-arm64-cross" ;; \
@@ -24,20 +26,20 @@ RUN case "$TARGETARCH" in \
 # instead of a COPY, so the image never embeds a stale snapshot of the
 # tree. The mount is read-only, so the build and its target
 # directory live under cache mounts instead of inside /src.
+WORKDIR /src
 RUN --mount=type=bind,source=rsworkspace,target=/src \
     --mount=type=cache,target=/target,id=trogon-atlas-mcp-target \
     --mount=type=cache,target=/usr/local/cargo/registry \
     . /cross.env \
- && cd /src \
  && cargo build --release --locked -p trogon-atlas-mcp --bin trogon-atlas-mcp --target "$(cat /target.txt)" --target-dir /target \
  && mkdir -p /out \
  && cp "/target/$(cat /target.txt)/release/trogon-atlas-mcp" /out/trogon-atlas-mcp
 
 FROM alpine:3.20 AS runtime
 RUN apk add --no-cache ca-certificates tini \
- && addgroup -S trogon-atlas \
- && adduser -S -G trogon-atlas trogon-atlas
+ && addgroup -g 101 -S trogon-atlas \
+ && adduser -S -u 100 -G trogon-atlas trogon-atlas
 COPY --from=builder /out/trogon-atlas-mcp /usr/local/bin/trogon-atlas-mcp
-USER trogon-atlas
+USER 100:101
 ENV TROGON_ATLAS_GRPC=http://trogon-atlas-server:50069
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/trogon-atlas-mcp"]

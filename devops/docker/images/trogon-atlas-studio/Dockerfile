@@ -21,7 +21,7 @@ RUN pnpm --filter trogon-atlas-studio run build \
 
 FROM node:22-alpine
 WORKDIR /app
-RUN addgroup -S studio && adduser -S -G studio studio
+RUN addgroup -g 101 -S studio && adduser -S -u 100 -G studio studio
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
@@ -32,7 +32,7 @@ COPY --from=build /app/shared ./shared
 # the sibling files, so the whole schema set ships together.
 RUN --mount=type=bind,source=proto,target=/mnt/proto \
     mkdir -p /app/proto && cp -r /mnt/proto/. /app/proto/
-USER studio
+USER 100:101
 ENV PROTO_PATH=/app/proto/trogonatlas/api/eventmodel/v1alpha1/service.proto \
     HOST=0.0.0.0 \
     PORT=80

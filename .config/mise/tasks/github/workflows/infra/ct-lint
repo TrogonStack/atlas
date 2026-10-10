@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run chart-testing lint against every changed chart, checked for a version bump against main"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+exec ct lint --config ct.yaml --target-branch main
