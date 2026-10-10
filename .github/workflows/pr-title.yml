@@ -1,30 +1,17 @@
-name: PR title
+name: SemConv
 
 on:
-  pull_request_target: # zizmor: ignore[dangerous-triggers] no checkout of PR code, only reads PR metadata
-    types:
-      - opened
-      - edited
-      - synchronize
-      - reopened
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
 
-permissions:
-  pull-requests: read
+permissions: {}
 
 jobs:
-  lint:
-    name: Lint
+  lint-pr-title:
+    name: Validate PR Title
     runs-on: ubuntu-latest
-
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
     steps:
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          types: |
-            feat
-            fix
-            docs
-            chore
-            ci
-          requireScope: false
+      - uses: TrogonStack/github-actions/actions/semconv/pull-request@87e6ef38afa59f9abf63ed6997d076163a02e4fa # semconv-pull-request@v0.0.1
