@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#MISE description="Scan dependencies for known vulnerabilities with osv-scanner, writing SARIF to results.sarif"
+set -uo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+
+set +e
+osv-scanner scan source --recursive --format sarif --output-file results.sarif .
+status=$?
+set -e
+
+if [ ! -s results.sarif ]; then
+  echo "osv-scanner did not write results.sarif" >&2
+  exit 1
+fi
+
+exit "$status"

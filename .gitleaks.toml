@@ -1,0 +1,14 @@
+title = "Atlas gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "e2e fixture placeholder token, not a credential"
+condition = "AND"
+paths = ['''^tsworkspace/webapps/studio/e2e/fixtures/run-e2e-stack\.mjs$''']
+regexTarget = "secret"
+regexes = ['''^e2e-fixture-no-direct-nats$''']
