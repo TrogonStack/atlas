@@ -165,7 +165,7 @@ against a per-RPC role table. Concretely:
 
 - **Identity.** `--auth-tokens-file` / `TROGON_ATLAS_AUTH_TOKENS_FILE` points at
   a TOML registry mapping each principal to a role, a list of valid tokens, and
-  an optional namespace allow-list (`tokens.example.toml`). The `BearerAuth`
+  an optional namespace allow-list (`examples/tokens.toml`). The `BearerAuth`
   interceptor resolves the token to a
   `Principal { name, role, is_anonymous, namespaces }` and inserts it into
   request extensions (`src/auth.rs`). Lookup is constant-time per candidate

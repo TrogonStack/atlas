@@ -121,7 +121,7 @@ struct Args {
     #[arg(long, env = "TROGON_ATLAS_AUTH_TOKEN")]
     auth_token: Option<String>,
     /// Path to a TOML token registry file. When set, overrides `--auth-token`.
-    /// See tokens.example.toml for the file format.
+    /// See examples/tokens.toml for the file format.
     #[arg(long, env = "TROGON_ATLAS_AUTH_TOKENS_FILE")]
     auth_tokens_file: Option<PathBuf>,
     /// Seconds between re-reads of the token registry, so a key can be issued

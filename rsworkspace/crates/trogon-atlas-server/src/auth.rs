@@ -1481,9 +1481,9 @@ tokens = ["shared-key"]
     /// deployed host, not in the test environment.
     #[test]
     fn the_shipped_example_registry_still_parses() {
-        let raw = include_str!("../tokens.example.toml");
+        let raw = include_str!("../examples/tokens.toml");
         let file: RegistryFile =
-            toml::from_str(raw).expect("tokens.example.toml must parse as a registry");
+            toml::from_str(raw).expect("examples/tokens.toml must parse as a registry");
         let ci = file
             .principals
             .get("ci")
