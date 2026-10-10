@@ -130,7 +130,7 @@ jobs:
         run: mise run github:workflows:ci:studio-test
 
   studio-e2e:
-    name: Studio - e2e
+    name: E2E
     needs: runs-on
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
 
