@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Benchmark the Jev field-mapping provider against the labeled fixtures (pass --dry-run to skip the provider)"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/tsworkspace/packages/jev-benchmark"
+exec node --experimental-transform-types src/benchmark.ts "$@"

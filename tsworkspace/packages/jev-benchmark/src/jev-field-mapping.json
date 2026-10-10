@@ -1,0 +1,147 @@
+[
+  {
+    "id": "semantic_rename",
+    "scenario": "A completed purchase creates a customer purchase history entry. The buyer is the customer who made the purchase.",
+    "target": {
+      "name": "customer_id",
+      "type": "string",
+      "description": "Identifier of the customer who made this purchase"
+    },
+    "candidates": [
+      {
+        "option": "candidate_0",
+        "element": "PurchaseCompleted",
+        "name": "buyer_id",
+        "type": "string",
+        "description": "Identifier of the customer who made this purchase"
+      },
+      {
+        "option": "candidate_1",
+        "element": "PurchaseCompleted",
+        "name": "merchant_id",
+        "type": "string",
+        "description": "Identifier of the store receiving the payment"
+      }
+    ],
+    "expected": "candidate_0"
+  },
+  {
+    "id": "ambiguous",
+    "scenario": "A booking can be initiated by either its owner or its guest. No rule specifies which person's email the reminder should use.",
+    "target": {
+      "name": "recipient_email",
+      "type": "string",
+      "description": "Email address receiving the booking reminder"
+    },
+    "candidates": [
+      {
+        "option": "candidate_0",
+        "element": "BookingCreated",
+        "name": "owner_email",
+        "type": "string",
+        "description": "Email address of the booking owner"
+      },
+      {
+        "option": "candidate_1",
+        "element": "BookingCreated",
+        "name": "guest_email",
+        "type": "string",
+        "description": "Email address of the invited guest"
+      }
+    ],
+    "expected": "unresolved"
+  },
+  {
+    "id": "missing_source",
+    "scenario": "An inventory receipt records only the item and quantity. No price or exchange-rate source is provided.",
+    "target": {
+      "name": "unit_price",
+      "type": "number",
+      "description": "Price charged for one unit in the invoice currency"
+    },
+    "candidates": [
+      {
+        "option": "candidate_0",
+        "element": "InventoryReceived",
+        "name": "quantity",
+        "type": "number",
+        "description": "Number of physical units received"
+      },
+      {
+        "option": "candidate_1",
+        "element": "InventoryReceived",
+        "name": "item_code",
+        "type": "string",
+        "description": "Warehouse item identifier"
+      }
+    ],
+    "expected": "unresolved"
+  },
+  {
+    "id": "misleading_name",
+    "scenario": "The destination needs the shipping address. The upstream customer_address refers explicitly to billing, while destination_address is the delivery location.",
+    "target": {
+      "name": "customer_address",
+      "type": "string",
+      "description": "Street address where the purchased goods must be delivered"
+    },
+    "candidates": [
+      {
+        "option": "candidate_0",
+        "element": "OrderPlaced",
+        "name": "customer_address",
+        "type": "string",
+        "description": "Billing address used by the payment provider"
+      },
+      {
+        "option": "candidate_1",
+        "element": "OrderPlaced",
+        "name": "destination_address",
+        "type": "string",
+        "description": "Street address where the purchased goods must be delivered"
+      }
+    ],
+    "expected": "candidate_1"
+  },
+  {
+    "id": "exact_match",
+    "scenario": "The order receipt displays the identifier of the order that was placed.",
+    "target": { "name": "order_id", "type": "string", "description": "Identifier of the placed order" },
+    "candidates": [
+      {
+        "option": "candidate_0",
+        "element": "OrderPlaced",
+        "name": "order_id",
+        "type": "string",
+        "description": "Identifier of the placed order"
+      },
+      {
+        "option": "candidate_1",
+        "element": "OrderPlaced",
+        "name": "customer_id",
+        "type": "string",
+        "description": "Identifier of the person placing the order"
+      }
+    ],
+    "expected": "candidate_0"
+  },
+  {
+    "id": "incompatible_type",
+    "scenario": "The result needs a numeric elapsed duration in seconds. The only upstream duration is a free-form description such as 'roughly half a day'; no parsing or conversion rule exists.",
+    "target": {
+      "name": "duration_seconds",
+      "type": "number",
+      "description": "Exact elapsed duration measured in seconds"
+    },
+    "candidates": [
+      {
+        "option": "candidate_0",
+        "element": "WorkCompleted",
+        "name": "duration",
+        "type": "string",
+        "description": "Approximate duration written as free-form prose"
+      }
+    ],
+    "expected": "unresolved"
+  }
+]
