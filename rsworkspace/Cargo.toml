@@ -2,11 +2,12 @@
 resolver = "2"
 members = [
   "crates/trogon-atlas-authzed",
-  "crates/trogon-atlas-proto",
   "crates/trogon-atlas-core",
-  "crates/trogon-atlas-types",
+  "crates/trogon-atlas-proto",
+  "crates/trogon-atlas-server",
   "crates/trogon-atlas-store",
   "crates/trogon-atlas-testsupport",
+  "crates/trogon-atlas-types",
 ]
 
 [workspace.package]
@@ -18,11 +19,16 @@ repository = "https://github.com/TrogonStack/atlas"
 [workspace.dependencies]
 trogon-atlas-proto = { path = "crates/trogon-atlas-proto" }
 trogon-atlas-core = { path = "crates/trogon-atlas-core" }
+trogon-atlas-types = { path = "crates/trogon-atlas-types" }
+trogon-atlas-authzed = { path = "crates/trogon-atlas-authzed" }
+trogon-atlas-store = { path = "crates/trogon-atlas-store" }
+trogon-atlas-testsupport = { path = "crates/trogon-atlas-testsupport" }
 
 prost = "0.13"
 prost-types = "0.13"
 tonic = "0.12"
 tonic-types = "0.12"
+tonic-health = "0.12"
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1"
 
@@ -33,10 +39,16 @@ parking_lot = "0.12"
 bytes = "1"
 
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 thiserror = "2"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+base64 = "0.22"
+chacha20poly1305 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v7"] }

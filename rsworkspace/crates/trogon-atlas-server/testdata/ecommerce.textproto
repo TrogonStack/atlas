@@ -1,0 +1,597 @@
+# Canonical e-commerce fixture for the Event Modeling service.
+#
+# Format: trogonatlas.api.eventmodel.v1alpha1.BatchMutateRequest in protobuf text format.
+# Apply this to a fresh deployment via:
+#   trogon-atlas-server --store nats seed \
+#     --fixture rsworkspace/crates/trogon-atlas-server/testdata/ecommerce.textproto
+
+# ---------- Swimlanes ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      swimlane {
+        id { namespace: "ecommerce" slug: "order" version: 1 }
+        title: "Order"
+        order: 1
+        stream_id: "order-{order_id}"
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      swimlane {
+        id { namespace: "ecommerce" slug: "payment" version: 1 }
+        title: "Payment"
+        order: 2
+        stream_id: "payment-{order_id}"
+      }
+    }
+  }
+}
+
+# ---------- Personas ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      persona {
+        id { namespace: "ecommerce" slug: "bob-the-manager" version: 1 }
+        title: "Bob"
+        role: "manager"
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      persona {
+        id { namespace: "ecommerce" slug: "billy-the-customer" version: 1 }
+        title: "Billy"
+        role: "customer"
+      }
+    }
+  }
+}
+
+# ---------- Events ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      event {
+        id { namespace: "ecommerce" slug: "order.placed" version: 1 }
+        title: "order.placed"
+        swimlane { id { namespace: "ecommerce" slug: "order" version: 1 } }
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id"     type { uuid {} } }
+            fields { name: "customer_id"  type { uuid {} } }
+            fields { name: "total_cents"  type { int {} } }
+            fields { name: "placed_at"    type { timestamp {} } }
+          }
+        }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      event {
+        id { namespace: "ecommerce" slug: "payment.captured" version: 1 }
+        title: "payment.captured"
+        swimlane { id { namespace: "ecommerce" slug: "payment" version: 1 } }
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id"     type { uuid {} } }
+            fields { name: "amount_cents" type { int {} } }
+            fields { name: "captured_at"  type { timestamp {} } }
+          }
+        }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      event {
+        id { namespace: "ecommerce" slug: "order.fulfilled" version: 1 }
+        title: "order.fulfilled"
+        swimlane { id { namespace: "ecommerce" slug: "order" version: 1 } }
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id"     type { uuid {} } }
+            fields { name: "fulfilled_at" type { timestamp {} } }
+          }
+        }
+      }
+    }
+  }
+}
+
+# ---------- Commands ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      command {
+        id { namespace: "ecommerce" slug: "place-order" version: 1 }
+        title: "place-order"
+        swimlane { id { namespace: "ecommerce" slug: "order" version: 1 } }
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id"    type { uuid {} } }
+            fields { name: "customer_id" type { uuid {} } }
+            fields { name: "total_cents" type { int {} } }
+          }
+        }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      command {
+        id { namespace: "ecommerce" slug: "capture-payment" version: 1 }
+        title: "capture-payment"
+        swimlane { id { namespace: "ecommerce" slug: "payment" version: 1 } }
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id"     type { uuid {} } }
+            fields { name: "amount_cents" type { int {} } }
+          }
+        }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      command {
+        id { namespace: "ecommerce" slug: "fulfill-order" version: 1 }
+        title: "fulfill-order"
+        swimlane { id { namespace: "ecommerce" slug: "order" version: 1 } }
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id" type { uuid {} } }
+          }
+        }
+      }
+    }
+  }
+}
+
+# ---------- ReadModels ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model {
+        id { namespace: "ecommerce" slug: "orders.list" version: 1 }
+        title: "orders.list"
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id"    type { uuid {} } }
+            fields { name: "customer_id" type { uuid {} } }
+            fields { name: "total_cents" type { int {} } }
+            fields { name: "status"      type { string {} } }
+          }
+        }
+        source_events { id { namespace: "ecommerce" slug: "order.placed" version: 1 } }
+        source_events { id { namespace: "ecommerce" slug: "payment.captured" version: 1 } }
+        source_events { id { namespace: "ecommerce" slug: "order.fulfilled" version: 1 } }
+      }
+    }
+  }
+}
+# Consumer-shaped views: each automation observes its own read model
+# (READ_MODEL_MULTIPLE_AUTOMATIONS invariant).
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model {
+        id { namespace: "ecommerce" slug: "orders.awaiting-payment" version: 1 }
+        title: "orders.awaiting-payment"
+        doc: "Placed orders whose payment has not been captured yet: the capture processor's queue."
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id"    type { uuid {} } }
+            fields { name: "total_cents" type { int {} } }
+          }
+        }
+        source_events { id { namespace: "ecommerce" slug: "order.placed" version: 1 } }
+        source_events { id { namespace: "ecommerce" slug: "payment.captured" version: 1 } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model {
+        id { namespace: "ecommerce" slug: "orders.awaiting-fulfillment" version: 1 }
+        title: "orders.awaiting-fulfillment"
+        doc: "Paid orders not yet fulfilled: the fulfillment notifier's queue."
+        schema {
+          [type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema] {
+            fields { name: "order_id" type { uuid {} } }
+          }
+        }
+        source_events { id { namespace: "ecommerce" slug: "payment.captured" version: 1 } }
+        source_events { id { namespace: "ecommerce" slug: "order.fulfilled" version: 1 } }
+      }
+    }
+  }
+}
+
+# ---------- UIs ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      ui {
+        id { namespace: "ecommerce" slug: "cart" version: 1 }
+        title: "cart"
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      ui {
+        id { namespace: "ecommerce" slug: "admin-fulfillment" version: 1 }
+        title: "admin-fulfillment"
+      }
+    }
+  }
+}
+
+# ---------- Processors ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      processor {
+        id { namespace: "ecommerce" slug: "payment-capture-processor" version: 1 }
+        title: "payment-capture-processor"
+        doc_trigger: "fires when an order is placed and no payment has been captured yet"
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      processor {
+        id { namespace: "ecommerce" slug: "fulfillment-notifier" version: 1 }
+        title: "fulfillment-notifier"
+        doc_trigger: "fires when payment is captured and order has not been fulfilled"
+      }
+    }
+  }
+}
+
+# ---------- Command slices ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      command_slice {
+        id { namespace: "ecommerce" slug: "place-order-slice" version: 1 }
+        title: "place-order-slice"
+        persona { persona { id { namespace: "ecommerce" slug: "billy-the-customer" version: 1 } } }
+        ui { ui { id { namespace: "ecommerce" slug: "cart" version: 1 } } }
+        command { command { id { namespace: "ecommerce" slug: "place-order" version: 1 } } }
+        emitted_events { event { id { namespace: "ecommerce" slug: "order.placed" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      command_slice {
+        id { namespace: "ecommerce" slug: "capture-payment-slice" version: 1 }
+        title: "capture-payment-slice"
+        persona { persona { id { namespace: "ecommerce" slug: "bob-the-manager" version: 1 } } }
+        ui { ui { id { namespace: "ecommerce" slug: "admin-fulfillment" version: 1 } } }
+        command { command { id { namespace: "ecommerce" slug: "capture-payment" version: 1 } } }
+        emitted_events { event { id { namespace: "ecommerce" slug: "payment.captured" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      command_slice {
+        id { namespace: "ecommerce" slug: "fulfill-order-slice" version: 1 }
+        title: "fulfill-order-slice"
+        persona { persona { id { namespace: "ecommerce" slug: "bob-the-manager" version: 1 } } }
+        ui { ui { id { namespace: "ecommerce" slug: "admin-fulfillment" version: 1 } } }
+        command { command { id { namespace: "ecommerce" slug: "fulfill-order" version: 1 } } }
+        emitted_events { event { id { namespace: "ecommerce" slug: "order.fulfilled" version: 1 } } }
+      }
+    }
+  }
+}
+
+# ---------- Read model slices ----------
+
+# Each read-model slice captures ONE update moment: the events listed are the
+# ones that just happened at that point in the storyboard. Slices without a UI
+# are projection-only: the view is updated, nobody observes it (yet).
+
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model_slice {
+        id { namespace: "ecommerce" slug: "orders-list-slice" version: 1 }
+        title: "orders-list-slice"
+        doc: "placed order appears in the admin order list"
+        source_events { event { id { namespace: "ecommerce" slug: "order.placed" version: 1 } } }
+        read_model { read_model { id { namespace: "ecommerce" slug: "orders.list" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model_slice {
+        id { namespace: "ecommerce" slug: "awaiting-payment-slice" version: 1 }
+        title: "awaiting-payment-slice"
+        doc: "projection only: placed order enters the awaiting-payment queue"
+        source_events { event { id { namespace: "ecommerce" slug: "order.placed" version: 1 } } }
+        read_model { read_model { id { namespace: "ecommerce" slug: "orders.awaiting-payment" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model_slice {
+        id { namespace: "ecommerce" slug: "orders-list-paid-slice" version: 1 }
+        title: "orders-list-paid-slice"
+        doc: "projection only: order shows as paid in the list"
+        source_events { event { id { namespace: "ecommerce" slug: "payment.captured" version: 1 } } }
+        read_model { read_model { id { namespace: "ecommerce" slug: "orders.list" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model_slice {
+        id { namespace: "ecommerce" slug: "awaiting-payment-cleared-slice" version: 1 }
+        title: "awaiting-payment-cleared-slice"
+        doc: "projection only: captured payment removes the order from the awaiting-payment queue"
+        source_events { event { id { namespace: "ecommerce" slug: "payment.captured" version: 1 } } }
+        read_model { read_model { id { namespace: "ecommerce" slug: "orders.awaiting-payment" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model_slice {
+        id { namespace: "ecommerce" slug: "awaiting-fulfillment-slice" version: 1 }
+        title: "awaiting-fulfillment-slice"
+        doc: "projection only: paid order enters the awaiting-fulfillment queue"
+        source_events { event { id { namespace: "ecommerce" slug: "payment.captured" version: 1 } } }
+        read_model { read_model { id { namespace: "ecommerce" slug: "orders.awaiting-fulfillment" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model_slice {
+        id { namespace: "ecommerce" slug: "orders-list-fulfilled-slice" version: 1 }
+        title: "orders-list-fulfilled-slice"
+        doc: "admin sees the order marked fulfilled"
+        source_events { event { id { namespace: "ecommerce" slug: "order.fulfilled" version: 1 } } }
+        read_model { read_model { id { namespace: "ecommerce" slug: "orders.list" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      read_model_slice {
+        id { namespace: "ecommerce" slug: "awaiting-fulfillment-cleared-slice" version: 1 }
+        title: "awaiting-fulfillment-cleared-slice"
+        doc: "projection only: fulfilled order leaves the awaiting-fulfillment queue"
+        source_events { event { id { namespace: "ecommerce" slug: "order.fulfilled" version: 1 } } }
+        read_model { read_model { id { namespace: "ecommerce" slug: "orders.awaiting-fulfillment" version: 1 } } }
+      }
+    }
+  }
+}
+
+# ---------- Automation slices ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      automation_slice {
+        id { namespace: "ecommerce" slug: "auto-capture-payment" version: 1 }
+        title: "auto-capture-payment"
+        source_read_models { read_model { id { namespace: "ecommerce" slug: "orders.awaiting-payment" version: 1 } } }
+        processor { processor { id { namespace: "ecommerce" slug: "payment-capture-processor" version: 1 } } }
+        emitted_command { command { id { namespace: "ecommerce" slug: "capture-payment" version: 1 } } }
+      }
+    }
+  }
+}
+ops {
+  put {
+    create_only: true
+    entity {
+      automation_slice {
+        id { namespace: "ecommerce" slug: "auto-fulfill-order" version: 1 }
+        title: "auto-fulfill-order"
+        source_read_models { read_model { id { namespace: "ecommerce" slug: "orders.awaiting-fulfillment" version: 1 } } }
+        processor { processor { id { namespace: "ecommerce" slug: "fulfillment-notifier" version: 1 } } }
+        emitted_command { command { id { namespace: "ecommerce" slug: "fulfill-order" version: 1 } } }
+      }
+    }
+  }
+}
+
+# ---------- UI slice ----------
+
+# The display moment: the admin looks at the fulfillment console and sees the
+# order list. The projections above put the rows there; this slice is who
+# reads them.
+
+ops {
+  put {
+    create_only: true
+    entity {
+      ui_slice {
+        id { namespace: "ecommerce" slug: "admin-fulfillment-ui" version: 1 }
+        title: "admin-fulfillment-ui"
+        doc: "the admin watches the order list on the fulfillment console"
+        persona { persona { id { namespace: "ecommerce" slug: "bob-the-manager" version: 1 } } }
+        source_read_models { read_model { id { namespace: "ecommerce" slug: "orders.list" version: 1 } } }
+        ui { ui { id { namespace: "ecommerce" slug: "admin-fulfillment" version: 1 } } }
+      }
+    }
+  }
+}
+
+# ---------- Storyboard ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      storyboard {
+        id { namespace: "ecommerce" slug: "order-to-fulfillment" version: 1 }
+        title: "order-to-fulfillment"
+        entry {
+          read_model { read_model { id { namespace: "ecommerce" slug: "orders.list" version: 1 } } }
+          human {
+            persona { persona { id { namespace: "ecommerce" slug: "billy-the-customer" version: 1 } } }
+            ui { ui { id { namespace: "ecommerce" slug: "cart" version: 1 } } }
+          }
+        }
+        outcome {
+          events { event { id { namespace: "ecommerce" slug: "order.fulfilled" version: 1 } } }
+          ui { ui { id { namespace: "ecommerce" slug: "admin-fulfillment" version: 1 } } }
+        }
+        slices { id { namespace: "ecommerce" slug: "place-order-slice"                  version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "orders-list-slice"                  version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "awaiting-payment-slice"             version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "auto-capture-payment"               version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "capture-payment-slice"              version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "orders-list-paid-slice"             version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "awaiting-payment-cleared-slice"     version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "awaiting-fulfillment-slice"         version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "auto-fulfill-order"                 version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "fulfill-order-slice"                version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "orders-list-fulfilled-slice"        version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "awaiting-fulfillment-cleared-slice" version: 1 } }
+        slices { id { namespace: "ecommerce" slug: "admin-fulfillment-ui"              version: 1 } }
+        traces {
+          id: "happy-path"
+          title: "happy path"
+          doc: "order placed -> payment captured -> fulfilled"
+        }
+        traces {
+          id: "payment-declined"
+          title: "payment declined"
+          doc: "order placed -> capture fails; order never fulfilled"
+        }
+      }
+    }
+  }
+}
+
+# ---------- Event model (root) ----------
+
+ops {
+  put {
+    create_only: true
+    entity {
+      event_model {
+        id { namespace: "ecommerce" slug: "ecommerce" version: 1 }
+        title: "ecommerce"
+        doc: "End-to-end e-commerce model"
+        members { kind: ENTITY_KIND_SWIMLANE         id { namespace: "ecommerce" slug: "order"                       version: 1 } }
+        members { kind: ENTITY_KIND_SWIMLANE         id { namespace: "ecommerce" slug: "payment"                     version: 1 } }
+        members { kind: ENTITY_KIND_PERSONA          id { namespace: "ecommerce" slug: "bob-the-manager"             version: 1 } }
+        members { kind: ENTITY_KIND_PERSONA          id { namespace: "ecommerce" slug: "billy-the-customer"          version: 1 } }
+        members { kind: ENTITY_KIND_EVENT            id { namespace: "ecommerce" slug: "order.placed"                version: 1 } }
+        members { kind: ENTITY_KIND_EVENT            id { namespace: "ecommerce" slug: "payment.captured"            version: 1 } }
+        members { kind: ENTITY_KIND_EVENT            id { namespace: "ecommerce" slug: "order.fulfilled"             version: 1 } }
+        members { kind: ENTITY_KIND_COMMAND          id { namespace: "ecommerce" slug: "place-order"                 version: 1 } }
+        members { kind: ENTITY_KIND_COMMAND          id { namespace: "ecommerce" slug: "capture-payment"             version: 1 } }
+        members { kind: ENTITY_KIND_COMMAND          id { namespace: "ecommerce" slug: "fulfill-order"               version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL       id { namespace: "ecommerce" slug: "orders.list"                 version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL       id { namespace: "ecommerce" slug: "orders.awaiting-payment"     version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL       id { namespace: "ecommerce" slug: "orders.awaiting-fulfillment" version: 1 } }
+        members { kind: ENTITY_KIND_UI               id { namespace: "ecommerce" slug: "cart"                        version: 1 } }
+        members { kind: ENTITY_KIND_UI               id { namespace: "ecommerce" slug: "admin-fulfillment"           version: 1 } }
+        members { kind: ENTITY_KIND_PROCESSOR        id { namespace: "ecommerce" slug: "payment-capture-processor"   version: 1 } }
+        members { kind: ENTITY_KIND_PROCESSOR        id { namespace: "ecommerce" slug: "fulfillment-notifier"        version: 1 } }
+        members { kind: ENTITY_KIND_COMMAND_SLICE    id { namespace: "ecommerce" slug: "place-order-slice"           version: 1 } }
+        members { kind: ENTITY_KIND_COMMAND_SLICE    id { namespace: "ecommerce" slug: "capture-payment-slice"       version: 1 } }
+        members { kind: ENTITY_KIND_COMMAND_SLICE    id { namespace: "ecommerce" slug: "fulfill-order-slice"         version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL_SLICE id { namespace: "ecommerce" slug: "orders-list-slice"           version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL_SLICE id { namespace: "ecommerce" slug: "awaiting-payment-slice"      version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL_SLICE id { namespace: "ecommerce" slug: "orders-list-paid-slice"      version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL_SLICE id { namespace: "ecommerce" slug: "awaiting-payment-cleared-slice" version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL_SLICE id { namespace: "ecommerce" slug: "awaiting-fulfillment-slice"  version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL_SLICE id { namespace: "ecommerce" slug: "orders-list-fulfilled-slice" version: 1 } }
+        members { kind: ENTITY_KIND_READ_MODEL_SLICE id { namespace: "ecommerce" slug: "awaiting-fulfillment-cleared-slice" version: 1 } }
+        members { kind: ENTITY_KIND_UI_SLICE         id { namespace: "ecommerce" slug: "admin-fulfillment-ui"        version: 1 } }
+        members { kind: ENTITY_KIND_AUTOMATION_SLICE id { namespace: "ecommerce" slug: "auto-capture-payment"        version: 1 } }
+        members { kind: ENTITY_KIND_AUTOMATION_SLICE id { namespace: "ecommerce" slug: "auto-fulfill-order"          version: 1 } }
+        members { kind: ENTITY_KIND_STORYBOARD       id { namespace: "ecommerce" slug: "order-to-fulfillment"        version: 1 } }
+      }
+    }
+  }
+}
