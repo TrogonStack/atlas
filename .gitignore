@@ -37,3 +37,14 @@ tsworkspace/webapps/studio/playwright-report/
 
 # Locally generated API keys
 *.key
+
+# Python
+__pycache__/
+
+# Studio test and build output
+tsworkspace/webapps/studio/coverage/
+tsworkspace/webapps/studio/test-results/
+tsworkspace/webapps/studio/.vite/
+
+# macOS
+.DS_Store
