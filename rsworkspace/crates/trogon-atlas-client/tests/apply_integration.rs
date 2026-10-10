@@ -1364,7 +1364,9 @@ async fn apply_into_an_unclaimed_namespace_succeeds_for_a_scoped_principal() {
         .await
         .expect("an unclaimed namespace must transcode as having no served type libraries yet");
     let plan = apply::plan(&mut client, resolved.manifests).await.unwrap();
+    assert_eq!(plan.len(), 1);
     let out = apply::apply(&mut client, plan, false, None).await.unwrap();
+    assert!(!out.lines.is_empty(), "apply produced no output lines");
     for line in &out.lines {
         assert!(line.ends_with(" created"), "{line}");
     }
