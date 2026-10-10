@@ -11,6 +11,7 @@ description = "Test helpers: ephemeral NATS JetStream instances via testcontaine
 trogon-atlas-store = { path = "../trogon-atlas-store" }
 trogon-atlas-proto = { workspace = true }
 tonic = { workspace = true }
+tonic-prost = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "net"] }
 testcontainers = "0.27"

@@ -3,8 +3,6 @@ targets = []
 
 [advisories]
 ignore = [
-  # rustls-pemfile is unmaintained with no known exploit; tonic 0.12 TLS pulls it in until tonic moves on.
-  "RUSTSEC-2025-0134",
   # Fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru.
   "RUSTSEC-2026-0253",
 ]
@@ -36,8 +34,6 @@ allow-wildcard-paths = true
 # third-party dependencies. These are not security concerns; skip them
 # until the direct deps align on a common version.
 skip = [
-  { name = "axum" },
-  { name = "axum-core" },
   { name = "base64" },
   { name = "chacha20" },
   { name = "darling" },
@@ -45,25 +41,14 @@ skip = [
   { name = "darling_macro" },
   { name = "getrandom" },
   { name = "hashbrown" },
-  { name = "indexmap" },
-  { name = "matchit" },
   { name = "ordered-float" },
-  { name = "prost" },
-  { name = "prost-derive" },
-  { name = "prost-types" },
   { name = "rand" },
   { name = "rand_chacha" },
   { name = "rand_core" },
   { name = "reqwest" },
   { name = "rustix" },
   { name = "sketches-ddsketch" },
-  { name = "socket2" },
   { name = "syn" },
-  { name = "thiserror" },
-  { name = "thiserror-impl" },
-  { name = "tonic" },
-  { name = "tonic-types" },
-  { name = "tower" },
   { name = "webpki-roots" },
   # Tiny transitive duplicates from testcontainers/getrandom version spread.
   { name = "cpufeatures" },
