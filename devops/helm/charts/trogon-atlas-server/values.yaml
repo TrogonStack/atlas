@@ -155,6 +155,15 @@ metrics:
     scrapeTimeout: 10s
     labels: {}
 
+# MCP over Streamable HTTP at /mcp, on the same port as gRPC. Holds no
+# Secret: each MCP request acts as its own Authorization bearer token,
+# through the same auth as gRPC.
+mcp:
+  enabled: true
+  # Host headers /mcp accepts beyond this release's own Service names and
+  # loopback, e.g. the hostname of an Ingress or Gateway you route to it.
+  allowedHosts: []
+
 # Serve gRPC over in-process TLS from a kubernetes.io/tls Secret.
 # Note: with TLS enabled the probes fall back to tcpSocket because the
 # kubelet gRPC probe does not support TLS.
