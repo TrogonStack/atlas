@@ -34,7 +34,7 @@ use std::fmt;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chacha20poly1305::{
-    aead::{Aead, AeadCore, KeyInit, OsRng, Payload},
+    aead::{Aead, Generate, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
 };
 
@@ -55,7 +55,7 @@ impl ChangeCursorKey {
     /// cursor minted by one process fails to open on another.
     #[must_use]
     pub fn generate() -> Self {
-        Self(ChaCha20Poly1305::generate_key(&mut OsRng))
+        Self(Key::generate())
     }
 
     /// Parse a standard-base64, 32-byte key -- the form
@@ -117,7 +117,7 @@ impl ChangeCursorSeal {
     /// key; `resolve` is the only way back, and only for the same
     /// principal.
     pub fn seal(&self, principal: &str, seq: u64) -> String {
-        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let nonce = Nonce::generate();
         let ciphertext = self.cipher.encrypt(
             &nonce,
             Payload {
@@ -148,11 +148,11 @@ impl ChangeCursorSeal {
             return Err(ResolveError::FailedToOpen);
         }
         let (nonce, ciphertext) = payload.split_at(NONCE_LEN);
-        let nonce = Nonce::from_slice(nonce);
+        let nonce = Nonce::try_from(nonce).map_err(|_| ResolveError::FailedToOpen)?;
         let plaintext = self
             .cipher
             .decrypt(
-                nonce,
+                &nonce,
                 Payload {
                     msg: ciphertext,
                     aad: principal.as_bytes(),
@@ -211,6 +211,22 @@ mod tests {
             second_instance.resolve("acme", &token),
             Ok(7),
             "a token must resolve on any process holding the same key, not only the one that minted it",
+        );
+    }
+
+    #[test]
+    fn a_token_sealed_before_the_cipher_crate_upgrade_still_opens() {
+        use base64::engine::general_purpose::STANDARD;
+        let seal = ChangeCursorSeal::new(
+            &ChangeCursorKey::from_base64(&STANDARD.encode([7u8; 32])).unwrap(),
+        );
+
+        assert_eq!(
+            seal.resolve(
+                "acme",
+                "sealed:CQkJCQkJCQkJCQkJ_Hn71-QOhY8iIBxRk14uq5j1S5vxIshC"
+            ),
+            Ok(42),
         );
     }
 
