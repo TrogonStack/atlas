@@ -66,6 +66,34 @@ describe('proto entrypoint contract', () => {
   });
 });
 
+describe('PROTO_INCLUDES anchors on PROTO_PATH, not on server __dirname', () => {
+  // The production Dockerfile copies server/ and proto/ as flat siblings
+  // under /app (COPY --from=build .../server ./server, then a separate
+  // RUN populates /app/proto), a shallower layout than the source tree's
+  // tsworkspace/webapps/studio/server. index.mjs must derive its proto
+  // includeDirs from PROTO_PATH's own directory, not from a fixed number
+  // of __dirname levels, or that depth mismatch resolves includeDirs
+  // outside the deployed package and every cross-file proto import fails.
+  it('resolves EventModelService under the deployed (pnpm deploy) directory shape', () => {
+    const deployDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trogon-atlas-studio-deploy-'));
+    try {
+      fs.mkdirSync(path.join(deployDir, 'server'));
+      fs.symlinkSync(path.resolve(atlasRoot, 'proto'), path.join(deployDir, 'proto'), 'dir');
+
+      const protoPath = path.join(deployDir, 'proto', SERVICE_PKG_DIR, 'service.proto');
+      // Mirrors index.mjs: includeDirs is four segments above the file
+      // service.proto itself lives in, derived from PROTO_PATH.
+      const includeDir = path.resolve(path.dirname(protoPath), '..', '..', '..', '..');
+      expect(includeDir).toBe(path.join(deployDir, 'proto'));
+
+      const ctor = loadServiceCtor(protoPath, includeDir);
+      expect(typeof ctor).toBe('function');
+    } finally {
+      fs.rmSync(deployDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('dev compose PROTO_PATH', () => {
   it('base compose (the file RUNBOOK invokes with -f alone) points PROTO_PATH at a file that exposes EventModelService', () => {
     const protoPath = pyEval(

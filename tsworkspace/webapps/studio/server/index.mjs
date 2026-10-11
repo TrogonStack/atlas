@@ -28,7 +28,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROTO_PATH =
   process.env.PROTO_PATH ??
   path.resolve(__dirname, "../../../../proto/trogonatlas/api/eventmodel/v1alpha1/service.proto");
-const PROTO_INCLUDES = [path.resolve(__dirname, "../../../../proto")];
+// Proto imports are rooted four segments above service.proto, wherever the
+// server is deployed.
+const PROTO_INCLUDES = [path.resolve(path.dirname(PROTO_PATH), "../../../..")];
 
 const GRPC_ENDPOINT = process.env.TROGON_ATLAS_GRPC ?? "http://127.0.0.1:50069";
 const AUTH_TOKEN = process.env.TROGON_ATLAS_AUTH_TOKEN ?? "";
