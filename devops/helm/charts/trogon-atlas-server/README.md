@@ -16,8 +16,13 @@ is just `auth.tokensFile`.
 ```bash
 helm install trogon-atlas-server devops/helm/charts/trogon-atlas-server \
   --set config.natsUrl=nats://my-nats:4222 \
-  --set auth.token.value=change-me
+  --set auth.token.value=change-me \
+  --set image.tag=canary
 ```
+
+Only the `canary` tag is published so far, built from every push to `main`.
+The image tag otherwise defaults to the chart's `appVersion`, which has no
+published image yet.
 
 ## Authentication
 

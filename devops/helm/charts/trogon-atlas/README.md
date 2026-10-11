@@ -22,8 +22,14 @@ with JetStream enabled.
 helm dependency update devops/helm/charts/trogon-atlas
 helm install trogon-atlas devops/helm/charts/trogon-atlas \
   --set server.config.natsUrl=nats://my-nats:4222 \
-  --set server.auth.token.value=change-me
+  --set server.auth.token.value=change-me \
+  --set server.image.tag=canary \
+  --set studio.image.tag=canary
 ```
+
+Only the `canary` tag is published so far, built from every push to `main`.
+The image tag otherwise defaults to the chart's `appVersion`, which has no
+published image yet.
 
 `helm dependency update` resolves the `file://` dependencies into
 `charts/*.tgz`; it needs rerunning whenever a subchart's `Chart.yaml`
