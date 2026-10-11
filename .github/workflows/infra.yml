@@ -13,6 +13,7 @@ on:
       - .config/mise/tasks/github/actions/docker-buildx/**
       - .config/mise/tasks/images/**
       - .github/workflows/infra.yml
+      - mise.toml
   pull_request:
     types:
       - opened
@@ -29,6 +30,7 @@ on:
       - .config/mise/tasks/github/actions/docker-buildx/**
       - .config/mise/tasks/images/**
       - .github/workflows/infra.yml
+      - mise.toml
   workflow_dispatch:
 
 concurrency:
