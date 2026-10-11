@@ -172,7 +172,7 @@ trogon-atlas apply -f place-order-latency.yaml -f order-confirmation-journey.yam
 ```
 
 `trogon-atlas apply`, even with `--dry-run`, only runs request-time validation on
-the batch; it does not run `validate_model`, so it never surfaces
+the batch; it does not run model validation, so it never surfaces
 reliability findings. Run full validation through the `validate_event_model`
 MCP tool instead:
 

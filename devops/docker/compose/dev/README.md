@@ -6,7 +6,7 @@ LLM drive it.
 
 There is no second data model. MCP tools call gRPC; the service is the source
 of truth; the canonical proto contract lives at
-`proto/event_model.proto`.
+`proto/trogonatlas/eventmodel/v1alpha1/event_model.proto`.
 
 ## What this is
 
@@ -14,10 +14,12 @@ of truth; the canonical proto contract lives at
   commands, read models, processors, UIs, personas, swimlanes, the slice
   kinds, storyboards, event models, strategic knowledge entities, schema
   entities, screens, and language entities).
-- The 24-RPC `EventModelService` surface: direct CRUD, batch mutate,
-  graph queries (impact, supersession), projections (slice, storyboard,
-  event model), structural diff, AI analysis (data-flow inference and
-  information-completeness gaps), full-text search, and a change feed.
+- The 50-RPC `EventModelService` surface
+  (`proto/trogonatlas/api/eventmodel/v1alpha1/service.proto`): direct CRUD,
+  batch mutate, graph queries (impact, supersession), projections (slice,
+  storyboard, event model), structural diff, validation, AI analysis
+  (data-flow inference and information-completeness gaps), full-text
+  search, a change feed, changesets, branches, and type libraries.
 - A git side-channel that mirrors every successful mutation to a working tree
   on disk (one commit per `PutEntity` / `DeleteEntity` / `BatchMutate`), so
   history is human-auditable without becoming the system of record.
@@ -36,7 +38,7 @@ of truth; the canonical proto contract lives at
 
 ## Crates
 
-The implementation lives under `rustworkspace/`:
+The implementation lives under `rsworkspace/crates/`:
 
 | Crate | Purpose |
 | --- | --- |
@@ -110,8 +112,10 @@ Each mutation flows through the same path:
 ## Drive it via MCP
 
 `trogon-atlas-mcp` exposes every gRPC method as an MCP tool. Read tools return
-both a human-readable Debug dump and `binpb_base64` so callers can decode the
-exact proto bytes. Mutations have two surfaces:
+the protobuf response as `binpb_base64` in a JSON text block. Some tools
+accept `json: true` and return proto3 JSON instead. See "What the tools
+return" in `rsworkspace/crates/trogon-atlas-mcp/README.md`. Mutations have
+two surfaces:
 
 - **JSON** (no protobuf tooling required): `get_entity_json` -> edit the
   proto3 JSON -> `put_entity_json` / `batch_mutate_json`.

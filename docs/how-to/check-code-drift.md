@@ -17,8 +17,8 @@ read-only phase: produce a drift report, mutate nothing.
 ## Procedure
 
 1. **Pick the scope.** A Component is the natural unit: fetch it, then
-   `batch_get` its members. Entities without any implementation link are
-   reported as **unlinked** and skipped.
+   `batch_get_entities` its members. Entities without any implementation
+   link are reported as **unlinked** and skipped.
 
 2. **Resolve each implementation link** to actual code in the repository.
    A link that resolves to nothing (moved or deleted code) is **stale-link**.

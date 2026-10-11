@@ -39,10 +39,10 @@ model-wide SLICE_STALE_REF noise until you are ready.
 
 4. **Measure blast radius against the real entity.**
    Call `diff_entities` with `a` = the real `@1`, `b` = the draft scratch
-   entity, to see what changes. Then call `get_impact` with `root` = the
-   real `@1` to find every entity that depends on it. Classify each as
-   broken-by-change or bump-only using the diff ops, as described in the
-   assess-change-impact guide.
+   entity, to see what changes. Then call `get_impact` with the real `@1`'s
+   flat `kind`, `namespace`, `slug` and `version` to find every entity that
+   depends on it. Classify each as broken-by-change or bump-only using the
+   diff ops, as described in the assess-change-impact guide.
 
 5. **Use `lifecycle_status_not_in` to hide drafts in listings.**
    When listing entities for production views, pass
