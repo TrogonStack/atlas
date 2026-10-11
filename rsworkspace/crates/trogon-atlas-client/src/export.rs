@@ -198,7 +198,7 @@ pub enum ExportLayout {
     Slices,
 }
 
-async fn namespace_types(client: &mut Client, namespace: &str) -> Result<TranscodePool> {
+pub(crate) async fn namespace_types(client: &mut Client, namespace: &str) -> Result<TranscodePool> {
     let mut scope = TypeScope::default();
     scope.add_namespace(namespace);
     tenant_types::transcode_pool(client, &scope).await
@@ -233,7 +233,7 @@ async fn fetch_namespace_entities(client: &mut Client, namespace: &str) -> Resul
     Ok(entities)
 }
 
-fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Value>) -> Result<String> {
+pub(crate) fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Value>) -> Result<String> {
     let mut out = String::new();
     for (i, doc) in docs.into_iter().enumerate() {
         if i > 0 {

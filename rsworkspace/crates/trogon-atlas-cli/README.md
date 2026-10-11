@@ -25,7 +25,13 @@ trogon-atlas openslo export --namespace shop -o shop.openslo.yaml --bindings ope
 trogon-atlas fmt manifests/                       # canonical YAML to stdout (single file) or report via --check
 trogon-atlas fmt manifests/ --write               # rewrite files in place
 trogon-atlas fmt manifests/ --check               # CI gate: exit 1 and list files that would change
+trogon-atlas get event/shop/order.placed          # one entity as manifest YAML (latest version unless @<version>)
+trogon-atlas describe command_slice/shop/place-order-slice # title, doc, fields, references in and out
 ```
+
+`get` and `describe` are read-only. They take the same kind names
+as manifests (`read-model`, `read_model`, `ReadModel`). A missing entity
+exits `6` (`not_found`).
 
 Connection flags (or environment):
 

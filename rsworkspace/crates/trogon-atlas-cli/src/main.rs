@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use trogon_atlas_client::{
     apply, branch, client, compat, export, failure::Failure, fmt, manifest, manifest_schema,
     openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
-    precondition::BranchEntryState,
+    precondition::BranchEntryState, view,
 };
 use trogon_atlas_proto as pb;
 
@@ -111,6 +111,18 @@ enum Cmd {
         /// anyway. Generated files are overwritten; stale ones are kept.
         #[arg(long)]
         force: bool,
+    },
+    /// Print one entity as the manifest YAML document `export` writes.
+    /// Omit `@version` to read the latest version.
+    Get {
+        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `event/shop/order.placed`.
+        entity: String,
+    },
+    /// Print one entity as readable text: title, doc, schema fields, and
+    /// the references it holds and receives.
+    Describe {
+        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `command_slice/shop/place-order-slice`.
+        entity: String,
     },
     /// Manage branch lifecycle (Phase 1: Isolation). Branch scope for
     /// Apply/Diff/Export is set via the top-level --branch flag, not here.
@@ -677,6 +689,32 @@ async fn run(
                 },
                 Some(data),
             ))
+        }
+        Cmd::Get { entity } => {
+            let address = view::parse_address(&entity)?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let entity = view::fetch_entity(&mut client, &address).await?;
+            let (manifest, yaml) = view::entity_manifest(&mut client, &entity).await?;
+            if text {
+                print!("{yaml}");
+            }
+            Ok((ExitCode::SUCCESS, Some(json!({"manifest": manifest}))))
+        }
+        Cmd::Describe { entity } => {
+            let address = view::parse_address(&entity)?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let entity = view::fetch_entity(&mut client, &address).await?;
+            let outgoing =
+                view::fetch_references(&mut client, &entity, view::Direction::Outgoing).await?;
+            let incoming =
+                view::fetch_references(&mut client, &entity, view::Direction::Incoming).await?;
+            let description = view::describe(&entity, &outgoing, &incoming);
+            if text {
+                print!("{}", view::render_description(&description));
+            }
+            Ok((ExitCode::SUCCESS, Some(serde_json::to_value(&description)?)))
         }
         Cmd::Openslo {
             cmd:
