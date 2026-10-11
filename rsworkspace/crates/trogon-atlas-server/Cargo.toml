@@ -53,7 +53,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tantivy = "0.26"
 prost-reflect = { version = "0.16", features = ["text-format"] }
 opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.33"
 
