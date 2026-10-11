@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="helm template every chart under devops/helm/charts against each ci/*-values.yaml, or its defaults when it has none, and validate the output with kubeconform, CRDs included"
+#MISE description="helm template every chart under devops/helm/charts against each values.<case>.yaml, or its defaults when it has none, and validate the output with kubeconform, CRDs included"
 set -euo pipefail
 
 root="$MISE_PROJECT_ROOT"
@@ -18,7 +18,7 @@ for chart in "$charts_dir"/*/; do
     helm dependency build "$chart" >/dev/null
   fi
 
-  values_files=("$chart"ci/*-values.yaml)
+  values_files=("$chart"values.*.yaml)
   if [ ! -e "${values_files[0]}" ]; then
     echo "validating $name (defaults)" >&2
     helm template "$name" "$chart" | validate
