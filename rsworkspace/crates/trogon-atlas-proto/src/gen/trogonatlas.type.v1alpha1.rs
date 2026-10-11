@@ -63,8 +63,7 @@
 ///    7. `supersedes` (on every entity) points at the prior version it
 ///       replaces. The supersession chain is single-parent and must terminate
 ///       at a root version with `supersedes` unset.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Id {
     /// free-form disambiguator, owner's choice
     #[prost(string, tag="1")]
@@ -83,8 +82,7 @@ pub struct Id {
 /// uid on delete+recreate of the same name, making silent re-keying
 /// detectable and giving external state management a durable handle.
 /// Client-provided values are ignored; the server owns this block.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SystemMeta {
     /// UUIDv7, time-sortable incarnation id
     #[prost(string, tag="1")]

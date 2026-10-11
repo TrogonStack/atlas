@@ -3,8 +3,7 @@
 /// One entity-level change. The payload of the poll-based change feed
 /// exposed by trogonatlas.api.eventmodel.v1alpha1 ListChanges / StreamChanges
 /// (see those RPCs for the polling and resume-cursor design).
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChangeEvent {
     #[prost(enumeration="change_event::Kind", tag="1")]
     pub kind: i32,
@@ -60,9 +59,9 @@ pub mod change_event {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Kind::Unspecified => "KIND_UNSPECIFIED",
-                Kind::Put => "KIND_PUT",
-                Kind::Deleted => "KIND_DELETED",
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Put => "KIND_PUT",
+                Self::Deleted => "KIND_DELETED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -85,15 +84,13 @@ pub mod change_event {
 // event; retention deletes old ones). Learn that something changed from the
 // feed; read what changed from here.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChangesetOp {
     #[prost(enumeration="change_event::Kind", tag="1")]
     pub kind: i32,
     #[prost(message, optional, tag="2")]
     pub entity: ::core::option::Option<super::super::eventmodel::v1alpha1::EntityRef>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Changeset {
     /// UUIDv7: lexicographic order is chronological order.
@@ -138,7 +135,6 @@ pub struct Changeset {
 /// records no revision. That is the same documented unattributed case the
 /// changeset log has, and it is why RevertChangeset refuses rather than
 /// guesses when a revision row is missing.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EntityRevision {
     /// Changeset this revision belongs to. UUIDv7, so ordering these
@@ -185,8 +181,7 @@ pub struct EntityRevision {
 /// result", not a durable receipt. See trogonatlas.api.eventmodel.v1alpha1
 /// GetOperationRequest / GetOperationResponse and its OperationStatus enum
 /// for the lookup RPC and the receipt's lifecycle states.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OperationReceipt {
     /// Echoes the caller-supplied id.
     #[prost(string, tag="1")]
@@ -200,8 +195,7 @@ pub struct OperationReceipt {
     #[prost(bool, tag="3")]
     pub replayed: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DiffOp {
     #[prost(enumeration="DiffOpKind", tag="1")]
     pub kind: i32,
@@ -252,11 +246,11 @@ impl DiffOpKind {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            DiffOpKind::Unspecified => "DIFF_OP_KIND_UNSPECIFIED",
-            DiffOpKind::Added => "DIFF_OP_KIND_ADDED",
-            DiffOpKind::Removed => "DIFF_OP_KIND_REMOVED",
-            DiffOpKind::Changed => "DIFF_OP_KIND_CHANGED",
-            DiffOpKind::Renamed => "DIFF_OP_KIND_RENAMED",
+            Self::Unspecified => "DIFF_OP_KIND_UNSPECIFIED",
+            Self::Added => "DIFF_OP_KIND_ADDED",
+            Self::Removed => "DIFF_OP_KIND_REMOVED",
+            Self::Changed => "DIFF_OP_KIND_CHANGED",
+            Self::Renamed => "DIFF_OP_KIND_RENAMED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -293,8 +287,7 @@ impl DiffOpKind {
 ///
 /// See trogonatlas.api.eventmodel.v1alpha1 ListNamespacesRequest / RegisterNamespaceRequest
 /// / MoveNamespaceRequest for the RPCs that read and write this registry.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NamespaceRecord {
     /// Immutable. `ns_` + 32 lowercase hex (UUIDv7) when minted; a bare legacy
     /// namespace name when adopted by the registry migration.
@@ -330,8 +323,7 @@ pub struct NamespaceRecord {
 /// One row of a content-addressable snapshot of the model. See
 /// trogonatlas.api.eventmodel.v1alpha1 GetSnapshotIdRequest / GetSnapshotIdResponse
 /// for how this entry is produced and what the snapshot id over it means.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SnapshotEntry {
     /// Storage key, the same form used by the change feed and branch deltas.
     #[prost(string, tag="1")]
@@ -346,8 +338,7 @@ pub struct SnapshotEntry {
 /// baseline store (see docs/explanation/branching.md). See
 /// trogonatlas.api.eventmodel.v1alpha1 CreateBranchRequest / ListBranchesRequest /
 /// DeleteBranchRequest for the lifecycle RPCs that manage this record.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BranchInfo {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
@@ -380,7 +371,6 @@ pub struct BranchInfo {
 /// Internal storage envelope for a single copy-on-write delta. Not returned
 /// directly by any RPC in Phase 1; defined here for a stable wire encoding
 /// usable by any Store backend that persists deltas as encoded protos.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BranchDelta {
     /// The baseline entity as it existed the first time this key was touched
@@ -404,7 +394,6 @@ pub struct BranchDelta {
 /// UpdateBranchRequest / ResolveBranchEntryRequest for the RPCs that produce
 /// and act on this entry; docs/explanation/branching.md, "Merge conflicts",
 /// has the full semantics.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BranchDiffEntry {
     #[prost(message, optional, tag="1")]
@@ -486,14 +475,14 @@ pub mod branch_diff_entry {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Status::Unspecified => "STATUS_UNSPECIFIED",
-                Status::Added => "STATUS_ADDED",
-                Status::Changed => "STATUS_CHANGED",
-                Status::Deleted => "STATUS_DELETED",
-                Status::Converged => "STATUS_CONVERGED",
-                Status::ConflictEditEdit => "STATUS_CONFLICT_EDIT_EDIT",
-                Status::ConflictEditDelete => "STATUS_CONFLICT_EDIT_DELETE",
-                Status::ConflictDeleteEdit => "STATUS_CONFLICT_DELETE_EDIT",
+                Self::Unspecified => "STATUS_UNSPECIFIED",
+                Self::Added => "STATUS_ADDED",
+                Self::Changed => "STATUS_CHANGED",
+                Self::Deleted => "STATUS_DELETED",
+                Self::Converged => "STATUS_CONVERGED",
+                Self::ConflictEditEdit => "STATUS_CONFLICT_EDIT_EDIT",
+                Self::ConflictEditDelete => "STATUS_CONFLICT_EDIT_DELETE",
+                Self::ConflictDeleteEdit => "STATUS_CONFLICT_DELETE_EDIT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -514,8 +503,7 @@ pub mod branch_diff_entry {
 }
 /// Revisions of the three inputs to a branch entry's classification. An etag
 /// is never empty, so an empty value means that side is absent.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BranchEntryState {
     /// Etag of `base` at capture time.
     #[prost(string, tag="1")]
@@ -534,7 +522,6 @@ pub struct BranchEntryState {
 /// move under me". They are captured at different moments and rebased
 /// individually, so they cannot be added up into a statement about the branch
 /// as a whole. This message is that statement.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BranchAncestry {
     /// BranchInfo.fork_changeset_id: the baseline changeset this branch forked

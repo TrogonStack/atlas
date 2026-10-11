@@ -1,7 +1,3 @@
 [[IgnoredVulns]]
-id = "RUSTSEC-2025-0134"
-reason = "rustls-pemfile is unmaintained with no known exploit; tonic 0.12 TLS pulls it in until tonic moves on."
-
-[[IgnoredVulns]]
 id = "RUSTSEC-2026-0253"
 reason = "fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru."
