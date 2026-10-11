@@ -7,12 +7,15 @@ export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      '@': path.resolve(__dirname, 'src'),
+      '@': path.resolve(import.meta.dirname, 'src'),
     },
   },
   // Strip `console.*` and `debugger` from production bundles only. The dev
   // server (`vite dev`) keeps both so authors still see logs in iteration.
-  esbuild: command === 'build' ? { drop: ['console', 'debugger'] } : undefined,
+  build:
+    command === 'build'
+      ? { rolldownOptions: { output: { minify: { compress: { dropConsole: true, dropDebugger: true } } } } }
+      : undefined,
   server: {
     port: 5179,
     proxy: {

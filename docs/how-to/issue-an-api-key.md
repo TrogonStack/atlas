@@ -57,7 +57,7 @@ Three fields, three different questions:
 A relative path in `token_files` resolves against the directory holding the
 registry file, not the server's working directory, so this also works:
 
-```
+```text
 /etc/trogon-atlas/
   tokens.toml       # token_files = ["acme.key"]
   acme.key
@@ -67,7 +67,7 @@ registry file, not the server's working directory, so this also works:
 
 Nothing to restart. Within one reload interval the server logs:
 
-```
+```text
 INFO reloaded the token registry path=/etc/trogon-atlas/tokens.toml memberships=3
 ```
 
@@ -87,7 +87,7 @@ same as a failure: a rejected key answers `Unauthenticated`.
 If the registry has an error in it, the reload is refused, the previous
 registry stays in force, and the server says so:
 
-```
+```text
 ERROR token registry failed to reload; the previous one stays in force ...
 ```
 

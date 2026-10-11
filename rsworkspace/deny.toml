@@ -5,6 +5,8 @@ targets = []
 ignore = [
   # rustls-pemfile is unmaintained with no known exploit; tonic 0.12 TLS pulls it in until tonic moves on.
   "RUSTSEC-2025-0134",
+  # Fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru.
+  "RUSTSEC-2026-0253",
 ]
 
 [licenses]
@@ -68,15 +70,6 @@ skip = [
   { name = "linux-raw-sys" },
   { name = "r-efi" },
   { name = "windows-sys" },
-  { name = "windows-targets" },
-  { name = "windows_aarch64_gnullvm" },
-  { name = "windows_aarch64_msvc" },
-  { name = "windows_i686_gnu" },
-  { name = "windows_i686_gnullvm" },
-  { name = "windows_i686_msvc" },
-  { name = "windows_x86_64_gnu" },
-  { name = "windows_x86_64_gnullvm" },
-  { name = "windows_x86_64_msvc" },
 ]
 
 [sources]

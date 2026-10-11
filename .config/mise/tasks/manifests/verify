@@ -18,16 +18,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ATLAS_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 MANIFESTS="$ATLAS_DIR/examples/manifests"
-TARGET_DIR="$(cd "$ATLAS_DIR/rsworkspace" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+TARGET_DIR="$(cd "$ATLAS_DIR/rsworkspace" && cargo metadata --format-version 1 --no-deps 2>/dev/null |
+  python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
 TROGON_ATLAS_BIN="${TROGON_ATLAS_BIN:-$TARGET_DIR/debug/trogon-atlas}"
 SERVER_BIN="${SERVER_BIN:-$TARGET_DIR/debug/trogon-atlas-server}"
 
-[ -x "$TROGON_ATLAS_BIN" ] || { echo "trogon-atlas not built: $TROGON_ATLAS_BIN (cargo build -p trogon-atlas-cli)"; exit 2; }
+[ -x "$TROGON_ATLAS_BIN" ] || {
+  echo "trogon-atlas not built: $TROGON_ATLAS_BIN (cargo build -p trogon-atlas-cli)"
+  exit 2
+}
 
 MANIFEST_ROOTS=("$MANIFESTS")
 if [ -n "${TROGON_ATLAS_EXTRA_FIXTURE_DIRS:-}" ]; then
-  IFS=':' read -r -a extra_roots <<< "$TROGON_ATLAS_EXTRA_FIXTURE_DIRS"
+  IFS=':' read -r -a extra_roots <<<"$TROGON_ATLAS_EXTRA_FIXTURE_DIRS"
   for d in "${extra_roots[@]}"; do
     [ -d "$d" ] && MANIFEST_ROOTS+=("$d")
   done
@@ -36,18 +39,18 @@ fi
 diff_all() {
   local endpoint="$1" drift=0 out rc ns
   for root in "${MANIFEST_ROOTS[@]}"; do
-  for d in "$root"/*/; do
-    ns="$(basename "$d")"
-    set +e
-    out="$("$TROGON_ATLAS_BIN" --endpoint "$endpoint" diff -f "$d" 2>&1)"
-    rc=$?
-    set -e
-    if [ $rc -ne 0 ] || [ -n "$out" ]; then
-      echo "DRIFT: $ns"
-      echo "$out" | head -5
-      drift=1
-    fi
-  done
+    for d in "$root"/*/; do
+      ns="$(basename "$d")"
+      set +e
+      out="$("$TROGON_ATLAS_BIN" --endpoint "$endpoint" diff -f "$d" 2>&1)"
+      rc=$?
+      set -e
+      if [ $rc -ne 0 ] || [ -n "$out" ]; then
+        echo "DRIFT: $ns"
+        echo "$out" | head -5
+        drift=1
+      fi
+    done
   done
   return $drift
 }
@@ -64,7 +67,10 @@ case "$mode" in
     fi
     ;;
   bootstrap)
-    [ -x "$SERVER_BIN" ] || { echo "server not built: $SERVER_BIN (cargo build -p trogon-atlas-server)"; exit 2; }
+    [ -x "$SERVER_BIN" ] || {
+      echo "server not built: $SERVER_BIN (cargo build -p trogon-atlas-server)"
+      exit 2
+    }
     nats_name="verify-manifests-nats-$$"
     nats_port="$((20000 + RANDOM % 10000))"
     grpc_port="$((30000 + RANDOM % 10000))"

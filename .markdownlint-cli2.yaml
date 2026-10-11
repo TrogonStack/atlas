@@ -1,0 +1,17 @@
+config:
+  default: true
+  # Existing docs wrap prose and tables well past 80 columns; not worth reformatting.
+  MD013: false
+  # These docs' tables don't follow a single consistent pipe-alignment style.
+  MD060: false
+  # Consecutive blockquotes separated by one blank line are two distinct
+  # quotes in this codebase's docs, not one quote with a gap.
+  MD028: false
+
+globs:
+  - "**/*.md"
+
+ignores:
+  - "**/node_modules/**"
+  - "rsworkspace/target/**"
+  - "rsworkspace/crates/trogon-atlas-server/prompts/**"

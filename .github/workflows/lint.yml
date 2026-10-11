@@ -1,0 +1,79 @@
+name: Lint
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  runs-on:
+    uses: ./.github/workflows/runs-on.yml
+
+  repo-hygiene:
+    name: Lint
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    if: github.event_name != 'schedule'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+
+      - name: shellcheck
+        run: mise run github:workflows:lint:shellcheck
+
+      - name: shfmt
+        run: mise run github:workflows:lint:shfmt
+
+      - name: ruff check
+        run: mise run github:workflows:lint:ruff-lint
+
+      - name: ruff format --check
+        run: mise run github:workflows:lint:ruff-format
+
+      - name: typos
+        run: mise run github:workflows:lint:typos
+
+      - name: taplo fmt --check
+        run: mise run github:workflows:lint:taplo
+
+      - name: markdownlint
+        run: mise run github:workflows:lint:markdownlint
+
+      - name: lychee - internal links
+        run: mise run github:workflows:lint:lychee-offline
+
+  link-check-full:
+    name: Links
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    if: github.event_name == 'schedule'
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+
+      - name: lychee - all links
+        run: mise run github:workflows:lint:lychee-full

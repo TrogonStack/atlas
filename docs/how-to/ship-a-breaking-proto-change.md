@@ -40,7 +40,7 @@ example of such a command.
 
 1. Copy every `BREAKING:` line the check printed into
    `rsworkspace/crates/trogon-atlas-proto/acknowledged-breaking-changes.txt`, without the
-   `BREAKING: ` prefix. One finding per line, verbatim; the check matches
+   `BREAKING: ` prefix. One finding per line, verbatim; the check matches<!-- markdownlint-disable-line MD038 -->
    lines exactly, so an unrelated later break is never covered by accident.
 2. Raise `CONTRACT_REVISION` in `rsworkspace/crates/trogon-atlas-proto/src/lib.rs`.
 3. Raise `MIN_CLIENT_CONTRACT_REVISION` to the new revision when older

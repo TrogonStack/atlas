@@ -247,7 +247,7 @@ the original landed. Reverting a baseline changeset under
 any other branch write. Pre-images are always read from the original
 changeset's own log, baseline or branch.
 
-```
+```text
 # What has happened to this entity, newest first?
 GetEntityHistory(ref: {kind: EVENT, id: {namespace: "shop", slug: "order.placed", version: 1}})
   -> revisions (each with before/after), next_page_token
@@ -283,7 +283,7 @@ and the record should stay simple.
 
 ## Using it
 
-```
+```text
 # What happened most recently?
 ListChangesets(page_size: 50)
   -> changesets (newest first), next_page_token

@@ -4,3 +4,4 @@ rules:
       # actionlint 1.7.12 does not parse the `$/...` self-repository syntax yet
       # (rhysd/actionlint#711). Revisit once actionlint supports it.
       - ci.yml:28
+      - lint.yml:24
