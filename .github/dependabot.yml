@@ -7,12 +7,11 @@ updates:
       day: "monday"
     open-pull-requests-limit: 5
     commit-message:
-      prefix: "ci(deps)"
+      prefix: "chore(deps)"
     groups:
-      actions-minor-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      actions:
+        patterns:
+          - "*"
 
   - package-ecosystem: "cargo"
     directory: "/rsworkspace"
@@ -23,6 +22,26 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
+      grpc:
+        patterns:
+          - "tonic"
+          - "tonic-*"
+          - "prost"
+          - "prost-*"
+          - "protox"
+          - "protox-*"
+      opentelemetry:
+        patterns:
+          - "opentelemetry*"
+          - "tracing-opentelemetry"
+      rustcrypto:
+        patterns:
+          - "sha2"
+          - "chacha20poly1305"
+          - "digest"
+          - "aead"
+          - "hmac"
+          - "hkdf"
       cargo-minor-patch:
         update-types:
           - "minor"
@@ -37,6 +56,25 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
+      vite:
+        patterns:
+          - "vite"
+          - "@vitejs/*"
+          - "vitest"
+          - "@vitest/*"
+      react:
+        patterns:
+          - "react"
+          - "react-dom"
+          - "@types/react"
+          - "@types/react-dom"
+      tailwind:
+        patterns:
+          - "tailwindcss"
+          - "@tailwindcss/*"
+      testing-library:
+        patterns:
+          - "@testing-library/*"
       npm-minor-patch:
         update-types:
           - "minor"
