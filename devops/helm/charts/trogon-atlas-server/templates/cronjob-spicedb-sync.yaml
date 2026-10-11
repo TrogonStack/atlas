@@ -112,16 +112,20 @@ spec:
               resources:
                 {{- toYaml . | nindent 16 }}
               {{- end }}
-              {{- if $tokensSecret }}
               volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+                {{- if $tokensSecret }}
                 - name: auth-tokens
                   mountPath: /etc/trogon-atlas/auth
                   readOnly: true
-              {{- end }}
-          {{- if $tokensSecret }}
+                {{- end }}
           volumes:
+            - name: tmp
+              emptyDir: {}
+            {{- if $tokensSecret }}
             - name: auth-tokens
               secret:
                 secretName: {{ $tokensSecret }}
-          {{- end }}
+            {{- end }}
 {{- end }}
