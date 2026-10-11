@@ -2,6 +2,8 @@ use std::fmt;
 
 use rmcp::{service::RequestContext, ErrorData, RoleServer};
 
+use crate::McpError;
+
 pub const BRANCH_HEADER: &str = "x-trogon-atlas-branch";
 
 /// Who an MCP request acts as, and on which branch, read from that request's
@@ -35,6 +37,28 @@ impl Caller {
         Ok(Self {
             token: CallerToken::from_headers(headers)?,
             branch,
+        })
+    }
+
+    /// Scope this caller to a tool call's own `branch` argument. A header
+    /// naming a different branch is refused rather than overridden, so a
+    /// call never writes somewhere its host did not expect.
+    pub fn with_branch_argument(self, argument: Option<String>) -> Result<Self, ErrorData> {
+        let Some(argument) = argument else {
+            return Ok(self);
+        };
+        trogon_atlas_client::branch::validate_branch_name(&argument)
+            .map_err(|e| McpError::InvalidParams(e.to_string()))?;
+        if let Some(header) = self.branch.as_deref().filter(|header| *header != argument) {
+            return Err(McpError::InvalidParams(format!(
+                "branch {argument:?} does not match the {BRANCH_HEADER} header {header:?}; \
+                 omit the branch argument or send the same name in both"
+            ))
+            .into());
+        }
+        Ok(Self {
+            branch: Some(argument),
+            ..self
         })
     }
 }
@@ -128,6 +152,61 @@ mod tests {
             Caller::from_headers(&http::HeaderMap::new()).unwrap(),
             Caller::default()
         );
+    }
+
+    fn on_header_branch(branch: &str) -> Caller {
+        let mut headers = http::HeaderMap::new();
+        headers.insert(BRANCH_HEADER, branch.parse().unwrap());
+        Caller::from_headers(&headers).unwrap()
+    }
+
+    #[test]
+    fn branch_argument_scopes_a_caller_without_a_header() {
+        let caller = Caller::default()
+            .with_branch_argument(Some("alex/rework".into()))
+            .unwrap();
+        assert_eq!(caller.branch.as_deref(), Some("alex/rework"));
+    }
+
+    #[test]
+    fn no_branch_argument_leaves_the_caller_as_it_was() {
+        assert_eq!(
+            Caller::default().with_branch_argument(None).unwrap(),
+            Caller::default()
+        );
+        assert_eq!(
+            on_header_branch("rework")
+                .with_branch_argument(None)
+                .unwrap(),
+            on_header_branch("rework")
+        );
+    }
+
+    #[test]
+    fn branch_argument_equal_to_the_header_is_accepted() {
+        let caller = on_header_branch("rework")
+            .with_branch_argument(Some("rework".into()))
+            .unwrap();
+        assert_eq!(caller.branch.as_deref(), Some("rework"));
+    }
+
+    #[test]
+    fn branch_argument_that_differs_from_the_header_is_refused() {
+        let err = on_header_branch("rework")
+            .with_branch_argument(Some("other".into()))
+            .unwrap_err();
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
+        assert!(err.message.contains("does not match"), "{err:?}");
+    }
+
+    #[test]
+    fn invalid_branch_argument_is_refused() {
+        for name in ["", "meta", "bad name", "a/b/c"] {
+            let err = Caller::default()
+                .with_branch_argument(Some(name.into()))
+                .unwrap_err();
+            assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{name:?}");
+        }
     }
 
     #[test]

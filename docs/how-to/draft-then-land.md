@@ -69,7 +69,8 @@ model-wide SLICE_STALE_REF noise until you are ready.
    to enumerate referrers, then `batch_mutate` to rewrite each one individually.
 
    To review the rewrite before anyone sees it, run steps 6 to 9 under a branch
-   header (`trogon-atlas --branch`, or `x-trogon-atlas-branch` from any surface).
+   (`trogon-atlas --branch`, the `branch` argument on each MCP tool call, or
+   `x-trogon-atlas-branch` from any surface).
    `retarget_references` honors it, so the new version and every rewritten
    referrer land as one change set you can diff and merge atomically. See
    [branching](../explanation/branching.md).

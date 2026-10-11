@@ -453,3 +453,63 @@ async fn grpc_and_mcp_share_the_same_port() {
 
     http.shut_down().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_branch_argument_that_contradicts_the_branch_header_is_refused() {
+    let http = McpHttp::start(authenticated_registry()).await;
+    let admin = http.client(Some(ADMIN_TOKEN)).await;
+    for name in ["header-side", "argument-side"] {
+        admin
+            .call_tool(tool_call(
+                "create_branch",
+                serde_json::json!({ "name": name }),
+            ))
+            .await
+            .unwrap();
+    }
+    let config =
+        StreamableHttpClientTransportConfig::with_uri(format!("http://{}{MCP_PATH}", http.addr))
+            .auth_header(ADMIN_TOKEN)
+            .custom_headers(
+                [(
+                    http::HeaderName::from_static(trogon_atlas_mcp::caller::BRANCH_HEADER),
+                    http::HeaderValue::from_static("header-side"),
+                )]
+                .into(),
+            );
+    let on_header_branch =
+        ().serve(StreamableHttpClientTransport::from_config(config))
+            .await
+            .unwrap();
+    let put = |branch: &str, title: &str| {
+        tool_call(
+            "put_entity_json",
+            serde_json::json!({
+                "branch": branch,
+                "entity_json": serde_json::json!({
+                    "event": {
+                        "id": {"namespace": "branch-arg-http", "slug": "drafted", "version": 1},
+                        "title": title,
+                    }
+                })
+                .to_string(),
+            }),
+        )
+    };
+
+    let err = on_header_branch
+        .call_tool(put("argument-side", "refused"))
+        .await
+        .expect_err("a call must not pick between two different branches");
+    assert!(
+        err.to_string().contains("does not match"),
+        "expected a branch mismatch refusal, got: {err}"
+    );
+    let agreed = on_header_branch
+        .call_tool(put("header-side", "accepted"))
+        .await
+        .unwrap();
+    assert_ne!(agreed.is_error, Some(true), "{agreed:?}");
+
+    http.shut_down().await;
+}

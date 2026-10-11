@@ -333,8 +333,9 @@ atomic batch, then deletes the branch.
    every RPC via the `x-trogon-atlas-branch` metadata header; reads resolve
    branch-first; writes land in the branch with merged-view validation and
    semantic no-op detection; `trogon-atlas --branch` plus branch subcommands; MCP
-   `--branch` and lifecycle tools. Concurrent writers can no longer hurt
-   each other.
+   lifecycle tools, and a per-call `branch` argument on every MCP tool that
+   reads or writes entities. Concurrent writers can no longer hurt each
+   other.
 2. **Review and merge (SHIPPED).** `DiffBranch`, `MergeBranch`
    (all-or-nothing, three-way conflict detection, post-merge world
    validation, identity preserved across the merge), `UpdateBranch` for

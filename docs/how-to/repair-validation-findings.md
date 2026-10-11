@@ -19,10 +19,10 @@ Point the MCP host at the server's `/mcp` endpoint, for example
 `http://127.0.0.1:50069/mcp` on the development stack, and have it send your
 key as `Authorization: Bearer <token>`.
 
-The endpoint scopes each request's tool calls through the
-`x-trogon-atlas-branch` header. For baseline, omit the header. For a named
-branch, have the MCP host send that name on every request. Do not change
-branches halfway through a repair.
+For baseline, call the tools without a branch. For a named branch, pass
+`branch: "<name>"` on every read and write of the repair, or have the MCP
+host send that name in the `x-trogon-atlas-branch` header on every request.
+Do not change branches halfway through a repair.
 
 Fetch the EventModel with `get_entity_json`, then run `validate_event_model`.
 Both use explicit `namespace`, `slug`, and numeric `version` arguments;

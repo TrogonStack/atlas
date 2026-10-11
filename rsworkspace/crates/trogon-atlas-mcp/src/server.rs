@@ -186,7 +186,10 @@ pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatl
              delete+recreate. Anything you send there is ignored; never try to set it.\n\
              Run validate_event_model after every mutation batch and fix all Errors. Mutations \
              execute concurrently when pipelined: issue ordered workflows (write -> delete -> \
-             validate) as separate sequential requests.";
+             validate) as separate sequential requests.\n\
+             To draft changes without touching baseline, call create_branch, then pass the same \
+             `branch` argument on every read, write, and validate_event_model call that belongs \
+             to the draft. Review with diff_branch and land with merge_branch.";
 
 /// The MCP crate's own ordering of the server's RBAC roles, so tool
 /// listing can compare a caller's role against a tool's minimum without
@@ -508,6 +511,101 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     },
 ];
 
+/// Tools whose RPCs honor `x-trogon-atlas-branch`, so each takes an optional
+/// `branch` argument. Hosts set headers per server rather than per call, so
+/// this argument is how an agent drafts on a branch it just created.
+const BRANCH_ARGUMENT_TOOLS: &[&str] = &[
+    "compile_type_library",
+    "resolve_type",
+    "list_namespaces",
+    "get_snapshot_id",
+    "list_entities",
+    "get_entity",
+    "batch_get_entities",
+    "search_entities",
+    "list_versions",
+    "get_latest_version",
+    "get_supersession_chain",
+    "get_incoming_references",
+    "get_outgoing_references",
+    "get_impact",
+    "retarget_references",
+    "get_slice_projection",
+    "get_storyboard_projection",
+    "get_event_model_projection",
+    "extract_subgraph",
+    "diff_entities",
+    "put_entity",
+    "get_entity_json",
+    "put_entity_json",
+    "batch_mutate_json",
+    "delete_entity",
+    "batch_mutate",
+    "get_entity_history",
+    "revert_changeset",
+    "validate_event_model",
+    "validate_project",
+    "delete_by_query",
+    "list_entities_by_domain",
+    "infer_data_flow",
+    "check_information_completeness",
+    "apply_manifests",
+    "diff_manifests",
+    "export_namespace",
+    "export_openslo",
+];
+
+const BRANCH_ARGUMENT: &str = "branch";
+
+/// Adds `branch` to the input schema of every tool in `BRANCH_ARGUMENT_TOOLS`.
+/// `call_tool` takes it off the arguments before dispatch, so no param
+/// struct carries it.
+fn with_branch_argument<S>(mut router: ToolRouter<S>) -> ToolRouter<S> {
+    for name in BRANCH_ARGUMENT_TOOLS {
+        let Some(route) = router.map.get_mut(*name) else {
+            continue;
+        };
+        let schema = std::sync::Arc::make_mut(&mut route.attr.input_schema);
+        if let serde_json::Value::Object(properties) = schema
+            .entry("properties")
+            .or_insert_with(|| serde_json::json!({}))
+        {
+            properties.insert(
+                BRANCH_ARGUMENT.into(),
+                serde_json::json!({
+                    "type": "string",
+                    "description": "Branch to run this call on, as returned by create_branch. \
+                        Omit for baseline, or for the branch in the x-trogon-atlas-branch \
+                        header if the host sends one; a different name than that header is \
+                        refused.",
+                }),
+            );
+        }
+    }
+    router
+}
+
+/// Removes the `branch` argument from a call to a tool that takes one, so
+/// the tool's own parameters still deny unknown fields.
+fn take_branch_argument(
+    request: &mut rmcp::model::CallToolRequestParams,
+) -> Result<Option<String>, rmcp::ErrorData> {
+    if !BRANCH_ARGUMENT_TOOLS.contains(&request.name.as_ref()) {
+        return Ok(None);
+    }
+    match request
+        .arguments
+        .as_mut()
+        .and_then(|arguments| arguments.remove(BRANCH_ARGUMENT))
+    {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(branch)) => Ok(Some(branch)),
+        Some(other) => {
+            Err(McpError::InvalidParams(format!("branch must be a string, got {other}")).into())
+        }
+    }
+}
+
 fn policy_for(tool: &str) -> Option<&'static ToolPolicy> {
     TOOL_POLICIES.iter().find(|p| p.tool == tool)
 }
@@ -560,7 +658,7 @@ impl McpServer {
             branch_scoped: options.branch.is_some(),
             options,
             client,
-            tool_router: Self::tool_router(),
+            tool_router: with_branch_argument(Self::tool_router()),
         })
     }
 
@@ -590,6 +688,16 @@ impl McpServer {
         context: &rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<Self, rmcp::ErrorData> {
         self.for_caller(Caller::from_context(context)?)
+    }
+
+    /// `for_request`, scoped further by the call's own `branch` argument.
+    fn for_call(
+        &self,
+        request: &mut rmcp::model::CallToolRequestParams,
+        context: &rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<Self, rmcp::ErrorData> {
+        let branch = take_branch_argument(request)?;
+        self.for_caller(Caller::from_context(context)?.with_branch_argument(branch)?)
     }
 
     /// Learn the caller's own role via `WhoAmI`, gated on the server
@@ -2625,7 +2733,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a new branch (Phase 1: Isolation): a server-side overlay of copy-on-write deltas over the baseline store. Fails if a branch with this name already exists. Scope subsequent tool calls to it by sending the branch name in the x-trogon-atlas-branch HTTP header on each MCP request.",
+        description = "Create a new branch (Phase 1: Isolation): a server-side overlay of copy-on-write deltas over the baseline store. Fails if a branch with this name already exists. To draft on it, pass its name as `branch` on each later read and write; review with diff_branch and land with merge_branch. Baseline is untouched until the merge.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2878,10 +2986,10 @@ impl ServerHandler for McpServer {
     /// service: the server sees the caller's own bearer token.
     async fn call_tool(
         &self,
-        request: rmcp::model::CallToolRequestParams,
+        mut request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let caller = self.for_request(&context)?;
+        let caller = self.for_call(&mut request, &context)?;
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(&caller, request, context);
         self.tool_router.call(tcc).await
     }
@@ -3377,5 +3485,92 @@ mod tests {
                 row.rpcs
             );
         }
+    }
+
+    fn has_branch_property(tool: &rmcp::model::Tool) -> bool {
+        tool.input_schema
+            .get("properties")
+            .and_then(|properties| properties.get(BRANCH_ARGUMENT))
+            .is_some()
+    }
+
+    #[test]
+    fn branch_argument_tools_are_live_tools_without_a_branch_param_of_their_own() {
+        let router = McpServer::tool_router();
+        for name in BRANCH_ARGUMENT_TOOLS {
+            let tool = router
+                .get(name)
+                .unwrap_or_else(|| panic!("{name} is in BRANCH_ARGUMENT_TOOLS but is not a tool"));
+            assert!(
+                !has_branch_property(tool),
+                "{name} already declares `branch`; the injected argument would shadow it"
+            );
+        }
+    }
+
+    #[test]
+    fn only_branch_argument_tools_advertise_a_branch_argument() {
+        for tool in with_branch_argument(McpServer::tool_router()).list_all() {
+            let name = tool.name.as_ref();
+            if name == "list_changesets" {
+                continue; // Its own `branch` filters the log; the RPC ignores the header.
+            }
+            assert_eq!(
+                has_branch_property(&tool),
+                BRANCH_ARGUMENT_TOOLS.contains(&name),
+                "{name}"
+            );
+        }
+        for name in [
+            "create_branch",
+            "list_branches",
+            "delete_branch",
+            "diff_branch",
+            "merge_branch",
+            "update_branch",
+            "resolve_branch_entry",
+            "who_am_i",
+            "get_server_info",
+            "list_entity_kinds",
+        ] {
+            assert!(!BRANCH_ARGUMENT_TOOLS.contains(&name), "{name}");
+        }
+    }
+
+    fn call_with(
+        name: &'static str,
+        arguments: serde_json::Value,
+    ) -> rmcp::model::CallToolRequestParams {
+        let serde_json::Value::Object(arguments) = arguments else {
+            panic!("arguments must be an object");
+        };
+        rmcp::model::CallToolRequestParams::new(name).with_arguments(arguments)
+    }
+
+    #[test]
+    fn take_branch_argument_removes_it_from_branch_argument_tools_only() {
+        let mut request = call_with(
+            "put_entity_json",
+            serde_json::json!({"entity_json": "{}", "branch": "rework"}),
+        );
+        assert_eq!(
+            take_branch_argument(&mut request).unwrap().as_deref(),
+            Some("rework")
+        );
+        assert_eq!(
+            request.arguments.unwrap().keys().collect::<Vec<_>>(),
+            ["entity_json"]
+        );
+
+        let mut request = call_with("list_changesets", serde_json::json!({"branch": "rework"}));
+        assert_eq!(take_branch_argument(&mut request).unwrap(), None);
+        assert!(request.arguments.unwrap().contains_key("branch"));
+
+        let mut request = call_with("get_entity", serde_json::json!({"branch": null}));
+        assert_eq!(take_branch_argument(&mut request).unwrap(), None);
+
+        let mut request = call_with("get_entity", serde_json::json!({"branch": 7}));
+        let err = take_branch_argument(&mut request).unwrap_err();
+        assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);
     }
 }

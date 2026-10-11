@@ -20,8 +20,12 @@ client's role can call. A request without the header is refused unless the
 server allows anonymous callers; a header that is not a bearer token is
 rejected.
 
-Send `x-trogon-atlas-branch: <name>` on a request to scope its tool calls
-to that branch. Omit it for baseline.
+To work on a branch, pass `branch: "<name>"` on each tool call that reads
+or writes entities. A host can also send `x-trogon-atlas-branch: <name>` on
+every request. When a call has both, they must name the same branch, or the
+call is refused. With neither, the call works on baseline. The branch tools
+(`create_branch`, `diff_branch`, `merge_branch`, and the others) take the
+branch as `name` and do not take `branch`.
 
 For validation repairs, use the
 [repair playbook](../../../docs/how-to/repair-validation-findings.md), which
