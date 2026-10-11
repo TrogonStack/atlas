@@ -1,0 +1,14 @@
+auth: &auth
+  insecureAllowAnonymous: true
+spicedb: &spicedb
+  endpoint: http://spicedb:50051
+  presharedKey:
+    value: ci-preshared-key
+  sync:
+    enabled: true
+gitMirror: &gitMirror
+  enabled: true
+server:
+  auth: *auth
+  spicedb: *spicedb
+  gitMirror: *gitMirror

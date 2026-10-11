@@ -1,7 +1,13 @@
 // @generated
 /// Generated client implementations.
 pub mod event_model_service_client {
-    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
     ///
@@ -22,10 +28,10 @@ pub mod event_model_service_client {
     }
     impl<T> EventModelServiceClient<T>
     where
-        T: tonic::client::GrpcService<tonic::body::BoxBody>,
+        T: tonic::client::GrpcService<tonic::body::Body>,
         T::Error: Into<StdError>,
-        T::ResponseBody: Body<Data = Bytes> + Send + 'static,
-        <T::ResponseBody as Body>::Error: Into<StdError> + Send,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
     {
         pub fn new(inner: T) -> Self {
             let inner = tonic::client::Grpc::new(inner);
@@ -43,14 +49,14 @@ pub mod event_model_service_client {
             F: tonic::service::Interceptor,
             T::ResponseBody: Default,
             T: tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
+                http::Request<tonic::body::Body>,
                 Response = http::Response<
-                    <T as tonic::client::GrpcService<tonic::body::BoxBody>>::ResponseBody,
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
                 >,
             >,
             <T as tonic::codegen::Service<
-                http::Request<tonic::body::BoxBody>,
-            >>::Error: Into<StdError> + Send + Sync,
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
         {
             EventModelServiceClient::new(InterceptedService::new(inner, interceptor))
         }
@@ -99,12 +105,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetServerInfo",
             );
@@ -130,12 +135,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListNamespaces",
             );
@@ -160,12 +164,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/WhoAmI",
             );
@@ -194,12 +197,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/RegisterNamespace",
             );
@@ -225,12 +227,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/MoveNamespace",
             );
@@ -258,12 +259,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSnapshotId",
             );
@@ -290,12 +290,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntity",
             );
@@ -321,12 +320,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BatchGetEntities",
             );
@@ -353,12 +351,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntities",
             );
@@ -384,12 +381,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/SearchEntities",
             );
@@ -416,12 +412,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListVersions",
             );
@@ -447,12 +442,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetLatestVersion",
             );
@@ -478,12 +472,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSupersessionChain",
             );
@@ -510,12 +503,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetIncomingReferences",
             );
@@ -541,12 +533,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetOutgoingReferences",
             );
@@ -573,12 +564,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetImpact",
             );
@@ -610,12 +600,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/RetargetReferences",
             );
@@ -642,12 +631,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSliceProjection",
             );
@@ -673,12 +661,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetStoryboardProjection",
             );
@@ -704,12 +691,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEventModelProjection",
             );
@@ -737,12 +723,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExtractSubgraph",
             );
@@ -769,12 +754,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DiffEntities",
             );
@@ -802,12 +786,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/PutEntity",
             );
@@ -833,12 +816,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteEntity",
             );
@@ -864,12 +846,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BatchMutate",
             );
@@ -896,12 +877,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListChanges",
             );
@@ -933,12 +913,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/StreamChanges",
             );
@@ -967,12 +946,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListChangesets",
             );
@@ -998,12 +976,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetChangeset",
             );
@@ -1030,12 +1007,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntityHistory",
             );
@@ -1061,12 +1037,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/RevertChangeset",
             );
@@ -1094,12 +1069,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetOperation",
             );
@@ -1126,12 +1100,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ValidateEventModel",
             );
@@ -1161,12 +1134,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListValidationRules",
             );
@@ -1193,12 +1165,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ValidateProject",
             );
@@ -1226,12 +1197,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteByQuery",
             );
@@ -1258,12 +1228,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntityKinds",
             );
@@ -1291,12 +1260,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntitiesByDomain",
             );
@@ -1324,12 +1292,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/InferDataFlow",
             );
@@ -1355,12 +1322,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CheckInformationCompleteness",
             );
@@ -1388,12 +1354,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CreateBranch",
             );
@@ -1419,12 +1384,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListBranches",
             );
@@ -1450,12 +1414,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteBranch",
             );
@@ -1484,12 +1447,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DiffBranch",
             );
@@ -1515,12 +1477,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/MergeBranch",
             );
@@ -1546,12 +1507,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UpdateBranch",
             );
@@ -1577,12 +1537,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ResolveBranchEntry",
             );
@@ -1609,12 +1568,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CompileTypeLibrary",
             );
@@ -1640,12 +1598,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ResolveType",
             );
@@ -1671,12 +1628,11 @@ pub mod event_model_service_client {
                 .ready()
                 .await
                 .map_err(|e| {
-                    tonic::Status::new(
-                        tonic::Code::Unknown,
+                    tonic::Status::unknown(
                         format!("Service was not ready: {}", e.into()),
                     )
                 })?;
-            let codec = tonic::codec::ProstCodec::default();
+            let codec = tonic_prost::ProstCodec::default();
             let path = http::uri::PathAndQuery::from_static(
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetTypeLibraryDescriptorSet",
             );
@@ -1694,11 +1650,17 @@ pub mod event_model_service_client {
 }
 /// Generated server implementations.
 pub mod event_model_service_server {
-    #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
     use tonic::codegen::*;
     /// Generated trait containing gRPC methods that should be implemented for use with EventModelServiceServer.
     #[async_trait]
-    pub trait EventModelService: Send + Sync + 'static {
+    pub trait EventModelService: std::marker::Send + std::marker::Sync + 'static {
         /** Bootstrap. Clients SHOULD call GetServerInfo on connect to learn
  which optional features and limits apply (Decision #22).
 */
@@ -1938,7 +1900,7 @@ pub mod event_model_service_server {
                     tonic::Status,
                 >,
             >
-            + Send
+            + std::marker::Send
             + 'static;
         /** Server-streaming change feed for non-MCP consumers. Same data as
  ListChanges, push semantics. MCP adapters should prefer ListChanges.
@@ -2162,14 +2124,14 @@ pub mod event_model_service_server {
     }
     ///
     #[derive(Debug)]
-    pub struct EventModelServiceServer<T: EventModelService> {
+    pub struct EventModelServiceServer<T> {
         inner: Arc<T>,
         accept_compression_encodings: EnabledCompressionEncodings,
         send_compression_encodings: EnabledCompressionEncodings,
         max_decoding_message_size: Option<usize>,
         max_encoding_message_size: Option<usize>,
     }
-    impl<T: EventModelService> EventModelServiceServer<T> {
+    impl<T> EventModelServiceServer<T> {
         pub fn new(inner: T) -> Self {
             Self::from_arc(Arc::new(inner))
         }
@@ -2223,10 +2185,10 @@ pub mod event_model_service_server {
     impl<T, B> tonic::codegen::Service<http::Request<B>> for EventModelServiceServer<T>
     where
         T: EventModelService,
-        B: Body + Send + 'static,
-        B::Error: Into<StdError> + Send + 'static,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
     {
-        type Response = http::Response<tonic::body::BoxBody>;
+        type Response = http::Response<tonic::body::Body>;
         type Error = std::convert::Infallible;
         type Future = BoxFuture<Self::Response, Self::Error>;
         fn poll_ready(
@@ -2268,7 +2230,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetServerInfoSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2314,7 +2276,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListNamespacesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2359,7 +2321,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = WhoAmISvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2408,7 +2370,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RegisterNamespaceSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2454,7 +2416,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = MoveNamespaceSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2500,7 +2462,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetSnapshotIdSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2545,7 +2507,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetEntitySvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2594,7 +2556,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = BatchGetEntitiesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2640,7 +2602,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListEntitiesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2686,7 +2648,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SearchEntitiesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2732,7 +2694,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListVersionsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2781,7 +2743,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetLatestVersionSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2830,7 +2792,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetSupersessionChainSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2879,7 +2841,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetIncomingReferencesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2928,7 +2890,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetOutgoingReferencesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -2973,7 +2935,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetImpactSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3022,7 +2984,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RetargetReferencesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3071,7 +3033,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetSliceProjectionSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3122,7 +3084,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetStoryboardProjectionSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3173,7 +3135,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetEventModelProjectionSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3219,7 +3181,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ExtractSubgraphSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3265,7 +3227,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DiffEntitiesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3310,7 +3272,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = PutEntitySvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3356,7 +3318,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DeleteEntitySvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3402,7 +3364,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = BatchMutateSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3448,7 +3410,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListChangesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3495,7 +3457,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = StreamChangesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3541,7 +3503,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListChangesetsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3587,7 +3549,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetChangesetSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3636,7 +3598,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetEntityHistorySvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3682,7 +3644,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RevertChangesetSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3728,7 +3690,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetOperationSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3777,7 +3739,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ValidateEventModelSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3826,7 +3788,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListValidationRulesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3872,7 +3834,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ValidateProjectSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3918,7 +3880,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DeleteByQuerySvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -3964,7 +3926,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListEntityKindsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4013,7 +3975,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListEntitiesByDomainSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4059,7 +4021,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = InferDataFlowSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4113,7 +4075,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CheckInformationCompletenessSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4159,7 +4121,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CreateBranchSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4205,7 +4167,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListBranchesSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4251,7 +4213,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DeleteBranchSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4296,7 +4258,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = DiffBranchSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4342,7 +4304,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = MergeBranchSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4388,7 +4350,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = UpdateBranchSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4437,7 +4399,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ResolveBranchEntrySvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4486,7 +4448,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = CompileTypeLibrarySvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4532,7 +4494,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ResolveTypeSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4586,7 +4548,7 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetTypeLibraryDescriptorSetSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
+                        let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
                                 accept_compression_encodings,
@@ -4603,23 +4565,27 @@ pub mod event_model_service_server {
                 }
                 _ => {
                     Box::pin(async move {
-                        Ok(
-                            http::Response::builder()
-                                .status(200)
-                                .header("grpc-status", tonic::Code::Unimplemented as i32)
-                                .header(
-                                    http::header::CONTENT_TYPE,
-                                    tonic::metadata::GRPC_CONTENT_TYPE,
-                                )
-                                .body(empty_body())
-                                .unwrap(),
-                        )
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
                     })
                 }
             }
         }
     }
-    impl<T: EventModelService> Clone for EventModelServiceServer<T> {
+    impl<T> Clone for EventModelServiceServer<T> {
         fn clone(&self) -> Self {
             let inner = self.inner.clone();
             Self {
@@ -4631,8 +4597,9 @@ pub mod event_model_service_server {
             }
         }
     }
-    impl<T: EventModelService> tonic::server::NamedService
-    for EventModelServiceServer<T> {
-        const NAME: &'static str = "trogonatlas.api.eventmodel.v1alpha1.EventModelService";
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "trogonatlas.api.eventmodel.v1alpha1.EventModelService";
+    impl<T> tonic::server::NamedService for EventModelServiceServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
     }
 }

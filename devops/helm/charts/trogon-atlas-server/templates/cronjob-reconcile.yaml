@@ -119,10 +119,14 @@ spec:
                 {{- toYaml . | nindent 16 }}
               {{- end }}
               volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
                 - name: git-mirror
                   mountPath: /var/lib/trogon-atlas/mirror
                   readOnly: true
           volumes:
+            - name: tmp
+              emptyDir: {}
             - name: git-mirror
               persistentVolumeClaim:
                 claimName: {{ default (printf "%s-mirror" (include "trogon-atlas-server.fullname" .)) $server.gitMirror.persistence.existingClaim }}

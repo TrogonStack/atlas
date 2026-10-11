@@ -8,80 +8,67 @@
 /// EventExample/CommandExample/ReadModelExample, inside TypeRef, etc.).
 /// Where a connection between entities can carry data (slice endpoints,
 /// storyboard entry/outcome), the schema uses Edge messages instead.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadModelRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProcessorRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UiRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ScreenRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PersonaRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SwimlaneRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExternalSystemRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DomainRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SubdomainRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BoundedContextRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TermRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -91,8 +78,7 @@ pub struct TermRef {
 /// typed Refs (EventRef, CommandRef, …) remain the in-graph pointer type
 /// because they prevent kind confusion at write time. EntityRef is the
 /// read-time uniform handle.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EntityRef {
     #[prost(enumeration="EntityKind", tag="1")]
     pub kind: i32,
@@ -144,36 +130,36 @@ impl EntityKind {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            EntityKind::Unspecified => "ENTITY_KIND_UNSPECIFIED",
-            EntityKind::Event => "ENTITY_KIND_EVENT",
-            EntityKind::Command => "ENTITY_KIND_COMMAND",
-            EntityKind::ReadModel => "ENTITY_KIND_READ_MODEL",
-            EntityKind::Processor => "ENTITY_KIND_PROCESSOR",
-            EntityKind::Ui => "ENTITY_KIND_UI",
-            EntityKind::Persona => "ENTITY_KIND_PERSONA",
-            EntityKind::Swimlane => "ENTITY_KIND_SWIMLANE",
-            EntityKind::CommandSlice => "ENTITY_KIND_COMMAND_SLICE",
-            EntityKind::ReadModelSlice => "ENTITY_KIND_READ_MODEL_SLICE",
-            EntityKind::AutomationSlice => "ENTITY_KIND_AUTOMATION_SLICE",
-            EntityKind::Storyboard => "ENTITY_KIND_STORYBOARD",
-            EntityKind::EventModel => "ENTITY_KIND_EVENT_MODEL",
-            EntityKind::Component => "ENTITY_KIND_COMPONENT",
-            EntityKind::ExternalSystem => "ENTITY_KIND_EXTERNAL_SYSTEM",
-            EntityKind::Tracker => "ENTITY_KIND_TRACKER",
-            EntityKind::BoundedContext => "ENTITY_KIND_BOUNDED_CONTEXT",
-            EntityKind::Domain => "ENTITY_KIND_DOMAIN",
-            EntityKind::Subdomain => "ENTITY_KIND_SUBDOMAIN",
-            EntityKind::Schema => "ENTITY_KIND_SCHEMA",
-            EntityKind::Project => "ENTITY_KIND_PROJECT",
-            EntityKind::Screen => "ENTITY_KIND_SCREEN",
-            EntityKind::Term => "ENTITY_KIND_TERM",
-            EntityKind::Ambiguity => "ENTITY_KIND_AMBIGUITY",
-            EntityKind::UiSlice => "ENTITY_KIND_UI_SLICE",
-            EntityKind::ServiceLevelIndicator => "ENTITY_KIND_SERVICE_LEVEL_INDICATOR",
-            EntityKind::ServiceLevelObjective => "ENTITY_KIND_SERVICE_LEVEL_OBJECTIVE",
-            EntityKind::AlertPolicy => "ENTITY_KIND_ALERT_POLICY",
-            EntityKind::AlertNotificationTarget => "ENTITY_KIND_ALERT_NOTIFICATION_TARGET",
-            EntityKind::TypeLibrary => "ENTITY_KIND_TYPE_LIBRARY",
+            Self::Unspecified => "ENTITY_KIND_UNSPECIFIED",
+            Self::Event => "ENTITY_KIND_EVENT",
+            Self::Command => "ENTITY_KIND_COMMAND",
+            Self::ReadModel => "ENTITY_KIND_READ_MODEL",
+            Self::Processor => "ENTITY_KIND_PROCESSOR",
+            Self::Ui => "ENTITY_KIND_UI",
+            Self::Persona => "ENTITY_KIND_PERSONA",
+            Self::Swimlane => "ENTITY_KIND_SWIMLANE",
+            Self::CommandSlice => "ENTITY_KIND_COMMAND_SLICE",
+            Self::ReadModelSlice => "ENTITY_KIND_READ_MODEL_SLICE",
+            Self::AutomationSlice => "ENTITY_KIND_AUTOMATION_SLICE",
+            Self::Storyboard => "ENTITY_KIND_STORYBOARD",
+            Self::EventModel => "ENTITY_KIND_EVENT_MODEL",
+            Self::Component => "ENTITY_KIND_COMPONENT",
+            Self::ExternalSystem => "ENTITY_KIND_EXTERNAL_SYSTEM",
+            Self::Tracker => "ENTITY_KIND_TRACKER",
+            Self::BoundedContext => "ENTITY_KIND_BOUNDED_CONTEXT",
+            Self::Domain => "ENTITY_KIND_DOMAIN",
+            Self::Subdomain => "ENTITY_KIND_SUBDOMAIN",
+            Self::Schema => "ENTITY_KIND_SCHEMA",
+            Self::Project => "ENTITY_KIND_PROJECT",
+            Self::Screen => "ENTITY_KIND_SCREEN",
+            Self::Term => "ENTITY_KIND_TERM",
+            Self::Ambiguity => "ENTITY_KIND_AMBIGUITY",
+            Self::UiSlice => "ENTITY_KIND_UI_SLICE",
+            Self::ServiceLevelIndicator => "ENTITY_KIND_SERVICE_LEVEL_INDICATOR",
+            Self::ServiceLevelObjective => "ENTITY_KIND_SERVICE_LEVEL_OBJECTIVE",
+            Self::AlertPolicy => "ENTITY_KIND_ALERT_POLICY",
+            Self::AlertNotificationTarget => "ENTITY_KIND_ALERT_NOTIFICATION_TARGET",
+            Self::TypeLibrary => "ENTITY_KIND_TYPE_LIBRARY",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -215,16 +201,14 @@ impl EntityKind {
 }
 /// Generic reference to any type definition. Used by FieldSpec when a payload
 /// field references another type and the kind is unknown ahead of time.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeRef {
     #[prost(oneof="type_ref::Ref", tags="1, 2, 3, 4, 5, 6, 7")]
     pub r#ref: ::core::option::Option<type_ref::Ref>,
 }
 /// Nested message and enum types in `TypeRef`.
 pub mod type_ref {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Ref {
         #[prost(message, tag="1")]
         Event(super::EventRef),
@@ -247,7 +231,6 @@ pub mod type_ref {
 /// kind carries its own configuration message and can grow parameters
 /// without breaking anything. A bare enum cannot say `uuid { version: 5 }`;
 /// this can. Empty configs cost zero bytes on the wire.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FieldType {
     #[prost(oneof="field_type::Kind", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10")]
@@ -255,28 +238,22 @@ pub struct FieldType {
 }
 /// Nested message and enum types in `FieldType`.
 pub mod field_type {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StringType {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BoolType {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct IntType {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct FloatType {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct TimestampType {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UuidType {
         /// 0 = unspecified. 5 = name-derived (the derivation itself is
         /// registered by name in a Uuidv5IdentityAnnotation on the owning
@@ -284,30 +261,25 @@ pub mod field_type {
         #[prost(uint32, tag="1")]
         pub version: u32,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BytesType {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EnumType {
         #[prost(string, repeated, tag="1")]
         pub values: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ObjectType {
         #[prost(message, repeated, tag="1")]
         pub fields: ::prost::alloc::vec::Vec<super::FieldSpec>,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct RefType {
         #[prost(message, optional, tag="1")]
         pub r#ref: ::core::option::Option<super::TypeRef>,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Kind {
         #[prost(message, tag="1")]
         String(StringType),
@@ -331,7 +303,6 @@ pub mod field_type {
         Ref(RefType),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct FieldSpec {
     #[prost(string, tag="1")]
@@ -363,7 +334,6 @@ pub struct FieldSpec {
 /// The `schema` Any may instead hold a message declared by a
 /// TypeLibrary in the entity's namespace; the store keeps that
 /// library's proto source text and compiles it on demand.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Schema {
     /// Optional identity. When set, this Schema can also exist as a
@@ -401,14 +371,14 @@ impl TypeKind {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            TypeKind::Unspecified => "TYPE_KIND_UNSPECIFIED",
-            TypeKind::Event => "TYPE_KIND_EVENT",
-            TypeKind::Command => "TYPE_KIND_COMMAND",
-            TypeKind::ReadModel => "TYPE_KIND_READ_MODEL",
-            TypeKind::Processor => "TYPE_KIND_PROCESSOR",
-            TypeKind::Ui => "TYPE_KIND_UI",
-            TypeKind::Persona => "TYPE_KIND_PERSONA",
-            TypeKind::Swimlane => "TYPE_KIND_SWIMLANE",
+            Self::Unspecified => "TYPE_KIND_UNSPECIFIED",
+            Self::Event => "TYPE_KIND_EVENT",
+            Self::Command => "TYPE_KIND_COMMAND",
+            Self::ReadModel => "TYPE_KIND_READ_MODEL",
+            Self::Processor => "TYPE_KIND_PROCESSOR",
+            Self::Ui => "TYPE_KIND_UI",
+            Self::Persona => "TYPE_KIND_PERSONA",
+            Self::Swimlane => "TYPE_KIND_SWIMLANE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -437,7 +407,6 @@ impl TypeKind {
 /// Read models, UIs, processors, and personas are cross-cutting and do not
 /// belong to a stream -- they have their own dedicated bands on a diagram and
 /// do not reference a swim lane.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Swimlane {
     #[prost(message, optional, tag="1")]
@@ -501,8 +470,7 @@ pub struct Swimlane {
 }
 /// Nested message and enum types in `Swimlane`.
 pub mod swimlane {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Transition {
         #[prost(message, optional, tag="1")]
         pub after: ::core::option::Option<super::EventRef>,
@@ -513,8 +481,7 @@ pub mod swimlane {
     pub mod transition {
         /// A Next is a real connection (the fork's branch), so like every other
         /// Edge it carries design data: the guard doc plus Any annotations.
-        #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+        #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Next {
             #[prost(message, optional, tag="1")]
             pub event: ::core::option::Option<super::super::EventRef>,
@@ -525,7 +492,6 @@ pub mod swimlane {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Event {
     #[prost(message, optional, tag="1")]
@@ -550,7 +516,6 @@ pub struct Event {
     #[prost(message, optional, tag="8")]
     pub schema: ::core::option::Option<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Command {
     #[prost(message, optional, tag="1")]
@@ -570,7 +535,6 @@ pub struct Command {
     #[prost(message, optional, tag="8")]
     pub schema: ::core::option::Option<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadModel {
     #[prost(message, optional, tag="1")]
@@ -608,8 +572,7 @@ pub struct ReadModel {
 }
 /// Nested message and enum types in `ReadModel`.
 pub mod read_model {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ExternalSource {
         /// the documented boundary this feed comes from
         #[prost(message, optional, tag="1")]
@@ -619,7 +582,6 @@ pub mod read_model {
         pub descriptor: ::prost::alloc::string::String,
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Processor {
     #[prost(message, optional, tag="1")]
@@ -643,7 +605,6 @@ pub struct Processor {
     #[prost(message, repeated, tag="7")]
     pub calls: ::prost::alloc::vec::Vec<ExternalSystemRef>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ui {
     #[prost(message, optional, tag="1")]
@@ -676,8 +637,7 @@ pub struct Ui {
 }
 /// Nested message and enum types in `UI`.
 pub mod ui {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Transition {
         #[prost(message, optional, tag="1")]
         pub to: ::core::option::Option<super::UiRef>,
@@ -688,16 +648,14 @@ pub mod ui {
         pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ScreenSlotRef {
     #[prost(message, optional, tag="1")]
     pub screen: ::core::option::Option<ScreenRef>,
     #[prost(string, tag="2")]
     pub slot: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Slot {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
@@ -706,7 +664,6 @@ pub struct Slot {
     #[prost(bool, tag="3")]
     pub required: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Screen {
     #[prost(message, optional, tag="1")]
@@ -755,7 +712,6 @@ pub struct Screen {
 /// A Persona does NOT belong to a Swimlane. Swimlanes here are event-sourcing
 /// streams (a server-side concept). Personas are on the human/UI side of the
 /// model and are cross-cutting across streams.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Persona {
     #[prost(message, optional, tag="1")]
@@ -777,7 +733,6 @@ pub struct Persona {
 /// identified BY the namespace (id.slug == id.namespace). Carries the
 /// context charter -- what this boundary owns, its links and metadata.
 /// Event models are curations within it; this is the root document.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BoundedContext {
     /// convention: slug == namespace, making it unique per context
@@ -806,8 +761,7 @@ pub struct BoundedContext {
 }
 /// Nested message and enum types in `BoundedContext`.
 pub mod bounded_context {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ContextRelationship {
         #[prost(message, optional, tag="1")]
         pub upstream: ::core::option::Option<super::BoundedContextRef>,
@@ -841,11 +795,11 @@ pub mod bounded_context {
             /// (if the ProtoBuf definition does not change) and safe for programmatic use.
             pub fn as_str_name(&self) -> &'static str {
                 match self {
-                    Intent::Unspecified => "INTENT_UNSPECIFIED",
-                    Intent::CustomerSupplier => "INTENT_CUSTOMER_SUPPLIER",
-                    Intent::Conformist => "INTENT_CONFORMIST",
-                    Intent::Partnership => "INTENT_PARTNERSHIP",
-                    Intent::SeparateWays => "INTENT_SEPARATE_WAYS",
+                    Self::Unspecified => "INTENT_UNSPECIFIED",
+                    Self::CustomerSupplier => "INTENT_CUSTOMER_SUPPLIER",
+                    Self::Conformist => "INTENT_CONFORMIST",
+                    Self::Partnership => "INTENT_PARTNERSHIP",
+                    Self::SeparateWays => "INTENT_SEPARATE_WAYS",
                 }
             }
             /// Creates an enum from field names used in the ProtoBuf definition.
@@ -864,7 +818,6 @@ pub mod bounded_context {
 }
 /// The business itself -- the container word. Usually exactly one. Pure
 /// knowledge: no behavior, no slices, no time.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Domain {
     /// convention: slug == namespace of the problem space
@@ -907,7 +860,6 @@ pub struct Domain {
 ///      is not refused at the mutation boundary. Validators (PROJECT_SLUG_MISMATCH,
 ///      DOMAIN_MISSING_PROJECT, BC_PROJECT_COLLISION) surface hygiene violations
 ///      post-write; a storage-layer rework is required for general enforcement.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Project {
     #[prost(message, optional, tag="1")]
@@ -925,13 +877,11 @@ pub struct Project {
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProjectRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Term {
     /// namespace = bounded context, slug = the word
@@ -950,7 +900,6 @@ pub struct Term {
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ambiguity {
     /// problem-space namespace, e.g. marketplace/review-collision
@@ -985,9 +934,9 @@ pub mod ambiguity {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Kind::Unspecified => "KIND_UNSPECIFIED",
-                Kind::Homonym => "KIND_HOMONYM",
-                Kind::Synonym => "KIND_SYNONYM",
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Homonym => "KIND_HOMONYM",
+                Self::Synonym => "KIND_SYNONYM",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1015,10 +964,10 @@ pub mod ambiguity {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Ruling::Unspecified => "RULING_UNSPECIFIED",
-                Ruling::Deliberate => "RULING_DELIBERATE",
-                Ruling::Rename => "RULING_RENAME",
-                Ruling::Merge => "RULING_MERGE",
+                Self::Unspecified => "RULING_UNSPECIFIED",
+                Self::Deliberate => "RULING_DELIBERATE",
+                Self::Rename => "RULING_RENAME",
+                Self::Merge => "RULING_MERGE",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1037,7 +986,6 @@ pub mod ambiguity {
 /// exists whether or not software does. The classification is the entire
 /// point: it is a budget document disguised as architecture (who builds it,
 /// build vs buy, what quality bar, rewrite vs tolerate).
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Subdomain {
     #[prost(message, optional, tag="1")]
@@ -1075,10 +1023,10 @@ pub mod subdomain {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Classification::Unspecified => "CLASSIFICATION_UNSPECIFIED",
-                Classification::Core => "CLASSIFICATION_CORE",
-                Classification::Supporting => "CLASSIFICATION_SUPPORTING",
-                Classification::Generic => "CLASSIFICATION_GENERIC",
+                Self::Unspecified => "CLASSIFICATION_UNSPECIFIED",
+                Self::Core => "CLASSIFICATION_CORE",
+                Self::Supporting => "CLASSIFICATION_SUPPORTING",
+                Self::Generic => "CLASSIFICATION_GENERIC",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1100,7 +1048,6 @@ pub mod subdomain {
 /// documented. Members are a curated listing (same pattern as EventModel:
 /// flat keyspace stays canonical, the component only points). Grouping is
 /// implementation intent and never affects model-semantics validation.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Component {
     #[prost(message, optional, tag="1")]
@@ -1125,7 +1072,6 @@ pub struct Component {
 /// it exposes, the tech used to integrate with it. ReadModels with an
 /// ExternalSource point here, so every external feed shares one documented
 /// source of truth about the system behind it.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExternalSystem {
     #[prost(message, optional, tag="1")]
@@ -1150,7 +1096,6 @@ pub struct ExternalSystem {
 /// models, components, whole storyboards), and several trackers can overlay
 /// the same model (per team, per milestone) without touching each other.
 /// "What needs work?" = ListEntities(kind=TRACKER) + read the items.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Tracker {
     #[prost(message, optional, tag="1")]
@@ -1168,8 +1113,7 @@ pub struct Tracker {
 }
 /// Nested message and enum types in `Tracker`.
 pub mod tracker {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Item {
         /// the model entity this status is ABOUT
         #[prost(message, optional, tag="1")]
@@ -1202,12 +1146,12 @@ impl TrackStatus {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            TrackStatus::Unspecified => "TRACK_STATUS_UNSPECIFIED",
-            TrackStatus::Todo => "TRACK_STATUS_TODO",
-            TrackStatus::InProgress => "TRACK_STATUS_IN_PROGRESS",
-            TrackStatus::Review => "TRACK_STATUS_REVIEW",
-            TrackStatus::Blocked => "TRACK_STATUS_BLOCKED",
-            TrackStatus::Done => "TRACK_STATUS_DONE",
+            Self::Unspecified => "TRACK_STATUS_UNSPECIFIED",
+            Self::Todo => "TRACK_STATUS_TODO",
+            Self::InProgress => "TRACK_STATUS_IN_PROGRESS",
+            Self::Review => "TRACK_STATUS_REVIEW",
+            Self::Blocked => "TRACK_STATUS_BLOCKED",
+            Self::Done => "TRACK_STATUS_DONE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1229,7 +1173,6 @@ impl TrackStatus {
 /// attached to the connection itself: field mappings, conditions under
 /// which an event is emitted, projection rules, validation, etc. Different
 /// tools can attach their own annotation types without conflicting.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EventEdge {
     #[prost(message, optional, tag="1")]
@@ -1239,7 +1182,6 @@ pub struct EventEdge {
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandEdge {
     #[prost(message, optional, tag="1")]
@@ -1249,7 +1191,6 @@ pub struct CommandEdge {
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadModelEdge {
     #[prost(message, optional, tag="1")]
@@ -1259,7 +1200,6 @@ pub struct ReadModelEdge {
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProcessorEdge {
     #[prost(message, optional, tag="1")]
@@ -1269,7 +1209,6 @@ pub struct ProcessorEdge {
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UiEdge {
     #[prost(message, optional, tag="1")]
@@ -1279,7 +1218,6 @@ pub struct UiEdge {
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PersonaEdge {
     #[prost(message, optional, tag="1")]
@@ -1306,24 +1244,21 @@ pub struct PersonaEdge {
 /// type's FieldSpec names. Tools accept both forms, discriminated by
 /// Any.type_url; Struct payloads graduate to generated messages without any
 /// schema change here.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventExample {
     #[prost(message, optional, tag="1")]
     pub event: ::core::option::Option<EventRef>,
     #[prost(message, optional, tag="2")]
     pub payload: ::core::option::Option<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommandExample {
     #[prost(message, optional, tag="1")]
     pub command: ::core::option::Option<CommandRef>,
     #[prost(message, optional, tag="2")]
     pub payload: ::core::option::Option<::prost_types::Any>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadModelExample {
     #[prost(message, optional, tag="1")]
     pub read_model: ::core::option::Option<ReadModelRef>,
@@ -1332,7 +1267,6 @@ pub struct ReadModelExample {
 }
 /// A set of events emitted at one step / scenario outcome. Wrapped so it can
 /// participate in a oneof.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmittedEvents {
     #[prost(message, repeated, tag="1")]
@@ -1340,8 +1274,7 @@ pub struct EmittedEvents {
 }
 /// A command rejected by a CommandSlice. reason_code is machine-readable
 /// (e.g. "ORDER_ALREADY_PLACED"); doc is the human explanation.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Rejection {
     #[prost(string, tag="1")]
     pub reason_code: ::prost::alloc::string::String,
@@ -1352,7 +1285,6 @@ pub struct Rejection {
 ///    Given: prior events on the relevant stream(s) that establish state.
 ///    When : this command is issued (with concrete payload).
 ///    Then : either events emitted, or the command is rejected with a reason.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandScenario {
     #[prost(string, tag="1")]
@@ -1374,8 +1306,7 @@ pub struct CommandScenario {
 }
 /// Nested message and enum types in `CommandScenario`.
 pub mod command_scenario {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Then {
         #[prost(message, tag="6")]
         Emit(super::EmittedEvents),
@@ -1388,7 +1319,6 @@ pub mod command_scenario {
 ///    Then: the read model is in this state.
 /// No Given -- the events are the When; the read model has no prior state of
 /// its own that isn't itself a projection of the same event history.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadModelScenario {
     #[prost(string, tag="1")]
@@ -1413,7 +1343,6 @@ pub struct ReadModelScenario {
 ///    Then : at most one command issued. Unset = "do nothing" (a valid
 ///           outcome that should be documented explicitly for at least one
 ///           scenario when relevant).
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AutomationScenario {
     #[prost(string, tag="1")]
@@ -1443,8 +1372,7 @@ pub struct AutomationScenario {
 ///    - an audit log discharging EVENT_UNOBSERVED with no UI yet
 ///    - a niche flow (cancel, dispute, refund) deferred to a future model
 ///    - a legacy entity kept for back-compat that no current flow touches
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OrphanAnnotation {
     /// Free-form explanation. Must be non-empty: silence is what the
     /// annotation is meant to replace.
@@ -1456,8 +1384,7 @@ pub struct OrphanAnnotation {
 /// book (click to cancel, click to view trades) or an admin dashboard
 /// (status display with action buttons). The doc explains why both roles
 /// genuinely co-locate on this physical surface.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MixedSurfaceAnnotation {
     #[prost(string, tag="1")]
     pub doc: ::prost::alloc::string::String,
@@ -1473,8 +1400,7 @@ pub struct MixedSurfaceAnnotation {
 /// with SharedConsumersAnnotation; the validator's
 /// READ_MODEL_MULTIPLE_AUTOMATIONS rule downgrades from Error to
 /// Info when this annotation is present and its doc is non-empty.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SharedConsumersAnnotation {
     /// Free-form explanation naming the consumers and why they share
     /// the same RM rather than each owning a per-consumer view.
@@ -1497,8 +1423,7 @@ pub struct SharedConsumersAnnotation {
 /// any entity whose id field is derived; codegen consumes it to emit the
 /// real identity options (e.g. an IdentityVersion enum with
 /// trogon.uuid.v1.enum_value format options).
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Uuidv5IdentityAnnotation {
     /// Registers the derived identity under this name; stream_id and other
     /// templates reference it as a plain placeholder, e.g. a swimlane with
@@ -1519,8 +1444,7 @@ pub struct Uuidv5IdentityAnnotation {
 /// Nested message and enum types in `Uuidv5IdentityAnnotation`.
 pub mod uuidv5_identity_annotation {
     /// UUIDv5 namespace, mirroring trogon.uuid.v1.Namespace.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Namespace {
         /// a UUID string used directly as the namespace
         #[prost(string, tag="1")]
@@ -1550,8 +1474,7 @@ pub mod uuidv5_identity_annotation {
 /// An empty `doc` covers nothing: silence without a reason is exactly what
 /// this annotation is meant to replace. The same stance applies to
 /// OrphanAnnotation. Always explain why staying back is deliberate.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PinnedRefAnnotation {
     /// Required. Explain why the slice intentionally pins the old version,
     /// e.g. "waiting for the v3 command stabilization window to close before
@@ -1574,8 +1497,7 @@ pub struct PinnedRefAnnotation {
 /// Suppresses EVENT_FIELD_UNSOURCED and AUTOMATION_COMMAND_FIELD_UNSOURCED
 /// for the annotated field. The doc must be non-empty: silence is what
 /// the annotation is meant to replace.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DerivedFieldAnnotation {
     /// Required. Explain where the runtime gets this value, e.g.
     /// "now() at activity start" or "Temporal workflow_id from the
@@ -1608,12 +1530,12 @@ pub mod derived_field_annotation {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Kind::Unspecified => "KIND_UNSPECIFIED",
-                Kind::Timestamp => "KIND_TIMESTAMP",
-                Kind::Uuid => "KIND_UUID",
-                Kind::Sequence => "KIND_SEQUENCE",
-                Kind::Context => "KIND_CONTEXT",
-                Kind::Other => "KIND_OTHER",
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Timestamp => "KIND_TIMESTAMP",
+                Self::Uuid => "KIND_UUID",
+                Self::Sequence => "KIND_SEQUENCE",
+                Self::Context => "KIND_CONTEXT",
+                Self::Other => "KIND_OTHER",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1634,8 +1556,7 @@ pub mod derived_field_annotation {
 /// person. Events are immutable, so a personal-data field on an event needs a
 /// declared way to make the value unrecoverable when the person asks to be
 /// forgotten.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PersonalDataAnnotation {
     /// Required. What personal data this is and whose, e.g. "customer's
     /// shipping address".
@@ -1671,11 +1592,11 @@ pub mod personal_data_annotation {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Erasure::Unspecified => "ERASURE_UNSPECIFIED",
-                Erasure::CryptoShredding => "ERASURE_CRYPTO_SHREDDING",
-                Erasure::ExternalReference => "ERASURE_EXTERNAL_REFERENCE",
-                Erasure::ProjectionDelete => "ERASURE_PROJECTION_DELETE",
-                Erasure::RetentionExpiry => "ERASURE_RETENTION_EXPIRY",
+                Self::Unspecified => "ERASURE_UNSPECIFIED",
+                Self::CryptoShredding => "ERASURE_CRYPTO_SHREDDING",
+                Self::ExternalReference => "ERASURE_EXTERNAL_REFERENCE",
+                Self::ProjectionDelete => "ERASURE_PROJECTION_DELETE",
+                Self::RetentionExpiry => "ERASURE_RETENTION_EXPIRY",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1697,8 +1618,7 @@ pub mod personal_data_annotation {
 /// tribal knowledge buried in a component's comments. Purely descriptive:
 /// unlike OrphanAnnotation or DerivedFieldAnnotation, no validator rule
 /// keys off this message today.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct FailureModeAnnotation {
     /// Required. What causes it, e.g. "network disconnect", "load timeout".
     #[prost(string, tag="1")]
@@ -1722,7 +1642,6 @@ pub struct FailureModeAnnotation {
 /// Slices carry NO delivery status: project management layers ON TOP of the
 /// design model, never inside it (Decision #25). Status lives in Tracker
 /// entities that point at slices (or any entity) from the outside.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandSlice {
     #[prost(message, optional, tag="1")]
@@ -1751,7 +1670,6 @@ pub struct CommandSlice {
 /// The projection alone. Who DISPLAYS the read model is a UiSlice and who
 /// ACTS on it is an AutomationSlice; both consume this slice's output by
 /// reference, so a projection carries no consumer of its own.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadModelSlice {
     #[prost(message, optional, tag="1")]
@@ -1793,7 +1711,6 @@ pub struct ReadModelSlice {
 /// External-system integration ("translation") is not a separate slice kind:
 /// the external input is modeled as a ReadModel with an ExternalSource, and
 /// the automation slice consumes it like any other ReadModel.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AutomationSlice {
     #[prost(message, optional, tag="1")]
@@ -1832,7 +1749,6 @@ pub struct AutomationSlice {
 /// A screen shows everything it shows in one slice: `source_read_models` is
 /// repeated, so a screen rendering three read models is ONE UiSlice, not the
 /// same screen restated in three projections.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UiSlice {
     #[prost(message, optional, tag="1")]
@@ -1855,7 +1771,6 @@ pub struct UiSlice {
     #[prost(message, optional, tag="8")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Slice {
     #[prost(oneof="slice::Kind", tags="1, 2, 3, 4")]
@@ -1863,8 +1778,7 @@ pub struct Slice {
 }
 /// Nested message and enum types in `Slice`.
 pub mod slice {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Kind {
         #[prost(message, tag="1")]
         Command(super::CommandSlice),
@@ -1876,8 +1790,7 @@ pub mod slice {
         Ui(super::UiSlice),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SliceRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -1901,9 +1814,9 @@ impl ProjectionRole {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            ProjectionRole::Unspecified => "PROJECTION_ROLE_UNSPECIFIED",
-            ProjectionRole::Upsert => "PROJECTION_ROLE_UPSERT",
-            ProjectionRole::Delete => "PROJECTION_ROLE_DELETE",
+            Self::Unspecified => "PROJECTION_ROLE_UNSPECIFIED",
+            Self::Upsert => "PROJECTION_ROLE_UPSERT",
+            Self::Delete => "PROJECTION_ROLE_DELETE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1916,8 +1829,7 @@ impl ProjectionRole {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StoryboardRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -1929,7 +1841,6 @@ pub struct StoryboardRef {
 ///    - AutomationObserver covers processor-driven storyboards, including
 ///      external systems (ReadModel with ExternalSource) and schedules
 ///      (a Clock-style ReadModel).
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StoryboardEntry {
     /// what is being observed
@@ -1940,22 +1851,19 @@ pub struct StoryboardEntry {
 }
 /// Nested message and enum types in `StoryboardEntry`.
 pub mod storyboard_entry {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct HumanObserver {
         #[prost(message, optional, tag="1")]
         pub persona: ::core::option::Option<super::PersonaEdge>,
         #[prost(message, optional, tag="2")]
         pub ui: ::core::option::Option<super::UiEdge>,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AutomationObserver {
         #[prost(message, optional, tag="1")]
         pub processor: ::core::option::Option<super::ProcessorEdge>,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Observer {
         #[prost(message, tag="2")]
         Human(HumanObserver),
@@ -1971,7 +1879,6 @@ pub mod storyboard_entry {
 /// derived from Swimlane.transitions (the stream's lifecycle decides which
 /// outcome events have alternative successors, and which storyboards emit
 /// them). Storyboards stay pure narrative.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StoryboardOutcome {
     #[prost(message, repeated, tag="1")]
@@ -1982,7 +1889,6 @@ pub struct StoryboardOutcome {
 }
 /// One step in a trace, pinned to a slice in the storyboard, with concrete
 /// data appropriate to that slice's kind.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TraceStep {
     #[prost(message, optional, tag="1")]
@@ -1992,8 +1898,7 @@ pub struct TraceStep {
 }
 /// Nested message and enum types in `TraceStep`.
 pub mod trace_step {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Execution {
         #[prost(message, tag="2")]
         Command(super::CommandStepExec),
@@ -2004,7 +1909,6 @@ pub mod trace_step {
     }
 }
 /// Concrete execution of a CommandSlice step: the command issued + its result.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandStepExec {
     #[prost(message, optional, tag="1")]
@@ -2014,8 +1918,7 @@ pub struct CommandStepExec {
 }
 /// Nested message and enum types in `CommandStepExec`.
 pub mod command_step_exec {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Result {
         #[prost(message, tag="2")]
         Emit(super::EmittedEvents),
@@ -2026,8 +1929,7 @@ pub mod command_step_exec {
 /// Concrete execution of a ReadModelSlice step: the resulting read model
 /// state at this point in the trace. The events that produced this state are
 /// the emissions of earlier steps in the same trace.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadModelStepExec {
     #[prost(message, optional, tag="1")]
     pub state: ::core::option::Option<ReadModelExample>,
@@ -2035,7 +1937,6 @@ pub struct ReadModelStepExec {
 /// Concrete execution of an AutomationSlice step: the read model(s) the
 /// processor observed + the single command it issued. emitted is unset when
 /// the correct outcome was "do nothing".
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AutomationStepExec {
     #[prost(message, repeated, tag="1")]
@@ -2043,7 +1944,6 @@ pub struct AutomationStepExec {
     #[prost(message, optional, tag="2")]
     pub emitted: ::core::option::Option<CommandExample>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StoryboardTrace {
     #[prost(string, tag="1")]
@@ -2070,7 +1970,6 @@ pub struct StoryboardTrace {
 /// An ordered, left-to-right narrative of slices. In Event Modeling parlance,
 /// this is the "storyboard" that tells a coherent story (a feature, a user
 /// journey, an end-to-end scenario) across the model.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Storyboard {
     #[prost(message, optional, tag="1")]
@@ -2108,7 +2007,6 @@ pub struct Storyboard {
 /// Cross-model references are first-class: `members` may include EntityRefs
 /// from other namespaces. Tools rendering this model can ask the service to
 /// resolve cross-model refs (include_cross_model on the projection RPC).
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EventModel {
     #[prost(message, optional, tag="1")]
@@ -2126,38 +2024,32 @@ pub struct EventModel {
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ComponentRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventModelRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceLevelIndicatorRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceLevelObjectiveRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AlertPolicyRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AlertNotificationTargetRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -2166,7 +2058,6 @@ pub struct AlertNotificationTargetRef {
 /// the validator resolves against the model; there is deliberately no
 /// generic (from, to) pair, so a connection that does not exist in the
 /// graph cannot be expressed.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Connection {
     #[prost(oneof="connection::Kind", tags="1, 2, 3, 4, 5, 6")]
@@ -2175,8 +2066,7 @@ pub struct Connection {
 /// Nested message and enum types in `Connection`.
 pub mod connection {
     /// Command issued -> event appended. Resolves against a CommandSlice.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CommandHandling {
         #[prost(message, optional, tag="1")]
         pub command_slice: ::core::option::Option<super::SliceRef>,
@@ -2185,8 +2075,7 @@ pub mod connection {
         pub events: ::prost::alloc::vec::Vec<super::EventRef>,
     }
     /// Event appended -> read model row written. Resolves against a ReadModelSlice.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Projection {
         #[prost(message, optional, tag="1")]
         pub read_model_slice: ::core::option::Option<super::SliceRef>,
@@ -2195,22 +2084,19 @@ pub mod connection {
         pub source_events: ::prost::alloc::vec::Vec<super::EventRef>,
     }
     /// Read model changed -> processor issued its command. Resolves against an AutomationSlice.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Reaction {
         #[prost(message, optional, tag="1")]
         pub automation_slice: ::core::option::Option<super::SliceRef>,
     }
     /// Read model changed -> screen rendered. Resolves against a UiSlice.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Display {
         #[prost(message, optional, tag="1")]
         pub ui_slice: ::core::option::Option<super::SliceRef>,
     }
     /// Outbound call. The system must be listed in Processor.calls.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Integration {
         #[prost(message, optional, tag="1")]
         pub processor: ::core::option::Option<super::ProcessorRef>,
@@ -2219,8 +2105,7 @@ pub mod connection {
     }
     /// One instance travelling from a start event to an end event, possibly
     /// across chained storyboards (scope = EventModel then).
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Journey {
         #[prost(message, optional, tag="3")]
         pub start: ::core::option::Option<super::EventRef>,
@@ -2234,8 +2119,7 @@ pub mod connection {
     }
     /// Nested message and enum types in `Journey`.
     pub mod journey {
-        #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+        #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
         pub enum Scope {
             #[prost(message, tag="1")]
             Storyboard(super::super::StoryboardRef),
@@ -2243,8 +2127,7 @@ pub mod connection {
             EventModel(super::super::EventModelRef),
         }
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Kind {
         #[prost(message, tag="1")]
         CommandHandling(CommandHandling),
@@ -2263,8 +2146,7 @@ pub mod connection {
 /// Where the measurement comes from, as a logical pointer. The vendor
 /// binding (DataSource, query) lives in export configuration, never in the
 /// model (Decision #28).
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Signal {
     #[prost(oneof="signal::Source", tags="1, 2")]
     pub source: ::core::option::Option<signal::Source>,
@@ -2273,12 +2155,10 @@ pub struct Signal {
 pub mod signal {
     /// Derived from event store timestamps. Valid only when both ends of the
     /// connection are events or event-sourced writes.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EventTimestamps {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Telemetry {
         #[prost(enumeration="super::TelemetryKind", tag="1")]
         pub kind: i32,
@@ -2286,8 +2166,7 @@ pub mod signal {
         #[prost(string, tag="2")]
         pub name: ::prost::alloc::string::String,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Source {
         #[prost(message, tag="1")]
         EventTimestamps(EventTimestamps),
@@ -2296,7 +2175,6 @@ pub mod signal {
     }
 }
 /// OpenSLO kind: SLI.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceLevelIndicator {
     #[prost(message, optional, tag="1")]
@@ -2319,13 +2197,11 @@ pub struct ServiceLevelIndicator {
 /// Nested message and enum types in `ServiceLevelIndicator`.
 pub mod service_level_indicator {
     /// Elapsed time across the connection. Threshold lives on the objective.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Latency {
     }
     /// good / (good + bad), classified by the event the instance ended in.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct OutcomeRatio {
         #[prost(message, repeated, tag="1")]
         pub good: ::prost::alloc::vec::Vec<super::EventRef>,
@@ -2333,14 +2209,12 @@ pub mod service_level_indicator {
         pub bad: ::prost::alloc::vec::Vec<super::EventRef>,
     }
     /// Fraction of started instances that reach the end within the bound.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Completion {
         #[prost(message, optional, tag="1")]
         pub within: ::core::option::Option<::prost_types::Duration>,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Measure {
         #[prost(message, tag="5")]
         Latency(Latency),
@@ -2352,7 +2226,6 @@ pub mod service_level_indicator {
 }
 /// OpenSLO kind: SLO. Several objectives may share one indicator: that is how
 /// an internal SLO and a looser external SLA coexist on the same SLI.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServiceLevelObjective {
     #[prost(message, optional, tag="1")]
@@ -2383,8 +2256,7 @@ pub struct ServiceLevelObjective {
 }
 /// Nested message and enum types in `ServiceLevelObjective`.
 pub mod service_level_objective {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Objective {
         #[prost(string, tag="1")]
         pub display_name: ::prost::alloc::string::String,
@@ -2400,8 +2272,7 @@ pub mod service_level_objective {
         pub time_slice_window: ::core::option::Option<::prost_types::Duration>,
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LatencyThreshold {
     #[prost(enumeration="Comparison", tag="1")]
     pub op: i32,
@@ -2409,29 +2280,25 @@ pub struct LatencyThreshold {
     pub value: ::core::option::Option<::prost_types::Duration>,
 }
 /// A fraction in (0, 1), e.g. 0.999. Wrapped so 99.9 cannot pass for it.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct Target {
     #[prost(double, tag="1")]
     pub ratio: f64,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TimeWindow {
     #[prost(oneof="time_window::Kind", tags="1, 2")]
     pub kind: ::core::option::Option<time_window::Kind>,
 }
 /// Nested message and enum types in `TimeWindow`.
 pub mod time_window {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Rolling {
         #[prost(message, optional, tag="1")]
         pub duration: ::core::option::Option<::prost_types::Duration>,
     }
     /// Months and quarters are not fixed durations, hence a period enum.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Calendar {
         #[prost(enumeration="super::CalendarPeriod", tag="1")]
         pub period: i32,
@@ -2442,8 +2309,7 @@ pub mod time_window {
         #[prost(string, tag="3")]
         pub time_zone: ::prost::alloc::string::String,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Kind {
         #[prost(message, tag="1")]
         Rolling(Rolling),
@@ -2453,20 +2319,17 @@ pub mod time_window {
 }
 /// Whether someone outside the team can hold you to this objective.
 /// External is what people usually mean by SLA.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Commitment {
     #[prost(oneof="commitment::Kind", tags="1, 2")]
     pub kind: ::core::option::Option<commitment::Kind>,
 }
 /// Nested message and enum types in `Commitment`.
 pub mod commitment {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Internal {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct External {
         /// logical pointer to the contract, never its text
         #[prost(string, tag="3")]
@@ -2479,8 +2342,7 @@ pub mod commitment {
     }
     /// Nested message and enum types in `External`.
     pub mod external {
-        #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+        #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
         pub enum Counterparty {
             #[prost(message, tag="1")]
             System(super::super::ExternalSystemRef),
@@ -2488,8 +2350,7 @@ pub mod commitment {
             Persona(super::super::PersonaRef),
         }
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Kind {
         #[prost(message, tag="1")]
         Internal(Internal),
@@ -2498,7 +2359,6 @@ pub mod commitment {
     }
 }
 /// OpenSLO kind: AlertPolicy, with AlertCondition inlined.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AlertPolicy {
     #[prost(message, optional, tag="1")]
@@ -2525,7 +2385,6 @@ pub struct AlertPolicy {
     #[prost(message, optional, tag="11")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AlertCondition {
     #[prost(string, tag="1")]
@@ -2537,8 +2396,7 @@ pub struct AlertCondition {
 }
 /// Nested message and enum types in `AlertCondition`.
 pub mod alert_condition {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, ::prost::Message)]
     pub struct BurnRate {
         #[prost(enumeration="super::Comparison", tag="1")]
         pub op: i32,
@@ -2553,7 +2411,6 @@ pub mod alert_condition {
 }
 /// OpenSLO kind: AlertNotificationTarget. Logical target name; the
 /// PagerDuty/Slack binding stays in export configuration.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AlertNotificationTarget {
     #[prost(message, optional, tag="1")]
@@ -2583,9 +2440,9 @@ impl TelemetryKind {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            TelemetryKind::Unspecified => "TELEMETRY_KIND_UNSPECIFIED",
-            TelemetryKind::Span => "TELEMETRY_KIND_SPAN",
-            TelemetryKind::Metric => "TELEMETRY_KIND_METRIC",
+            Self::Unspecified => "TELEMETRY_KIND_UNSPECIFIED",
+            Self::Span => "TELEMETRY_KIND_SPAN",
+            Self::Metric => "TELEMETRY_KIND_METRIC",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2614,11 +2471,11 @@ impl Comparison {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            Comparison::Unspecified => "COMPARISON_UNSPECIFIED",
-            Comparison::Lt => "COMPARISON_LT",
-            Comparison::Lte => "COMPARISON_LTE",
-            Comparison::Gt => "COMPARISON_GT",
-            Comparison::Gte => "COMPARISON_GTE",
+            Self::Unspecified => "COMPARISON_UNSPECIFIED",
+            Self::Lt => "COMPARISON_LT",
+            Self::Lte => "COMPARISON_LTE",
+            Self::Gt => "COMPARISON_GT",
+            Self::Gte => "COMPARISON_GTE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2649,11 +2506,11 @@ impl CalendarPeriod {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            CalendarPeriod::Unspecified => "CALENDAR_PERIOD_UNSPECIFIED",
-            CalendarPeriod::Week => "CALENDAR_PERIOD_WEEK",
-            CalendarPeriod::Month => "CALENDAR_PERIOD_MONTH",
-            CalendarPeriod::Quarter => "CALENDAR_PERIOD_QUARTER",
-            CalendarPeriod::Year => "CALENDAR_PERIOD_YEAR",
+            Self::Unspecified => "CALENDAR_PERIOD_UNSPECIFIED",
+            Self::Week => "CALENDAR_PERIOD_WEEK",
+            Self::Month => "CALENDAR_PERIOD_MONTH",
+            Self::Quarter => "CALENDAR_PERIOD_QUARTER",
+            Self::Year => "CALENDAR_PERIOD_YEAR",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2683,10 +2540,10 @@ impl BudgetingMethod {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            BudgetingMethod::Unspecified => "BUDGETING_METHOD_UNSPECIFIED",
-            BudgetingMethod::Occurrences => "BUDGETING_METHOD_OCCURRENCES",
-            BudgetingMethod::Timeslices => "BUDGETING_METHOD_TIMESLICES",
-            BudgetingMethod::RatioTimeslices => "BUDGETING_METHOD_RATIO_TIMESLICES",
+            Self::Unspecified => "BUDGETING_METHOD_UNSPECIFIED",
+            Self::Occurrences => "BUDGETING_METHOD_OCCURRENCES",
+            Self::Timeslices => "BUDGETING_METHOD_TIMESLICES",
+            Self::RatioTimeslices => "BUDGETING_METHOD_RATIO_TIMESLICES",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2715,10 +2572,10 @@ impl Severity {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            Severity::Unspecified => "SEVERITY_UNSPECIFIED",
-            Severity::Page => "SEVERITY_PAGE",
-            Severity::Ticket => "SEVERITY_TICKET",
-            Severity::Info => "SEVERITY_INFO",
+            Self::Unspecified => "SEVERITY_UNSPECIFIED",
+            Self::Page => "SEVERITY_PAGE",
+            Self::Ticket => "SEVERITY_TICKET",
+            Self::Info => "SEVERITY_INFO",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2732,8 +2589,7 @@ impl Severity {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeLibraryRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -2746,7 +2602,6 @@ pub struct TypeLibraryRef {
 ///
 /// The source is the only stored form. The compiled descriptors are derived
 /// state the server rebuilds whenever it needs them.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TypeLibrary {
     #[prost(message, optional, tag="1")]
@@ -2767,8 +2622,7 @@ pub struct TypeLibrary {
     #[prost(message, optional, tag="8")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProtoSourceFile {
     /// Relative import path, e.g. "acme/orders/v1/orders.proto".
     #[prost(string, tag="1")]
@@ -2779,20 +2633,17 @@ pub struct ProtoSourceFile {
 /// Where the source text came from. A record only: the server never fetches
 /// anything it names. Remote origins are pulled client-side and arrive as
 /// `TypeLibrary.files`.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeLibraryProvenance {
     #[prost(oneof="type_library_provenance::Source", tags="1, 2, 3")]
     pub source: ::core::option::Option<type_library_provenance::Source>,
 }
 /// Nested message and enum types in `TypeLibraryProvenance`.
 pub mod type_library_provenance {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InlineSource {
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BufModuleSnapshot {
         #[prost(string, tag="1")]
         pub remote: ::prost::alloc::string::String,
@@ -2803,8 +2654,7 @@ pub mod type_library_provenance {
         #[prost(string, tag="4")]
         pub commit: ::prost::alloc::string::String,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct GitSnapshot {
         #[prost(string, tag="1")]
         pub repository_url: ::prost::alloc::string::String,
@@ -2815,8 +2665,7 @@ pub mod type_library_provenance {
         #[prost(string, tag="4")]
         pub subdirectory: ::prost::alloc::string::String,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Source {
         #[prost(message, tag="1")]
         Inline(InlineSource),
@@ -3314,7 +3163,6 @@ pub mod type_library_provenance {
 //       replaces. The supersession chain is single-parent and must terminate
 //       at a root version with `supersedes` unset.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Entity {
     #[prost(message, optional, tag="29")]
@@ -3324,8 +3172,7 @@ pub struct Entity {
 }
 /// Nested message and enum types in `Entity`.
 pub mod entity {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Kind {
         #[prost(message, tag="1")]
         Event(super::Event),

@@ -15,7 +15,7 @@ path = "src/main.rs"
 trogon-atlas-client = { workspace = true }
 trogon-atlas-core = { workspace = true }
 trogon-atlas-proto = { workspace = true }
-tonic = { workspace = true, features = ["tls", "tls-roots"] }
+tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
 prost = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync"] }
 serde = { workspace = true }

@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#MISE description="Build every trogon-atlas image with GitHub Actions layer caching and load it locally"
+set -euo pipefail
+
+root="$MISE_PROJECT_ROOT"
+
+for dockerfile in "$root"/devops/docker/images/*/Dockerfile; do
+  name="$(basename "$(dirname "$dockerfile")")"
+  echo "building $name" >&2
+  mise run images:build "$name" --load \
+    --cache-from "type=gha,scope=$name" \
+    --cache-to "type=gha,scope=$name,mode=max"
+done

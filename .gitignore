@@ -52,3 +52,6 @@ tsworkspace/webapps/studio/.vite/
 
 # macOS
 .DS_Store
+
+# Trivy image scan reports
+trivy-results/

@@ -907,7 +907,7 @@ async fn main() -> Result<()> {
         .max_decoding_message_size(args.max_message_bytes)
         .max_encoding_message_size(args.max_message_bytes);
 
-    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
     // Verify store connectivity before advertising SERVING. A cheap list
     // with limit=1 is enough to confirm the backend is reachable.
@@ -940,7 +940,7 @@ async fn main() -> Result<()> {
     let (health_shutdown_tx, mut health_shutdown_rx) = tokio::sync::watch::channel(false);
     {
         let store_for_health = store.clone();
-        let mut health_reporter_bg = health_reporter.clone();
+        let health_reporter_bg = health_reporter.clone();
         tokio::spawn(async move {
             const HEALTH_INTERVAL: Duration = Duration::from_secs(15);
             let mut interval = tokio::time::interval(HEALTH_INTERVAL);

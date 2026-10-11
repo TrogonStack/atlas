@@ -1,0 +1,5 @@
+auth:
+  insecureAllowAnonymous: true
+metrics:
+  serviceMonitor:
+    enabled: true

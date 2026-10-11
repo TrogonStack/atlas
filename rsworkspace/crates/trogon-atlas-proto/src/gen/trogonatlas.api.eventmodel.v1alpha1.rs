@@ -20,16 +20,14 @@
 // valid; the cache is a convenience.
 
 /// What to analyze. Exactly one of the scope fields must be set.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnalysisScope {
     #[prost(oneof="analysis_scope::Scope", tags="1, 2, 3")]
     pub scope: ::core::option::Option<analysis_scope::Scope>,
 }
 /// Nested message and enum types in `AnalysisScope`.
 pub mod analysis_scope {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Scope {
         #[prost(message, tag="1")]
         Slice(super::super::super::super::eventmodel::v1alpha1::EntityRef),
@@ -40,8 +38,7 @@ pub mod analysis_scope {
     }
 }
 /// A point-source citation: an upstream entity + a path inside its FieldSpec.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InferredFieldSource {
     #[prost(message, optional, tag="1")]
     pub from_entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
@@ -53,7 +50,6 @@ pub struct InferredFieldSource {
 /// comes from. Either traceable to an upstream field, or classified as
 /// having a non-field origin. confidence and rationale let humans decide
 /// whether to trust it or pin a correction in metadata.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InferredFieldMapping {
     #[prost(message, optional, tag="1")]
@@ -72,8 +68,7 @@ pub struct InferredFieldMapping {
 }
 /// Nested message and enum types in `InferredFieldMapping`.
 pub mod inferred_field_mapping {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Source {
         #[prost(message, tag="3")]
         FromField(super::InferredFieldSource),
@@ -81,13 +76,11 @@ pub mod inferred_field_mapping {
         Origin(i32),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InferDataFlowRequest {
     #[prost(message, optional, tag="1")]
     pub scope: ::core::option::Option<AnalysisScope>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InferDataFlowResponse {
     #[prost(message, repeated, tag="1")]
@@ -103,7 +96,6 @@ pub struct InferDataFlowResponse {
 /// A field-flow information-completeness problem the engine surfaced.
 /// Trigger-story authoring invariants, such as missing or ambiguous command
 /// issuers, are reported as ValidationIssue entries instead.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompletenessGap {
     #[prost(enumeration="completeness_gap::Kind", tag="1")]
@@ -143,13 +135,13 @@ pub mod completeness_gap {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Kind::Unspecified => "KIND_UNSPECIFIED",
-                Kind::MissingSource => "KIND_MISSING_SOURCE",
-                Kind::AmbiguousSource => "KIND_AMBIGUOUS_SOURCE",
-                Kind::DanglingInput => "KIND_DANGLING_INPUT",
-                Kind::NameMismatch => "KIND_NAME_MISMATCH",
-                Kind::ShapeMismatch => "KIND_SHAPE_MISMATCH",
-                Kind::UndeclaredFields => "KIND_UNDECLARED_FIELDS",
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::MissingSource => "KIND_MISSING_SOURCE",
+                Self::AmbiguousSource => "KIND_AMBIGUOUS_SOURCE",
+                Self::DanglingInput => "KIND_DANGLING_INPUT",
+                Self::NameMismatch => "KIND_NAME_MISMATCH",
+                Self::ShapeMismatch => "KIND_SHAPE_MISMATCH",
+                Self::UndeclaredFields => "KIND_UNDECLARED_FIELDS",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -167,13 +159,11 @@ pub mod completeness_gap {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CheckInformationCompletenessRequest {
     #[prost(message, optional, tag="1")]
     pub scope: ::core::option::Option<AnalysisScope>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CheckInformationCompletenessResponse {
     #[prost(message, repeated, tag="1")]
@@ -225,16 +215,16 @@ impl InferredOrigin {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            InferredOrigin::Unspecified => "INFERRED_ORIGIN_UNSPECIFIED",
-            InferredOrigin::UserInput => "INFERRED_ORIGIN_USER_INPUT",
-            InferredOrigin::Generated => "INFERRED_ORIGIN_GENERATED",
-            InferredOrigin::Clock => "INFERRED_ORIGIN_CLOCK",
-            InferredOrigin::Constant => "INFERRED_ORIGIN_CONSTANT",
-            InferredOrigin::Derived => "INFERRED_ORIGIN_DERIVED",
-            InferredOrigin::PassThrough => "INFERRED_ORIGIN_PASS_THROUGH",
-            InferredOrigin::Aggregated => "INFERRED_ORIGIN_AGGREGATED",
-            InferredOrigin::Opaque => "INFERRED_ORIGIN_OPAQUE",
-            InferredOrigin::Unknown => "INFERRED_ORIGIN_UNKNOWN",
+            Self::Unspecified => "INFERRED_ORIGIN_UNSPECIFIED",
+            Self::UserInput => "INFERRED_ORIGIN_USER_INPUT",
+            Self::Generated => "INFERRED_ORIGIN_GENERATED",
+            Self::Clock => "INFERRED_ORIGIN_CLOCK",
+            Self::Constant => "INFERRED_ORIGIN_CONSTANT",
+            Self::Derived => "INFERRED_ORIGIN_DERIVED",
+            Self::PassThrough => "INFERRED_ORIGIN_PASS_THROUGH",
+            Self::Aggregated => "INFERRED_ORIGIN_AGGREGATED",
+            Self::Opaque => "INFERRED_ORIGIN_OPAQUE",
+            Self::Unknown => "INFERRED_ORIGIN_UNKNOWN",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -270,9 +260,9 @@ impl AnalysisProvenance {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            AnalysisProvenance::Unspecified => "ANALYSIS_PROVENANCE_UNSPECIFIED",
-            AnalysisProvenance::Deterministic => "ANALYSIS_PROVENANCE_DETERMINISTIC",
-            AnalysisProvenance::Llm => "ANALYSIS_PROVENANCE_LLM",
+            Self::Unspecified => "ANALYSIS_PROVENANCE_UNSPECIFIED",
+            Self::Deterministic => "ANALYSIS_PROVENANCE_DETERMINISTIC",
+            Self::Llm => "ANALYSIS_PROVENANCE_LLM",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -287,8 +277,7 @@ impl AnalysisProvenance {
 }
 /// The state a mutation was planned against no longer holds. An etag is never
 /// empty, so an empty value here means the key is absent.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PreconditionFailure {
     #[prost(message, optional, tag="1")]
     pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
@@ -304,8 +293,7 @@ pub struct PreconditionFailure {
 /// motivation as ListValidationRules: avoids the per-client three-name
 /// map (proto enum string ENTITY_KIND_FOO, JSON discriminator `event`,
 /// numeric tag 1).
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EntityKindInfo {
     /// the numeric / proto enum
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
@@ -329,8 +317,7 @@ pub struct EntityKindInfo {
 /// A typed pointer hit. `from` is the entity that holds the pointer (e.g. a
 /// slice), `from_field` is the structural path inside that entity to the
 /// reference site (e.g. "emitted_events\[2\].event"). `to` is the target.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Reference {
     #[prost(message, optional, tag="1")]
     pub from: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
@@ -339,7 +326,6 @@ pub struct Reference {
     #[prost(message, optional, tag="3")]
     pub to: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImpactNode {
     #[prost(message, optional, tag="1")]
@@ -361,7 +347,6 @@ pub struct ImpactNode {
 // the projection as a self-contained graph and traverse it without further
 // RPCs.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SliceProjection {
     #[prost(message, optional, tag="1")]
@@ -371,8 +356,7 @@ pub struct SliceProjection {
     #[prost(map="string, message", tag="2")]
     pub entities: ::std::collections::HashMap<::prost::alloc::string::String, super::super::super::eventmodel::v1alpha1::Entity>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSliceProjectionRequest {
     /// one of the *_SLICE kinds
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
@@ -380,7 +364,6 @@ pub struct GetSliceProjectionRequest {
     #[prost(message, optional, tag="2")]
     pub id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetSliceProjectionResponse {
     #[prost(message, optional, tag="1")]
@@ -392,7 +375,6 @@ pub struct GetSliceProjectionResponse {
     #[prost(bool, tag="2")]
     pub truncated: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StoryboardProjection {
     #[prost(message, optional, tag="1")]
@@ -405,13 +387,11 @@ pub struct StoryboardProjection {
     #[prost(map="string, message", tag="3")]
     pub entities: ::std::collections::HashMap<::prost::alloc::string::String, super::super::super::eventmodel::v1alpha1::Entity>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetStoryboardProjectionRequest {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetStoryboardProjectionResponse {
     #[prost(message, optional, tag="1")]
@@ -422,7 +402,6 @@ pub struct GetStoryboardProjectionResponse {
     #[prost(bool, tag="2")]
     pub truncated: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EventModelProjection {
     #[prost(message, optional, tag="1")]
@@ -433,8 +412,7 @@ pub struct EventModelProjection {
     #[prost(map="string, message", tag="2")]
     pub entities: ::std::collections::HashMap<::prost::alloc::string::String, super::super::super::eventmodel::v1alpha1::Entity>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetEventModelProjectionRequest {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
@@ -444,7 +422,6 @@ pub struct GetEventModelProjectionRequest {
     #[prost(bool, tag="2")]
     pub include_cross_model: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetEventModelProjectionResponse {
     #[prost(message, optional, tag="1")]
@@ -463,8 +440,7 @@ pub struct GetEventModelProjectionResponse {
 // the scope. The result is not persisted; the caller PutEntity's it (or
 // some of its members) to materialize.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExtractSubgraphRequest {
     #[prost(message, optional, tag="1")]
     pub scope: ::core::option::Option<AnalysisScope>,
@@ -479,7 +455,6 @@ pub struct ExtractSubgraphRequest {
     #[prost(bool, tag="3")]
     pub include_cross_model: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExtractSubgraphResponse {
     /// The new EventModel listing the closure as members. Not persisted.
@@ -493,7 +468,6 @@ pub struct ExtractSubgraphResponse {
     #[prost(bool, tag="3")]
     pub truncated: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchResult {
     #[prost(message, optional, tag="1")]
@@ -512,8 +486,7 @@ pub struct SearchResult {
 // edges + cardinality), supersession chains pointing at non-existent
 // versions, traces that violate data completeness, etc.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ValidationIssue {
     #[prost(enumeration="validation_issue::Severity", tag="1")]
     pub severity: i32,
@@ -559,10 +532,10 @@ pub mod validation_issue {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Severity::Unspecified => "SEVERITY_UNSPECIFIED",
-                Severity::Info => "SEVERITY_INFO",
-                Severity::Warning => "SEVERITY_WARNING",
-                Severity::Error => "SEVERITY_ERROR",
+                Self::Unspecified => "SEVERITY_UNSPECIFIED",
+                Self::Info => "SEVERITY_INFO",
+                Self::Warning => "SEVERITY_WARNING",
+                Self::Error => "SEVERITY_ERROR",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -577,7 +550,6 @@ pub mod validation_issue {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidateEventModelRequest {
     /// Either validate an in-memory model (supplied here) or validate a stored
@@ -587,7 +559,6 @@ pub struct ValidateEventModelRequest {
     #[prost(message, optional, tag="2")]
     pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidateEventModelResponse {
     #[prost(message, repeated, tag="1")]
@@ -600,8 +571,7 @@ pub struct ValidateEventModelResponse {
 /// CI tooling) use this to render legends, link findings to docs, and
 /// gate releases on specific severity classes without having to
 /// reverse-engineer the validator.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ValidationRule {
     /// e.g. "EVENT_UNOBSERVED"
     #[prost(string, tag="1")]
@@ -625,11 +595,9 @@ pub struct ValidationRule {
     #[prost(string, tag="7")]
     pub category: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListValidationRulesRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListValidationRulesResponse {
     #[prost(message, repeated, tag="1")]
@@ -639,8 +607,7 @@ pub struct ListValidationRulesResponse {
 /// pass, instead of N round trips through ValidateEventModel. The
 /// validator already has the full entity store in memory per call;
 /// looping per-model is pure waste.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ValidateProjectRequest {
     /// Scope by Project.id (if your store carries Projects) or by
     /// Domain.id (legacy). One of the two must be set. ENTITY_KIND_UNSPECIFIED
@@ -655,8 +622,7 @@ pub mod validate_project_request {
     /// Domain.id (legacy). One of the two must be set. ENTITY_KIND_UNSPECIFIED
     /// for the full store works only on small dev stores; large stores
     /// should always scope.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Scope {
         #[prost(message, tag="1")]
         ProjectId(super::super::super::super::r#type::v1alpha1::Id),
@@ -664,7 +630,6 @@ pub mod validate_project_request {
         DomainId(super::super::super::super::r#type::v1alpha1::Id),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidateProjectResponse {
     #[prost(message, repeated, tag="1")]
@@ -680,8 +645,7 @@ pub struct ValidateProjectResponse {
 }
 /// Nested message and enum types in `ValidateProjectResponse`.
 pub mod validate_project_response {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ModelReport {
         #[prost(message, optional, tag="1")]
         pub event_model_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::Id>,
@@ -695,8 +659,7 @@ pub mod validate_project_response {
 // honors the x-trogon-atlas-branch header the same way reads do.
 
 /// A compiler error, positioned in the library's own source.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeLibraryDiagnostic {
     #[prost(string, tag="1")]
     pub path: ::prost::alloc::string::String,
@@ -709,13 +672,11 @@ pub struct TypeLibraryDiagnostic {
 }
 /// A change that would stop payloads written against the previous version of
 /// the library from decoding the same way.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeLibraryCompatibilityViolation {
     #[prost(string, tag="1")]
     pub message: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompileTypeLibraryRequest {
     #[prost(message, optional, tag="1")]
@@ -724,7 +685,6 @@ pub struct CompileTypeLibraryRequest {
 /// Empty lists mean PutEntity would accept the library as written. Problems
 /// that are not about the source itself (an unknown dependency, a package
 /// prefix another library owns) fail the call the same way PutEntity would.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompileTypeLibraryResponse {
     #[prost(message, repeated, tag="1")]
@@ -732,8 +692,7 @@ pub struct CompileTypeLibraryResponse {
     #[prost(message, repeated, tag="2")]
     pub compatibility_violations: ::prost::alloc::vec::Vec<TypeLibraryCompatibilityViolation>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ResolveTypeRequest {
     #[prost(string, tag="1")]
     pub namespace: ::prost::alloc::string::String,
@@ -741,8 +700,7 @@ pub struct ResolveTypeRequest {
     #[prost(string, tag="2")]
     pub type_url: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ResolveTypeResponse {
     /// The live type library that declares the message. Unset when the message
     /// is built in (a well-known type or one of this service's own).
@@ -753,22 +711,19 @@ pub struct ResolveTypeResponse {
     #[prost(bytes="vec", tag="2")]
     pub file_descriptor_set: ::prost::alloc::vec::Vec<u8>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTypeLibraryDescriptorSetRequest {
     #[prost(string, tag="1")]
     pub namespace: ::prost::alloc::string::String,
 }
 /// A message a live type library declares.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeLibraryMessage {
     #[prost(string, tag="1")]
     pub full_name: ::prost::alloc::string::String,
     #[prost(message, optional, tag="2")]
     pub library: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetTypeLibraryDescriptorSetResponse {
     /// An encoded google.protobuf.FileDescriptorSet holding every file of every
@@ -814,15 +769,13 @@ pub struct GetTypeLibraryDescriptorSetResponse {
 
 // ---------- Direct lookup ----------------------------------------------------
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetEntityRequest {
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
     pub kind: i32,
     #[prost(message, optional, tag="2")]
     pub id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetEntityResponse {
     #[prost(message, optional, tag="1")]
@@ -833,7 +786,6 @@ pub struct GetEntityResponse {
     #[prost(string, tag="2")]
     pub etag: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BatchGetEntitiesRequest {
     #[prost(message, repeated, tag="1")]
@@ -844,7 +796,6 @@ pub struct BatchGetEntitiesRequest {
     #[prost(bool, tag="2")]
     pub dense: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BatchGetEntitiesResponse {
     #[prost(message, repeated, tag="1")]
@@ -866,8 +817,7 @@ pub struct BatchGetEntitiesResponse {
 }
 // ---------- Listing & search -------------------------------------------------
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListEntitiesRequest {
     /// Filter by kind. Empty = all kinds.
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", repeated, tag="1")]
@@ -895,7 +845,6 @@ pub struct ListEntitiesRequest {
     #[prost(string, repeated, tag="7")]
     pub lifecycle_status_not_in: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListEntitiesResponse {
     #[prost(message, repeated, tag="1")]
@@ -906,8 +855,7 @@ pub struct ListEntitiesResponse {
 /// SearchEntitiesRequest always searches the baseline index. The
 /// `x-trogon-atlas-branch` metadata header (see the branch context note above)
 /// is ignored for this RPC in Phase 1.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SearchEntitiesRequest {
     /// Free-form query. Implementations may support full-text, semantic, or
     /// both; the schema does not constrain the matching algorithm.
@@ -920,7 +868,6 @@ pub struct SearchEntitiesRequest {
     #[prost(int32, tag="4")]
     pub limit: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchEntitiesResponse {
     #[prost(message, repeated, tag="1")]
@@ -928,8 +875,7 @@ pub struct SearchEntitiesResponse {
 }
 // ---------- Versioning -------------------------------------------------------
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListVersionsRequest {
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
     pub kind: i32,
@@ -942,7 +888,6 @@ pub struct ListVersionsRequest {
     #[prost(string, tag="5")]
     pub page_token: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListVersionsResponse {
     /// Every version of (namespace, slug), ordered by version ascending.
@@ -951,8 +896,7 @@ pub struct ListVersionsResponse {
     #[prost(string, tag="2")]
     pub next_page_token: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetLatestVersionRequest {
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
     pub kind: i32,
@@ -961,14 +905,12 @@ pub struct GetLatestVersionRequest {
     #[prost(string, tag="3")]
     pub slug: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetLatestVersionResponse {
     #[prost(message, optional, tag="1")]
     pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::Entity>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSupersessionChainRequest {
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
     pub kind: i32,
@@ -1000,10 +942,10 @@ pub mod get_supersession_chain_request {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Direction::Unspecified => "DIRECTION_UNSPECIFIED",
-                Direction::Ancestors => "DIRECTION_ANCESTORS",
-                Direction::Descendants => "DIRECTION_DESCENDANTS",
-                Direction::Both => "DIRECTION_BOTH",
+                Self::Unspecified => "DIRECTION_UNSPECIFIED",
+                Self::Ancestors => "DIRECTION_ANCESTORS",
+                Self::Descendants => "DIRECTION_DESCENDANTS",
+                Self::Both => "DIRECTION_BOTH",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1018,7 +960,6 @@ pub mod get_supersession_chain_request {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetSupersessionChainResponse {
     /// Entities ordered oldest -> newest. The requested entity is included.
@@ -1029,8 +970,7 @@ pub struct GetSupersessionChainResponse {
 }
 // ---------- Graph traversal --------------------------------------------------
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetReferencesRequest {
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
     pub kind: i32,
@@ -1045,7 +985,6 @@ pub struct GetReferencesRequest {
     #[prost(string, tag="5")]
     pub page_token: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetReferencesResponse {
     #[prost(message, repeated, tag="1")]
@@ -1062,7 +1001,6 @@ pub struct GetReferencesResponse {
 // caller is explicit about what should happen to entities pointing at the
 // deleted one.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutEntityRequest {
     #[prost(message, optional, tag="1")]
@@ -1101,7 +1039,6 @@ pub struct PutEntityRequest {
     #[prost(string, tag="6")]
     pub operation_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PutEntityResponse {
     /// The entity as stored, including the server-owned `system` block.
@@ -1125,8 +1062,7 @@ pub struct PutEntityResponse {
     #[prost(message, optional, tag="5")]
     pub operation_receipt: ::core::option::Option<super::super::super::catalog::v1alpha1::OperationReceipt>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteEntityRequest {
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
     pub kind: i32,
@@ -1170,10 +1106,10 @@ pub mod delete_entity_request {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Mode::Unspecified => "MODE_UNSPECIFIED",
-                Mode::FailIfReferenced => "MODE_FAIL_IF_REFERENCED",
-                Mode::Force => "MODE_FORCE",
-                Mode::DryRun => "MODE_DRY_RUN",
+                Self::Unspecified => "MODE_UNSPECIFIED",
+                Self::FailIfReferenced => "MODE_FAIL_IF_REFERENCED",
+                Self::Force => "MODE_FORCE",
+                Self::DryRun => "MODE_DRY_RUN",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1188,7 +1124,6 @@ pub mod delete_entity_request {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteEntityResponse {
     /// References pointing AT the target entity. Semantics depend on mode:
@@ -1226,7 +1161,6 @@ pub struct DeleteEntityResponse {
 /// DeleteEntityRequest / DeleteEntityResponse, which must stay here, so
 /// splitting the wrappers out would require service.proto to import
 /// batch.proto while batch.proto imports service.proto back -- a cycle.
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BatchMutateOp {
     #[prost(oneof="batch_mutate_op::Op", tags="1, 2")]
@@ -1234,8 +1168,7 @@ pub struct BatchMutateOp {
 }
 /// Nested message and enum types in `BatchMutateOp`.
 pub mod batch_mutate_op {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Op {
         #[prost(message, tag="1")]
         Put(super::PutEntityRequest),
@@ -1243,7 +1176,6 @@ pub mod batch_mutate_op {
         Delete(super::DeleteEntityRequest),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BatchMutateOpResult {
     #[prost(oneof="batch_mutate_op_result::Result", tags="1, 2")]
@@ -1251,8 +1183,7 @@ pub struct BatchMutateOpResult {
 }
 /// Nested message and enum types in `BatchMutateOpResult`.
 pub mod batch_mutate_op_result {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Result {
         #[prost(message, tag="1")]
         Put(super::PutEntityResponse),
@@ -1260,7 +1191,6 @@ pub mod batch_mutate_op_result {
         Delete(super::DeleteEntityResponse),
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BatchMutateRequest {
     /// Ops applied in declared order. Order is preserved so that callers
@@ -1283,7 +1213,6 @@ pub struct BatchMutateRequest {
     #[prost(string, tag="3")]
     pub operation_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BatchMutateResponse {
     #[prost(enumeration="batch_mutate_response::Status", tag="1")]
@@ -1334,10 +1263,10 @@ pub mod batch_mutate_response {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Status::Unspecified => "STATUS_UNSPECIFIED",
-                Status::Applied => "STATUS_APPLIED",
-                Status::Validated => "STATUS_VALIDATED",
-                Status::Failed => "STATUS_FAILED",
+                Self::Unspecified => "STATUS_UNSPECIFIED",
+                Self::Applied => "STATUS_APPLIED",
+                Self::Validated => "STATUS_VALIDATED",
+                Self::Failed => "STATUS_FAILED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1361,8 +1290,7 @@ pub mod batch_mutate_response {
 /// the merged view, and each delete lands as a tombstone delta. A victim that
 /// exists only on baseline is hidden from the branch and removed from baseline
 /// on merge, never before.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteByQueryRequest {
     /// Restrict to one project. Empty = any project.
     #[prost(string, tag="1")]
@@ -1385,7 +1313,6 @@ pub struct DeleteByQueryRequest {
     #[prost(int32, tag="6")]
     pub max_deletes: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteByQueryResponse {
     #[prost(message, repeated, tag="1")]
@@ -1400,8 +1327,7 @@ pub struct DeleteByQueryResponse {
 }
 /// Nested message and enum types in `DeleteByQueryResponse`.
 pub mod delete_by_query_response {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Deleted {
         #[prost(enumeration="super::super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
         pub kind: i32,
@@ -1413,11 +1339,9 @@ pub mod delete_by_query_response {
 /// motivation as ListValidationRules: avoids the per-client three-name
 /// map (proto enum string ENTITY_KIND_FOO, JSON discriminator `event`,
 /// numeric tag 1).
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListEntityKindsRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListEntityKindsResponse {
     #[prost(message, repeated, tag="1")]
@@ -1427,8 +1351,7 @@ pub struct ListEntityKindsResponse {
 /// traces back to the given Domain (Project once that becomes
 /// load-bearing). Saves four client-side getEntity hops (EM → BC →
 /// Subdomain → Domain) per filter.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListEntitiesByDomainRequest {
     /// Required. Domain.id to scope by.
     #[prost(message, optional, tag="1")]
@@ -1446,7 +1369,6 @@ pub struct ListEntitiesByDomainRequest {
     #[prost(bool, tag="5")]
     pub latest_versions_only: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListEntitiesByDomainResponse {
     #[prost(message, repeated, tag="1")]
@@ -1462,8 +1384,7 @@ pub struct ListEntitiesByDomainResponse {
 // tools use this to scope changes; MCP tools use it before proposing
 // edits to gauge blast radius.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetImpactRequest {
     #[prost(message, optional, tag="1")]
     pub root: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
@@ -1479,7 +1400,6 @@ pub struct GetImpactRequest {
     #[prost(string, tag="5")]
     pub page_token: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetImpactResponse {
     /// Every entity transitively depending on the root, including the root
@@ -1502,8 +1422,7 @@ pub struct GetImpactResponse {
 /// version migration is stageable as one reviewable change set. A referrer
 /// visible only on baseline is copied into the branch, since it is still a
 /// referrer the branch sees. Baseline is untouched until the merge.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RetargetReferencesRequest {
     /// The reference target being replaced. Every stored entity that points at
     /// `from` will have that pointer rewritten to `to`.
@@ -1526,7 +1445,6 @@ pub struct RetargetReferencesRequest {
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", repeated, tag="4")]
     pub filter_kinds: ::prost::alloc::vec::Vec<i32>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RetargetReferencesResponse {
     /// One entry per referrer that was examined (matched by the reverse index
@@ -1545,8 +1463,7 @@ pub struct RetargetReferencesResponse {
 }
 /// Nested message and enum types in `RetargetReferencesResponse`.
 pub mod retarget_references_response {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Result {
         /// The entity whose stored pointers were examined.
         #[prost(message, optional, tag="1")]
@@ -1569,15 +1486,13 @@ pub mod retarget_references_response {
 // structural changes -- additions, removals, value changes, and engine-
 // guessed renames. Tools render this for human review of model changes.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DiffEntitiesRequest {
     #[prost(message, optional, tag="1")]
     pub a: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
     #[prost(message, optional, tag="2")]
     pub b: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DiffEntitiesResponse {
     #[prost(message, repeated, tag="1")]
@@ -1586,8 +1501,7 @@ pub struct DiffEntitiesResponse {
 /// Durable changeset log: what landed together, who did it, when. See
 /// trogonatlas.catalog.v1alpha1 Changeset / ChangesetOp for the stored record
 /// these RPCs read.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListChangesetsRequest {
     /// Exclusive cursor: return only changesets ordered strictly before this
     /// id. Empty = start from the newest. Pass back `next_page_token`.
@@ -1601,7 +1515,6 @@ pub struct ListChangesetsRequest {
     #[prost(string, tag="3")]
     pub branch: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListChangesetsResponse {
     /// Newest first.
@@ -1611,13 +1524,11 @@ pub struct ListChangesetsResponse {
     #[prost(string, tag="2")]
     pub next_page_token: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetChangesetRequest {
     #[prost(string, tag="1")]
     pub id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetChangesetResponse {
     #[prost(message, optional, tag="1")]
@@ -1627,8 +1538,7 @@ pub struct GetChangesetResponse {
 /// `x-trogon-atlas-branch` metadata header: baseline history and a branch's
 /// own history are separate logs, because a branch write never touches
 /// baseline.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetEntityHistoryRequest {
     #[prost(message, optional, tag="1")]
     pub r#ref: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
@@ -1641,7 +1551,6 @@ pub struct GetEntityHistoryRequest {
     #[prost(int32, tag="3")]
     pub page_size: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetEntityHistoryResponse {
     /// Newest first.
@@ -1659,8 +1568,7 @@ pub struct GetEntityHistoryResponse {
 /// All-or-nothing. Refuses with FAILED_PRECONDITION when any op in the
 /// changeset has no recorded revision, since the prior content is then
 /// unknown and a guess would be worse than a refusal.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RevertChangesetRequest {
     /// The changeset to undo.
     #[prost(string, tag="1")]
@@ -1673,7 +1581,6 @@ pub struct RevertChangesetRequest {
     #[prost(string, tag="3")]
     pub operation_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RevertChangesetResponse {
     /// Every entity the revert restored or removed, in application order.
@@ -1688,14 +1595,12 @@ pub struct RevertChangesetResponse {
     #[prost(message, optional, tag="4")]
     pub operation_receipt: ::core::option::Option<super::super::super::catalog::v1alpha1::OperationReceipt>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetOperationRequest {
     #[prost(string, tag="1")]
     pub operation_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetOperationResponse {
     #[prost(enumeration="OperationStatus", tag="1")]
     pub status: i32,
@@ -1718,7 +1623,6 @@ pub struct GetOperationResponse {
 // do not parse it; treat it as a resumable cursor. Events are
 // trogonatlas.catalog.v1alpha1.ChangeEvent.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListChangesRequest {
     /// Empty token = the service returns no events but a current cursor;
@@ -1737,7 +1641,6 @@ pub struct ListChangesRequest {
     #[prost(int32, tag="3")]
     pub page_size: i32,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListChangesResponse {
     #[prost(message, repeated, tag="1")]
@@ -1757,8 +1660,7 @@ pub struct ListChangesResponse {
 ///
 /// Each emitted ChangeEvent carries its own `token`; clients persist the
 /// last received token and pass it back on reconnect.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StreamChangesRequest {
     /// Resume cursor. Empty = from now (no replay).
     #[prost(string, tag="1")]
@@ -1776,12 +1678,10 @@ pub struct StreamChangesRequest {
 // (Decision #22). These RPCs let a tool ask the server "what do you
 // support and what should I expect?" before issuing real work.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetServerInfoRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetServerInfoResponse {
     /// Stable identifier for the schema this server implements. Matches the
     /// proto package, e.g. "trogonatlas.eventmodel.v1alpha1". A mismatch with what
@@ -1815,8 +1715,7 @@ pub mod get_server_info_response {
     /// mean the RPC is missing from the service -- it means the server will
     /// return UNIMPLEMENTED if called. Clients should probe here rather
     /// than catching that error.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Features {
         /// SearchEntities
         #[prost(bool, tag="1")]
@@ -1881,8 +1780,7 @@ pub mod get_server_info_response {
     /// Numeric limits the server applies. Clients use these to size their
     /// requests appropriately and to know when a single call cannot return
     /// everything they need.
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Limits {
         /// ListEntities, SearchEntities
         #[prost(int32, tag="1")]
@@ -1905,8 +1803,7 @@ pub mod get_server_info_response {
         #[prost(uint32, tag="7")]
         pub operation_retention_seconds: u32,
     }
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct WriterStatus {
         #[prost(enumeration="WriterRole", tag="1")]
         pub role: i32,
@@ -1941,10 +1838,10 @@ pub mod get_server_info_response {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                WriterRole::Unspecified => "WRITER_ROLE_UNSPECIFIED",
-                WriterRole::Writer => "WRITER_ROLE_WRITER",
-                WriterRole::Standby => "WRITER_ROLE_STANDBY",
-                WriterRole::Reader => "WRITER_ROLE_READER",
+                Self::Unspecified => "WRITER_ROLE_UNSPECIFIED",
+                Self::Writer => "WRITER_ROLE_WRITER",
+                Self::Standby => "WRITER_ROLE_STANDBY",
+                Self::Reader => "WRITER_ROLE_READER",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1961,11 +1858,9 @@ pub mod get_server_info_response {
 }
 /// See trogonatlas.catalog.v1alpha1 NamespaceRecord for the registry row these
 /// RPCs read and write.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListNamespacesRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListNamespacesResponse {
     #[prost(message, repeated, tag="1")]
@@ -1973,8 +1868,7 @@ pub struct ListNamespacesResponse {
 }
 /// Nested message and enum types in `ListNamespacesResponse`.
 pub mod list_namespaces_response {
-    #[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Namespace {
         #[prost(string, tag="1")]
         pub name: ::prost::alloc::string::String,
@@ -1991,8 +1885,7 @@ pub mod list_namespaces_response {
         pub parent: ::prost::alloc::string::String,
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegisterNamespaceRequest {
     /// Human label to claim. Must be unused within the caller's `parent`.
     #[prost(string, tag="1")]
@@ -2002,8 +1895,7 @@ pub struct RegisterNamespaceRequest {
     #[prost(string, tag="2")]
     pub parent: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RegisterNamespaceResponse {
     #[prost(message, optional, tag="1")]
     pub namespace: ::core::option::Option<super::super::super::catalog::v1alpha1::NamespaceRecord>,
@@ -2013,8 +1905,7 @@ pub struct RegisterNamespaceResponse {
     #[prost(bool, tag="2")]
     pub created: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MoveNamespaceRequest {
     /// Namespace id, not name: a move crosses an ownership boundary, and names
     /// are only unique inside one.
@@ -2024,8 +1915,7 @@ pub struct MoveNamespaceRequest {
     #[prost(string, tag="2")]
     pub parent: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MoveNamespaceResponse {
     #[prost(message, optional, tag="1")]
     pub namespace: ::core::option::Option<super::super::super::catalog::v1alpha1::NamespaceRecord>,
@@ -2037,12 +1927,10 @@ pub struct MoveNamespaceResponse {
 // can skip offering tools its own role could never call, instead of
 // discovering the ceiling one PERMISSION_DENIED at a time.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WhoAmIRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WhoAmIResponse {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
@@ -2077,8 +1965,7 @@ pub struct WhoAmIResponse {
 // `system` block (uid, created_at) and the etag are excluded, so restoring a
 // model from a manifest reproduces its snapshot id.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSnapshotIdRequest {
     /// Restrict the snapshot to these namespaces. Empty means every namespace.
     /// Two snapshot ids are comparable only when computed over the same
@@ -2091,7 +1978,6 @@ pub struct GetSnapshotIdRequest {
     #[prost(bool, tag="2")]
     pub include_entries: bool,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetSnapshotIdResponse {
     /// Lowercase hex SHA-256 over the whole `(key, content_hash)` set. Equal
@@ -2115,38 +2001,32 @@ pub struct GetSnapshotIdResponse {
 // scope travels on every other RPC (gRPC metadata, not a message field).
 // These three RPCs manage branch lifecycle only.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateBranchRequest {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub doc: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CreateBranchResponse {
     #[prost(message, optional, tag="1")]
     pub branch: ::core::option::Option<super::super::super::catalog::v1alpha1::BranchInfo>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListBranchesRequest {
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListBranchesResponse {
     #[prost(message, repeated, tag="1")]
     pub branches: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::BranchInfo>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteBranchRequest {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteBranchResponse {
 }
 // ---------- Branching (Phase 2: Review and merge) ----------------------------
@@ -2154,13 +2034,11 @@ pub struct DeleteBranchResponse {
 // See docs/explanation/branching.md, "Merge conflicts", for the full
 // semantics summarized here.
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DiffBranchRequest {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DiffBranchResponse {
     #[prost(message, repeated, tag="1")]
@@ -2168,8 +2046,7 @@ pub struct DiffBranchResponse {
     #[prost(message, optional, tag="2")]
     pub ancestry: ::core::option::Option<super::super::super::catalog::v1alpha1::BranchAncestry>,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MergeBranchRequest {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
@@ -2196,7 +2073,6 @@ pub struct MergeBranchRequest {
     #[prost(string, tag="5")]
     pub operation_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MergeBranchResponse {
     #[prost(enumeration="merge_branch_response::Status", tag="1")]
@@ -2238,11 +2114,11 @@ pub mod merge_branch_response {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Status::Unspecified => "STATUS_UNSPECIFIED",
-                Status::Applied => "STATUS_APPLIED",
-                Status::Validated => "STATUS_VALIDATED",
-                Status::Conflicts => "STATUS_CONFLICTS",
-                Status::Invalid => "STATUS_INVALID",
+                Self::Unspecified => "STATUS_UNSPECIFIED",
+                Self::Applied => "STATUS_APPLIED",
+                Self::Validated => "STATUS_VALIDATED",
+                Self::Conflicts => "STATUS_CONFLICTS",
+                Self::Invalid => "STATUS_INVALID",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2258,13 +2134,11 @@ pub mod merge_branch_response {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UpdateBranchRequest {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UpdateBranchResponse {
     /// Number of the branch's delta rows whose recorded `base`/`base_etag`
@@ -2282,8 +2156,7 @@ pub struct UpdateBranchResponse {
     #[prost(string, tag="3")]
     pub fork_changeset_id: ::prost::alloc::string::String,
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ResolveBranchEntryRequest {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
@@ -2330,10 +2203,10 @@ pub mod resolve_branch_entry_request {
         /// (if the ProtoBuf definition does not change) and safe for programmatic use.
         pub fn as_str_name(&self) -> &'static str {
             match self {
-                Resolution::Unspecified => "RESOLUTION_UNSPECIFIED",
-                Resolution::TakeTheirs => "RESOLUTION_TAKE_THEIRS",
-                Resolution::KeepOurs => "RESOLUTION_KEEP_OURS",
-                Resolution::TakeMerged => "RESOLUTION_TAKE_MERGED",
+                Self::Unspecified => "RESOLUTION_UNSPECIFIED",
+                Self::TakeTheirs => "RESOLUTION_TAKE_THEIRS",
+                Self::KeepOurs => "RESOLUTION_KEEP_OURS",
+                Self::TakeMerged => "RESOLUTION_TAKE_MERGED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2348,8 +2221,7 @@ pub mod resolve_branch_entry_request {
         }
     }
 }
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ResolveBranchEntryResponse {
     /// Set only when the request carried an operation_id.
     #[prost(message, optional, tag="1")]
@@ -2384,12 +2256,12 @@ impl OperationStatus {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            OperationStatus::Unspecified => "OPERATION_STATUS_UNSPECIFIED",
-            OperationStatus::Pending => "OPERATION_STATUS_PENDING",
-            OperationStatus::Applied => "OPERATION_STATUS_APPLIED",
-            OperationStatus::Rejected => "OPERATION_STATUS_REJECTED",
-            OperationStatus::NotApplied => "OPERATION_STATUS_NOT_APPLIED",
-            OperationStatus::Unknown => "OPERATION_STATUS_UNKNOWN",
+            Self::Unspecified => "OPERATION_STATUS_UNSPECIFIED",
+            Self::Pending => "OPERATION_STATUS_PENDING",
+            Self::Applied => "OPERATION_STATUS_APPLIED",
+            Self::Rejected => "OPERATION_STATUS_REJECTED",
+            Self::NotApplied => "OPERATION_STATUS_NOT_APPLIED",
+            Self::Unknown => "OPERATION_STATUS_UNKNOWN",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2420,9 +2292,9 @@ impl PrincipalKind {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            PrincipalKind::Unspecified => "PRINCIPAL_KIND_UNSPECIFIED",
-            PrincipalKind::User => "PRINCIPAL_KIND_USER",
-            PrincipalKind::Agent => "PRINCIPAL_KIND_AGENT",
+            Self::Unspecified => "PRINCIPAL_KIND_UNSPECIFIED",
+            Self::User => "PRINCIPAL_KIND_USER",
+            Self::Agent => "PRINCIPAL_KIND_AGENT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2452,10 +2324,10 @@ impl Role {
     /// (if the ProtoBuf definition does not change) and safe for programmatic use.
     pub fn as_str_name(&self) -> &'static str {
         match self {
-            Role::Unspecified => "ROLE_UNSPECIFIED",
-            Role::Reader => "ROLE_READER",
-            Role::Writer => "ROLE_WRITER",
-            Role::Admin => "ROLE_ADMIN",
+            Self::Unspecified => "ROLE_UNSPECIFIED",
+            Self::Reader => "ROLE_READER",
+            Self::Writer => "ROLE_WRITER",
+            Self::Admin => "ROLE_ADMIN",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.

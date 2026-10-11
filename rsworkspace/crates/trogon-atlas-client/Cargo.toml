@@ -11,11 +11,11 @@ description = "Shared write-discipline semantics (manifest parsing, apply planni
 trogon-atlas-proto = { workspace = true }
 trogon-atlas-core = { workspace = true }
 trogon-atlas-types = { workspace = true }
-tonic = { workspace = true, features = ["tls", "tls-roots"] }
+tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
 tonic-types = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
-prost-reflect = { version = "0.14", features = ["serde"] }
+prost-reflect = { version = "0.16", features = ["serde"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
