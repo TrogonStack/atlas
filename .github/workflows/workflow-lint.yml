@@ -1,0 +1,39 @@
+# A workflow file that fails to parse runs none of its jobs, so a lint step
+# inside lint.yml could never report breakage of lint.yml itself. This stays
+# in its own file so a broken workflow is always caught by something else.
+name: Workflow Lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  runs-on:
+    uses: ./.github/workflows/runs-on.yml
+
+  actionlint:
+    name: actionlint
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: TrogonStack/github-actions/actions/actionlint@fa016e95f1afbdcbb5cdd09f14039eeab9bf786d # actionlint@v0.1.0
