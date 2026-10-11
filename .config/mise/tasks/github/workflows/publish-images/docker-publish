@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#MISE description="Build every trogon-atlas image for linux/amd64 and linux/arm64 and push it to GHCR tagged canary"
+set -euo pipefail
+
+root="$MISE_PROJECT_ROOT"
+revision="${GITHUB_SHA:?GITHUB_SHA is required}"
+
+for dockerfile in "$root"/devops/docker/images/*/Dockerfile; do
+  dir="$(dirname "$dockerfile")"
+  name="$(basename "$dir")"
+  if grep -q -- '--mount=type=bind,source=' "$dockerfile"; then
+    ctx="$root"
+  else
+    ctx="$dir"
+  fi
+  image="ghcr.io/trogonstack/$name"
+  echo "publishing $image:canary (context: $ctx)" >&2
+  docker buildx build \
+    --file "$dockerfile" \
+    --platform linux/amd64,linux/arm64 \
+    --tag "$image:canary" \
+    --label "org.opencontainers.image.source=https://github.com/TrogonStack/atlas" \
+    --label "org.opencontainers.image.revision=$revision" \
+    --provenance=true \
+    --sbom=true \
+    --cache-from "type=gha,scope=$name" \
+    --cache-from "type=gha,scope=$name-canary" \
+    --cache-to "type=gha,scope=$name-canary,mode=max" \
+    --push \
+    "$ctx"
+done

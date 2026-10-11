@@ -1,0 +1,64 @@
+name: Publish Images
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - devops/docker/images/**
+      - "**/Dockerfile*"
+      - .config/mise/tasks/github/workflows/publish-images/**
+      - .config/mise/tasks/github/actions/docker-buildx/**
+      - .github/workflows/publish-images.yml
+      - mise.toml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  runs-on:
+    uses: ./.github/workflows/runs-on.yml
+
+  publish:
+    name: Publish
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+
+      - name: Reclaim runner disk
+        run: mise run github:workflows:ci:reclaim-disk
+
+      - name: Set up buildx
+        run: mise run github:actions:docker-buildx:setup
+
+      - name: Expose the Actions cache to buildx
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            for (const [key, value] of Object.entries(process.env)) {
+              if (key.startsWith('ACTIONS_')) core.exportVariable(key, value);
+            }
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish images
+        run: mise run github:workflows:publish-images:docker-publish
