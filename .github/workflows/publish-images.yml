@@ -28,7 +28,6 @@ jobs:
       matrix:
         image:
           - trogon-atlas-server
-          - trogon-atlas-mcp
           - trogon-atlas-studio
 
     steps:
