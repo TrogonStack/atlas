@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Check internal Markdown links only, for fast PR feedback"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+exec lychee --offline "**/*.md"

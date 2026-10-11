@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#MISE description="Run shfmt --check over the bash mise tasks and any *.sh scripts"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+
+files=()
+while IFS= read -r -d '' f; do
+  files+=("$f")
+done < <(find .config/mise/tasks -type f -print0)
+while IFS= read -r -d '' f; do
+  files+=("$f")
+done < <(find . -name '*.sh' -not -path './rsworkspace/target/*' -not -path '*/node_modules/*' -print0)
+
+bash_files=()
+for f in "${files[@]}"; do
+  if head -1 "$f" | grep -q '^#!.*bash'; then
+    bash_files+=("$f")
+  fi
+done
+
+[ ${#bash_files[@]} -gt 0 ] || exit 0
+exec shfmt -ln bash -i 2 -ci -d "${bash_files[@]}"

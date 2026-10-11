@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Scan this ref's full git history for leaked secrets with gitleaks"
+set -euo pipefail
+
+exec gitleaks git --log-opts="--full-history HEAD" --redact -v

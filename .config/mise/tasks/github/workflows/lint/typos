@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run typos across the repository"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+exec typos

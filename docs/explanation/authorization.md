@@ -358,7 +358,7 @@ conservative answer, and it is the answer a reviewer can verify.
 
 The same patterns configure the server side of the seam:
 
-```
+```text
 --protect-baseline                        # every namespace (unchanged)
 --protect-baseline-namespaces=orders,shop-*  # only these
 TROGON_ATLAS_PROTECT_BASELINE_NAMESPACES=orders,shop-*
@@ -398,7 +398,7 @@ on the MCP side, the gateway env on the Studio side).
 
 ### Request flow
 
-```
+```text
 request arrives with "authorization: Bearer <token>"
         |
         v
@@ -882,7 +882,7 @@ caller every other one.
 
 ### Operating it
 
-```
+```text
 trogon-atlas-server --spicedb-endpoint=http://spicedb:50051 \
                   --spicedb-preshared-key=... \
                   --auth-tokens-file=/etc/trogon-atlas/tokens.toml

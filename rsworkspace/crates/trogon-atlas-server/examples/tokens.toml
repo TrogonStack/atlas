@@ -73,4 +73,3 @@ role = "writer"
 token_files = ["/run/secrets/trogon-atlas-ci.key"]
 namespaces = ["orders"]
 parent = "acme"
-
