@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
-zizmor --format=sarif .github/workflows > zizmor-results.sarif
+zizmor --format=sarif .github/workflows >zizmor-results.sarif
