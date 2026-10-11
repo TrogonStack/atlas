@@ -2,15 +2,12 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use tonic::{
-    service::interceptor::InterceptedService,
-    transport::{Identity, Server, ServerTlsConfig},
-};
+use tonic::transport::{Identity, Server, ServerTlsConfig};
 use trogon_atlas_core::WriterRole;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{
-    auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    auth::{BearerAuth, TokenRegistry},
     git_mirror::{GitMirror, MirrorAuthor},
 };
 use trogon_atlas_store::{
@@ -113,6 +110,20 @@ struct Args {
         default_value_t = false
     )]
     metrics_allow_external: bool,
+    /// Serve MCP over Streamable HTTP at `/mcp`, on this same gRPC listener.
+    /// Off by default. Every MCP request acts as its own `Authorization:
+    /// Bearer` token, exactly as a gRPC call would.
+    #[arg(long, env = "TROGON_ATLAS_MCP", default_value_t = false)]
+    mcp: bool,
+    /// Comma-separated `Host` header values the MCP endpoint accepts, as a
+    /// guard against DNS rebinding. Entries without a port match any port;
+    /// `*` disables the check. Only guards `/mcp`; gRPC is unaffected.
+    #[arg(
+        long,
+        env = "TROGON_ATLAS_MCP_ALLOWED_HOSTS",
+        default_value = "localhost,127.0.0.1,::1"
+    )]
+    mcp_allowed_hosts: trogon_atlas_server::mcp::AllowedHosts,
     /// Shared bearer token required on every RPC. Deprecated in favor of
     /// `--auth-tokens-file`. When set without a tokens file, the token is
     /// treated as belonging to a synthetic principal named "legacy-admin" with
@@ -970,18 +981,16 @@ async fn main() -> Result<()> {
         });
     }
 
-    tracing::info!(%addr, "trogon-atlas-server starting");
-
     let drain_deadline = std::time::Duration::from_secs(args.shutdown_drain_secs);
 
     // Watch channel for drain notification: InflightGuard::drop sends the
     // current count; await_inflight_drain wakes on each send.
     let (drain_tx, drain_rx) = tokio::sync::watch::channel(0i64);
     let drain_tx = std::sync::Arc::new(drain_tx);
+    let inflight =
+        trogon_atlas_server::telemetry::InflightLayer::new(inflight_counter.clone(), drain_tx);
 
-    let inflight_for_layer = inflight_counter.clone();
-    let mut builder = builder.concurrency_limit_per_connection(args.concurrency_limit);
-    if args.rpc_timeout_secs > 0 {
+    let rpc_timeout = (args.rpc_timeout_secs > 0).then(|| {
         // An LLM-backed RPC needs headroom above the LLM's own timeout,
         // otherwise the gRPC deadline fires first and turns a slow-but-valid
         // LLM response into DEADLINE_EXCEEDED. Widen with a fixed buffer
@@ -1003,40 +1012,71 @@ async fn main() -> Result<()> {
                 "widening RPC timeout to allow analysis and fallback to complete"
             );
         }
-        builder = builder.timeout(std::time::Duration::from_secs(rpc_timeout_secs));
+        std::time::Duration::from_secs(rpc_timeout_secs)
+    });
+
+    // Request flow for the data-plane service, for gRPC and MCP callers alike:
+    //   InterceptedService/BearerAuth (token -> Principal in extensions, authn)
+    //     -> AuthzLayer (required_role(uri.path()) vs principal.role, authz)
+    //       -> handler
+    let data_plane = trogon_atlas_server::mcp::data_plane(grpc_service, auth);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+    let shutdown_requested = move || {
+        let mut shutdown_rx = shutdown_rx.clone();
+        async move {
+            let _ = shutdown_rx.wait_for(|requested| *requested).await;
+        }
+    };
+
+    // The health service is mounted OUTSIDE the auth stack so
+    // liveness/readiness probes (kube-proxy, GCP HC, etc.) can reach it
+    // without holding a bearer token. It exposes only liveness -- no
+    // entity data -- so the bypass is intentional and bounded. Anything
+    // touching the EventModelService data plane must stay inside
+    // `data_plane`.
+    let mut routes = tonic::service::Routes::builder();
+    routes.add_service(health_service);
+    routes.add_service(data_plane.clone());
+    let mut routes = routes.routes();
+    if args.mcp {
+        let mcp_router = trogon_atlas_server::mcp::mcp_router(
+            data_plane,
+            inflight.clone(),
+            rpc_timeout,
+            args.max_message_bytes,
+            args.mcp_allowed_hosts.clone(),
+        )?;
+        let merged = routes.axum_router_mut().clone().merge(mcp_router);
+        *routes.axum_router_mut() = merged;
+        tracing::info!(
+            "serving MCP over Streamable HTTP at {} on the gRPC listener",
+            trogon_atlas_server::mcp::MCP_PATH
+        );
+    }
+
+    tracing::info!(%addr, "trogon-atlas-server starting");
+
+    let mut builder = builder.concurrency_limit_per_connection(args.concurrency_limit);
+    if let Some(rpc_timeout) = rpc_timeout {
+        builder = builder.timeout(rpc_timeout);
+    }
+    if args.mcp {
+        // MCP clients speak HTTP/1.1; the gRPC listener is HTTP/2 only by
+        // default.
+        builder = builder.accept_http1(true);
     }
     builder
         .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new())
-        .layer(trogon_atlas_server::telemetry::InflightLayer::new(
-            inflight_for_layer,
-            drain_tx,
-        ))
+        .layer(inflight)
         .trace_fn(trogon_atlas_server::telemetry::rpc_span_from_request)
-        // The health service is mounted OUTSIDE the auth stack so
-        // liveness/readiness probes (kube-proxy, GCP HC, etc.) can reach it
-        // without holding a bearer token. It exposes only liveness -- no
-        // entity data -- so the bypass is intentional and bounded. Anything
-        // touching the EventModelService data plane must stay inside the
-        // auth stack below.
-        //
-        // Request flow for the data-plane service:
-        //   InterceptedService/BearerAuth (token -> Principal in extensions, authn)
-        //     -> AuthzLayer (required_role(uri.path()) vs principal.role, authz)
-        //       -> handler
-        //
-        // Ordering is critical: InterceptedService is the OUTERMOST wrapper so
-        // BearerAuth runs first and populates extensions before AuthzLayer reads
-        // them. Inverting the nesting puts AuthzLayer before authn and denies
-        // every request.
-        .add_service(health_service)
-        .add_service(InterceptedService::new(
-            tower::ServiceBuilder::new()
-                .layer(AuthzLayer)
-                .service(grpc_service),
-            auth,
-        ))
+        .add_routes(routes)
         .serve_with_shutdown(addr, async {
-            shutdown_signal().await;
+            shutdown_requested().await;
             // Stop the background health probe before toggling the status so
             // the probe cannot race and flip back to SERVING after we set
             // NOT_SERVING here.

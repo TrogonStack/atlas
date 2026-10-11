@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 use std::sync::Arc;
 
 use rmcp::model::ErrorCode;
@@ -21,7 +23,7 @@ use tonic::Code;
 ///    `batch_mutate`, `delete_entity`, `get_entity` (read), and the `NOT_FOUND`
 ///    error path that the MCP handler classifies via `classify_status`.
 ///
-/// 4. Full MCP transport dispatch -- `McpServer::connect` plus an in-process
+/// 4. Full MCP transport dispatch -- `McpServer::new` plus an in-process
 ///    `tokio::io::duplex` pipe driven by `rmcp::serve_client` exercises the
 ///    `#[tool_router]`-generated dispatch itself (tool name resolution,
 ///    parameter deserialization, `Ok`/`Err` -> JSON-RPC result/error mapping),
@@ -553,7 +555,7 @@ fn get_entity_params_missing_kind_returns_deserialization_error() {
     );
 }
 
-// Item 4: stdio transport (JSON-RPC framing + tool_router dispatch) tested via
+// Item 4: in-process transport (JSON-RPC framing + tool_router dispatch) tested via
 // an in-process tokio::io::duplex pair. The server side is a real McpServer
 // connected to an in-process gRPC backend; the client side is rmcp::serve_client
 // driving the initialize handshake and one call_tool round-trip.
@@ -565,14 +567,10 @@ fn get_entity_params_missing_kind_returns_deserialization_error() {
 // initialize message, the client waits for the server's initialize response.
 // Sequential setup deadlocks, so we use tokio::join! to start both at once.
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_stdio_transport_initialize_and_list_namespaces() {
+async fn mcp_in_process_transport_initialize_and_list_namespaces() {
     let grpc_endpoint = start_server().await;
 
-    // McpServer::connect requires an actual gRPC endpoint string.
-    let mcp_server =
-        trogon_atlas_mcp::server::McpServer::connect(&grpc_endpoint, None, None, 30, None)
-            .await
-            .unwrap();
+    let mcp_server = support::mcp_server(&grpc_endpoint, None);
 
     // Create an in-process bidirectional pipe. Both halves are split into
     // separate read/write ends so server and client can handshake concurrently.
@@ -607,12 +605,9 @@ async fn mcp_stdio_transport_initialize_and_list_namespaces() {
 // Item 4: also verify that an invalid namespace arg surfaces as an MCP error
 // (invalid_params) rather than a transport error.
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_stdio_transport_invalid_namespace_returns_error() {
+async fn mcp_in_process_transport_invalid_namespace_returns_error() {
     let grpc_endpoint = start_server().await;
-    let mcp_server =
-        trogon_atlas_mcp::server::McpServer::connect(&grpc_endpoint, None, None, 30, None)
-            .await
-            .unwrap();
+    let mcp_server = support::mcp_server(&grpc_endpoint, None);
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(
@@ -660,12 +655,9 @@ async fn mcp_stdio_transport_invalid_namespace_returns_error() {
 // exercises the create -> unchanged -> export round trip through the same
 // in-process MCP transport as the tests above.
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_stdio_transport_apply_manifests_round_trip() {
+async fn mcp_in_process_transport_apply_manifests_round_trip() {
     let grpc_endpoint = start_server().await;
-    let mcp_server =
-        trogon_atlas_mcp::server::McpServer::connect(&grpc_endpoint, None, None, 30, None)
-            .await
-            .unwrap();
+    let mcp_server = support::mcp_server(&grpc_endpoint, None);
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(
@@ -739,7 +731,7 @@ spec: { title: Thing happened }
 
 // ===========================================================================
 // Branch tools (Phase 1 Isolation + Phase 2 Review and merge). Same in-process
-// stdio transport as the apply_manifests test above: a real McpServer wired
+// in-process transport as the apply_manifests test above: a real McpServer wired
 // to an in-process gRPC server backed by an ephemeral JetStream store, driven
 // by rmcp::serve_client over a tokio::io::duplex pipe.
 // ===========================================================================
@@ -750,7 +742,7 @@ type McpServiceRunning =
 
 /// Start an MCP server + client pair over an in-process duplex pipe, against
 /// a fresh in-process gRPC server. Same setup as every other
-/// `mcp_stdio_transport_*` test in this file.
+/// `mcp_in_process_transport_*` test in this file.
 async fn start_mcp_client() -> (McpClient, McpServiceRunning, String) {
     let grpc_endpoint = start_server().await;
     let (client, service) = mcp_client_for(&grpc_endpoint, None).await;
@@ -758,26 +750,18 @@ async fn start_mcp_client() -> (McpClient, McpServiceRunning, String) {
 }
 
 /// Start a second MCP server + client pair against an *existing* gRPC
-/// endpoint, optionally scoped to a branch. Branch scope for trogon-atlas-mcp
-/// is bound once at `McpServer::connect` time (there is no per-call branch
-/// header the way trogon-atlas's `--branch` flag works), so exercising a branch's
-/// content through the MCP surface requires a second, branch-scoped server
-/// instance talking to the same backend as the unscoped one that drives
+/// endpoint, optionally scoped to a branch. Over the duplex pipe there are no
+/// HTTP headers to carry `x-trogon-atlas-branch`, so the branch is bound at
+/// `McpServer::new` time instead, and exercising a branch's content through
+/// the MCP surface requires a second, branch-scoped server instance talking
+/// to the same backend as the unscoped one that drives
 /// diff_branch/merge_branch/update_branch/resolve_branch_entry (those RPCs
 /// take the branch `name` as an explicit field, never via connect-time scope).
 async fn mcp_client_for(
     grpc_endpoint: &str,
     branch: Option<&str>,
 ) -> (McpClient, McpServiceRunning) {
-    let mcp_server = trogon_atlas_mcp::server::McpServer::connect(
-        grpc_endpoint,
-        None,
-        None,
-        30,
-        branch.map(str::to_string),
-    )
-    .await
-    .unwrap();
+    let mcp_server = support::mcp_server(grpc_endpoint, branch.map(str::to_string));
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(

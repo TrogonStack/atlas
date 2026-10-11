@@ -23,6 +23,10 @@ serde_yaml = "0.9"
 similar = "2"
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+tower = { version = "0.5", features = ["util"] }
+http = "1"
+http-body = "1"
+bytes = { workspace = true }
 
 [dev-dependencies]
 trogon-atlas-server = { workspace = true }
@@ -30,7 +34,6 @@ trogon-atlas-store = { workspace = true }
 trogon-atlas-testsupport = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }
 jsonschema = { workspace = true }
-tower = "0.5"
 toml = "1.1"
 tempfile = { workspace = true }
 

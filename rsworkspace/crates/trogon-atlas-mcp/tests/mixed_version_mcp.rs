@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 // The MCP adapter must refuse a mutation tool before the mutation reaches a
 // server that cannot honor it, while reads keep working so an agent can
 // still inspect the server and see why.
@@ -12,9 +14,7 @@ type McpServiceRunning =
     rmcp::service::RunningService<rmcp::RoleServer, trogon_atlas_mcp::server::McpServer>;
 
 async fn start_mcp(endpoint: &str, branch: Option<String>) -> (McpClient, McpServiceRunning) {
-    let mcp_server = trogon_atlas_mcp::server::McpServer::connect(endpoint, None, None, 5, branch)
-        .await
-        .unwrap();
+    let mcp_server = support::mcp_server(endpoint, branch);
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (service, client) = tokio::join!(

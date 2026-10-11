@@ -9,7 +9,7 @@ use rmcp::{
 use trogon_atlas_client::{
     apply::ApplyRejected,
     branch::Resolution,
-    client::{connect_with_options, Client, ConnectOptions},
+    client::{client_for_transport, Client, ConnectOptions, Transport},
     compat::{self, MutationIntent},
     precondition::{BranchEntryState, StalePlan},
     tenant_types::{self, TypeScope},
@@ -18,6 +18,7 @@ use trogon_atlas_core::transcode::TranscodePool;
 use trogon_atlas_proto as pb;
 
 use crate::{
+    caller::{Caller, CallerToken},
     error::{attach_operation_id, tool_err, McpError},
     tools::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
@@ -41,7 +42,7 @@ pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_SEARCH_QUERY_BYTES: usize = 2048;
 
 /// ServerHandler instructions. Keep in sync with `get_info`.
-pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas-mcp: stdio MCP adapter for the trogonatlas.api.eventmodel.v1alpha1 gRPC service. \
+pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatlas.api.eventmodel.v1alpha1 gRPC service. \
              Read tools return a binpb_base64 envelope you can decode (or use *_json companions). Mutations \
              have two surfaces: JSON (get_entity_json -> edit proto3 JSON -> put_entity_json / \
              batch_mutate_json; no protobuf tooling required) and binpb (get_entity -> modify \
@@ -189,7 +190,7 @@ pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas-mcp: stdio MCP adapter for t
 
 /// The MCP crate's own ordering of the server's RBAC roles, so tool
 /// listing can compare a caller's role against a tool's minimum without
-/// depending on `trogon-atlas-server` (a dev-only dependency here; see
+/// depending on `trogon-atlas-server`, which depends on this crate (see
 /// `TOOL_POLICIES` below).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ToolRole {
@@ -214,9 +215,8 @@ impl From<pb::Role> for ToolRole {
 /// minimum role a caller needs before this adapter offers the tool at all.
 ///
 /// `min_role` is hand-maintained here rather than derived at runtime from
-/// `trogon_atlas_server::auth::required_role`, because that crate is only a
-/// dev-dependency of `trogon-atlas-mcp` (the role map is server-internal;
-/// this adapter should not need the server crate to run). The `tests`
+/// `trogon_atlas_server::auth::required_role`, because that crate serves
+/// these tools and so can only be a dev-dependency here. The `tests`
 /// module below, which already depends on `trogon-atlas-server`, asserts
 /// every row's `min_role` equals the max role `required_role` reports over
 /// `rpcs`, so the two can never drift silently.
@@ -530,21 +530,17 @@ fn tool_allowed_for(tool: &str, role: ToolRole) -> bool {
 
 #[derive(Clone)]
 pub struct McpServer {
-    /// `tonic::Channel` multiplexes requests internally and is `Clone +
-    /// Send`. Wrapping the client in `Mutex` (the previous shape) made every
-    /// MCP tool call serialize through one global lock, defeating concurrency
-    /// and adding head-of-line blocking. We hand each call its own `clone()`
-    /// of the client; the underlying channel is shared.
+    /// Shared by every caller; each caller gets its own `Client` over it
+    /// (see `for_caller`).
+    transport: Transport,
+    options: ConnectOptions,
+    /// The client tool handlers call through. On the shared instance it
+    /// carries no credential; `for_caller` swaps in one carrying the
+    /// caller's own bearer token for the duration of a request.
     client: Client,
     /// Whether every request carries `x-trogon-atlas-branch`, which a server
     /// must honor before this adapter lets an agent mutate through it.
     branch_scoped: bool,
-    /// The caller's own role, learned from `WhoAmI` at connect time, used to
-    /// filter `list_tools` down to what this principal could actually call.
-    /// `None` when the server predates the `who_am_i` feature flag or the
-    /// call failed, in which case every tool is listed unfiltered: the
-    /// server remains the actual enforcement point regardless.
-    role: Option<ToolRole>,
     // Required for `#[tool_router]` codegen; the macro reads this field
     // off `self` at dispatch time but the compiler can't prove the read
     // because the dispatch flows through trait-object indirection. The
@@ -555,46 +551,55 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    pub async fn connect(
-        endpoint: &str,
-        auth_token: Option<&str>,
-        max_message_bytes: Option<usize>,
-        rpc_timeout_secs: u64,
-        branch: Option<String>,
-    ) -> Result<Self> {
-        // Match the server's 4 MiB cap so a `listEntities` page that's
-        // legal server-side doesn't blow up on the MCP client with a
-        // surprise `ResourceExhausted`. The limit is configured via
-        // --max-message-bytes / TROGON_ATLAS_MCP_MAX_MESSAGE_BYTES.
-        let branch_scoped = branch.is_some();
-        let client = connect_with_options(
-            endpoint,
-            auth_token,
-            rpc_timeout_secs,
-            ConnectOptions {
-                request_id_prefix: Some("mcp"),
-                max_message_bytes,
-                branch,
-            },
-        )
-        .await?;
-        let role = Self::learn_role(&client).await;
+    /// `options.branch` is the branch callers act on unless their request
+    /// names its own.
+    pub fn new(transport: Transport, options: ConnectOptions) -> Result<Self> {
+        let client = client_for_transport(transport.clone(), None, &options)?;
         Ok(Self {
+            transport,
+            branch_scoped: options.branch.is_some(),
+            options,
             client,
-            branch_scoped,
-            role,
             tool_router: Self::tool_router(),
         })
+    }
+
+    /// A copy of this server whose every gRPC call carries `caller`'s token
+    /// and branch.
+    fn for_caller(&self, caller: Caller) -> Result<Self, rmcp::ErrorData> {
+        let options = ConnectOptions {
+            branch: caller.branch.or_else(|| self.options.branch.clone()),
+            ..self.options.clone()
+        };
+        let client = client_for_transport(
+            self.transport.clone(),
+            caller.token.as_ref().map(CallerToken::as_str),
+            &options,
+        )
+        .map_err(|e| rmcp::ErrorData::invalid_request(e.to_string(), None))?;
+        Ok(Self {
+            client,
+            branch_scoped: options.branch.is_some(),
+            options,
+            ..self.clone()
+        })
+    }
+
+    fn for_request(
+        &self,
+        context: &rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<Self, rmcp::ErrorData> {
+        self.for_caller(Caller::from_context(context)?)
     }
 
     /// Learn the caller's own role via `WhoAmI`, gated on the server
     /// advertising the `who_am_i` feature flag. Any absence or failure
     /// degrades to `None` (list every tool unfiltered) rather than
-    /// refusing to connect: the server enforces the role on every call
+    /// failing the listing: the server enforces the role on every call
     /// regardless, so a client-side listing miss is never a safety gap,
     /// only a worse-than-ideal tool menu.
-    async fn learn_role(client: &Client) -> Option<ToolRole> {
-        let mut client = client.clone();
+    async fn learn_role(&self) -> Option<ToolRole> {
+        let mut client = self.client();
         let info = match client.get_server_info(pb::GetServerInfoRequest {}).await {
             Ok(resp) => resp.into_inner(),
             Err(e) => {
@@ -621,8 +626,8 @@ impl McpServer {
     }
 
     /// Hand each tool invocation its own client clone so concurrent calls
-    /// multiplex over the shared `tonic::Channel` instead of serializing
-    /// behind a single mutex.
+    /// multiplex over the shared transport instead of serializing behind a
+    /// single mutex.
     fn client(&self) -> Client {
         self.client.clone()
     }
@@ -1935,7 +1940,7 @@ impl McpServer {
         const MAX_B64_BYTES: usize = MAX_JSON_BYTES * 4 / 3 + 4;
         // Cap the total encoded proto payload across all ops at the gRPC max
         // message size (4 MiB, matching --max-message-bytes / the channel cap
-        // set in McpServer::connect). Without this the server rejects the
+        // set in McpServer::new). Without this the server rejects the
         // request with an opaque ResourceExhausted instead of a clear error.
         const MAX_BATCH_PAYLOAD_BYTES: usize = MAX_JSON_BYTES;
         let mut batch_payload_bytes: usize = 0;
@@ -2620,7 +2625,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create a new branch (Phase 1: Isolation): a server-side overlay of copy-on-write deltas over the baseline store. Fails if a branch with this name already exists. Scope subsequent tool calls to it by restarting trogon-atlas-mcp with --branch/TROGON_ATLAS_BRANCH set to the branch name.",
+        description = "Create a new branch (Phase 1: Isolation): a server-side overlay of copy-on-write deltas over the baseline store. Fails if a branch with this name already exists. Scope subsequent tool calls to it by sending the branch name in the x-trogon-atlas-branch HTTP header on each MCP request.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2869,19 +2874,32 @@ impl ServerHandler for McpServer {
             .with_instructions(SERVER_INSTRUCTIONS)
     }
 
-    /// Filters the tool list down to what `self.role` could actually call,
-    /// so an agent never offers itself a tool the server would answer with
-    /// `PERMISSION_DENIED`. `call_tool` is left for `#[tool_handler]` to
-    /// generate unfiltered: the server is the real enforcement point, and
-    /// this listing is only a courtesy that degrades to "list everything"
-    /// whenever `self.role` is unknown (see `McpServer::learn_role`).
+    /// Runs the tool as the caller who sent this request, never as the
+    /// service: the server sees the caller's own bearer token.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let caller = self.for_request(&context)?;
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(&caller, request, context);
+        self.tool_router.call(tcc).await
+    }
+
+    /// Filters the tool list down to what the caller's role could actually
+    /// call, so an agent never offers itself a tool the server would answer
+    /// with `PERMISSION_DENIED`. `call_tool` stays unfiltered: the server is
+    /// the real enforcement point, and this listing is only a courtesy that
+    /// degrades to "list everything" whenever the role is unknown (see
+    /// `McpServer::learn_role`).
     async fn list_tools(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let role = self.for_request(&context)?.learn_role().await;
         let tools = self.tool_router.list_all();
-        let tools = match self.role {
+        let tools = match role {
             None => tools,
             Some(role) => tools
                 .into_iter()
