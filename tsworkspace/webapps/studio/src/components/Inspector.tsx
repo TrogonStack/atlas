@@ -67,12 +67,15 @@ export function safeLinkHref(raw: string): string {
 // to whichever EventModels claim the upstream/downstream entity as a
 // member; clicking opens that EM with the entity focused.
 function SeamSection({ entity, model, onSelect }: { entity: Entity; model: Model; onSelect: (key: string) => void }) {
-  const upstreamRefs =
-    entity.kind === 'readModel'
-      ? (Array.isArray(entity.raw.sourceEvents) ? entity.raw.sourceEvents : [])
-          .map((r) => asId((r as Record<string, unknown>)?.id))
-          .filter((id) => id.namespace && id.slug && id.namespace !== entity.id.namespace)
-      : [];
+  const upstreamRefs = useMemo(
+    () =>
+      entity.kind === 'readModel'
+        ? (Array.isArray(entity.raw.sourceEvents) ? entity.raw.sourceEvents : [])
+            .map((r) => asId((r as Record<string, unknown>)?.id))
+            .filter((id) => id.namespace && id.slug && id.namespace !== entity.id.namespace)
+        : [],
+    [entity],
+  );
   const allSeams = useMemo(() => contextSeams(model), [model]);
   const downstreamViews =
     entity.kind === 'event'
@@ -261,7 +264,7 @@ function ScenarioBlock({ scenario, givenApplies }: { scenario: ScenarioView; giv
             <div className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">Given</div>
             {scenario.given.length > 0 ? (
               scenario.given.map((g, i) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: examples have no stable id
+                // oxlint-disable-next-line react/no-array-index-key -- examples have no stable id
                 <ExampleBlock key={i} example={g} />
               ))
             ) : (
@@ -274,7 +277,7 @@ function ScenarioBlock({ scenario, givenApplies }: { scenario: ScenarioView; giv
             <div className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">When</div>
             {scenario.whenDoc ? <p className="text-[11px] italic">{scenario.whenDoc}</p> : null}
             {scenario.when.map((w, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: examples have no stable id
+              // oxlint-disable-next-line react/no-array-index-key -- examples have no stable id
               <ExampleBlock key={i} example={w} />
             ))}
           </div>
@@ -288,7 +291,7 @@ function ScenarioBlock({ scenario, givenApplies }: { scenario: ScenarioView; giv
             </div>
           ) : null}
           {scenario.thenEmits.map((e, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: examples have no stable id
+            // oxlint-disable-next-line react/no-array-index-key -- examples have no stable id
             <ExampleBlock key={i} example={e} />
           ))}
           {scenario.thenState ? <ExampleBlock example={scenario.thenState} /> : null}
@@ -954,7 +957,7 @@ export function Inspector({
                 const status = humanStatus(item.status);
                 return (
                   <div
-                    // biome-ignore lint/suspicious/noArrayIndexKey: items have no stable id
+                    // oxlint-disable-next-line react/no-array-index-key -- items have no stable id
                     key={i}
                     className="flex items-baseline gap-2 border-b border-border px-2 py-1.5 last:border-0"
                   >
@@ -1020,14 +1023,14 @@ export function Inspector({
                 const after = (t.after as { id?: { slug?: string } } | undefined)?.id?.slug ?? '?';
                 const next = Array.isArray(t.next) ? (t.next as Record<string, unknown>[]) : [];
                 return (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: transitions have no stable id
+                  // oxlint-disable-next-line react/no-array-index-key -- transitions have no stable id
                   <div key={i} className="rounded-md border border-border px-2 py-1.5 text-xs">
                     <div className="font-mono text-[11px]">after {after}</div>
                     <div className="mt-0.5 space-y-0.5">
                       {next.map((n, j) => {
                         const slug = (n.event as { id?: { slug?: string } } | undefined)?.id?.slug ?? '?';
                         return (
-                          // biome-ignore lint/suspicious/noArrayIndexKey: branches have no stable id
+                          // oxlint-disable-next-line react/no-array-index-key -- branches have no stable id
                           <div key={j} className="flex items-baseline gap-1.5">
                             <span className="text-amber-600">→</span>
                             <span className="font-mono text-[11px]">{slug}</span>
@@ -1108,7 +1111,7 @@ export function Inspector({
             <div className="overflow-hidden rounded-md border border-border">
               {(entity.raw.members as { kind?: string; id?: { namespace?: string; slug?: string } }[]).map((m, i) => (
                 <div
-                  // biome-ignore lint/suspicious/noArrayIndexKey: members have no stable id beyond ref
+                  // oxlint-disable-next-line react/no-array-index-key -- members have no stable id beyond ref
                   key={i}
                   className="flex items-baseline gap-2 border-b border-border px-2 py-1.5 last:border-0"
                 >
@@ -1149,7 +1152,7 @@ export function Inspector({
             <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Annotations</h3>
             <div className="space-y-1.5">
               {listedAnnotations.map((a, i) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: annotations have no stable id
+                // oxlint-disable-next-line react/no-array-index-key -- annotations have no stable id
                 <AnnotationView key={i} annotation={a} />
               ))}
             </div>

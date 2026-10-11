@@ -219,7 +219,7 @@ describe('entityContext: GIVEN is rendered even when empty', () => {
       id: 'exhausted',
       title: 'Retries exhausted',
       whenDoc: 'retry budget exhausted',
-      // biome-ignore lint/suspicious/noThenProperty: `then` is the AutomationScenario proto field
+      // oxlint-disable-next-line unicorn/no-thenable -- `then` is the AutomationScenario proto field
       then: { command: { id: id('supply-account', 'fail-transfer') } },
     });
     const ctx = entityContext(model, mustFind(model.slices[0]).entity);
@@ -243,7 +243,7 @@ describe('entityContext: GIVEN is rendered even when empty', () => {
       id: 'projects',
       title: 'Feed projects',
       when: [{ event: { id: id('supply-account', 'transfer.compensated') } }],
-      // biome-ignore lint/suspicious/noThenProperty: `then` is the ReadModelScenario proto field
+      // oxlint-disable-next-line unicorn/no-thenable -- `then` is the ReadModelScenario proto field
       then: { readModel: { id: id('supply-account', 'supplier-issuance') } },
     });
     const ctx = entityContext(model, mustFind(model.slices[0]).entity);

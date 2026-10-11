@@ -140,11 +140,13 @@ function CompileOutcome({ state }: { state: CompileState }) {
   return (
     <ul className="flex flex-col gap-1 text-xs">
       {diagnostics.map((d, i) => (
+        // oxlint-disable-next-line react/no-array-index-key -- diagnostics have no stable id
         <li key={`d-${i}-${diagnosticLocation(d)}`} className="text-red-700">
           <span className="font-mono">{diagnosticLocation(d)}</span> {d.message}
         </li>
       ))}
       {violations.map((v, i) => (
+        // oxlint-disable-next-line react/no-array-index-key -- violations have no stable id
         <li key={`v-${i}-${v.message}`} className="text-amber-700">
           {v.message}
         </li>

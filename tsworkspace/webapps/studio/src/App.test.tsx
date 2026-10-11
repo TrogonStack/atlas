@@ -172,7 +172,7 @@ describe('App credential prompt', () => {
         }),
       ),
     );
-    await expect(api.info()).rejects.toThrow();
+    await expect(api.info()).rejects.toThrow('unauthenticated');
     vi.unstubAllGlobals();
     await waitFor(() => {
       expect(screen.getByRole('dialog')).toBeDefined();

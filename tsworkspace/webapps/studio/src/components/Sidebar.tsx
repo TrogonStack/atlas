@@ -56,7 +56,6 @@ export function Sidebar({
   const [searchError, setSearchError] = useState<string>();
   const [retryCount, setRetryCount] = useState(0);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: retryCount is an intentional retry trigger
   useEffect(() => {
     if (!query.trim()) {
       setHits([]);

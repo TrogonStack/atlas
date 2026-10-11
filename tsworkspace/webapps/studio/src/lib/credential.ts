@@ -87,6 +87,7 @@ export function subscribeCredential(listener: Listener): () => void {
 }
 
 function notify(): void {
+  // oxlint-disable-next-line unicorn/no-useless-spread -- snapshot current listeners so late (un)registrations during dispatch don't affect this pass
   for (const listener of [...listeners]) listener();
 }
 

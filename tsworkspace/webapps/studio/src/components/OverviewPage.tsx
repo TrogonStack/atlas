@@ -157,7 +157,6 @@ export function OverviewPage() {
   // tree and has no owning writer of its own), which matches its existing
   // once-per-mount idiom for ?domain=/?mode= (persistDomains/persistMode
   // patch the URL without triggering a refetch either).
-  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally mount-only, see above
   useEffect(() => {
     const ctrl = new AbortController();
     api
@@ -173,6 +172,7 @@ export function OverviewPage() {
         setOverviewError(e instanceof Error ? e.message : String(e));
       });
     return () => ctrl.abort();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- intentionally mount-only, see above
   }, []);
 
   useEffect(() => {

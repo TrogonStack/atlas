@@ -72,7 +72,6 @@ export function useEntityHomes(refs: { kind: string; id: EntityId }[]): {
   const [error, setError] = useState<string>();
   const [attempt, setAttempt] = useState(0);
   const branch = readBranchFromUrl();
-  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt is an intentional retry trigger
   useEffect(() => {
     let alive = true;
     setError(undefined);
