@@ -49,11 +49,10 @@ fn current_server_info() -> pb::GetServerInfoResponse {
     }
 }
 
-fn refusal_message(err: rmcp::ServiceError) -> String {
-    match err {
-        rmcp::ServiceError::McpError(e) => e.message.to_string(),
-        other => panic!("expected McpError, got {other:?}"),
-    }
+fn refusal_message(result: &rmcp::model::CallToolResult) -> String {
+    let body = support::tool_error(result);
+    assert_eq!(body["category"], "incompatible", "{body}");
+    body["message"].as_str().unwrap().to_owned()
 }
 
 const EVENT_JSON: &str = r#"{"event": {"id": {"namespace": "mcp-compat", "slug": "thing", "version": 1}, "title": "Thing"}}"#;
@@ -74,14 +73,14 @@ async fn put_entity_json_refuses_server_that_predates_contract_revisions() {
         "reads stay available: {info:?}"
     );
 
-    let err = client
+    let result = client
         .call_tool(tool(
             "put_entity_json",
             serde_json::json!({ "entity_json": EVENT_JSON }),
         ))
         .await
-        .unwrap_err();
-    let message = refusal_message(err);
+        .unwrap();
+    let message = refusal_message(&result);
     assert!(
         message.contains("upgrade the server"),
         "refusal must say which side to upgrade: {message}"
@@ -102,14 +101,14 @@ async fn branch_scoped_adapter_refuses_server_that_ignores_branch_header() {
     let server = DiscoveryOnlyServer::start(info).await.unwrap();
     let (client, service) = start_mcp(&server.endpoint, Some("feature-x".into())).await;
 
-    let err = client
+    let result = client
         .call_tool(tool(
             "put_entity_json",
             serde_json::json!({ "entity_json": EVENT_JSON }),
         ))
         .await
-        .unwrap_err();
-    let message = refusal_message(err);
+        .unwrap();
+    let message = refusal_message(&result);
     assert!(
         message.contains("branch_scoped_requests"),
         "refusal must name the missing capability: {message}"
@@ -126,14 +125,14 @@ async fn validate_only_put_refuses_server_without_validate_only() {
     let server = DiscoveryOnlyServer::start(info).await.unwrap();
     let (client, service) = start_mcp(&server.endpoint, None).await;
 
-    let err = client
+    let result = client
         .call_tool(tool(
             "put_entity_json",
             serde_json::json!({ "entity_json": EVENT_JSON, "validate_only": true }),
         ))
         .await
-        .unwrap_err();
-    let message = refusal_message(err);
+        .unwrap();
+    let message = refusal_message(&result);
     assert!(
         message.contains("validate_only"),
         "refusal must name the missing capability: {message}"

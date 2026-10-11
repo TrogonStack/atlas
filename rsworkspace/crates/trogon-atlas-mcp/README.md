@@ -50,12 +50,19 @@ that some tools used to take is still accepted and has no effect.
 
 ## Error contract
 
+A tool that runs and fails returns an `isError` result, so the client
+shows it to the model. Its JSON is `message`, `category` and
+`next_action`, plus `code`, `next_action_detail` and `operation_id` when
+they apply. This includes bad input, not-found, stale plans and the
+server's authorization refusals. Only failures before a tool runs are
+JSON-RPC errors: an unknown tool name, and an `Authorization` or branch
+header the endpoint cannot read.
+
 Internal helpers (`descriptor_for`, `message_from_json`, ...) use `anyhow`
-for ergonomic context-attachment.
-The public dispatch surface goes through `McpError` (see `error.rs`)
-which maps structurally to the MCP error codes: client-shape failures
-(`UnknownKind`, `InvalidBase64`, ...) surface as `invalid_params`;
-everything else as `internal_error`.
+for ergonomic context-attachment. The public dispatch surface goes through
+`McpError` (see `error.rs`), which classifies every failure:
+client-shape failures (`UnknownKind`, `InvalidBase64`, ...) are
+`validation`; unclassified faults are `internal`.
 
 ## Adding new kinds
 

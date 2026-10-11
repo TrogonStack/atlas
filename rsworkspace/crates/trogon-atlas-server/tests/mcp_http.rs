@@ -166,6 +166,16 @@ fn who_am_i_body(result: &rmcp::model::CallToolResult) -> serde_json::Value {
     serde_json::from_str(result.content[0].as_text().unwrap().text.as_str()).unwrap()
 }
 
+/// A refusal from the server for a tool that ran is a tool error the model
+/// reads, not a JSON-RPC error a client may hide from it.
+fn tool_error_body(result: &rmcp::model::CallToolResult) -> serde_json::Value {
+    assert_eq!(result.is_error, Some(true), "{result:?}");
+    result
+        .structured_content
+        .clone()
+        .expect("a tool error carries a structured body")
+}
+
 fn tool_call(name: &'static str, arguments: serde_json::Value) -> CallToolRequestParams {
     let serde_json::Value::Object(arguments) = arguments else {
         panic!("tool arguments must be a JSON object");
@@ -315,16 +325,17 @@ async fn the_server_denies_a_reader_a_tool_it_was_never_offered() {
         )["role"],
         "reader"
     );
-    let err = reader
+    let refused = reader
         .call_tool(tool_call(
             "create_branch",
             serde_json::json!({ "name": branch }),
         ))
         .await
-        .expect_err("authorization must refuse a reader creating a branch");
-    assert!(
-        err.to_string().contains("unauthorized"),
-        "expected an authorization error, got: {err}"
+        .unwrap();
+    let body = tool_error_body(&refused);
+    assert_eq!(
+        body["category"], "unauthorized",
+        "authorization must refuse a reader creating a branch: {body}"
     );
 
     let branches = admin
@@ -344,13 +355,14 @@ async fn an_authenticated_server_refuses_a_caller_without_a_token() {
     let http = McpHttp::start(authenticated_registry()).await;
     let client = http.client(None).await;
 
-    let err = client
+    let refused = client
         .call_tool(CallToolRequestParams::new("who_am_i"))
         .await
-        .expect_err("an anonymous caller must be refused by an authenticated server");
-    assert!(
-        err.to_string().contains("unauthorized"),
-        "expected an unauthorized error, got: {err}"
+        .unwrap();
+    let body = tool_error_body(&refused);
+    assert_eq!(
+        body["category"], "unauthorized",
+        "an anonymous caller must be refused by an authenticated server: {body}"
     );
 
     http.shut_down().await;

@@ -254,13 +254,9 @@ async fn mcp_read_write_tool_lifecycle() {
             ])),
         )
         .await
-        .unwrap_err();
-    match missing {
-        rmcp::ServiceError::McpError(e) => {
-            assert_eq!(e.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&missing);
+    assert_eq!(e["category"], "not_found", "{e:?}");
 
     // list_changes: empty since_token returns an opaque cursor positioned
     // at "now" (no events, since every mutation above already happened
@@ -438,16 +434,14 @@ spec: { title: Order placed }
             )),
         )
         .await
-        .unwrap_err();
-    match export_missing {
-        rmcp::ServiceError::McpError(e) => {
-            let data = e.data.as_ref().expect("classified error carries data");
-            assert_eq!(data["category"], "validation", "{e:?}");
-            assert_eq!(data["next_action"], "fix_input", "{e:?}");
-            assert!(e.message.contains("no entities"), "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&export_missing);
+    assert_eq!(e["category"], "validation", "{e:?}");
+    assert_eq!(e["next_action"], "fix_input", "{e:?}");
+    assert!(
+        e["message"].as_str().unwrap().contains("no entities"),
+        "{e:?}"
+    );
 
     mcp_service.cancel().await.unwrap();
     let _ = grpc_endpoint;
@@ -525,15 +519,10 @@ async fn mcp_batch_mutate_json_status_failed_reports_as_error() {
             )),
         )
         .await
-        .unwrap_err();
-    match batch_result {
-        rmcp::ServiceError::McpError(e) => {
-            let data = e.data.as_ref().expect("classified error carries data");
-            assert_eq!(data["category"], "not_found", "{e:?}");
-            assert_eq!(data["code"], "ENTITY_NOT_FOUND", "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&batch_result);
+    assert_eq!(e["category"], "not_found", "{e:?}");
+    assert_eq!(e["code"], "ENTITY_NOT_FOUND", "{e:?}");
 
     mcp_service.cancel().await.unwrap();
 }

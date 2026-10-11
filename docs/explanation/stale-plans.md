@@ -74,8 +74,8 @@ generic error:
   branch again right after the refusal.
 - **trogon-atlas**: prints `stale, replan: ...` with both revisions and exits 3,
   a code no other failure uses.
-- **MCP**: `apply_manifests` and `resolve_branch_entry` fail with
-  `invalid_params` whose `data` has `category: "stale_state"` and
+- **MCP**: `apply_manifests` and `resolve_branch_entry` return an
+  `isError` result whose JSON has `category: "stale_state"` and
   `next_action: "replan"`, plus `entity` and the expected and actual
   revisions (`expected_etag`/`actual_etag` for apply, `expected_state`/
   `actual_state` for resolve). A `null` revision means absent.

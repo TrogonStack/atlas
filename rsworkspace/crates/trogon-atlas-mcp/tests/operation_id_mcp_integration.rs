@@ -168,14 +168,13 @@ async fn mcp_put_entity_json_rejects_a_malformed_operation_id() {
             ])),
         )
         .await
-        .unwrap_err();
-    match err {
-        rmcp::ServiceError::McpError(e) => {
-            assert_eq!(e.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{e:?}");
-            assert!(e.message.contains("operation_id"), "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&err);
+    assert_eq!(e["category"], "validation", "{e:?}");
+    assert!(
+        e["message"].as_str().unwrap().contains("operation_id"),
+        "{e:?}"
+    );
 
     // The malformed id must be rejected before any write: the entity was
     // never created.
@@ -189,14 +188,9 @@ async fn mcp_put_entity_json_rejects_a_malformed_operation_id() {
             ])),
         )
         .await
-        .unwrap_err();
-    match get_result {
-        rmcp::ServiceError::McpError(e) => {
-            let data = e.data.as_ref().expect("classified error carries data");
-            assert_eq!(data["category"], "not_found", "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&get_result);
+    assert_eq!(e["category"], "not_found", "{e:?}");
 
     mcp_service.cancel().await.unwrap();
 }
@@ -250,14 +244,9 @@ async fn mcp_batch_mutate_failure_carries_operation_id_in_error_data() {
             ])),
         )
         .await
-        .unwrap_err();
-    match err {
-        rmcp::ServiceError::McpError(e) => {
-            let data = e.data.as_ref().expect("classified error carries data");
-            assert_eq!(data["operation_id"], operation_id, "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&err);
+    assert_eq!(e["operation_id"], operation_id, "{e:?}");
 
     mcp_service.cancel().await.unwrap();
 }
@@ -322,14 +311,9 @@ async fn mcp_batch_mutate_rpc_failure_carries_operation_id_in_error_data() {
             ])),
         )
         .await
-        .unwrap_err();
-    match err {
-        rmcp::ServiceError::McpError(e) => {
-            let data = e.data.as_ref().expect("classified error carries data");
-            assert_eq!(data["operation_id"], operation_id, "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&err);
+    assert_eq!(e["operation_id"], operation_id, "{e:?}");
 
     mcp_service.cancel().await.unwrap();
 }

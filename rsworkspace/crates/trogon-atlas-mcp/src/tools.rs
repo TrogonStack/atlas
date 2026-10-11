@@ -937,7 +937,7 @@ pub struct ResolveBranchEntryParams {
     )]
     pub resolution: String,
     #[schemars(
-        description = "The entry state the decision was made from: copy the `state` object of this entry from diff_branch or update_branch unchanged. The resolution is refused as stale (data.category \"stale_state\") if any side moved since; diff again and decide from the fresh entry."
+        description = "The entry state the decision was made from: copy the `state` object of this entry from diff_branch or update_branch unchanged. The resolution is refused as stale (category \"stale_state\") if any side moved since; diff again and decide from the fresh entry."
     )]
     pub expected_state: ExpectedBranchEntryState,
     #[schemars(

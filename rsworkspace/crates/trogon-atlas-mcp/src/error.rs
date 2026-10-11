@@ -12,6 +12,7 @@
 //! caller might want to act on (typically a bad-input case that
 //! should surface as `invalid_params`, not as `internal_error`).
 
+use rmcp::model::CallToolResult;
 use thiserror::Error;
 use trogon_atlas_client::{
     compat::CompatibilityError,
@@ -93,7 +94,7 @@ impl McpError {
 /// `{category, next_action}` plus whatever richer detail a classified
 /// failure carries, as the `data` of an `rmcp::ErrorData`. `category` and
 /// `next_action` stay flat top-level strings (an existing contract: an
-/// agent switches on `data.category == "stale_state"` without a schema per
+/// agent switches on `category == "stale_state"` without a schema per
 /// category); everything else -- a stale plan's revisions, a partial
 /// apply's journal id, a rejected batch op's code -- nests under
 /// `next_action_detail` instead of flattening into `data`, so a new detail
@@ -114,11 +115,11 @@ fn mcp_data(failure: &Failure) -> serde_json::Value {
     serde_json::Value::Object(map)
 }
 
-/// The same two buckets `rmcp` offers a tool caller: `INVALID_PARAMS` for
-/// "change your request and retry" (including a replan or a plain retry --
-/// the MCP protocol has no error code for those, so `data.next_action`
-/// carries that distinction instead), `INTERNAL_ERROR` for "nothing the
-/// caller can do about this specific call".
+/// Two coarse buckets: `INVALID_PARAMS` for "change your request and retry"
+/// (including a replan or a plain retry -- no error code says which, so
+/// `next_action` carries that distinction instead), `INTERNAL_ERROR` for
+/// "nothing the caller can do about this specific call". The agent reads
+/// `category` and `next_action`; see [`tool_error_result`].
 fn rmcp_code_for(category: FailureCategory) -> rmcp::model::ErrorCode {
     match category {
         FailureCategory::Validation
@@ -239,6 +240,34 @@ pub fn attach_operation_id(mut err: rmcp::ErrorData, operation_id: &str) -> rmcp
     err
 }
 
+/// A failed tool call as the result the model reads: `isError` set, and a
+/// body of `message`, `category`, `next_action` and whatever else the error
+/// data carries. MCP clients SHOULD show a tool execution error to the model
+/// but only MAY show a JSON-RPC error, so this is how `next_action` reliably
+/// reaches the agent. An error built without classified data (a local input
+/// check, an internal fault) takes the category its code stands for.
+pub fn tool_error_result(err: rmcp::ErrorData) -> CallToolResult {
+    let mut body = match err.data {
+        Some(serde_json::Value::Object(map)) => map,
+        Some(other) => serde_json::Map::from_iter([("value".to_owned(), other)]),
+        None => serde_json::Map::new(),
+    };
+    if !body.contains_key("category") {
+        let category = if err.code == rmcp::model::ErrorCode::INVALID_PARAMS {
+            FailureCategory::Validation
+        } else {
+            FailureCategory::Internal
+        };
+        body.insert("category".into(), category.to_string().into());
+        body.insert(
+            "next_action".into(),
+            category.next_action().to_string().into(),
+        );
+    }
+    body.insert("message".into(), err.message.into_owned().into());
+    CallToolResult::structured_error(serde_json::Value::Object(body))
+}
+
 /// Usage: `.map_err(tool_err("tool_name"))`
 pub fn tool_err(tool: &'static str) -> impl Fn(tonic::Status) -> rmcp::ErrorData {
     move |s| {
@@ -261,6 +290,42 @@ mod tests {
     use rmcp::model::ErrorCode;
 
     use super::*;
+
+    #[test]
+    fn a_classified_failure_becomes_an_is_error_result_with_the_same_fields() {
+        let status = tonic::Status::not_found("entity shop/ghost@1 not found");
+        let err = attach_operation_id(classify_status(&status), "op-1");
+        let result = tool_error_result(err);
+        assert_eq!(result.is_error, Some(true));
+        let body = result.structured_content.clone().unwrap();
+        assert_eq!(body["category"], "not_found", "{body}");
+        assert_eq!(body["next_action"], "none", "{body}");
+        assert_eq!(body["operation_id"], "op-1", "{body}");
+        assert!(body["message"].is_string(), "{body}");
+        let text: serde_json::Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(text, body);
+    }
+
+    #[test]
+    fn an_unclassified_error_takes_the_category_its_code_stands_for() {
+        let body = tool_error_result(rmcp::ErrorData::invalid_params("slug is empty", None))
+            .structured_content
+            .unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "message": "slug is empty",
+                "category": "validation",
+                "next_action": "fix_input",
+            })
+        );
+        let body = tool_error_result(rmcp::ErrorData::internal_error("boom", None))
+            .structured_content
+            .unwrap();
+        assert_eq!(body["category"], "internal", "{body}");
+        assert_eq!(body["next_action"], "none", "{body}");
+    }
 
     #[test]
     fn stale_plan_reaches_the_agent_as_replan_with_nested_revisions() {

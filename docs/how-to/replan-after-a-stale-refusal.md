@@ -2,7 +2,8 @@
 
 Use this when an apply or a conflict resolution is refused because the state
 it was planned from moved. trogon-atlas prints `stale, replan:` and exits 3; the MCP
-tools fail with `data.category` set to `stale_state`. Nothing was written.
+tools return an `isError` result with `category` set to `stale_state`.
+Nothing was written.
 [Stale plans](../explanation/stale-plans.md) explains why the server refuses.
 
 ## Replan an apply
@@ -38,8 +39,8 @@ tools fail with `data.category` set to `stale_state`. Nothing was written.
 
    Each entry prints a line such as
    `state: base=12,ours=40,theirs=15`. Over MCP, call `diff_branch` and read
-   the entry's `state` object, or use `actual_state` from the refusal's
-   `data`.
+   the entry's `state` object, or use `next_action_detail.actual_state`
+   from the refusal.
 2. Compare the entry's current `base`, `ours` and `theirs` content with what
    you decided from. If the decision no longer holds, choose again.
 3. Resolve with the state you just read:

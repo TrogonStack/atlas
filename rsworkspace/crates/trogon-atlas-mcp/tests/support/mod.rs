@@ -24,6 +24,23 @@ pub fn mcp_server(grpc_endpoint: &str, branch: Option<String>) -> McpServer {
 #[allow(dead_code, reason = "not every test binary reads tool results")]
 pub fn structured(result: &CallToolResult) -> serde_json::Value {
     assert_ne!(result.is_error, Some(true), "{result:?}");
+    structured_body(result)
+}
+
+/// The JSON body of a failed tool call. A failure the tool reports comes
+/// back as an `isError` result, which clients show the model, rather than
+/// as a JSON-RPC error, which they may not.
+#[allow(dead_code, reason = "not every test binary reads tool results")]
+pub fn tool_error(result: &CallToolResult) -> serde_json::Value {
+    assert_eq!(result.is_error, Some(true), "{result:?}");
+    let body = structured_body(result);
+    for field in ["message", "category", "next_action"] {
+        assert!(body[field].is_string(), "{field} missing: {body}");
+    }
+    body
+}
+
+fn structured_body(result: &CallToolResult) -> serde_json::Value {
     let value = result
         .structured_content
         .clone()

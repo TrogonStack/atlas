@@ -602,8 +602,8 @@ async fn mcp_in_process_transport_initialize_and_list_namespaces() {
     mcp_service.cancel().await.unwrap();
 }
 
-// Item 4: also verify that an invalid namespace arg surfaces as an MCP error
-// (invalid_params) rather than a transport error.
+// Item 4: also verify that an invalid namespace arg surfaces as a tool
+// error the model can read rather than a transport error.
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_in_process_transport_invalid_namespace_returns_error() {
     let grpc_endpoint = start_server().await;
@@ -618,10 +618,8 @@ async fn mcp_in_process_transport_invalid_namespace_returns_error() {
     let client = client_result.unwrap();
 
     // An invalid namespace (contains a space) must be caught by the local
-    // validate_id_component guard before the RPC is issued. The handler
-    // returns Err(rmcp::ErrorData) which rmcp converts to a JSON-RPC error
-    // response; the client receives ServiceError::McpError. We match the
-    // error to confirm it carries the right message.
+    // validate_id_component guard before the RPC is issued. The tool reports
+    // it as an isError result the model can read and correct.
     let mut args = serde_json::Map::new();
     args.insert("kind".into(), serde_json::json!("event"));
     args.insert("namespace".into(), serde_json::json!("bad namespace"));
@@ -629,23 +627,14 @@ async fn mcp_in_process_transport_invalid_namespace_returns_error() {
     let err = client
         .call_tool(rmcp::model::CallToolRequestParams::new("list_versions").with_arguments(args))
         .await
-        .unwrap_err();
-
-    match err {
-        rmcp::ServiceError::McpError(e) => {
-            assert_eq!(
-                e.code,
-                rmcp::model::ErrorCode::INVALID_PARAMS,
-                "invalid namespace must produce INVALID_PARAMS: {e:?}"
-            );
-            assert!(
-                e.message.contains("namespace"),
-                "error message must mention 'namespace': {:?}",
-                e.message
-            );
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&err);
+    assert_eq!(e["category"], "validation", "{e}");
+    assert_eq!(e["next_action"], "fix_input", "{e}");
+    assert!(
+        e["message"].as_str().unwrap().contains("namespace"),
+        "error message must mention 'namespace': {e}"
+    );
 
     mcp_service.cancel().await.unwrap();
 }
@@ -740,6 +729,26 @@ type McpServiceRunning =
 /// Start an MCP server + client pair over an in-process duplex pipe, against
 /// a fresh in-process gRPC server. Same setup as every other
 /// `mcp_in_process_transport_*` test in this file.
+// A tool name the server does not know is a request it cannot route, so it
+// stays a JSON-RPC protocol error; only a tool that ran reports isError.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_unknown_tool_is_a_protocol_error() {
+    let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
+
+    let err = client
+        .call_tool(rmcp::model::CallToolRequestParams::new("no_such_tool"))
+        .await
+        .unwrap_err();
+    match err {
+        rmcp::ServiceError::McpError(e) => {
+            assert_eq!(e.code, ErrorCode::INVALID_PARAMS, "{e:?}");
+        }
+        other => panic!("expected a protocol error, got {other:?}"),
+    }
+
+    mcp_service.cancel().await.unwrap();
+}
+
 async fn start_mcp_client() -> (McpClient, McpServiceRunning, String) {
     let grpc_endpoint = start_server().await;
     let (client, service) = mcp_client_for(&grpc_endpoint, None).await;
@@ -854,14 +863,9 @@ async fn mcp_create_branch_invalid_name_returns_error() {
             ])),
         )
         .await
-        .unwrap_err();
-
-    match err {
-        rmcp::ServiceError::McpError(e) => {
-            assert_eq!(e.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&err);
+    assert_eq!(e["category"], "validation", "{e:?}");
 
     mcp_service.cancel().await.unwrap();
 }
@@ -876,14 +880,9 @@ async fn mcp_delete_branch_missing_returns_error() {
                 .with_arguments(args_obj(&[("name", serde_json::json!("does-not-exist"))])),
         )
         .await
-        .unwrap_err();
-
-    match err {
-        rmcp::ServiceError::McpError(e) => {
-            assert_eq!(e.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&err);
+    assert_eq!(e["category"], "not_found", "{e:?}");
 
     mcp_service.cancel().await.unwrap();
 }
@@ -1141,14 +1140,8 @@ async fn mcp_merge_branch_reports_conflict_field_paths() {
                 .with_arguments(resolve_args(inspected_state.clone())),
         )
         .await
-        .unwrap_err();
-    let rmcp::ServiceError::McpError(stale) = stale else {
-        panic!("expected an MCP error, got {stale:?}");
-    };
-    assert_eq!(stale.code, rmcp::model::ErrorCode::INVALID_PARAMS);
-    let data = stale
-        .data
-        .expect("a stale resolution must carry structured data");
+        .unwrap();
+    let data = support::tool_error(&stale);
     assert_eq!(data["category"], "stale_state", "{data}");
     assert_eq!(data["next_action"], "replan", "{data}");
     assert_eq!(
@@ -1250,17 +1243,9 @@ async fn mcp_branch_tools_reject_unknown_branch_name() {
                 rmcp::model::CallToolRequestParams::new(*tool_name).with_arguments(args.clone()),
             )
             .await
-            .unwrap_err();
-        match err {
-            rmcp::ServiceError::McpError(e) => {
-                assert_eq!(
-                    e.code,
-                    rmcp::model::ErrorCode::INVALID_PARAMS,
-                    "{tool_name}: {e:?}"
-                );
-            }
-            other => panic!("{tool_name}: expected McpError, got {other:?}"),
-        }
+            .unwrap();
+        let e = support::tool_error(&err);
+        assert_eq!(e["category"], "not_found", "{tool_name}: {e}");
     }
 
     mcp_service.cancel().await.unwrap();
@@ -1287,18 +1272,17 @@ async fn mcp_validate_project_rejects_ambiguous_dual_scope() {
         )
         .await;
 
-    match result {
-        Ok(ok) => {
-            assert!(
-                ok.is_error.unwrap_or(false),
-                "dual project+domain scope must be rejected; tool succeeded: {ok:?}"
-            );
-        }
-        Err(rmcp::ServiceError::McpError(e)) => {
-            assert_eq!(e.code, ErrorCode::INVALID_PARAMS, "{e:?}");
-        }
-        Err(other) => panic!("expected invalid_params McpError, got {other:?}"),
-    }
+    // Arguments that fail to deserialize are input errors too, with the same
+    // body as every other tool error.
+    let e = support::tool_error(&result.unwrap());
+    assert_eq!(e["category"], "validation", "{e}");
+    assert!(
+        e["message"]
+            .as_str()
+            .unwrap()
+            .contains("scope is exclusive"),
+        "{e}"
+    );
 
     mcp_service.cancel().await.unwrap();
 }

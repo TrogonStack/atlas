@@ -19,7 +19,7 @@ use trogon_atlas_proto as pb;
 
 use crate::{
     caller::{Caller, CallerToken},
-    error::{attach_operation_id, tool_err, McpError},
+    error::{attach_operation_id, tool_err, tool_error_result, McpError},
     tools::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
         BatchMutateParams, CompileTypeLibraryParams, CreateBranchParams, DeleteBranchParams,
@@ -982,7 +982,7 @@ async fn ok_json<M: ApiMessage>(
 /// `Ok` while carrying a domain failure in its body; `ok_json` alone
 /// would report it to the agent as a successful tool call. Classify it the
 /// same way `trogon-atlas-client::apply` classifies the identical response
-/// shape, so the agent gets an MCP tool error with the same category data
+/// shape, so the agent gets a tool error with the same category data
 /// any other failure carries instead of a success it has to read to
 /// discover the batch did not apply.
 fn batch_mutate_failure(resp: &pb::BatchMutateResponse) -> anyhow::Error {
@@ -1758,7 +1758,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create or replace an entity. The entity payload is a base64-encoded prost binpb of an Entity message (obtain via get_entity with format=binpb, edit binpb_base64, and pass back). A failed write is an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never a success envelope.",
+        description = "Create or replace an entity. The entity payload is a base64-encoded prost binpb of an Entity message (obtain via get_entity with format=binpb, edit binpb_base64, and pass back). A failed write returns isError with a JSON body of message, category and next_action (and code/next_action_detail when applicable), never a success result.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1889,7 +1889,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Atomic batch of put/delete operations expressed as a proto3 JSON BatchMutateRequest (no protobuf tooling required). Failure rolls back the whole batch and is reported as an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never as a success envelope with status=STATUS_FAILED inside it.",
+        description = "Atomic batch of put/delete operations expressed as a proto3 JSON BatchMutateRequest (no protobuf tooling required). Failure rolls back the whole batch and is reported as isError with a JSON body of message, category and next_action (and code/next_action_detail when applicable), never as a success result with status=STATUS_FAILED inside it.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1933,7 +1933,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Delete an entity. mode = 'fail_if_referenced' (default), 'force', or 'dry_run'. A refused delete is an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never a success envelope.",
+        description = "Delete an entity. mode = 'fail_if_referenced' (default), 'force', or 'dry_run'. A refused delete returns isError with a JSON body of message, category and next_action (and code/next_action_detail when applicable), never a success result.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -1968,7 +1968,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Atomic batch of put/delete operations. Each op specifies op='put' (with entity_b64) or op='delete' (with kind/namespace/slug/version). Failure rolls back the whole batch and is reported as an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never as a success envelope with status=STATUS_FAILED inside it.",
+        description = "Atomic batch of put/delete operations. Each op specifies op='put' (with entity_b64) or op='delete' (with kind/namespace/slug/version). Failure rolls back the whole batch and is reported as isError with a JSON body of message, category and next_action (and code/next_action_detail when applicable), never as a success result with status=STATUS_FAILED inside it.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -2520,7 +2520,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state.",
+        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call returns isError with category \"stale_state\" and next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2796,7 +2796,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Resolve a single conflicting entry on a branch (Phase 2: Review and merge). resolution must be \"take_theirs\" (discard the branch's edit, adopting current baseline content), \"keep_ours\" (keep the branch's value, rebasing forward so the conflict clears), or \"take_merged\" (take both sides' edits combined, available only when the two sides changed different fields). expected_state binds the decision to the entry state it was made from; if the entry moved since, the call fails with data.category \"stale_state\" and data.next_action \"replan\", carrying expected_state and actual_state, and nothing changes.",
+        description = "Resolve a single conflicting entry on a branch (Phase 2: Review and merge). resolution must be \"take_theirs\" (discard the branch's edit, adopting current baseline content), \"keep_ours\" (keep the branch's value, rebasing forward so the conflict clears), or \"take_merged\" (take both sides' edits combined, available only when the two sides changed different fields). expected_state binds the decision to the entry state it was made from; if the entry moved since, the call returns isError with category \"stale_state\" and next_action \"replan\", carrying expected_state and actual_state, and nothing changes.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2890,14 +2890,36 @@ impl ServerHandler for McpServer {
 
     /// Runs the tool as the caller who sent this request, never as the
     /// service: the server sees the caller's own bearer token.
+    ///
+    /// A failure once a known tool runs, the server's refusals included, is
+    /// a tool execution error the model reads (MCP: API, input and business
+    /// failures). Headers refused before the tool runs and unknown tool names
+    /// stay JSON-RPC errors, since no tool ran.
     async fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let caller = self.for_request(&context)?;
+        let known = self.tool_router.has_route(&request.name);
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(&caller, request, context);
-        self.tool_router.call(tcc).await
+        match self.tool_router.call(tcc).await {
+            Err(err) if known => Ok(tool_error_result(err)),
+            // rmcp reports arguments that fail to deserialize as bare text;
+            // give them the body every other tool error has.
+            Ok(result) if result.is_error == Some(true) && result.structured_content.is_none() => {
+                let message = result
+                    .content
+                    .first()
+                    .and_then(|block| block.as_text())
+                    .map(|text| text.text.clone())
+                    .unwrap_or_default();
+                Ok(tool_error_result(rmcp::ErrorData::invalid_params(
+                    message, None,
+                )))
+            }
+            other => other,
+        }
     }
 
     /// Filters the tool list down to what the caller's role could actually

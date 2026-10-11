@@ -131,8 +131,11 @@ do not infer that an unsuccessful response always means nothing changed.
 ### Read the actual tool response
 
 Every tool returns its result as proto3 JSON in `structuredContent`, with
-the same JSON in a text block. Check transport errors and `isError` before
-reading it.
+the same JSON in a text block. Check `isError` before reading it: a failed
+call returns `{ "message", "category", "next_action" }`, plus `code`,
+`next_action_detail` and `operation_id` when they apply. Follow
+`next_action`: `fix_input`, `replan`, `retry`, `check_operation`,
+`use_new_operation_id`, `restart_listing` or `none`.
 
 | Operation | Result |
 | --- | --- |

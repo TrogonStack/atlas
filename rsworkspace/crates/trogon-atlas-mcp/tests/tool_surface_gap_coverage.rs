@@ -785,13 +785,9 @@ async fn mcp_batch_mutate_binpb_variant() {
             )])),
         )
         .await
-        .unwrap_err();
-    match malformed_result {
-        rmcp::ServiceError::McpError(e) => {
-            assert_eq!(e.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&malformed_result);
+    assert_eq!(e["category"], "validation", "{e:?}");
 
     mcp_service.cancel().await.unwrap();
 }
@@ -882,13 +878,9 @@ async fn mcp_validate_project_scope_variants() {
                 .with_arguments(args_obj(&[])),
         )
         .await
-        .unwrap_err();
-    match no_scope_result {
-        rmcp::ServiceError::McpError(e) => {
-            assert_eq!(e.code, rmcp::model::ErrorCode::INVALID_PARAMS, "{e:?}");
-        }
-        other => panic!("expected McpError, got {other:?}"),
-    }
+        .unwrap();
+    let e = support::tool_error(&no_scope_result);
+    assert_eq!(e["category"], "validation", "{e:?}");
 
     mcp_service.cancel().await.unwrap();
 }
