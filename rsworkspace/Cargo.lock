@@ -4229,7 +4229,6 @@ dependencies = [
  "tonic",
  "tonic-prost",
  "tonic-types",
- "tracing",
 ]
 
 [[package]]
@@ -4305,7 +4304,6 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "prost",
- "prost-reflect",
  "prost-types",
  "rmcp",
  "schemars 1.2.2",
@@ -4356,7 +4354,6 @@ dependencies = [
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "parking_lot",
- "pin-project-lite",
  "proptest",
  "prost",
  "prost-reflect",

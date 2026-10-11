@@ -143,7 +143,7 @@ pub const RESERVED_BRANCH_NAME: &str = "meta";
 
 /// Rejects the one branch name that would make delta rows ambiguous with
 /// metadata rows under a plain `"meta."` prefix scan: a branch literally
-/// named `"meta"` encodes (via [`encode_component`], which is the identity
+/// named `"meta"` encodes (via `encode_component`, which is the identity
 /// function on pure-ASCII-alphanumeric input) to the same `meta.` prefix
 /// used by every [`branch_meta_key`] row, so `branch_delta_prefix("meta")`
 /// and the metadata-row prefix would overlap. Callers validating a
@@ -248,7 +248,7 @@ fn encode_component(s: &str) -> String {
     out
 }
 
-/// Public alias for [`decode_component`], the inverse of `encode_component`
+/// Public alias for `decode_component`, the inverse of `encode_component`
 /// used when reversing a `branch_meta_key`'s escaped branch-name segment
 /// back into the original branch name.
 #[must_use]

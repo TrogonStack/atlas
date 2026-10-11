@@ -162,7 +162,7 @@ pub mod canonical {
 
     /// Canonical Id string used as the key in projection maps and as a
     /// stable hashable identifier for entities. Format:
-    ///   "<kind>:<namespace>/<slug>@<version>"
+    ///   `"<kind>:<namespace>/<slug>@<version>"`
     /// `kind` is the lowercase short form of the `EntityKind` enum
     /// (e.g. "event", "`command_slice`"). Callers may construct this from
     /// an Id; do not parse it back; use the entity's own Id field for

@@ -18,7 +18,5 @@ tonic-prost = { workspace = true }
 thiserror = { workspace = true }
 tonic-types = { workspace = true }
 
-tracing = { workspace = true }
-
 [lints]
 workspace = true
