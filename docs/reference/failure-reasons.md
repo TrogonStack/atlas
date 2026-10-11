@@ -50,7 +50,8 @@ disambiguates.
 `operation_id` can fail with, and each carries a `next_action` other than
 its category's default: `OPERATION_IN_PROGRESS` means another call already
 owns the id and has not settled it yet, so the next action is
-`check_operation` (poll `GetOperation` rather than retry the mutation
+`check_operation` (poll `GetOperation`, which is the `get_operation` MCP
+tool or `trogon-atlas operation get`, rather than retry the mutation
 itself) instead of `unavailable`'s usual `retry`; `OPERATION_ID_REUSED`
 means the id is already bound to a different request, so the next action
 is `use_new_operation_id` instead of `operation_conflict`'s usual

@@ -1,7 +1,7 @@
 # Reliability validation rules
 
 `ServiceLevelIndicator` and `ServiceLevelObjective` entities are checked by
-`validate_model`, the same engine behind `validate_event_model` and the
+model validation, the engine behind the `validate_event_model` tool and the
 per-model pass of `validate_project` (see
 `docs/how-to/repair-validation-findings.md`). These checks only run for an
 indicator or objective listed in the `EventModel`'s `members`; one that

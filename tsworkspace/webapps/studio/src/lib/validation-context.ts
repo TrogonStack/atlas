@@ -159,7 +159,7 @@ export function validationFixPrompt(
   const json = (value: unknown) => `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 
   return [
-    'Fix this validation finding in the Eventmodel project using the Eventmodel CLI or MCP tools.',
+    'Fix this validation finding in the Atlas project using the `trogon-atlas` CLI or the `trogon-atlas-mcp` MCP tools.',
     'Re-read the current model and validation results in the specified branch and scope before editing. The snapshot below may be stale or incomplete.',
     'Fetch referenced definitions that are missing or omitted, including their exact pinned versions. Apply a targeted repair that preserves intended behavior, event causality, and existing contracts. Do not merely suppress the rule, downgrade its severity, or delete valid behavior to hide the finding.',
     'For temporal findings, inspect the full ordered storyboard, its slice definitions, and the source and emitted events before deciding whether to change ordering, references, or modeling. Do not assume an event missing from this snapshot does not exist.',

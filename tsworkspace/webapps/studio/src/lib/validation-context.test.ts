@@ -75,7 +75,9 @@ describe('validationFixPrompt', () => {
       scopePath: '/em/shop/checkout',
     });
 
-    expect(prompt).toMatch(/^Fix this validation finding.*Eventmodel CLI or MCP/);
+    expect(prompt).toMatch(
+      /^Fix this validation finding in the Atlas project using the `trogon-atlas` CLI or the `trogon-atlas-mcp` MCP tools\./,
+    );
     expect(prompt).toContain('Re-read the current model and validation results');
     expect(prompt).toContain('targeted repair that preserves intended behavior');
     expect(prompt).toContain('rerun validation');

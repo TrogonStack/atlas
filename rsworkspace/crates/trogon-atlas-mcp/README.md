@@ -32,6 +32,8 @@ the procedure for future runs.
 | `--grpc` / `TROGON_ATLAS_GRPC` | `http://127.0.0.1:50069` | gRPC endpoint. `https://` endpoints use TLS with native roots. |
 | `--auth-token` / `TROGON_ATLAS_AUTH_TOKEN` | _(none)_ | Shared bearer token matching the server's `TROGON_ATLAS_AUTH_TOKEN`. The value is redacted from logs and `--help` output. |
 | `--max-message-bytes` / `TROGON_ATLAS_MCP_MAX_MESSAGE_BYTES` | `4194304` (4 MiB) | Maximum gRPC message size for encoding and decoding. Must match the server's cap; set both sides in lock-step when raising the limit. Startup fails with a clear error if the env var is set to a non-numeric value. |
+| `--rpc-timeout-secs` / `TROGON_ATLAS_MCP_RPC_TIMEOUT_SECS` | `120` | Timeout in seconds for each gRPC call. LLM-backed tools (`infer_data_flow`, `check_information_completeness`) can take 60 seconds or more. The connect timeout is always 5 seconds. |
+| `--branch` / `TROGON_ATLAS_BRANCH` | _(none)_ | Branch for every call, sent in the `x-trogon-atlas-branch` header. Omit to use baseline. To change branch, restart the adapter. |
 
 ## What the tools return
 
