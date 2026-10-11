@@ -1309,13 +1309,11 @@ namespaces = ["orders/*"]
 
     /// Each test gets its own directory so a leftover file from a previous
     /// run cannot make a later one pass.
-    fn secret_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "trogon-atlas-token-file-{tag}-{}",
-            uuid::Uuid::now_v7()
-        ));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        dir
+    fn secret_dir(tag: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("trogon-atlas-token-file-{tag}-"))
+            .tempdir()
+            .expect("create temp dir")
     }
 
     fn write_secret(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
@@ -1329,6 +1327,7 @@ namespaces = ["orders/*"]
     #[test]
     fn a_token_file_authenticates_and_carries_the_principals_grants() {
         let dir = secret_dir("happy");
+        let dir = dir.path().to_path_buf();
         let secret = write_secret(&dir, "api.key", "s3cret-from-a-file");
         let raw = format!(
             r#"
@@ -1354,7 +1353,6 @@ parent = "acme"
         );
         assert!(!p.is_anonymous);
         assert!(r.lookup("s3cret-from-a-file-x").is_none());
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// `echo secret > file` appends a newline and no operator means it as part
@@ -1362,6 +1360,7 @@ parent = "acme"
     #[test]
     fn a_trailing_newline_in_the_secret_file_is_not_part_of_the_key() {
         let dir = secret_dir("newline");
+        let dir = dir.path().to_path_buf();
         let secret = write_secret(&dir, "api.key", "trimmed-key\n");
         let raw = format!(
             "[principals.ci]\nrole = \"reader\"\ntoken_files = [\"{}\"]\n",
@@ -1375,7 +1374,6 @@ parent = "acme"
             r.lookup("trimmed-key\n").is_none(),
             "the newline must not be accepted as part of the key either",
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A relative path must follow the registry file, not the process's cwd,
@@ -1383,6 +1381,7 @@ parent = "acme"
     #[test]
     fn a_relative_token_file_resolves_against_the_registry_directory() {
         let dir = secret_dir("relative");
+        let dir = dir.path().to_path_buf();
         write_secret(&dir, "api.key", "relative-key");
         let registry = write_secret(
             &dir,
@@ -1395,7 +1394,6 @@ parent = "acme"
             r.lookup("relative-key").is_some(),
             "a bare filename must resolve next to the registry that names it",
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A typo'd path must stop the server. Starting with a principal nobody
@@ -1404,6 +1402,7 @@ parent = "acme"
     #[test]
     fn a_missing_token_file_fails_startup() {
         let dir = secret_dir("missing");
+        let dir = dir.path().to_path_buf();
         let raw = format!(
             "[principals.ci]\nrole = \"reader\"\ntoken_files = [\"{}\"]\n",
             dir.join("absent.key").display()
@@ -1415,7 +1414,6 @@ parent = "acme"
             err.contains("absent.key"),
             "the error must name the path the operator has to fix, got: {err}",
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// An empty file would otherwise register an empty token, which is the
@@ -1423,6 +1421,7 @@ parent = "acme"
     #[test]
     fn an_empty_token_file_fails_startup() {
         let dir = secret_dir("empty");
+        let dir = dir.path().to_path_buf();
         let secret = write_secret(&dir, "api.key", "\n");
         let raw = format!(
             "[principals.ci]\nrole = \"reader\"\ntoken_files = [\"{}\"]\n",
@@ -1432,7 +1431,6 @@ parent = "acme"
         let err = TokenRegistry::from_file_contents(file)
             .expect_err("an empty secret file must not start");
         assert!(err.contains("is empty"), "got: {err}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Uniqueness has to hold across both sources, otherwise one key could
@@ -1440,6 +1438,7 @@ parent = "acme"
     #[test]
     fn a_token_duplicated_between_a_file_and_an_inline_entry_is_refused() {
         let dir = secret_dir("dup");
+        let dir = dir.path().to_path_buf();
         let secret = write_secret(&dir, "api.key", "shared-key");
         let raw = format!(
             r#"
@@ -1460,7 +1459,6 @@ tokens = ["shared-key"]
             err.contains("api.key") && err.contains("studio"),
             "the error must name both sources so the operator can find them, got: {err}",
         );
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// A principal with neither source is unreachable, which is a typo rather

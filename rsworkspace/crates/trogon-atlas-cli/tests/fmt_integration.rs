@@ -127,19 +127,11 @@ fn trogon_atlas(args: &[&str]) -> std::process::Output {
         .expect("trogon-atlas must spawn")
 }
 
-fn tempdir(tag: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("trogon-atlas-fmt-test-{tag}-{}", uuid_like()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn uuid_like() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn tempdir(tag: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("trogon-atlas-fmt-test-{tag}-"))
+        .tempdir()
         .unwrap()
-        .as_nanos();
-    format!("{nanos}-{:?}", std::thread::current().id())
 }
 
 const NON_CANONICAL_EVENT: &str = "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1\nkind: Event\nmetadata: {namespace: shop, name: order.placed}\nspec: {title: Order placed}\n";
@@ -147,6 +139,7 @@ const NON_CANONICAL_EVENT: &str = "apiVersion: eventmodel.atlas.trogonstack.com/
 #[test]
 fn fmt_default_mode_prints_canonical_yaml_for_a_single_file() {
     let dir = tempdir("stdout");
+    let dir = dir.path().to_path_buf();
     let path = dir.join("event.yaml");
     std::fs::write(&path, NON_CANONICAL_EVENT).unwrap();
 
@@ -164,6 +157,7 @@ fn fmt_default_mode_prints_canonical_yaml_for_a_single_file() {
 #[test]
 fn fmt_default_mode_rejects_more_than_one_resolved_file() {
     let dir = tempdir("stdout-multi");
+    let dir = dir.path().to_path_buf();
     std::fs::write(dir.join("a.yaml"), NON_CANONICAL_EVENT).unwrap();
     std::fs::write(
         dir.join("b.yaml"),
@@ -183,6 +177,7 @@ fn fmt_default_mode_rejects_more_than_one_resolved_file() {
 #[test]
 fn fmt_write_rewrites_in_place_and_becomes_a_no_op_on_rerun() {
     let dir = tempdir("write");
+    let dir = dir.path().to_path_buf();
     let path = dir.join("event.yaml");
     std::fs::write(&path, NON_CANONICAL_EVENT).unwrap();
 
@@ -210,6 +205,7 @@ fn fmt_write_rewrites_in_place_and_becomes_a_no_op_on_rerun() {
 #[test]
 fn fmt_check_reports_files_that_would_change_and_exits_nonzero() {
     let dir = tempdir("check");
+    let dir = dir.path().to_path_buf();
     let path = dir.join("event.yaml");
     std::fs::write(&path, NON_CANONICAL_EVENT).unwrap();
 
@@ -228,6 +224,7 @@ fn fmt_check_reports_files_that_would_change_and_exits_nonzero() {
 #[test]
 fn fmt_refuses_a_file_with_a_comment_unless_forced() {
     let dir = tempdir("comment");
+    let dir = dir.path().to_path_buf();
     let path = dir.join("event.yaml");
     let with_comment = format!("# a note about this event\n{NON_CANONICAL_EVENT}");
     std::fs::write(&path, &with_comment).unwrap();

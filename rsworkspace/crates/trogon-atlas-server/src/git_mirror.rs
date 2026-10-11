@@ -780,18 +780,11 @@ mod namespace_snapshot_tests {
 
     use super::*;
 
-    fn tmp_dir(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+    fn tmp_dir(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("trogon-atlas-snapshot-{label}-"))
+            .tempdir()
             .unwrap()
-            .as_nanos();
-        p.push(format!(
-            "trogon-atlas-snapshot-{label}-{}-{nanos}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        p
     }
 
     fn record(id: &str, name: &str, parent: &str, tenure: NamespaceTenure) -> NamespaceRecord {
@@ -860,6 +853,7 @@ mod namespace_snapshot_tests {
     #[test]
     fn round_trips_through_the_file() {
         let dir = tmp_dir("roundtrip");
+        let dir = dir.path().to_path_buf();
         let records = vec![record(
             "orders",
             "orders",
@@ -890,6 +884,7 @@ mod namespace_snapshot_tests {
         // different answers: the first is a mirror from before export-git and
         // has to be refused, the second would silently unown everything.
         let dir = tmp_dir("absent");
+        let dir = dir.path().to_path_buf();
         assert!(read_namespace_snapshot(&dir).unwrap().is_none());
     }
 
@@ -957,16 +952,11 @@ mod apply_tests {
         }
     }
 
-    fn tmp_dir(label: &str) -> PathBuf {
-        let mut p = std::env::temp_dir();
-        let pid = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+    fn tmp_dir(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("trogon-atlas-mirror-{label}-"))
+            .tempdir()
             .unwrap()
-            .as_nanos();
-        p.push(format!("trogon-atlas-mirror-{label}-{pid}-{nanos}"));
-        std::fs::create_dir_all(&p).unwrap();
-        p
     }
 
     fn git_log_count(root: &Path) -> usize {
@@ -1011,6 +1001,7 @@ mod apply_tests {
         // describes. Two commits would leave a window whose checkout hands
         // namespaces to the wrong owners.
         let root = tmp_dir("rootfile");
+        let root = root.path().to_path_buf();
         let mirror = open_mirror(&root);
 
         mirror
@@ -1045,6 +1036,7 @@ mod apply_tests {
     #[tokio::test]
     async fn a_root_file_cannot_escape_the_mirror() {
         let root = tmp_dir("escape");
+        let root = root.path().to_path_buf();
         let mirror = open_mirror(&root);
 
         let err = mirror
@@ -1066,6 +1058,7 @@ mod apply_tests {
     #[tokio::test]
     async fn stray_file_in_mirror_root_is_not_committed() {
         let root = tmp_dir("stray");
+        let root = root.path().to_path_buf();
         let mirror = open_mirror(&root);
 
         // Place a stray file in the mirror root before the first apply.
@@ -1104,6 +1097,7 @@ mod apply_tests {
     #[tokio::test]
     async fn delete_stages_removal_correctly() {
         let root = tmp_dir("delete");
+        let root = root.path().to_path_buf();
         let mirror = open_mirror(&root);
 
         let entity = make_entity("acme", "order-placed");
@@ -1140,6 +1134,7 @@ mod apply_tests {
     #[tokio::test]
     async fn write_txt_env_controls_txt_files() {
         let root = tmp_dir("write-txt");
+        let root = root.path().to_path_buf();
 
         // Enable txt output. Serialize with other env-mutating tests via ENV_LOCK.
         let mirror = {
@@ -1171,6 +1166,7 @@ mod apply_tests {
     #[tokio::test]
     async fn no_txt_files_without_env_var() {
         let root = tmp_dir("no-txt");
+        let root = root.path().to_path_buf();
 
         let mirror = open_mirror(&root);
 

@@ -61,7 +61,6 @@ fn one_outcome_line(stdout: &str) -> Value {
 }
 
 fn write_manifest(dir: &std::path::Path, ns: &str, slug: &str) -> std::path::PathBuf {
-    std::fs::create_dir_all(dir).unwrap();
     let path = dir.join("event.yaml");
     std::fs::write(
         &path,
@@ -73,18 +72,18 @@ fn write_manifest(dir: &std::path::Path, ns: &str, slug: &str) -> std::path::Pat
     path
 }
 
-fn tempfile_dir(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!(
-        "trogon-atlas-operation-cli-test-{tag}-{}",
-        std::process::id()
-    ))
+fn tempfile_dir(tag: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("trogon-atlas-operation-cli-test-{tag}-"))
+        .tempdir()
+        .unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trogon_atlas_apply_without_operation_id_mints_one_and_prints_it_to_stderr() {
     let endpoint = start_server().await;
     let dir = tempfile_dir("mint");
-    let path = write_manifest(&dir, "opcli", "minted.happened");
+    let path = write_manifest(dir.path(), "opcli", "minted.happened");
 
     let out = trogon_atlas(&endpoint, &["apply", "-f", path.to_str().unwrap()]);
     assert!(out.status.success(), "{out:?}");
@@ -104,7 +103,7 @@ async fn trogon_atlas_apply_without_operation_id_mints_one_and_prints_it_to_stde
 async fn trogon_atlas_apply_with_an_explicit_operation_id_echoes_it_to_stderr() {
     let endpoint = start_server().await;
     let dir = tempfile_dir("explicit");
-    let path = write_manifest(&dir, "opcli", "explicit.happened");
+    let path = write_manifest(dir.path(), "opcli", "explicit.happened");
 
     let out = trogon_atlas(
         &endpoint,
@@ -148,7 +147,7 @@ async fn trogon_atlas_apply_rejects_a_malformed_operation_id_before_connecting()
 async fn trogon_atlas_apply_format_json_carries_the_operation_id_in_the_outcome() {
     let endpoint = start_server().await;
     let dir = tempfile_dir("json-outcome");
-    let path = write_manifest(&dir, "opcli", "jsonoutcome.happened");
+    let path = write_manifest(dir.path(), "opcli", "jsonoutcome.happened");
 
     let out = trogon_atlas(
         &endpoint,
@@ -171,7 +170,7 @@ async fn trogon_atlas_apply_format_json_carries_the_operation_id_in_the_outcome(
 async fn trogon_atlas_operation_get_reports_applied_after_a_real_apply() {
     let endpoint = start_server().await;
     let dir = tempfile_dir("get-applied");
-    let path = write_manifest(&dir, "opcli", "getapplied.happened");
+    let path = write_manifest(dir.path(), "opcli", "getapplied.happened");
     let op_id = "test-op-get-applied-1";
 
     let applied = trogon_atlas(
@@ -211,7 +210,7 @@ async fn trogon_atlas_operation_get_reports_unknown_for_an_id_nothing_ever_claim
 async fn trogon_atlas_apply_dry_run_does_not_claim_the_operation_id() {
     let endpoint = start_server().await;
     let dir = tempfile_dir("dry-run-no-claim");
-    let path = write_manifest(&dir, "opcli", "dryrun.happened");
+    let path = write_manifest(dir.path(), "opcli", "dryrun.happened");
     let op_id = "test-op-dry-run-no-claim-1";
 
     let dry = trogon_atlas(

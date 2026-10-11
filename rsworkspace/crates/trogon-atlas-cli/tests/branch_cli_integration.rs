@@ -109,6 +109,7 @@ async fn trogon_atlas_branch_merge_with_conflict_exits_1_and_prints_conflict() {
     assert!(created.status.success(), "{:?}", created.stderr);
 
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("branch-edit.yaml");
     std::fs::write(
         &manifest_path,
@@ -179,6 +180,7 @@ async fn trogon_atlas_branch_merge_dry_run_exits_0() {
     assert!(created.status.success(), "{:?}", created.stderr);
 
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("dry-run.yaml");
     std::fs::write(
         &manifest_path,
@@ -230,6 +232,7 @@ async fn trogon_atlas_branch_merge_clean_exits_0() {
     assert!(created.status.success(), "{:?}", created.stderr);
 
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("clean.yaml");
     std::fs::write(
         &manifest_path,
@@ -289,6 +292,7 @@ async fn trogon_atlas_branch_diff_exits_1_when_conflict_present() {
     assert!(created.status.success(), "{:?}", created.stderr);
 
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("diff-edit.yaml");
     std::fs::write(
         &manifest_path,
@@ -324,17 +328,9 @@ spec: { title: Branch edit }
     );
 }
 
-fn tempfile_dir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("trogon-atlas-branch-cli-test-{}", uuid_like()));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn uuid_like() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn tempfile_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("trogon-atlas-branch-cli-test-")
+        .tempdir()
         .unwrap()
-        .as_nanos();
-    format!("{nanos}-{:?}", std::thread::current().id())
 }
