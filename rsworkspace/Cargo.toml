@@ -29,11 +29,12 @@ trogon-atlas-server = { path = "crates/trogon-atlas-server" }
 trogon-atlas-store = { path = "crates/trogon-atlas-store" }
 trogon-atlas-testsupport = { path = "crates/trogon-atlas-testsupport" }
 
-prost = "0.13"
-prost-types = "0.13"
-tonic = "0.12"
-tonic-types = "0.12"
-tonic-health = "0.12"
+prost = "0.14"
+prost-types = "0.14"
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-types = "0.14"
+tonic-health = "0.14"
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1"
 
@@ -53,10 +54,10 @@ thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.23"
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 jsonschema = { version = "0.58", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-sha2 = "0.10"
+sha2 = "0.11"
 uuid = { version = "1", features = ["v7"] }
 
 [workspace.lints.rust]

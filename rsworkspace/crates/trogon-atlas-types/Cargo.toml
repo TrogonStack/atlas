@@ -11,8 +11,8 @@ description = "Compiles tenant-owned protobuf source text in memory and keeps th
 trogon-atlas-proto = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
-prost-reflect = "0.14"
-protox = "=0.7.2"
+prost-reflect = "0.16"
+protox = "=0.10.0"
 miette = "7"
 sha2 = { workspace = true }
 thiserror = { workspace = true }

@@ -5,16 +5,19 @@ inputs:
     paths:
       - authzed/api/v1
 plugins:
-  - remote: buf.build/community/neoeinstein-prost:v0.4.0
+  - remote: buf.build/community/neoeinstein-prost:v0.5.0
     out: rsworkspace/crates/trogon-atlas-authzed/src/gen
     opt:
+      - flat_output_dir
       - extern_path=.google.rpc=::tonic_types::pb
-  - remote: buf.build/community/neoeinstein-tonic:v0.4.1
+  - remote: buf.build/community/neoeinstein-tonic:v0.5.0
     out: rsworkspace/crates/trogon-atlas-authzed/src/gen
     opt:
+      - flat_output_dir
       - extern_path=.google.rpc=::tonic_types::pb
       - no_server
-  - remote: buf.build/community/neoeinstein-prost-crate:v0.4.1
+  - remote: buf.build/community/neoeinstein-prost-crate:v0.5.0
     out: rsworkspace/crates/trogon-atlas-authzed/src/gen
     opt:
       - no_features
+      - flat_output_dir
