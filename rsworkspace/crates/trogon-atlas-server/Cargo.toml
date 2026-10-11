@@ -52,10 +52,10 @@ pin-project-lite = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tantivy = "0.26"
 prost-reflect = { version = "0.16", features = ["text-format"] }
-opentelemetry = "0.32"
-opentelemetry_sdk = { version = "0.32", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"] }
-tracing-opentelemetry = "0.33"
+opentelemetry = "0.33"
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.33", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.34"
 
 [dev-dependencies]
 wiremock = "0.6"
