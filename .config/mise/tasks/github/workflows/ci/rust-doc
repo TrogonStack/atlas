@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+#MISE description="Build rustdoc for the Rust workspace with warnings denied"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/rsworkspace"
+export RUSTDOCFLAGS="-D warnings"
+exec cargo doc --no-deps --workspace

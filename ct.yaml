@@ -1,0 +1,5 @@
+chart-dirs:
+  - devops/helm/charts
+validate-maintainers: false
+validate-chart-schema: false
+validate-yaml: false

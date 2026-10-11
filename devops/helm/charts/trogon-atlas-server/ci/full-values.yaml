@@ -1,0 +1,21 @@
+auth:
+  tokensFile:
+    content: |
+      [principals.ci]
+      role = "admin"
+      tokens = ["ci-token"]
+config:
+  acknowledgeUnauthenticatedStore: true
+spicedb:
+  endpoint: http://spicedb:50051
+  presharedKey:
+    value: ci-preshared-key
+  sync:
+    enabled: true
+gitMirror:
+  enabled: true
+metrics:
+  serviceMonitor:
+    enabled: true
+tls:
+  existingSecret: trogon-atlas-server-tls

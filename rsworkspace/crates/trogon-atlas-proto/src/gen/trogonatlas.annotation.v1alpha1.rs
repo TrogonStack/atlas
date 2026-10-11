@@ -7,8 +7,7 @@
 // annotations.proto, next to the schema they annotate.
 
 /// A pinned design note. The classic "sticky on the canvas" annotation.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NoteAnnotation {
     #[prost(string, tag="1")]
     pub text: ::prost::alloc::string::String,
@@ -20,8 +19,7 @@ pub struct NoteAnnotation {
     pub created_at: ::prost::alloc::string::String,
 }
 /// An external link to a ticket, ADR, Figma frame, doc, etc.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LinkAnnotation {
     #[prost(string, tag="1")]
     pub url: ::prost::alloc::string::String,
@@ -47,8 +45,7 @@ pub struct LinkAnnotation {
 /// An entity may carry several CodeRefAnnotations (e.g. one processor entity
 /// standing for two backend-scoped workers). Presence doubles as the
 /// as-is/to-be discriminator: PROPOSED entities carry none.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CodeRefAnnotation {
     /// required: logical repository name
     #[prost(string, tag="1")]
@@ -64,8 +61,7 @@ pub struct CodeRefAnnotation {
     pub r#ref: ::prost::alloc::string::String,
 }
 /// Free-form tags for filtering and grouping.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TagAnnotation {
     #[prost(string, repeated, tag="1")]
     pub tags: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
@@ -73,8 +69,7 @@ pub struct TagAnnotation {
 /// Lifecycle status. Status semantics are intentionally a free string;
 /// orgs agree on their own vocabulary. Suggested baseline values: "draft",
 /// "proposed", "accepted", "deprecated", "superseded".
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LifecycleAnnotation {
     #[prost(string, tag="1")]
     pub status: ::prost::alloc::string::String,
@@ -86,8 +81,7 @@ pub struct LifecycleAnnotation {
 /// humans answer by editing the annotation or removing it once resolved.
 /// Contrast AssumptionAnnotation, which names something the design already
 /// proceeds as if true, rather than something still undecided.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OpenQuestionAnnotation {
     #[prost(string, tag="1")]
     pub question: ::prost::alloc::string::String,
@@ -101,8 +95,7 @@ pub struct OpenQuestionAnnotation {
 /// this names the load-bearing guess so a human can check it instead of
 /// discovering it was wrong downstream. The validator surfaces these as
 /// Info findings alongside OpenQuestionAnnotation.
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AssumptionAnnotation {
     #[prost(string, tag="1")]
     pub statement: ::prost::alloc::string::String,

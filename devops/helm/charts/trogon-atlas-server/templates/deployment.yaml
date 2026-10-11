@@ -225,6 +225,8 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
+            - name: tmp
+              mountPath: /tmp
             {{- if $tokensSecret }}
             - name: auth-tokens
               mountPath: /etc/trogon-atlas/auth
@@ -240,6 +242,8 @@ spec:
               mountPath: /var/lib/trogon-atlas/mirror
             {{- end }}
       volumes:
+        - name: tmp
+          emptyDir: {}
         {{- if $tokensSecret }}
         - name: auth-tokens
           secret:

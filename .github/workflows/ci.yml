@@ -28,7 +28,7 @@ jobs:
     uses: ./.github/workflows/runs-on.yml
 
   rust:
-    name: Rust - fmt / clippy / test
+    name: Rust
     needs: runs-on
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
 
@@ -53,13 +53,55 @@ jobs:
       - name: cargo clippy
         run: mise run github:workflows:ci:rust-clippy
 
+      - name: cargo machete
+        run: mise run github:workflows:ci:rust-machete
+
+      - name: cargo doc
+        run: mise run github:workflows:ci:rust-doc
+
       - name: cargo test
         env:
           TROGON_ATLAS_TEST_NATS_URL: ""
         run: mise run github:workflows:ci:rust-test
 
+  rust-coverage:
+    name: Coverage
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+
+      - name: Reclaim runner disk
+        run: mise run github:workflows:ci:reclaim-disk
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: rsworkspace
+
+      - name: cargo llvm-cov
+        env:
+          TROGON_ATLAS_TEST_NATS_URL: ""
+        run: mise run github:workflows:ci:rust-coverage
+
+      - name: upload coverage to codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: rsworkspace/lcov.info
+          flags: rust
+          use_oidc: true
+          fail_ci_if_error: false
+
   deny:
-    name: Rust - dependency policy
+    name: Dependencies
     runs-on: ubuntu-latest
 
     steps:
@@ -74,7 +116,7 @@ jobs:
         run: mise run github:workflows:ci:rust-deny
 
   proto:
-    name: Proto - lint / breaking
+    name: Proto
     needs: runs-on
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
 
@@ -115,9 +157,6 @@ jobs:
       - name: Install mise
         uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
 
-      - name: actionlint
-        run: mise run github:workflows:ci:workflows-actionlint
-
       - name: zizmor
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -137,9 +176,12 @@ jobs:
           category: zizmor
 
   studio:
-    name: Studio - typecheck / lint / test / build
+    name: Studio
     needs: runs-on
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -163,8 +205,16 @@ jobs:
       - name: build
         run: mise run github:workflows:ci:studio-build
 
-      - name: test
-        run: mise run github:workflows:ci:studio-test
+      - name: test coverage
+        run: mise run github:workflows:ci:studio-coverage
+
+      - name: upload coverage to codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: tsworkspace/webapps/studio/coverage/lcov.info
+          flags: studio
+          use_oidc: true
+          fail_ci_if_error: false
 
   studio-e2e:
     name: E2E

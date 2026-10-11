@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Run trivy config against devops/ Dockerfiles and Helm charts, failing on CRITICAL or HIGH"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+
+for chart in devops/helm/charts/*/; do
+  if grep -q '^dependencies:' "$chart/Chart.yaml"; then
+    helm dependency build "$chart" >/dev/null
+  fi
+done
+
+exec trivy config --severity CRITICAL,HIGH --exit-code 1 \
+  --skip-files '**/*.dockerignore' \
+  --helm-values devops/helm/trivy-values.yaml \
+  devops

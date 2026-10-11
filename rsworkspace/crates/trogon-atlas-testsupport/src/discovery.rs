@@ -9,10 +9,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use tonic::{
-    body::BoxBody,
-    codegen::{http, Body, BoxFuture, Service, StdError},
-};
+use tonic::codegen::{http, Body, BoxFuture, Service, StdError};
 use trogon_atlas_proto as pb;
 
 const GET_SERVER_INFO_PATH: &str =
@@ -36,7 +33,7 @@ where
     B: Body + Send + 'static,
     B::Error: Into<StdError> + Send + 'static,
 {
-    type Response = http::Response<BoxBody>;
+    type Response = http::Response<tonic::body::Body>;
     type Error = Infallible;
     type Future = BoxFuture<Self::Response, Self::Error>;
 
@@ -54,7 +51,7 @@ where
             (GET_SERVER_INFO_PATH, _) => {
                 let info = self.info.clone();
                 Box::pin(async move {
-                    let mut grpc = tonic::server::Grpc::new(tonic::codec::ProstCodec::default());
+                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
                     Ok(grpc
                         .unary(Scripted::<pb::GetServerInfoRequest, _>::new(info), req)
                         .await)
@@ -63,7 +60,7 @@ where
             (BATCH_GET_ENTITIES_PATH, Some(entities)) => {
                 let entities = entities.clone();
                 Box::pin(async move {
-                    let mut grpc = tonic::server::Grpc::new(tonic::codec::ProstCodec::default());
+                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
                     Ok(grpc
                         .unary(
                             Scripted::<pb::BatchGetEntitiesRequest, _>::new(entities),
