@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Audit GitHub Actions workflows with zizmor"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+exec zizmor .github/workflows

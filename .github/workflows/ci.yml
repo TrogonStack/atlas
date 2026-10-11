@@ -141,6 +141,40 @@ jobs:
           TROGON_ATLAS_PROTO_BASELINE_REF: origin/main
         run: mise run github:workflows:ci:proto-breaking
 
+  workflows:
+    name: Workflows
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: mise run github:workflows:ci:workflows-zizmor
+
+      - name: zizmor SARIF report
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: mise run github:workflows:ci:workflows-zizmor-sarif
+
+      - name: Upload zizmor SARIF
+        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: zizmor-results.sarif
+          category: zizmor
+
   studio:
     name: Studio
     needs: runs-on

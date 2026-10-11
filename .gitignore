@@ -53,5 +53,7 @@ tsworkspace/webapps/studio/.vite/
 # macOS
 .DS_Store
 
+# zizmor SARIF report
+zizmor-results.sarif
 # Trivy image scan reports
 trivy-results/
