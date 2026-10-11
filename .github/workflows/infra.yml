@@ -7,8 +7,8 @@ on:
     paths:
       - devops/**
       - "**/Dockerfile*"
-      - .hadolint.yaml
-      - ct.yaml
+      - .config/hadolint.yaml
+      - .config/ct.yaml
       - .config/mise/tasks/github/workflows/infra/**
       - .config/mise/tasks/github/actions/docker-buildx/**
       - .config/mise/tasks/images/**
@@ -24,8 +24,8 @@ on:
     paths:
       - devops/**
       - "**/Dockerfile*"
-      - .hadolint.yaml
-      - ct.yaml
+      - .config/hadolint.yaml
+      - .config/ct.yaml
       - .config/mise/tasks/github/workflows/infra/**
       - .config/mise/tasks/github/actions/docker-buildx/**
       - .config/mise/tasks/images/**

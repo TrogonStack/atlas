@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
-exec typos
+exec typos --config .config/typos.toml

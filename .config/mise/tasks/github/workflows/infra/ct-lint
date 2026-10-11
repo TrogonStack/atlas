@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
-exec ct lint --config ct.yaml --target-branch main
+exec ct lint --config .config/ct.yaml --target-branch main
