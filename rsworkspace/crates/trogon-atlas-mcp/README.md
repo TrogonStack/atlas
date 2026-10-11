@@ -30,21 +30,28 @@ the procedure for future runs.
 
 ## What the tools return
 
-Every read RPC's response is wrapped in a stable JSON envelope:
+Every tool returns its result as JSON in `structuredContent`, with the same
+JSON in a text block for clients that read only text. A tool that wraps one
+RPC returns that RPC's response message as proto3 JSON, the mapping
+manifests and the `*_json` inputs also use, so an agent reads field names
+and enum names directly. For example, `put_entity_json` returns:
 
 ```json
-{ "binpb_base64": "<base64-encoded protobuf>" }
+{ "entity": { "event": { "id": { "namespace": "shop", "slug": "order-placed", "version": "1" }, "title": "Order placed" } }, "etag": "..." }
 ```
 
-Clients decode the protobuf (or use the matching `*_json` tool when a
-JSON view is easier to consume). The previous behavior, embedding
-Rust's `Debug` output alongside the binpb, was removed because that
-format is not wire-stable.
+A tenant-typed `Any` renders through the type libraries of the namespaces
+the response names.
+
+`get_entity` takes `format: "binpb"` to return
+`{ "binpb_base64": "<base64-encoded protobuf>" }` instead, for the
+`put_entity` / `batch_mutate` path that takes protobuf in. The `json` flag
+that some tools used to take is still accepted and has no effect.
 
 ## Error contract
 
-Internal helpers (`descriptor_for`, `message_from_json`,
-`message_to_json`, ...) use `anyhow` for ergonomic context-attachment.
+Internal helpers (`descriptor_for`, `message_from_json`, ...) use `anyhow`
+for ergonomic context-attachment.
 The public dispatch surface goes through `McpError` (see `error.rs`)
 which maps structurally to the MCP error codes: client-shape failures
 (`UnknownKind`, `InvalidBase64`, ...) surface as `invalid_params`;

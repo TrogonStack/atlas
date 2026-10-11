@@ -26,13 +26,13 @@ branches halfway through a repair.
 
 Fetch the EventModel with `get_entity_json`, then run `validate_event_model`.
 Both use explicit `namespace`, `slug`, and numeric `version` arguments;
-`get_entity_json` also takes `kind: "event_model"`. Request `json: true` for
-validation. Save the full validation response before editing, not just the
+`get_entity_json` also takes `kind: "event_model"`. Save the full
+validation response before editing, not just the
 error count. Match the current finding by code, exact subject, field, and
 storyboard context. If it is gone, report that instead of replaying an old
 repair.
 
-Use `list_validation_rules` with `json: true` when the rule's meaning needs
+Use `list_validation_rules` when the rule's meaning needs
 clarification. A new rule or unclear result can require inspection of its
 validator implementation; the catalog and tool contracts are the starting
 point.
@@ -128,25 +128,22 @@ uncertain mutation outcome, reread live state and changesets before
 retrying. Batch operations use best-effort rollback on storage failures;
 do not infer that an unsuccessful response always means nothing changed.
 
-### Decode the actual tool response
+### Read the actual tool response
 
-The MCP result contains text blocks holding an envelope. Check transport
-errors and `isError` before reading that envelope.
+Every tool returns its result as proto3 JSON in `structuredContent`, with
+the same JSON in a text block. Check transport errors and `isError` before
+reading it.
 
-| Operation | Envelope |
+| Operation | Result |
 | --- | --- |
 | `get_entity_json` | `{ "etag": "...", "json": { ... } }` with an object-valued entity. |
-| `validate_event_model` with `json: true` | `{ "json": "..." }` with a JSON-encoded response string. |
-| Reference tools, `get_impact`, `batch_mutate_json` | `{ "binpb_base64": "..." }` with the protobuf response. |
+| Every tool that wraps one RPC, for example `validate_event_model`, reference tools, `get_impact`, `put_entity_json` and `batch_mutate_json` | The RPC response message, for example `{ "status": "STATUS_APPLIED", "results": [ ... ] }` for `BatchMutateResponse`. |
 
-The JSON response helper can fall back to `binpb_base64` if reflection
-rendering fails. Decode binary responses using the matching RPC response
-descriptor from the
-[canonical schema](../../proto/trogonatlas/api/eventmodel/v1alpha1/service.proto), rather
-than guessing success from the presence of an envelope. For example, with
-`@grpc/proto-loader`, the service method's `responseDeserialize` decodes
-`BatchMutateResponse`; do not assume a message descriptor has a
-`deserialize` method.
+The fields are those of the matching response message in the
+[canonical schema](../../proto/trogonatlas/api/eventmodel/v1alpha1/service.proto),
+in proto3 JSON: lowerCamelCase names, enum value names, 64-bit integers as
+strings, and default values omitted. Read `status` and the returned etags
+from that JSON; do not guess success from the presence of a result.
 
 ## Verify the result and preserve source fixtures
 

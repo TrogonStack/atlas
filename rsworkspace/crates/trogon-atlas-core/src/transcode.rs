@@ -7,13 +7,16 @@
 //! above the generated bindings) is what prevents each surface from
 //! growing its own copy that drifts.
 
-use std::sync::OnceLock;
+use std::{collections::BTreeSet, sync::OnceLock};
 
 use prost::Message;
-use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
+use prost_reflect::{
+    DescriptorPool, DynamicMessage, MessageDescriptor, ReflectMessage as _, Value,
+};
 use trogon_atlas_proto::{Entity, FILE_DESCRIPTOR_SET};
 
 const ENTITY_MESSAGE: &str = "trogonatlas.eventmodel.v1alpha1.Entity";
+const ID_MESSAGE: &str = "trogonatlas.type.v1alpha1.Id";
 
 #[derive(Debug, thiserror::Error)]
 pub enum TranscodeError {
@@ -163,6 +166,19 @@ impl TranscodePool {
         serde_json::to_value(&self.to_dynamic(full_name, msg)?).map_err(TranscodeError::ToJson)
     }
 
+    /// Every `Id.namespace` anywhere in a message, read without rendering
+    /// it. A tenant-typed `Any` renders only after the type libraries of
+    /// those namespaces are layered in, so this names which ones to fetch.
+    pub fn namespaces_in<M: Message>(
+        &self,
+        full_name: &str,
+        msg: &M,
+    ) -> Result<BTreeSet<String>, TranscodeError> {
+        let mut found = BTreeSet::new();
+        collect_namespaces(&self.to_dynamic(full_name, msg)?, &mut found);
+        Ok(found)
+    }
+
     pub fn entity_to_json(&self, entity: &Entity) -> Result<String, TranscodeError> {
         self.message_to_json(ENTITY_MESSAGE, entity)
     }
@@ -209,6 +225,30 @@ pub fn message_from_json_value<M: Message + Default>(
     json: &serde_json::Value,
 ) -> Result<M, TranscodeError> {
     TranscodePool::builtin()?.message_from_json_value(full_name, json)
+}
+
+fn collect_namespaces(msg: &DynamicMessage, found: &mut BTreeSet<String>) {
+    if msg.descriptor().full_name() == ID_MESSAGE {
+        if let Some(Value::String(namespace)) = msg.get_field_by_name("namespace").as_deref() {
+            found.insert(namespace.clone());
+        }
+    }
+    for (_, value) in msg.fields() {
+        collect_namespaces_in_value(value, found);
+    }
+}
+
+fn collect_namespaces_in_value(value: &Value, found: &mut BTreeSet<String>) {
+    match value {
+        Value::Message(msg) => collect_namespaces(msg, found),
+        Value::List(items) => items
+            .iter()
+            .for_each(|item| collect_namespaces_in_value(item, found)),
+        Value::Map(entries) => entries
+            .values()
+            .for_each(|item| collect_namespaces_in_value(item, found)),
+        _ => {}
+    }
 }
 
 fn redecode<M: Message + Default>(
@@ -284,6 +324,37 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("trailing"), "{err}");
+    }
+
+    #[test]
+    fn namespaces_in_names_every_id_even_when_a_tenant_any_cannot_render() {
+        const NAME: &str = "trogonatlas.api.eventmodel.v1alpha1.BatchGetEntitiesResponse";
+        let event = |namespace: &str| pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Event(pb::Event {
+                id: Some(pb::Id {
+                    namespace: namespace.into(),
+                    slug: "placed".into(),
+                    version: 1,
+                }),
+                schema: Some(prost_types::Any {
+                    type_url: "type.googleapis.com/shop.orders.v1.OrderPlaced".into(),
+                    value: Vec::new(),
+                }),
+                ..Default::default()
+            })),
+        };
+        let resp = pb::BatchGetEntitiesResponse {
+            entities: vec![event("shop"), event("billing")],
+            ..Default::default()
+        };
+        let pool = TranscodePool::builtin().unwrap();
+
+        assert!(pool.message_json_value(NAME, &resp).is_err());
+        assert_eq!(
+            pool.namespaces_in(NAME, &resp).unwrap(),
+            BTreeSet::from(["billing".to_string(), "shop".to_string()])
+        );
     }
 
     #[test]

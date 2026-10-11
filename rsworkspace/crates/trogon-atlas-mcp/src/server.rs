@@ -3,7 +3,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use prost::Message;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router, ServerHandler,
 };
 use trogon_atlas_client::{
@@ -14,7 +14,7 @@ use trogon_atlas_client::{
     precondition::{BranchEntryState, StalePlan},
     tenant_types::{self, TypeScope},
 };
-use trogon_atlas_core::transcode::TranscodePool;
+use trogon_atlas_core::transcode::{TranscodeError, TranscodePool};
 use trogon_atlas_proto as pb;
 
 use crate::{
@@ -25,14 +25,14 @@ use crate::{
         BatchMutateParams, CompileTypeLibraryParams, CreateBranchParams, DeleteBranchParams,
         DeleteByQueryParams, DeleteEntityParams, DiffBranchParams, DiffEntitiesParams,
         DiffManifestsParams, EmptyParams, EntitySpec, ExportNamespaceParams, ExportOpensloParams,
-        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
-        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
-        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams,
-        MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
-        PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
-        ResolveTypeParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
-        SliceProjectionParams, SupersessionChainParams, UpdateBranchParams,
-        ValidateEventModelParams, ValidateProjectParams,
+        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetEntityParams,
+        GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts,
+        ListChangesParams, ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams,
+        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
+        PutEntityJsonParams, PutEntityParams, ReferencesParams, RegisterNamespaceParams,
+        ResolveBranchEntryParams, ResolveTypeParams, ResultFormat, RetargetReferencesParams,
+        RevertChangesetParams, SearchParams, SliceProjectionParams, SupersessionChainParams,
+        UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
     },
 };
 
@@ -42,13 +42,16 @@ pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_SEARCH_QUERY_BYTES: usize = 2048;
 
 /// ServerHandler instructions. Keep in sync with `get_info`.
-pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatlas.api.eventmodel.v1alpha1 gRPC service. \
-             Read tools return a binpb_base64 envelope you can decode (or use *_json companions). Mutations \
+pub const SERVER_INSTRUCTIONS: &str =
+    "trogon-atlas MCP: tools for the trogonatlas.api.eventmodel.v1alpha1 gRPC service. \
+             Every tool returns its result as proto3 JSON (structuredContent, mirrored as text): \
+             the response message's fields, read directly with no decoding. Mutations \
              have two surfaces: JSON (get_entity_json -> edit proto3 JSON -> put_entity_json / \
-             batch_mutate_json; no protobuf tooling required) and binpb (get_entity -> modify \
-             binpb_base64 -> put_entity / batch_mutate). Call who_am_i if you need to confirm \
-             which role, namespaces, or owner you are authenticated as; the tools listed here \
-             are already filtered to what that role can call.\n\
+             batch_mutate_json; no protobuf tooling required) and binpb (get_entity with \
+             format=binpb -> modify binpb_base64 -> put_entity / batch_mutate). Call \
+             who_am_i if you need to confirm which role, namespaces, or owner you are \
+             authenticated as; the tools listed here are already filtered to what that role \
+             can call.\n\
              \n\
              STORYBOARD AUTHORING RULES (validated; violations are rejected or flagged):\n\
              1. A storyboard is a TEMPORAL sequence: each slice is one moment. A read-model \
@@ -685,13 +688,6 @@ fn message_from_json<M: Message + Default>(message_name: &str, json: &str) -> Re
     )?)
 }
 
-fn message_to_json<M: Message>(message_name: &str, msg: &M) -> Result<String> {
-    Ok(trogon_atlas_core::transcode::message_to_json(
-        message_name,
-        msg,
-    )?)
-}
-
 async fn tenant_types_for(
     client: &mut Client,
     scope: &TypeScope,
@@ -886,23 +882,108 @@ fn encode_b64<M: Message>(msg: &M) -> String {
     B64.encode(msg.encode_to_vec())
 }
 
-/// Wire-stable envelope for proto responses returned through MCP. The body
-/// is a JSON object with a single `binpb_base64` field carrying the
-/// base64-encoded protobuf; callers decode it (or use the `*_json`
-/// companion tools when JSON is wanted directly). Rust `Debug` output is
-/// deliberately NOT included: it would couple consumers to a format that
-/// changes whenever prost regenerates field ordering or struct shape.
-fn ok_envelope<M: Message>(msg: &M) -> CallToolResult {
-    let body = serde_json::json!({ "binpb_base64": encode_b64(msg) }).to_string();
-    CallToolResult::success(vec![ContentBlock::text(body)])
+/// Proto full names of the responses tools return. prost generates no
+/// `prost::Name` for these types, so each name is built from the type's own
+/// identifier and cannot drift from it.
+trait ApiMessage: Message {
+    const FULL_NAME: &'static str;
+}
+
+macro_rules! api_messages {
+    ($($message:ident),* $(,)?) => {
+        $(impl ApiMessage for pb::$message {
+            const FULL_NAME: &'static str =
+                concat!("trogonatlas.api.eventmodel.v1alpha1.", stringify!($message));
+        })*
+    };
+}
+
+api_messages!(
+    BatchGetEntitiesResponse,
+    BatchMutateResponse,
+    CheckInformationCompletenessResponse,
+    CompileTypeLibraryResponse,
+    CreateBranchResponse,
+    DeleteByQueryResponse,
+    DeleteEntityResponse,
+    DiffBranchResponse,
+    DiffEntitiesResponse,
+    ExtractSubgraphResponse,
+    GetChangesetResponse,
+    GetEntityHistoryResponse,
+    GetEntityResponse,
+    GetEventModelProjectionResponse,
+    GetImpactResponse,
+    GetLatestVersionResponse,
+    GetOperationResponse,
+    GetReferencesResponse,
+    GetServerInfoResponse,
+    GetSliceProjectionResponse,
+    GetSnapshotIdResponse,
+    GetStoryboardProjectionResponse,
+    GetSupersessionChainResponse,
+    InferDataFlowResponse,
+    ListBranchesResponse,
+    ListChangesResponse,
+    ListChangesetsResponse,
+    ListEntitiesByDomainResponse,
+    ListEntitiesResponse,
+    ListEntityKindsResponse,
+    ListNamespacesResponse,
+    ListValidationRulesResponse,
+    ListVersionsResponse,
+    MergeBranchResponse,
+    MoveNamespaceResponse,
+    PutEntityResponse,
+    RegisterNamespaceResponse,
+    ResolveTypeResponse,
+    RetargetReferencesResponse,
+    RevertChangesetResponse,
+    SearchEntitiesResponse,
+    UpdateBranchResponse,
+    ValidateEventModelResponse,
+    ValidateProjectResponse,
+);
+
+/// A result carrying `msg` as proto3 JSON, the same mapping manifests and
+/// the `*_json` inputs use, so an agent reads field names instead of
+/// decoding protobuf. `structured` also mirrors the JSON into a text block
+/// for clients that ignore `structuredContent`.
+fn json_result<M: ApiMessage>(
+    pool: &TranscodePool,
+    msg: &M,
+) -> Result<CallToolResult, TranscodeError> {
+    Ok(CallToolResult::structured(
+        pool.message_json_value(M::FULL_NAME, msg)?,
+    ))
+}
+
+/// [`json_result`] for an RPC response. A tenant-typed `Any` renders only
+/// once its namespace's type libraries are layered in, so a miss on the
+/// built-in types retries with every namespace the response names; the
+/// common case costs no extra RPC.
+async fn ok_json<M: ApiMessage>(
+    client: &mut Client,
+    msg: &M,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let internal = |e: TranscodeError| rmcp::ErrorData::from(McpError::Internal(e.to_string()));
+    let builtin = TranscodePool::builtin().map_err(internal)?;
+    if let Ok(result) = json_result(&builtin, msg) {
+        return Ok(result);
+    }
+    let mut scope = TypeScope::default();
+    for namespace in builtin.namespaces_in(M::FULL_NAME, msg).map_err(internal)? {
+        scope.add_namespace(namespace);
+    }
+    json_result(&tenant_types_for(client, &scope).await?, msg).map_err(internal)
 }
 
 /// `BatchMutateResponse.status == STATUS_FAILED` is an RPC that returned
-/// `Ok` while carrying a domain failure in its body; `ok_envelope` alone
+/// `Ok` while carrying a domain failure in its body; `ok_json` alone
 /// would report it to the agent as a successful tool call. Classify it the
 /// same way `trogon-atlas-client::apply` classifies the identical response
 /// shape, so the agent gets an MCP tool error with the same category data
-/// any other failure carries instead of a binpb blob it has to decode to
+/// any other failure carries instead of a success it has to read to
 /// discover the batch did not apply.
 fn batch_mutate_failure(resp: &pb::BatchMutateResponse) -> anyhow::Error {
     if let Some(failure) = &resp.precondition_failure {
@@ -915,37 +996,6 @@ fn batch_mutate_failure(resp: &pb::BatchMutateResponse) -> anyhow::Error {
         failed: format!("op[{}]", resp.failed_op_index),
         issues: resp.failure.clone(),
     })
-}
-
-/// Universal response shaper. When `want_json` is true and the descriptor pool
-/// knows the message, return the JSON-rendered proto in a
-/// `{ "format": "json", "json": "..." }` envelope. On any serialization
-/// failure (descriptor missing, transcoding fault) fall back to the
-/// `binpb_base64` envelope so the tool call never fails purely over the response
-/// shape, but log at warn and include `"format": "binpb_base64"` so callers
-/// can detect the fallback without inspecting field presence.
-fn ok_response<M: Message>(message_name: &str, msg: &M, want_json: bool) -> CallToolResult {
-    if want_json {
-        match message_to_json(message_name, msg) {
-            Ok(s) => {
-                let body = serde_json::json!({ "format": "json", "json": s }).to_string();
-                return CallToolResult::success(vec![ContentBlock::text(body)]);
-            }
-            Err(e) => {
-                tracing::warn!(
-                    message_name = message_name,
-                    error = %e,
-                    "ok_response: JSON serialization failed; falling back to binpb_base64"
-                );
-            }
-        }
-    }
-    let body = serde_json::json!({
-        "format": "binpb_base64",
-        "binpb_base64": encode_b64(msg)
-    })
-    .to_string();
-    CallToolResult::success(vec![ContentBlock::text(body)])
 }
 
 #[tool_router]
@@ -969,7 +1019,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_server_info"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1001,9 +1051,8 @@ impl McpServer {
             "namespaces": resp.namespaces,
             "owner": resp.owner,
             "anonymous": resp.anonymous,
-        })
-        .to_string();
-        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        });
+        Ok(CallToolResult::structured(body))
     }
 
     #[tool(
@@ -1025,7 +1074,7 @@ impl McpServer {
             .await
             .map_err(tool_err("list_namespaces"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1051,7 +1100,7 @@ impl McpServer {
             .await
             .map_err(tool_err("register_namespace"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1077,7 +1126,7 @@ impl McpServer {
             .await
             .map_err(tool_err("move_namespace"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1115,7 +1164,7 @@ impl McpServer {
             .await
             .map_err(tool_err("compile_type_library"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1140,7 +1189,7 @@ impl McpServer {
             .await
             .map_err(tool_err("resolve_type"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1165,7 +1214,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_snapshot_id"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1205,11 +1254,11 @@ impl McpServer {
             .await
             .map_err(tool_err("list_entities"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
-        description = "Fetch a single entity by (kind, namespace, slug, version). Returns an opaque etag for use with put_entity / delete_entity if_match.",
+        description = "Fetch a single entity by (kind, namespace, slug, version) as proto3 JSON, with an opaque etag for use with put_entity / delete_entity if_match. format=binpb returns the base64 protobuf that put_entity's entity_b64 takes instead.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1219,7 +1268,7 @@ impl McpServer {
     )]
     async fn get_entity(
         &self,
-        Parameters(p): Parameters<EntitySpec>,
+        Parameters(p): Parameters<GetEntityParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let kind = parse_kind(&p.kind).map_err(rmcp::ErrorData::from)?;
         let req = pb::GetEntityRequest {
@@ -1232,7 +1281,12 @@ impl McpServer {
             .await
             .map_err(tool_err("get_entity"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        if p.format == ResultFormat::Binpb {
+            return Ok(CallToolResult::structured(
+                serde_json::json!({ "binpb_base64": encode_b64(&resp) }),
+            ));
+        }
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1274,7 +1328,7 @@ impl McpServer {
             .await
             .map_err(tool_err("batch_get_entities"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1314,7 +1368,7 @@ impl McpServer {
             .await
             .map_err(tool_err("search_entities"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1346,7 +1400,7 @@ impl McpServer {
             .await
             .map_err(tool_err("list_versions"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1376,7 +1430,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_latest_version"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1411,7 +1465,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_supersession_chain"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1442,7 +1496,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_incoming_references"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1473,7 +1527,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_outgoing_references"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1507,7 +1561,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_impact"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1554,7 +1608,7 @@ impl McpServer {
             .await
             .map_err(tool_err("retarget_references"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1581,7 +1635,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_slice_projection"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1606,7 +1660,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_storyboard_projection"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1632,7 +1686,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_event_model_projection"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1666,7 +1720,7 @@ impl McpServer {
             .await
             .map_err(tool_err("extract_subgraph"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1700,11 +1754,11 @@ impl McpServer {
             .await
             .map_err(tool_err("diff_entities"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
-        description = "Create or replace an entity. The entity payload is a base64-encoded prost binpb of an Entity message (obtain via get_entity, edit binpb_base64, and pass back). A failed write is an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never a success envelope.",
+        description = "Create or replace an entity. The entity payload is a base64-encoded prost binpb of an Entity message (obtain via get_entity with format=binpb, edit binpb_base64, and pass back). A failed write is an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never a success envelope.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -1745,7 +1799,7 @@ impl McpServer {
             .map_err(tool_err("put_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1783,8 +1837,8 @@ impl McpServer {
             }
             None => serde_json::Value::Null,
         };
-        let body = serde_json::json!({ "etag": resp.etag, "json": entity_json }).to_string();
-        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        let body = serde_json::json!({ "etag": resp.etag, "json": entity_json });
+        Ok(CallToolResult::structured(body))
     }
 
     #[tool(
@@ -1831,7 +1885,7 @@ impl McpServer {
             .map_err(tool_err("put_entity_json"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1875,7 +1929,7 @@ impl McpServer {
         if resp.status == pb::batch_mutate_response::Status::Failed as i32 {
             return Err(McpError::from(batch_mutate_failure(&resp)).into());
         }
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -1910,7 +1964,7 @@ impl McpServer {
             .map_err(tool_err("delete_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2038,7 +2092,7 @@ impl McpServer {
             let err: rmcp::ErrorData = McpError::from(batch_mutate_failure(&resp)).into();
             return Err(attach_operation_id(err, &operation_id));
         }
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2067,7 +2121,7 @@ impl McpServer {
             .await
             .map_err(tool_err("list_changes"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2096,7 +2150,7 @@ impl McpServer {
             .await
             .map_err(tool_err("list_changesets"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2118,7 +2172,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_changeset"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2151,7 +2205,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_entity_history"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2180,7 +2234,7 @@ impl McpServer {
             .map_err(tool_err("revert_changeset"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2206,11 +2260,7 @@ impl McpServer {
             .await
             .map_err(tool_err("validate_event_model"))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.ValidateEventModelResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2224,7 +2274,7 @@ impl McpServer {
     )]
     async fn list_validation_rules(
         &self,
-        Parameters(p): Parameters<JsonOpts>,
+        Parameters(_p): Parameters<JsonOpts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let mut client = self.client();
         let resp = client
@@ -2232,11 +2282,7 @@ impl McpServer {
             .await
             .map_err(tool_err("list_validation_rules"))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.ListValidationRulesResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2304,11 +2350,7 @@ impl McpServer {
             .await
             .map_err(tool_err("validate_project"))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.ValidateProjectResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2356,11 +2398,7 @@ impl McpServer {
             .await
             .map_err(tool_err("delete_by_query"))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.DeleteByQueryResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2374,7 +2412,7 @@ impl McpServer {
     )]
     async fn list_entity_kinds(
         &self,
-        Parameters(p): Parameters<JsonOpts>,
+        Parameters(_p): Parameters<JsonOpts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let mut client = self.client();
         let resp = client
@@ -2382,11 +2420,7 @@ impl McpServer {
             .await
             .map_err(tool_err("list_entity_kinds"))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.ListEntityKindsResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2432,11 +2466,7 @@ impl McpServer {
             .await
             .map_err(tool_err("list_entities_by_domain"))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.ListEntitiesByDomainResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2461,7 +2491,7 @@ impl McpServer {
             .await
             .map_err(tool_err("infer_data_flow"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2486,7 +2516,7 @@ impl McpServer {
             .await
             .map_err(tool_err("check_information_completeness"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2529,9 +2559,8 @@ impl McpServer {
             "lines": outcome.lines,
             "issues": outcome.issues.iter().map(trogon_atlas_client::apply::format_issue).collect::<Vec<_>>(),
             "operation_id": (!operation_id.is_empty()).then_some(operation_id.as_str()),
-        })
-        .to_string();
-        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        });
+        Ok(CallToolResult::structured(body))
     }
 
     #[tool(
@@ -2560,8 +2589,8 @@ impl McpServer {
             .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
         let (diff, changed) = trogon_atlas_client::apply::render_diff(&plan, &resolved.types)
             .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        let body = serde_json::json!({ "changed": changed, "diff": diff }).to_string();
-        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        let body = serde_json::json!({ "changed": changed, "diff": diff });
+        Ok(CallToolResult::structured(body))
     }
 
     #[tool(
@@ -2585,9 +2614,8 @@ impl McpServer {
         let body = serde_json::json!({
             "files": outcome.files,
             "skipped": outcome.skipped,
-        })
-        .to_string();
-        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        });
+        Ok(CallToolResult::structured(body))
     }
 
     #[tool(
@@ -2619,9 +2647,8 @@ impl McpServer {
         let body = serde_json::json!({
             "yaml": outcome.yaml,
             "skipped": outcome.skipped,
-        })
-        .to_string();
-        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        });
+        Ok(CallToolResult::structured(body))
     }
 
     #[tool(
@@ -2642,9 +2669,11 @@ impl McpServer {
         let info = trogon_atlas_client::branch::create_branch(&mut client, &p.name, &p.doc)
             .await
             .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "{info:#?}"
-        ))]))
+        ok_json(
+            &mut client,
+            &pb::CreateBranchResponse { branch: Some(info) },
+        )
+        .await
     }
 
     #[tool(
@@ -2664,9 +2693,7 @@ impl McpServer {
         let branches = trogon_atlas_client::branch::list_branches(&mut client)
             .await
             .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "{branches:#?}"
-        ))]))
+        ok_json(&mut client, &pb::ListBranchesResponse { branches }).await
     }
 
     #[tool(
@@ -2687,10 +2714,9 @@ impl McpServer {
         trogon_atlas_client::branch::delete_branch(&mut client, &p.name)
             .await
             .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "{} deleted",
-            p.name
-        ))]))
+        Ok(CallToolResult::structured(
+            serde_json::json!({ "name": p.name, "deleted": true }),
+        ))
     }
 
     #[tool(
@@ -2712,11 +2738,7 @@ impl McpServer {
             .await
             .map_err(tool_err("diff_branch"))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.DiffBranchResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2747,11 +2769,7 @@ impl McpServer {
             .map_err(tool_err("merge_branch"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2774,11 +2792,7 @@ impl McpServer {
             .await
             .map_err(tool_err("update_branch"))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.UpdateBranchResponse",
-            &resp,
-            p.json.unwrap_or(false),
-        ))
+        ok_json(&mut client, &resp).await
     }
 
     #[tool(
@@ -2834,9 +2848,9 @@ impl McpServer {
         .map_err(|e| {
             attach_operation_id(rmcp::ErrorData::from(McpError::from(e)), &operation_id)
         })?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            "resolved",
-        )]))
+        Ok(CallToolResult::structured(
+            serde_json::json!({ "resolved": true }),
+        ))
     }
 
     #[tool(
@@ -2862,7 +2876,7 @@ impl McpServer {
             .await
             .map_err(tool_err("get_operation"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        ok_json(&mut client, &resp).await
     }
 }
 
@@ -3006,7 +3020,11 @@ mod tests {
                 ..Default::default()
             })),
         };
-        let json = message_to_json("trogonatlas.eventmodel.v1alpha1.Entity", &entity).unwrap();
+        let json = trogon_atlas_core::transcode::message_to_json(
+            "trogonatlas.eventmodel.v1alpha1.Entity",
+            &entity,
+        )
+        .unwrap();
         let back: pb::Entity =
             message_from_json("trogonatlas.eventmodel.v1alpha1.Entity", &json).unwrap();
         assert_eq!(back, entity);
@@ -3120,15 +3138,47 @@ mod tests {
     }
 
     #[test]
-    fn server_instructions_must_not_claim_debug_envelope() {
+    fn server_instructions_describe_json_results() {
         assert!(
             !SERVER_INSTRUCTIONS.contains("human-readable Debug"),
-            "ok_envelope no longer returns Debug; instructions must not claim it"
+            "no tool returns Debug output; instructions must not claim it"
         );
         assert!(
-            SERVER_INSTRUCTIONS.contains("binpb_base64"),
-            "instructions should still describe the binpb_base64 envelope"
+            !SERVER_INSTRUCTIONS.contains("return a binpb_base64 envelope"),
+            "read tools return JSON; instructions must not send agents to decode protobuf"
         );
+        assert!(
+            SERVER_INSTRUCTIONS.contains("proto3 JSON (structuredContent"),
+            "instructions should say results are structured proto3 JSON"
+        );
+    }
+
+    #[test]
+    fn json_result_is_structured_proto3_json_mirrored_as_text() {
+        let resp = pb::GetEntityResponse {
+            entity: Some(pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Event(pb::Event {
+                    id: Some(id_from("shop", "order-placed", 1)),
+                    title: "Order placed".into(),
+                    ..Default::default()
+                })),
+            }),
+            etag: "7".into(),
+        };
+        let result = json_result(&TranscodePool::builtin().unwrap(), &resp).unwrap();
+        let expected = serde_json::json!({
+            "entity": {"event": {
+                "id": {"namespace": "shop", "slug": "order-placed", "version": "1"},
+                "title": "Order placed",
+            }},
+            "etag": "7",
+        });
+        assert_eq!(result.is_error, Some(false));
+        assert_eq!(result.structured_content, Some(expected.clone()));
+        let text: serde_json::Value =
+            serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+        assert_eq!(text, expected);
     }
 
     #[test]

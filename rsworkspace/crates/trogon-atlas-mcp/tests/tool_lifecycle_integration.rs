@@ -16,7 +16,6 @@ mod support;
 
 use std::sync::Arc;
 
-use prost::Message as _;
 use tokio::net::TcpListener;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
@@ -67,7 +66,7 @@ fn args_obj(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serd
 }
 
 fn call_tool_result_text(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
+    support::structured(result)
 }
 
 fn event_json(ns: &str, slug: &str, version: u64, title: &str) -> String {
@@ -106,7 +105,7 @@ fn put_req(entity: pb::Entity, create_only: bool) -> pb::PutEntityRequest {
     }
 }
 
-// put_entity_json / get_entity_json / get_entity (binpb_base64) / list_entities
+// put_entity_json / get_entity_json / get_entity / list_entities
 // / delete_entity / batch_mutate_json / list_changes, chained through one
 // lifecycle so the whole read/write surface gets exercised in one server
 // instance.
@@ -128,8 +127,15 @@ async fn mcp_read_write_tool_lifecycle() {
         .await
         .unwrap();
     assert!(!put_result.is_error.unwrap_or(false), "{put_result:?}");
+    // The new etag is readable JSON, ready for the next guarded write.
     let put_body = call_tool_result_text(&put_result);
-    assert!(put_body["binpb_base64"].is_string(), "{put_body:?}");
+    let put_etag = put_body["etag"].as_str().unwrap().to_owned();
+    assert!(!put_etag.is_empty(), "{put_body:?}");
+    assert_eq!(
+        put_body["entity"]["event"]["title"],
+        serde_json::json!("Created"),
+        "{put_body:?}"
+    );
 
     // get_entity_json: read back as proto3 JSON, with an etag.
     let get_json_result = client
@@ -156,8 +162,9 @@ async fn mcp_read_write_tool_lifecycle() {
         get_json_body["json"]["event"]["title"],
         serde_json::json!("Created")
     );
+    assert_eq!(get_json_body["etag"], serde_json::json!(put_etag));
 
-    // get_entity: raw binpb_base64 envelope, decodable as a GetEntityResponse.
+    // get_entity: proto3 JSON of a GetEntityResponse.
     let get_result = client
         .call_tool(
             rmcp::model::CallToolRequestParams::new("get_entity").with_arguments(args_obj(&[
@@ -170,9 +177,8 @@ async fn mcp_read_write_tool_lifecycle() {
         .await
         .unwrap();
     assert!(!get_result.is_error.unwrap_or(false), "{get_result:?}");
-    let get_body = call_tool_result_text(&get_result);
-    let raw = base64_decode(get_body["binpb_base64"].as_str().unwrap());
-    let decoded = pb::GetEntityResponse::decode(raw.as_slice()).unwrap();
+    let decoded: pb::GetEntityResponse = support::structured_as(&get_result, "GetEntityResponse");
+    assert_eq!(decoded.etag, put_etag);
     match decoded.entity.unwrap().kind {
         Some(pb::entity::Kind::Event(ev)) => assert_eq!(ev.title, "Created"),
         other => panic!("unexpected: {other:?}"),
@@ -190,9 +196,8 @@ async fn mcp_read_write_tool_lifecycle() {
         .await
         .unwrap();
     assert!(!list_result.is_error.unwrap_or(false), "{list_result:?}");
-    let list_body = call_tool_result_text(&list_result);
-    let raw = base64_decode(list_body["binpb_base64"].as_str().unwrap());
-    let decoded = pb::ListEntitiesResponse::decode(raw.as_slice()).unwrap();
+    let decoded: pb::ListEntitiesResponse =
+        support::structured_as(&list_result, "ListEntitiesResponse");
     assert_eq!(decoded.entities.len(), 1, "{decoded:?}");
 
     // batch_mutate_json: put a second entity and delete the first, atomically.
@@ -212,9 +217,12 @@ async fn mcp_read_write_tool_lifecycle() {
         .await
         .unwrap();
     assert!(!batch_result.is_error.unwrap_or(false), "{batch_result:?}");
-    let batch_body = call_tool_result_text(&batch_result);
-    let raw = base64_decode(batch_body["binpb_base64"].as_str().unwrap());
-    let decoded = pb::BatchMutateResponse::decode(raw.as_slice()).unwrap();
+    assert_eq!(
+        call_tool_result_text(&batch_result)["status"],
+        serde_json::json!("STATUS_APPLIED")
+    );
+    let decoded: pb::BatchMutateResponse =
+        support::structured_as(&batch_result, "BatchMutateResponse");
     assert_eq!(decoded.results.len(), 2, "{decoded:?}");
 
     // delete_entity: the second entity is now deletable directly.
@@ -267,9 +275,8 @@ async fn mcp_read_write_tool_lifecycle() {
         .await
         .unwrap();
     assert!(!first_result.is_error.unwrap_or(false), "{first_result:?}");
-    let first_body = call_tool_result_text(&first_result);
-    let raw = base64_decode(first_body["binpb_base64"].as_str().unwrap());
-    let first_decoded = pb::ListChangesResponse::decode(raw.as_slice()).unwrap();
+    let first_decoded: pb::ListChangesResponse =
+        support::structured_as(&first_result, "ListChangesResponse");
     assert!(!first_decoded.next_token.is_empty(), "{first_decoded:?}");
 
     let mut grpc = trogon_atlas_client::client::connect(&grpc_endpoint, None, 30)
@@ -295,18 +302,12 @@ async fn mcp_read_write_tool_lifecycle() {
         !second_result.is_error.unwrap_or(false),
         "{second_result:?}"
     );
-    let second_body = call_tool_result_text(&second_result);
-    let raw = base64_decode(second_body["binpb_base64"].as_str().unwrap());
-    let second_decoded = pb::ListChangesResponse::decode(raw.as_slice()).unwrap();
+    let second_decoded: pb::ListChangesResponse =
+        support::structured_as(&second_result, "ListChangesResponse");
     assert!(!second_decoded.events.is_empty(), "{second_decoded:?}");
 
     mcp_service.cancel().await.unwrap();
     let _ = grpc_endpoint;
-}
-
-fn base64_decode(s: &str) -> Vec<u8> {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.decode(s).unwrap()
 }
 
 // export_namespace: apply a small model via apply_manifests (dry_run, so the
@@ -487,16 +488,13 @@ async fn mcp_validate_event_model_returns_json_report() {
                     ("namespace", serde_json::json!("mcp-validate")),
                     ("slug", serde_json::json!("model")),
                     ("version", serde_json::json!(1)),
-                    ("json", serde_json::json!(true)),
                 ]),
             ),
         )
         .await
         .unwrap();
     assert!(!result.is_error.unwrap_or(false), "{result:?}");
-    let body = call_tool_result_text(&result);
-    assert_eq!(body["format"], serde_json::json!("json"), "{body:?}");
-    let report: serde_json::Value = serde_json::from_str(body["json"].as_str().unwrap()).unwrap();
+    let report = call_tool_result_text(&result);
     // proto3 JSON omits empty repeated fields: absent means no issues.
     assert!(report
         .get("reports")

@@ -74,11 +74,7 @@ fn args_obj(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serd
 }
 
 fn call_tool_result_text(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
-}
-
-fn base64_decode(s: &str) -> Vec<u8> {
-    base64::engine::general_purpose::STANDARD.decode(s).unwrap()
+    support::structured(result)
 }
 
 fn base64_encode(bytes: &[u8]) -> String {
@@ -197,7 +193,7 @@ fn put_req(entity: pb::Entity, create_only: bool) -> pb::PutEntityRequest {
 
 // get_server_info: static handshake-style tool, no arguments.
 #[tokio::test(flavor = "multi_thread")]
-async fn mcp_get_server_info_returns_envelope() {
+async fn mcp_get_server_info_returns_json() {
     let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
 
     let result = client
@@ -208,10 +204,8 @@ async fn mcp_get_server_info_returns_envelope() {
         .await
         .unwrap();
     assert!(!result.is_error.unwrap_or(false), "{result:?}");
-    let body = call_tool_result_text(&result);
-    assert!(body["binpb_base64"].is_string(), "{body:?}");
-    let raw = base64_decode(body["binpb_base64"].as_str().unwrap());
-    pb::GetServerInfoResponse::decode(raw.as_slice()).unwrap();
+    let info: pb::GetServerInfoResponse = support::structured_as(&result, "GetServerInfoResponse");
+    assert!(info.features.is_some(), "{info:?}");
 
     mcp_service.cancel().await.unwrap();
 }
@@ -222,6 +216,8 @@ async fn mcp_get_server_info_returns_envelope() {
 async fn mcp_static_catalog_tools() {
     let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
 
+    // Older prompts still pass the retired `json` flag; it is accepted and
+    // changes nothing, since every result is JSON now.
     let kinds_result = client
         .call_tool(
             rmcp::model::CallToolRequestParams::new("list_entity_kinds")
@@ -230,14 +226,7 @@ async fn mcp_static_catalog_tools() {
         .await
         .unwrap();
     assert!(!kinds_result.is_error.unwrap_or(false), "{kinds_result:?}");
-    let kinds_body = call_tool_result_text(&kinds_result);
-    assert_eq!(
-        kinds_body["format"],
-        serde_json::json!("json"),
-        "{kinds_body:?}"
-    );
-    let kinds_report: serde_json::Value =
-        serde_json::from_str(kinds_body["json"].as_str().unwrap()).unwrap();
+    let kinds_report = call_tool_result_text(&kinds_result);
     assert!(
         !kinds_report["kinds"].as_array().unwrap().is_empty(),
         "{kinds_report:?}"
@@ -246,14 +235,12 @@ async fn mcp_static_catalog_tools() {
     let rules_result = client
         .call_tool(
             rmcp::model::CallToolRequestParams::new("list_validation_rules")
-                .with_arguments(args_obj(&[("json", serde_json::json!(true))])),
+                .with_arguments(args_obj(&[])),
         )
         .await
         .unwrap();
     assert!(!rules_result.is_error.unwrap_or(false), "{rules_result:?}");
-    let rules_body = call_tool_result_text(&rules_result);
-    let rules_report: serde_json::Value =
-        serde_json::from_str(rules_body["json"].as_str().unwrap()).unwrap();
+    let rules_report = call_tool_result_text(&rules_result);
     assert!(
         !rules_report["rules"].as_array().unwrap().is_empty(),
         "{rules_report:?}"
@@ -329,9 +316,8 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !latest_result.is_error.unwrap_or(false),
         "{latest_result:?}"
     );
-    let latest_body = call_tool_result_text(&latest_result);
-    let raw = base64_decode(latest_body["binpb_base64"].as_str().unwrap());
-    let latest_decoded = pb::GetLatestVersionResponse::decode(raw.as_slice()).unwrap();
+    let latest_decoded: pb::GetLatestVersionResponse =
+        support::structured_as(&latest_result, "GetLatestVersionResponse");
     let Some(pb::entity::Kind::Command(cmd)) = latest_decoded.entity.unwrap().kind else {
         panic!("expected command");
     };
@@ -353,9 +339,10 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         .await
         .unwrap();
     assert!(!chain_result.is_error.unwrap_or(false), "{chain_result:?}");
-    let chain_body = call_tool_result_text(&chain_result);
-    let raw = base64_decode(chain_body["binpb_base64"].as_str().unwrap());
-    pb::GetSupersessionChainResponse::decode(raw.as_slice()).unwrap();
+    support::structured_as::<pb::GetSupersessionChainResponse>(
+        &chain_result,
+        "GetSupersessionChainResponse",
+    );
 
     // get_outgoing_references: place-order slice references the command and
     // the event.
@@ -376,9 +363,8 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !outgoing_result.is_error.unwrap_or(false),
         "{outgoing_result:?}"
     );
-    let outgoing_body = call_tool_result_text(&outgoing_result);
-    let raw = base64_decode(outgoing_body["binpb_base64"].as_str().unwrap());
-    let outgoing_decoded = pb::GetReferencesResponse::decode(raw.as_slice()).unwrap();
+    let outgoing_decoded: pb::GetReferencesResponse =
+        support::structured_as(&outgoing_result, "GetReferencesResponse");
     assert!(
         !outgoing_decoded.references.is_empty(),
         "{outgoing_decoded:?}"
@@ -402,9 +388,8 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !incoming_result.is_error.unwrap_or(false),
         "{incoming_result:?}"
     );
-    let incoming_body = call_tool_result_text(&incoming_result);
-    let raw = base64_decode(incoming_body["binpb_base64"].as_str().unwrap());
-    let incoming_decoded = pb::GetReferencesResponse::decode(raw.as_slice()).unwrap();
+    let incoming_decoded: pb::GetReferencesResponse =
+        support::structured_as(&incoming_result, "GetReferencesResponse");
     assert!(
         !incoming_decoded.references.is_empty(),
         "{incoming_decoded:?}"
@@ -427,9 +412,7 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !impact_result.is_error.unwrap_or(false),
         "{impact_result:?}"
     );
-    let impact_body = call_tool_result_text(&impact_result);
-    let raw = base64_decode(impact_body["binpb_base64"].as_str().unwrap());
-    pb::GetImpactResponse::decode(raw.as_slice()).unwrap();
+    support::structured_as::<pb::GetImpactResponse>(&impact_result, "GetImpactResponse");
 
     // batch_get_entities: fetch all three seeded entities in one call.
     let batch_get_result = client
@@ -449,9 +432,8 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !batch_get_result.is_error.unwrap_or(false),
         "{batch_get_result:?}"
     );
-    let batch_get_body = call_tool_result_text(&batch_get_result);
-    let raw = base64_decode(batch_get_body["binpb_base64"].as_str().unwrap());
-    let batch_get_decoded = pb::BatchGetEntitiesResponse::decode(raw.as_slice()).unwrap();
+    let batch_get_decoded: pb::BatchGetEntitiesResponse =
+        support::structured_as(&batch_get_result, "BatchGetEntitiesResponse");
     assert_eq!(batch_get_decoded.entities.len(), 3, "{batch_get_decoded:?}");
 
     // get_slice_projection: renders the command_slice projection.
@@ -472,9 +454,10 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !slice_proj_result.is_error.unwrap_or(false),
         "{slice_proj_result:?}"
     );
-    let slice_proj_body = call_tool_result_text(&slice_proj_result);
-    let raw = base64_decode(slice_proj_body["binpb_base64"].as_str().unwrap());
-    pb::GetSliceProjectionResponse::decode(raw.as_slice()).unwrap();
+    support::structured_as::<pb::GetSliceProjectionResponse>(
+        &slice_proj_result,
+        "GetSliceProjectionResponse",
+    );
 
     // get_event_model_projection: renders the whole model's projection.
     let em_proj_result = client
@@ -494,9 +477,8 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !em_proj_result.is_error.unwrap_or(false),
         "{em_proj_result:?}"
     );
-    let em_proj_body = call_tool_result_text(&em_proj_result);
-    let raw = base64_decode(em_proj_body["binpb_base64"].as_str().unwrap());
-    let em_proj_decoded = pb::GetEventModelProjectionResponse::decode(raw.as_slice()).unwrap();
+    let em_proj_decoded: pb::GetEventModelProjectionResponse =
+        support::structured_as(&em_proj_result, "GetEventModelProjectionResponse");
     let _ = em_proj_decoded;
 
     // extract_subgraph: root at the event_model, closure includes all
@@ -514,9 +496,10 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !subgraph_result.is_error.unwrap_or(false),
         "{subgraph_result:?}"
     );
-    let subgraph_body = call_tool_result_text(&subgraph_result);
-    let raw = base64_decode(subgraph_body["binpb_base64"].as_str().unwrap());
-    pb::ExtractSubgraphResponse::decode(raw.as_slice()).unwrap();
+    support::structured_as::<pb::ExtractSubgraphResponse>(
+        &subgraph_result,
+        "ExtractSubgraphResponse",
+    );
 
     // diff_entities: the two command versions differ in title.
     let diff_result = client
@@ -535,9 +518,7 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         .await
         .unwrap();
     assert!(!diff_result.is_error.unwrap_or(false), "{diff_result:?}");
-    let diff_body = call_tool_result_text(&diff_result);
-    let raw = base64_decode(diff_body["binpb_base64"].as_str().unwrap());
-    pb::DiffEntitiesResponse::decode(raw.as_slice()).unwrap();
+    support::structured_as::<pb::DiffEntitiesResponse>(&diff_result, "DiffEntitiesResponse");
 
     // infer_data_flow / check_information_completeness: analysis tools over
     // the command_slice scope.
@@ -553,9 +534,7 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         .await
         .unwrap();
     assert!(!flow_result.is_error.unwrap_or(false), "{flow_result:?}");
-    let flow_body = call_tool_result_text(&flow_result);
-    let raw = base64_decode(flow_body["binpb_base64"].as_str().unwrap());
-    pb::InferDataFlowResponse::decode(raw.as_slice()).unwrap();
+    support::structured_as::<pb::InferDataFlowResponse>(&flow_result, "InferDataFlowResponse");
 
     let completeness_result = client
         .call_tool(
@@ -573,9 +552,10 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !completeness_result.is_error.unwrap_or(false),
         "{completeness_result:?}"
     );
-    let completeness_body = call_tool_result_text(&completeness_result);
-    let raw = base64_decode(completeness_body["binpb_base64"].as_str().unwrap());
-    pb::CheckInformationCompletenessResponse::decode(raw.as_slice()).unwrap();
+    support::structured_as::<pb::CheckInformationCompletenessResponse>(
+        &completeness_result,
+        "CheckInformationCompletenessResponse",
+    );
 
     // list_entities_by_domain requires a domain -> subdomain -> bounded
     // context -> event_model realizes chain; without one seeded, the tool
@@ -587,7 +567,6 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
                     ("namespace", serde_json::json!(ns)),
                     ("slug", serde_json::json!("no-such-domain")),
                     ("version", serde_json::json!(1)),
-                    ("json", serde_json::json!(true)),
                 ]),
             ),
         )
@@ -597,9 +576,7 @@ async fn mcp_read_tool_lifecycle_over_seeded_graph() {
         !by_domain_result.is_error.unwrap_or(false),
         "{by_domain_result:?}"
     );
-    let by_domain_body = call_tool_result_text(&by_domain_result);
-    let by_domain_report: serde_json::Value =
-        serde_json::from_str(by_domain_body["json"].as_str().unwrap()).unwrap();
+    let by_domain_report = call_tool_result_text(&by_domain_result);
     assert!(
         by_domain_report
             .get("entities")
@@ -661,9 +638,8 @@ async fn mcp_retarget_references_dry_run_does_not_persist() {
         !dry_run_result.is_error.unwrap_or(false),
         "{dry_run_result:?}"
     );
-    let dry_run_body = call_tool_result_text(&dry_run_result);
-    let raw = base64_decode(dry_run_body["binpb_base64"].as_str().unwrap());
-    let dry_run_decoded = pb::RetargetReferencesResponse::decode(raw.as_slice()).unwrap();
+    let dry_run_decoded: pb::RetargetReferencesResponse =
+        support::structured_as(&dry_run_result, "RetargetReferencesResponse");
     assert_eq!(dry_run_decoded.rewritten, 1, "{dry_run_decoded:?}");
 
     // dry_run must not have persisted: outgoing refs of the slice still
@@ -681,9 +657,8 @@ async fn mcp_retarget_references_dry_run_does_not_persist() {
         )
         .await
         .unwrap();
-    let outgoing_body = call_tool_result_text(&outgoing_result);
-    let raw = base64_decode(outgoing_body["binpb_base64"].as_str().unwrap());
-    let outgoing_decoded = pb::GetReferencesResponse::decode(raw.as_slice()).unwrap();
+    let outgoing_decoded: pb::GetReferencesResponse =
+        support::structured_as(&outgoing_result, "GetReferencesResponse");
     assert!(
         outgoing_decoded.references.iter().any(|r| r
             .to
@@ -715,9 +690,8 @@ async fn mcp_put_entity_binpb_variant() {
         .await
         .unwrap();
     assert!(!put_result.is_error.unwrap_or(false), "{put_result:?}");
-    let put_body = call_tool_result_text(&put_result);
-    let raw = base64_decode(put_body["binpb_base64"].as_str().unwrap());
-    let put_decoded = pb::PutEntityResponse::decode(raw.as_slice()).unwrap();
+    let put_decoded: pb::PutEntityResponse =
+        support::structured_as(&put_result, "PutEntityResponse");
     assert!(!put_decoded.no_op, "{put_decoded:?}");
 
     // A second create_only put of the identical entity is a no_op (force
@@ -735,10 +709,31 @@ async fn mcp_put_entity_binpb_variant() {
         !put_again_result.is_error.unwrap_or(false),
         "{put_again_result:?}"
     );
-    let put_again_body = call_tool_result_text(&put_again_result);
-    let raw = base64_decode(put_again_body["binpb_base64"].as_str().unwrap());
-    let put_again_decoded = pb::PutEntityResponse::decode(raw.as_slice()).unwrap();
+    let put_again_decoded: pb::PutEntityResponse =
+        support::structured_as(&put_again_result, "PutEntityResponse");
     assert!(put_again_decoded.no_op, "{put_again_decoded:?}");
+
+    // get_entity with format=binpb hands back the protobuf the binpb write
+    // path edits and passes to put_entity.
+    let get_result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("get_entity").with_arguments(args_obj(&[
+                ("kind", serde_json::json!("event")),
+                ("namespace", serde_json::json!("mcp-gap-put-binpb")),
+                ("slug", serde_json::json!("created")),
+                ("version", serde_json::json!(1)),
+                ("format", serde_json::json!("binpb")),
+            ])),
+        )
+        .await
+        .unwrap();
+    let get_body = call_tool_result_text(&get_result);
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(get_body["binpb_base64"].as_str().unwrap())
+        .unwrap();
+    let got = pb::GetEntityResponse::decode(raw.as_slice()).unwrap();
+    assert!(!got.etag.is_empty(), "{got:?}");
+    assert_eq!(got.entity.and_then(|e| e.kind), entity.kind);
 
     mcp_service.cancel().await.unwrap();
 }
@@ -773,9 +768,8 @@ async fn mcp_batch_mutate_binpb_variant() {
         .await
         .unwrap();
     assert!(!batch_result.is_error.unwrap_or(false), "{batch_result:?}");
-    let batch_body = call_tool_result_text(&batch_result);
-    let raw = base64_decode(batch_body["binpb_base64"].as_str().unwrap());
-    let batch_decoded = pb::BatchMutateResponse::decode(raw.as_slice()).unwrap();
+    let batch_decoded: pb::BatchMutateResponse =
+        support::structured_as(&batch_result, "BatchMutateResponse");
     assert_eq!(batch_decoded.results.len(), 2, "{batch_decoded:?}");
 
     // The delete op requires kind/namespace/slug/version all present; a
@@ -855,7 +849,6 @@ async fn mcp_validate_project_scope_variants() {
                     ("project_namespace", serde_json::json!(ns)),
                     ("project_slug", serde_json::json!("project")),
                     ("project_version", serde_json::json!(1)),
-                    ("json", serde_json::json!(true)),
                 ],
             )),
         )
@@ -873,7 +866,6 @@ async fn mcp_validate_project_scope_variants() {
                     ("domain_namespace", serde_json::json!(ns)),
                     ("domain_slug", serde_json::json!("domain")),
                     ("domain_version", serde_json::json!(1)),
-                    ("json", serde_json::json!(true)),
                 ],
             )),
         )
@@ -925,7 +917,6 @@ async fn mcp_delete_by_query_dry_run_then_real() {
                 ("kind", serde_json::json!("event")),
                 ("mode", serde_json::json!("dry_run")),
                 ("max_deletes", serde_json::json!(10)),
-                ("json", serde_json::json!(true)),
             ])),
         )
         .await
@@ -934,9 +925,7 @@ async fn mcp_delete_by_query_dry_run_then_real() {
         !dry_run_result.is_error.unwrap_or(false),
         "{dry_run_result:?}"
     );
-    let dry_run_body = call_tool_result_text(&dry_run_result);
-    let dry_run_report: serde_json::Value =
-        serde_json::from_str(dry_run_body["json"].as_str().unwrap()).unwrap();
+    let dry_run_report = call_tool_result_text(&dry_run_result);
     assert_eq!(
         dry_run_report["deletedCount"],
         serde_json::json!(1),
@@ -970,15 +959,12 @@ async fn mcp_delete_by_query_dry_run_then_real() {
                 ("namespace", serde_json::json!(ns)),
                 ("kind", serde_json::json!("event")),
                 ("max_deletes", serde_json::json!(10)),
-                ("json", serde_json::json!(true)),
             ])),
         )
         .await
         .unwrap();
     assert!(!real_result.is_error.unwrap_or(false), "{real_result:?}");
-    let real_body = call_tool_result_text(&real_result);
-    let real_report: serde_json::Value =
-        serde_json::from_str(real_body["json"].as_str().unwrap()).unwrap();
+    let real_report = call_tool_result_text(&real_result);
     assert_eq!(
         real_report["deletedCount"],
         serde_json::json!(1),
@@ -1026,9 +1012,7 @@ async fn mcp_get_snapshot_id_detects_change() {
                 .await
                 .unwrap();
             assert!(!result.is_error.unwrap_or(false), "{result:?}");
-            let body = call_tool_result_text(&result);
-            let raw = base64_decode(body["binpb_base64"].as_str().unwrap());
-            pb::GetSnapshotIdResponse::decode(raw.as_slice()).unwrap()
+            support::structured_as::<pb::GetSnapshotIdResponse>(&result, "GetSnapshotIdResponse")
         }
     };
 

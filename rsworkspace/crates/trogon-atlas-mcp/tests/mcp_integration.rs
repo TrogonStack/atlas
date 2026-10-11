@@ -686,8 +686,7 @@ spec: { title: Thing happened }
         !result.is_error.unwrap_or(false),
         "apply_manifests must succeed: {result:?}"
     );
-    let body: serde_json::Value =
-        serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    let body = call_tool_result_text(&result);
     assert_eq!(
         body["lines"],
         serde_json::json!(["event:mcp-apply/thing.happened@1 created"])
@@ -698,8 +697,7 @@ spec: { title: Thing happened }
         .call_tool(rmcp::model::CallToolRequestParams::new("apply_manifests").with_arguments(args))
         .await
         .unwrap();
-    let body: serde_json::Value =
-        serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    let body = call_tool_result_text(&result);
     assert_eq!(
         body["lines"],
         serde_json::json!(["event:mcp-apply/thing.happened@1 unchanged"])
@@ -718,8 +716,7 @@ spec: { title: Thing happened }
         !result.is_error.unwrap_or(false),
         "export_namespace must succeed: {result:?}"
     );
-    let body: serde_json::Value =
-        serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
+    let body = call_tool_result_text(&result);
     assert_eq!(body["skipped"], serde_json::json!([]));
     assert!(
         body["files"].as_object().is_some_and(|f| !f.is_empty()),
@@ -772,7 +769,7 @@ async fn mcp_client_for(
 }
 
 fn call_tool_result_text(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
+    support::structured(result)
 }
 
 fn args_obj(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serde_json::Value> {
@@ -784,8 +781,7 @@ fn args_obj(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serd
 }
 
 // create_branch / list_branches / delete_branch: the three Phase 1 lifecycle
-// tools. Their responses are Debug-formatted text (see server.rs), not JSON,
-// so assertions match on substrings rather than parsing a JSON body.
+// tools.
 #[tokio::test(flavor = "multi_thread")]
 async fn mcp_branch_lifecycle_create_list_delete() {
     let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
@@ -800,16 +796,25 @@ async fn mcp_branch_lifecycle_create_list_delete() {
         .await
         .unwrap();
     assert!(!created.is_error.unwrap_or(false), "{created:?}");
-    let created_text = created.content[0].as_text().unwrap().text.clone();
-    assert!(created_text.contains("mcp-lifecycle"), "{created_text}");
+    assert_eq!(
+        call_tool_result_text(&created)["branch"]["name"],
+        serde_json::json!("mcp-lifecycle")
+    );
 
     let listed = client
         .call_tool(rmcp::model::CallToolRequestParams::new("list_branches"))
         .await
         .unwrap();
     assert!(!listed.is_error.unwrap_or(false), "{listed:?}");
-    let listed_text = listed.content[0].as_text().unwrap().text.clone();
-    assert!(listed_text.contains("mcp-lifecycle"), "{listed_text}");
+    let listed_json = call_tool_result_text(&listed);
+    assert!(
+        listed_json["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["name"] == "mcp-lifecycle"),
+        "{listed_json}"
+    );
 
     let deleted = client
         .call_tool(
@@ -819,20 +824,19 @@ async fn mcp_branch_lifecycle_create_list_delete() {
         .await
         .unwrap();
     assert!(!deleted.is_error.unwrap_or(false), "{deleted:?}");
-    let deleted_text = deleted.content[0].as_text().unwrap().text.clone();
-    assert!(
-        deleted_text.contains("mcp-lifecycle") && deleted_text.contains("deleted"),
-        "{deleted_text}"
+    assert_eq!(
+        call_tool_result_text(&deleted),
+        serde_json::json!({"name": "mcp-lifecycle", "deleted": true})
     );
 
     let listed_after = client
         .call_tool(rmcp::model::CallToolRequestParams::new("list_branches"))
         .await
         .unwrap();
-    let listed_after_text = listed_after.content[0].as_text().unwrap().text.clone();
+    let listed_after_json = call_tool_result_text(&listed_after);
     assert!(
-        !listed_after_text.contains("mcp-lifecycle"),
-        "{listed_after_text}"
+        !listed_after_json.to_string().contains("mcp-lifecycle"),
+        "{listed_after_json}"
     );
 
     mcp_service.cancel().await.unwrap();
@@ -885,10 +889,7 @@ async fn mcp_delete_branch_missing_returns_error() {
 }
 
 // diff_branch / update_branch / merge_branch / resolve_branch_entry: the
-// Phase 2 tools. These respond with `ok_response` JSON envelopes
-// (`{"format": "binpb_base64"|"json", ...}`); requesting `json: true` lets
-// the test assert on the proto3-JSON body directly instead of decoding
-// base64-encoded protobuf bytes.
+// Phase 2 tools. They return the proto3 JSON of their response message.
 fn put_entity_json_args(entity_json: &str) -> serde_json::Map<String, serde_json::Value> {
     args_obj(&[("entity_json", serde_json::json!(entity_json))])
 }
@@ -935,8 +936,7 @@ async fn mcp_diff_update_merge_lifecycle_clean() {
 
     // diff_branch (via the unscoped client, by name) sees the new entity as
     // ADDED.
-    let mut diff_args = args_obj(&[("name", serde_json::json!("mcp-p2-clean"))]);
-    diff_args.insert("json".into(), serde_json::json!(true));
+    let diff_args = args_obj(&[("name", serde_json::json!("mcp-p2-clean"))]);
     let diff_result = client
         .call_tool(
             rmcp::model::CallToolRequestParams::new("diff_branch")
@@ -945,18 +945,14 @@ async fn mcp_diff_update_merge_lifecycle_clean() {
         .await
         .unwrap();
     assert!(!diff_result.is_error.unwrap_or(false), "{diff_result:?}");
-    let diff_body = call_tool_result_text(&diff_result);
-    assert_eq!(diff_body["format"], serde_json::json!("json"));
-    let diff_json: serde_json::Value =
-        serde_json::from_str(diff_body["json"].as_str().unwrap()).unwrap();
+    let diff_json = call_tool_result_text(&diff_result);
     let entries = diff_json["entries"].as_array().unwrap();
     assert_eq!(entries.len(), 1, "{diff_json:?}");
     assert_eq!(entries[0]["status"], serde_json::json!("STATUS_ADDED"));
 
     // update_branch on a branch with no baseline movement rebases nothing and
     // surfaces no conflicts.
-    let mut update_args = args_obj(&[("name", serde_json::json!("mcp-p2-clean"))]);
-    update_args.insert("json".into(), serde_json::json!(true));
+    let update_args = args_obj(&[("name", serde_json::json!("mcp-p2-clean"))]);
     let update_result = client
         .call_tool(
             rmcp::model::CallToolRequestParams::new("update_branch").with_arguments(update_args),
@@ -967,9 +963,7 @@ async fn mcp_diff_update_merge_lifecycle_clean() {
         !update_result.is_error.unwrap_or(false),
         "{update_result:?}"
     );
-    let update_body = call_tool_result_text(&update_result);
-    let update_json: serde_json::Value =
-        serde_json::from_str(update_body["json"].as_str().unwrap()).unwrap();
+    let update_json = call_tool_result_text(&update_result);
     // proto3 JSON omits zero/empty fields: absent means 0 / [].
     assert_eq!(update_json["rebasedCount"].as_u64().unwrap_or(0), 0);
     assert!(update_json["conflicts"]
@@ -978,8 +972,7 @@ async fn mcp_diff_update_merge_lifecycle_clean() {
 
     // merge_branch lands the branch cleanly and deletes it (default
     // keep_branch=false).
-    let mut merge_args = args_obj(&[("name", serde_json::json!("mcp-p2-clean"))]);
-    merge_args.insert("json".into(), serde_json::json!(true));
+    let merge_args = args_obj(&[("name", serde_json::json!("mcp-p2-clean"))]);
     let merge_result = client
         .call_tool(
             rmcp::model::CallToolRequestParams::new("merge_branch").with_arguments(merge_args),
@@ -987,9 +980,7 @@ async fn mcp_diff_update_merge_lifecycle_clean() {
         .await
         .unwrap();
     assert!(!merge_result.is_error.unwrap_or(false), "{merge_result:?}");
-    let merge_body = call_tool_result_text(&merge_result);
-    let merge_json: serde_json::Value =
-        serde_json::from_str(merge_body["json"].as_str().unwrap()).unwrap();
+    let merge_json = call_tool_result_text(&merge_result);
     assert_eq!(merge_json["status"], serde_json::json!("STATUS_APPLIED"));
     assert_eq!(merge_json["appliedCount"], serde_json::json!(1));
 
@@ -997,10 +988,10 @@ async fn mcp_diff_update_merge_lifecycle_clean() {
         .call_tool(rmcp::model::CallToolRequestParams::new("list_branches"))
         .await
         .unwrap();
-    let listed_text = listed.content[0].as_text().unwrap().text.clone();
+    let listed_json = call_tool_result_text(&listed);
     assert!(
-        !listed_text.contains("mcp-p2-clean"),
-        "clean merge with keep_branch=false must delete the branch: {listed_text}"
+        !listed_json.to_string().contains("mcp-p2-clean"),
+        "clean merge with keep_branch=false must delete the branch: {listed_json}"
     );
 
     branch_service.cancel().await.unwrap();
@@ -1068,11 +1059,10 @@ async fn mcp_merge_branch_reports_conflict_field_paths() {
     .await
     .unwrap();
 
-    let mut merge_args = args_obj(&[
+    let merge_args = args_obj(&[
         ("name", serde_json::json!("mcp-p2-conflict")),
         ("keep_branch", serde_json::json!(true)),
     ]);
-    merge_args.insert("json".into(), serde_json::json!(true));
     let merge_result = client
         .call_tool(
             rmcp::model::CallToolRequestParams::new("merge_branch").with_arguments(merge_args),
@@ -1080,9 +1070,7 @@ async fn mcp_merge_branch_reports_conflict_field_paths() {
         .await
         .unwrap();
     assert!(!merge_result.is_error.unwrap_or(false), "{merge_result:?}");
-    let merge_body = call_tool_result_text(&merge_result);
-    let merge_json: serde_json::Value =
-        serde_json::from_str(merge_body["json"].as_str().unwrap()).unwrap();
+    let merge_json = call_tool_result_text(&merge_result);
     assert_eq!(
         merge_json["status"],
         serde_json::json!("STATUS_CONFLICTS"),
@@ -1172,15 +1160,12 @@ async fn mcp_merge_branch_reports_conflict_field_paths() {
         "{data}"
     );
 
-    let mut diff_args = args_obj(&[("name", serde_json::json!("mcp-p2-conflict"))]);
-    diff_args.insert("json".into(), serde_json::json!(true));
+    let diff_args = args_obj(&[("name", serde_json::json!("mcp-p2-conflict"))]);
     let diff_result = client
         .call_tool(rmcp::model::CallToolRequestParams::new("diff_branch").with_arguments(diff_args))
         .await
         .unwrap();
-    let diff_body = call_tool_result_text(&diff_result);
-    let diff_json: serde_json::Value =
-        serde_json::from_str(diff_body["json"].as_str().unwrap()).unwrap();
+    let diff_json = call_tool_result_text(&diff_result);
     let fresh_state = diff_json["entries"][0]["state"].clone();
 
     // resolve_branch_entry(keep_ours) from the fresh state clears the
@@ -1198,21 +1183,18 @@ async fn mcp_merge_branch_reports_conflict_field_paths() {
         "{resolve_result:?}"
     );
     assert_eq!(
-        resolve_result.content[0].as_text().unwrap().text,
-        "resolved"
+        call_tool_result_text(&resolve_result),
+        serde_json::json!({"resolved": true})
     );
 
-    let mut merge_args_2 = args_obj(&[("name", serde_json::json!("mcp-p2-conflict"))]);
-    merge_args_2.insert("json".into(), serde_json::json!(true));
+    let merge_args_2 = args_obj(&[("name", serde_json::json!("mcp-p2-conflict"))]);
     let merge_result_2 = client
         .call_tool(
             rmcp::model::CallToolRequestParams::new("merge_branch").with_arguments(merge_args_2),
         )
         .await
         .unwrap();
-    let merge_body_2 = call_tool_result_text(&merge_result_2);
-    let merge_json_2: serde_json::Value =
-        serde_json::from_str(merge_body_2["json"].as_str().unwrap()).unwrap();
+    let merge_json_2 = call_tool_result_text(&merge_result_2);
     assert_eq!(
         merge_json_2["status"],
         serde_json::json!("STATUS_APPLIED"),
@@ -1372,30 +1354,47 @@ async fn json_tools_spell_schemas_with_tenant_types() {
         put_entity_json_args(&orders_library_json(ns).to_string()),
     )
     .await;
-    call_ok(
+    let put = call_ok(
         &client,
         "put_entity_json",
         put_entity_json_args(&order_placed_event_json(ns).to_string()),
     )
     .await;
-    let got = call_ok(
-        &client,
-        "get_entity_json",
-        args_obj(&[
-            ("kind", serde_json::json!("event")),
-            ("namespace", serde_json::json!(ns)),
-            ("slug", serde_json::json!("order-placed")),
-            ("version", serde_json::json!(1)),
-        ]),
-    )
-    .await;
-    let schema = &call_tool_result_text(&got)["json"]["event"]["schema"];
-    assert_eq!(
-        schema["@type"],
-        serde_json::json!("type.googleapis.com/shop.orders.v1.OrderPlaced"),
-        "{schema}"
-    );
-    assert_eq!(schema["orderId"], serde_json::json!("o-1"), "{schema}");
+    let entity_args = args_obj(&[
+        ("kind", serde_json::json!("event")),
+        ("namespace", serde_json::json!(ns)),
+        ("slug", serde_json::json!("order-placed")),
+        ("version", serde_json::json!(1)),
+    ]);
+    let got_json = call_ok(&client, "get_entity_json", entity_args.clone()).await;
+    let got = call_ok(&client, "get_entity", entity_args).await;
+    // Every result that carries the entity renders its tenant-typed schema,
+    // not only the *_json read.
+    for (tool, schema) in [
+        (
+            "put_entity_json",
+            &call_tool_result_text(&put)["entity"]["event"]["schema"],
+        ),
+        (
+            "get_entity_json",
+            &call_tool_result_text(&got_json)["json"]["event"]["schema"],
+        ),
+        (
+            "get_entity",
+            &call_tool_result_text(&got)["entity"]["event"]["schema"],
+        ),
+    ] {
+        assert_eq!(
+            schema["@type"],
+            serde_json::json!("type.googleapis.com/shop.orders.v1.OrderPlaced"),
+            "{tool}: {schema}"
+        );
+        assert_eq!(
+            schema["orderId"],
+            serde_json::json!("o-1"),
+            "{tool}: {schema}"
+        );
+    }
 
     let ns = "mcp-tenant-batch";
     let request = serde_json::json!({
@@ -1404,12 +1403,16 @@ async fn json_tools_spell_schemas_with_tenant_types() {
             {"put": {"entity": orders_library_json(ns)}},
         ]
     });
-    call_ok(
+    let batch = call_ok(
         &client,
         "batch_mutate_json",
         args_obj(&[("request_json", serde_json::json!(request.to_string()))]),
     )
     .await;
+    assert_eq!(
+        call_tool_result_text(&batch)["status"],
+        serde_json::json!("STATUS_APPLIED")
+    );
 
     mcp_service.cancel().await.unwrap();
 }

@@ -45,6 +45,35 @@ impl<'de> Deserialize<'de> for EntitySpec {
 #[serde(deny_unknown_fields)]
 pub struct EmptyParams {}
 
+/// How `get_entity` encodes its result. Every other tool returns JSON only:
+/// binpb is kept for the put_entity / batch_mutate path, which takes
+/// base64 protobuf in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ResultFormat {
+    #[default]
+    Json,
+    Binpb,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetEntityParams {
+    #[schemars(
+        description = "Entity kind: event, command, read_model, processor, ui, persona, swimlane, command_slice, read_model_slice, automation_slice, ui_slice, storyboard, event_model"
+    )]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+    #[schemars(description = "Schema version number (>0), e.g. 1")]
+    pub version: u64,
+    #[schemars(
+        description = "json (default) returns the GetEntityResponse as proto3 JSON. binpb returns {\"binpb_base64\": ...}, the bytes to edit and pass back as put_entity's entity_b64."
+    )]
+    #[serde(default)]
+    pub format: ResultFormat,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListEntitiesParams {
@@ -273,9 +302,9 @@ pub struct ValidateEventModelParams {
     pub namespace: String,
     pub slug: String,
     pub version: u64,
-    /// When true, return the response as proto3-rendered JSON inside a
-    /// `{ "json": "..." }` envelope instead of the default
-    /// `{ "binpb_base64": "..." }`. Lets clients skip a varint decoder.
+    /// Retired: every result is JSON now. Still accepted, and ignored, so
+    /// older prompts that pass it keep working.
+    #[schemars(skip)]
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -283,9 +312,9 @@ pub struct ValidateEventModelParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct JsonOpts {
-    /// When true, return the response as proto3-rendered JSON inside a
-    /// `{ "json": "..." }` envelope instead of the default
-    /// `{ "binpb_base64": "..." }`.
+    /// Retired: every result is JSON now. Still accepted, and ignored, so
+    /// older prompts that pass it keep working.
+    #[schemars(skip)]
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -324,6 +353,9 @@ pub struct ValidateProjectParams {
     pub domain_slug: Option<String>,
     /// Required (>0) when domain_namespace+domain_slug are set. Omitted must not become 0.
     pub domain_version: Option<u64>,
+    /// Retired: every result is JSON now. Still accepted, and ignored, so
+    /// older prompts that pass it keep working.
+    #[schemars(skip)]
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -418,6 +450,9 @@ pub struct DeleteByQueryParams {
         description = "Required safety cap: refuse to delete more than this many entities. Must be > 0 (server rejects uncapped deletes)."
     )]
     pub max_deletes: u32,
+    /// Retired: every result is JSON now. Still accepted, and ignored, so
+    /// older prompts that pass it keep working.
+    #[schemars(skip)]
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -494,6 +529,9 @@ pub struct ListEntitiesByDomainParams {
     pub page_token: Option<String>,
     #[serde(default)]
     pub latest_versions_only: Option<bool>,
+    /// Retired: every result is JSON now. Still accepted, and ignored, so
+    /// older prompts that pass it keep working.
+    #[schemars(skip)]
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -830,9 +868,9 @@ pub struct DeleteBranchParams {
 pub struct DiffBranchParams {
     #[schemars(description = "Name of the branch to diff against baseline.")]
     pub name: String,
-    /// When true, return the response as proto3-rendered JSON inside a
-    /// `{ "json": "..." }` envelope instead of the default
-    /// `{ "binpb_base64": "..." }`.
+    /// Retired: every result is JSON now. Still accepted, and ignored, so
+    /// older prompts that pass it keep working.
+    #[schemars(skip)]
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -857,6 +895,9 @@ pub struct MergeBranchParams {
         description = "Land the combined result for edit/edit conflicts whose two sides changed different field paths, instead of reporting them as conflicts. Conflicts where both sides changed the same field path still block, as do edit/delete and delete/edit conflicts."
     )]
     pub auto_merge: bool,
+    /// Retired: every result is JSON now. Still accepted, and ignored, so
+    /// older prompts that pass it keep working.
+    #[schemars(skip)]
     #[serde(default)]
     pub json: Option<bool>,
     #[schemars(
@@ -873,6 +914,9 @@ pub struct UpdateBranchParams {
         description = "Name of the branch to rebase forward: advances non-conflicting deltas' recorded base to the current baseline; conflicting entries are left untouched and returned for resolve_branch_entry."
     )]
     pub name: String,
+    /// Retired: every result is JSON now. Still accepted, and ignored, so
+    /// older prompts that pass it keep working.
+    #[schemars(skip)]
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -1069,6 +1113,35 @@ mod deny_unknown_params_tests {
             !text.contains("4096"),
             "SearchParams schema must not advertise the stale 4096-byte cap; got {text}"
         );
+    }
+
+    // The retired `json` flag must still parse for older prompts, but no
+    // schema may advertise it now that it does nothing.
+    #[test]
+    fn retired_json_flag_is_accepted_but_not_advertised() {
+        let parsed = serde_json::from_value::<ValidateEventModelParams>(serde_json::json!({
+            "namespace": "shop", "slug": "model", "version": 1, "json": true,
+        }));
+        assert!(parsed.is_ok(), "{parsed:?}");
+        let text = serde_json::to_string(&schemars::schema_for!(ValidateEventModelParams))
+            .unwrap_or_default();
+        assert!(!text.contains("\"json\""), "{text}");
+    }
+
+    #[test]
+    fn get_entity_format_defaults_to_json_and_rejects_unknown_values() {
+        let base = serde_json::json!({
+            "kind": "event", "namespace": "shop", "slug": "placed", "version": 1,
+        });
+        let parsed = serde_json::from_value::<GetEntityParams>(base.clone()).unwrap();
+        assert_eq!(parsed.format, ResultFormat::Json);
+        let mut binpb = base.clone();
+        binpb["format"] = serde_json::json!("binpb");
+        let parsed = serde_json::from_value::<GetEntityParams>(binpb).unwrap();
+        assert_eq!(parsed.format, ResultFormat::Binpb);
+        let mut unknown = base;
+        unknown["format"] = serde_json::json!("xml");
+        assert!(serde_json::from_value::<GetEntityParams>(unknown).is_err());
     }
 
     // Server get_impact maps max_depth=0 to ADVERTISED_MAX_IMPACT_DEPTH (16),

@@ -121,15 +121,14 @@ authentication and authorization as a gRPC call made with that token, so
 each client acts as its own principal. Send `x-trogon-atlas-branch: <name>`
 to scope a request to a branch.
 
-It exposes every gRPC method as an MCP tool. Read tools return the protobuf
-response as `binpb_base64` in a JSON text block. Some tools accept `json: true`
-and return proto3 JSON instead. See "What the tools return" in
-`rsworkspace/crates/trogon-atlas-mcp/README.md`. Mutations have two surfaces:
+It exposes every gRPC method as an MCP tool. Every tool returns its result
+as proto3 JSON (`structuredContent`, mirrored as text). Mutations have two
+surfaces:
 
 - **JSON** (no protobuf tooling required): `get_entity_json` -> edit the
   proto3 JSON -> `put_entity_json` / `batch_mutate_json`.
-- **binpb**: `get_entity` -> modify `binpb_base64` -> `put_entity` /
-  `batch_mutate`.
+- **binpb**: `get_entity` with `format: "binpb"` -> modify `binpb_base64` ->
+  `put_entity` / `batch_mutate`.
 
 ## Configuration
 

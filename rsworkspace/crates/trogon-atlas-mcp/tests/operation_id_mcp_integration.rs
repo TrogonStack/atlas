@@ -76,14 +76,6 @@ fn args_obj(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serd
     m
 }
 
-fn call_tool_result_text(result: &rmcp::model::CallToolResult) -> serde_json::Value {
-    serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
-}
-
-fn base64_decode(s: &str) -> Vec<u8> {
-    base64::engine::general_purpose::STANDARD.decode(s).unwrap()
-}
-
 fn event_json(ns: &str, slug: &str, version: u64, title: &str) -> String {
     serde_json::json!({
         "event": {
@@ -105,9 +97,7 @@ async fn get_operation(client: &McpClient, operation_id: &str) -> pb::GetOperati
         .await
         .unwrap();
     assert!(!result.is_error.unwrap_or(false), "{result:?}");
-    let body = call_tool_result_text(&result);
-    let raw = base64_decode(body["binpb_base64"].as_str().unwrap());
-    pb::GetOperationResponse::decode(raw.as_slice()).unwrap()
+    support::structured_as(&result, "GetOperationResponse")
 }
 
 #[tokio::test(flavor = "multi_thread")]
