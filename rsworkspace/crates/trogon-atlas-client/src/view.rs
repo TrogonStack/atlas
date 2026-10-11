@@ -1,15 +1,18 @@
-//! Read-only views of one entity. The
+//! Read-only views of one entity or of a namespace's structure. The
 //! builders and renderers are pure functions over the gRPC response types,
 //! so the CLI's text output and any later terminal UI show the same thing.
 
-use std::fmt::Write as _;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write as _,
+};
 
 use anyhow::{Context as _, Result};
 use prost::Message as _;
 use prost_reflect::DynamicMessage;
 use serde::Serialize;
-use serde_json::Value;
-use trogon_atlas_core::{entity_id, entity_kind, schema::entity_fields};
+use serde_json::{json, Value};
+use trogon_atlas_core::{entity_id, entity_kind, outbound_refs, schema::entity_fields};
 use trogon_atlas_proto as pb;
 
 use crate::{client::Client, export, failure::invalid_input};
@@ -248,6 +251,232 @@ fn push_section<'a>(
     }
 }
 
+/// Every namespace the caller can see, sorted by name.
+pub async fn fetch_namespaces(
+    client: &mut Client,
+) -> Result<Vec<pb::list_namespaces_response::Namespace>> {
+    let resp = client
+        .list_namespaces(pb::ListNamespacesRequest {})
+        .await
+        .context("ListNamespaces failed")?;
+    let mut namespaces = resp.into_inner().namespaces;
+    namespaces.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(namespaces)
+}
+
+pub fn render_namespaces(namespaces: &[pb::list_namespaces_response::Namespace]) -> String {
+    if namespaces.is_empty() {
+        return "no namespaces\n".to_string();
+    }
+    let width = namespaces
+        .iter()
+        .map(|n| n.name.len())
+        .max()
+        .unwrap_or(0)
+        .max(4);
+    let mut out = format!("{:<width$}  ENTITIES\n", "NAME");
+    for n in namespaces {
+        let _ = writeln!(out, "{:<width$}  {}", n.name, n.entity_count);
+    }
+    out
+}
+
+pub fn namespaces_json(namespaces: &[pb::list_namespaces_response::Namespace]) -> Value {
+    let rows: Vec<Value> = namespaces
+        .iter()
+        .map(|n| json!({"name": n.name, "entity_count": n.entity_count, "parent": n.parent}))
+        .collect();
+    json!({"namespaces": rows})
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NamespaceTree {
+    pub namespace: String,
+    pub domains: Vec<TreeNode>,
+    pub storyboards: Vec<TreeNode>,
+    /// Slices no storyboard lists, so nothing in the namespace is hidden.
+    pub unplaced_slices: Vec<TreeNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TreeNode {
+    pub kind: &'static str,
+    pub namespace: String,
+    pub slug: String,
+    pub version: u64,
+    pub title: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<TreeNode>,
+}
+
+const SLICE_KINDS: [pb::EntityKind; 4] = [
+    pb::EntityKind::CommandSlice,
+    pb::EntityKind::ReadModelSlice,
+    pb::EntityKind::AutomationSlice,
+    pb::EntityKind::UiSlice,
+];
+
+/// Builds domain -> subdomain and storyboard -> slice -> command / event /
+/// read model / processor from the latest version of each entity. A slice's
+/// scenario references are left out: they restate its edges as examples.
+pub fn namespace_tree(namespace: &str, entities: &[pb::Entity]) -> NamespaceTree {
+    let index: HashMap<pb::EntityKey, &pb::Entity> = entities
+        .iter()
+        .filter_map(|e| Some((pb::EntityKey::new(entity_kind(e)?, entity_id(e)?), e)))
+        .collect();
+    let mut newest: HashMap<(pb::EntityKind, &str, &str), u64> = HashMap::new();
+    for key in index.keys() {
+        let v = newest
+            .entry((key.kind, key.namespace.as_str(), key.slug.as_str()))
+            .or_default();
+        *v = (*v).max(key.version);
+    }
+    let mut latest: Vec<&pb::EntityKey> = index
+        .keys()
+        .filter(|k| newest[&(k.kind, k.namespace.as_str(), k.slug.as_str())] == k.version)
+        .collect();
+    latest.sort_by(|a, b| (&a.slug, &a.namespace).cmp(&(&b.slug, &b.namespace)));
+    let of_kind = |kind: pb::EntityKind| latest.iter().copied().filter(move |k| k.kind == kind);
+    let node = |key: &pb::EntityKey, children: Vec<TreeNode>| TreeNode {
+        kind: pb::canonical::kind_short(key.kind),
+        namespace: key.namespace.clone(),
+        slug: key.slug.clone(),
+        version: key.version,
+        title: index
+            .get(key)
+            .map(|e| text_field(e, "title"))
+            .unwrap_or_default(),
+        children,
+    };
+    let refs_of =
+        |key: &pb::EntityKey| index.get(key).map(|e| outbound_refs(e)).unwrap_or_default();
+
+    let domains = of_kind(pb::EntityKind::Domain)
+        .map(|domain| {
+            let subdomains = of_kind(pb::EntityKind::Subdomain)
+                .filter(|s| {
+                    refs_of(s)
+                        .iter()
+                        .any(|r| r.from_field == "domain" && r.to_id == domain.id())
+                })
+                .map(|s| node(s, vec![]))
+                .collect();
+            node(domain, subdomains)
+        })
+        .collect();
+
+    let slice_node = |key: &pb::EntityKey| {
+        let mut seen = HashSet::new();
+        let children = refs_of(key)
+            .into_iter()
+            .filter(|r| !r.from_field.starts_with("scenarios"))
+            .filter_map(|r| {
+                let kind = r.to_kind.filter(|k| {
+                    matches!(
+                        k,
+                        pb::EntityKind::Command
+                            | pb::EntityKind::Event
+                            | pb::EntityKind::ReadModel
+                            | pb::EntityKind::Processor
+                    )
+                })?;
+                Some(pb::EntityKey::new(kind, &r.to_id))
+            })
+            .filter(|k| seen.insert(k.clone()))
+            .map(|k| node(&k, vec![]))
+            .collect();
+        node(key, children)
+    };
+
+    let mut placed = HashSet::new();
+    let mut storyboards = Vec::new();
+    for storyboard in of_kind(pb::EntityKind::Storyboard) {
+        let mut slices = Vec::new();
+        for r in refs_of(storyboard)
+            .iter()
+            .filter(|r| r.from_field.starts_with("slices["))
+        {
+            let found = SLICE_KINDS
+                .iter()
+                .map(|k| pb::EntityKey::new(*k, &r.to_id))
+                .find(|k| index.contains_key(k));
+            slices.push(match found {
+                Some(key) => {
+                    let n = slice_node(&key);
+                    placed.insert(key);
+                    n
+                }
+                None => TreeNode {
+                    kind: "slice",
+                    namespace: r.to_id.namespace.clone(),
+                    slug: r.to_id.slug.clone(),
+                    version: r.to_id.version,
+                    title: "(not found)".into(),
+                    children: vec![],
+                },
+            });
+        }
+        storyboards.push(node(storyboard, slices));
+    }
+    let unplaced_slices = latest
+        .iter()
+        .filter(|k| SLICE_KINDS.contains(&k.kind) && !placed.contains(**k))
+        .map(|k| slice_node(k))
+        .collect();
+    NamespaceTree {
+        namespace: namespace.to_string(),
+        domains,
+        storyboards,
+        unplaced_slices,
+    }
+}
+
+pub fn render_tree(tree: &NamespaceTree) -> String {
+    let ns = tree.namespace.as_str();
+    let mut top: Vec<(String, &[TreeNode])> = tree
+        .domains
+        .iter()
+        .chain(&tree.storyboards)
+        .map(|n| (tree_label(n, ns), n.children.as_slice()))
+        .collect();
+    if !tree.unplaced_slices.is_empty() {
+        top.push(("(not in a storyboard)".into(), &tree.unplaced_slices));
+    }
+    let mut out = format!("{ns}\n");
+    push_branches(&mut out, "", &top, ns);
+    out
+}
+
+fn push_branches(out: &mut String, prefix: &str, items: &[(String, &[TreeNode])], ns: &str) {
+    for (i, (label, children)) in items.iter().enumerate() {
+        let last = i + 1 == items.len();
+        let _ = writeln!(out, "{prefix}{}{label}", if last { "└── " } else { "├── " });
+        let nested: Vec<_> = children
+            .iter()
+            .map(|c| (tree_label(c, ns), c.children.as_slice()))
+            .collect();
+        let indent = format!("{prefix}{}", if last { "    " } else { "│   " });
+        push_branches(out, &indent, &nested, ns);
+    }
+}
+
+/// Namespace and version only appear when they differ from the tree's
+/// namespace and from 1, which keeps the common case short.
+fn tree_label(n: &TreeNode, ns: &str) -> String {
+    let mut label = format!("{} ", n.kind);
+    if n.namespace != ns {
+        let _ = write!(label, "{}/", n.namespace);
+    }
+    label.push_str(&n.slug);
+    if n.version != 1 {
+        let _ = write!(label, "@{}", n.version);
+    }
+    if !n.title.is_empty() {
+        let _ = write!(label, "  {}", n.title);
+    }
+    label
+}
+
 fn ref_label(r: Option<&pb::EntityRef>) -> String {
     let id = r.and_then(|r| r.id.clone()).unwrap_or_default();
     match r.and_then(|r| pb::EntityKind::try_from(r.kind).ok()) {
@@ -462,5 +691,94 @@ Referenced by:
         assert!(
             render_description(&d).ends_with("References:\n  <none>\nReferenced by:\n  <none>\n")
         );
+    }
+
+    #[test]
+    fn namespaces_render_as_a_name_and_count_table() {
+        let ns = |name: &str, entity_count| pb::list_namespaces_response::Namespace {
+            name: name.into(),
+            entity_count,
+            ..Default::default()
+        };
+        assert_eq!(
+            render_namespaces(&[ns("acme-reviews", 35), ns("shop", 0)]),
+            "NAME          ENTITIES\nacme-reviews  35\nshop          0\n"
+        );
+        assert_eq!(render_namespaces(&[]), "no namespaces\n");
+        let json = namespaces_json(&[ns("shop", 2)]);
+        assert_eq!(
+            json,
+            serde_json::json!({"namespaces": [{"name": "shop", "entity_count": 2, "parent": ""}]})
+        );
+    }
+
+    #[test]
+    fn tree_groups_by_domain_and_storyboard_and_keeps_unplaced_slices() {
+        let domain = entity(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(id("retail", 1)),
+            title: "Retail".into(),
+            ..Default::default()
+        }));
+        let subdomain = entity(pb::entity::Kind::Subdomain(pb::Subdomain {
+            id: Some(id("ordering", 1)),
+            title: "Ordering".into(),
+            domain: Some(pb::DomainRef {
+                id: Some(id("retail", 1)),
+            }),
+            ..Default::default()
+        }));
+        let storyboard = entity(pb::entity::Kind::Storyboard(pb::Storyboard {
+            id: Some(id("checkout", 1)),
+            title: "Checkout".into(),
+            slices: vec![
+                pb::SliceRef {
+                    id: Some(id("place-order-slice", 1)),
+                },
+                pb::SliceRef {
+                    id: Some(id("gone-slice", 1)),
+                },
+            ],
+            ..Default::default()
+        }));
+        let mut placed_v2 = event("order.placed", 2, "Order placed v2");
+        if let Some(pb::entity::Kind::Event(e)) = placed_v2.kind.as_mut() {
+            e.supersedes = Some(id("order.placed", 1));
+        }
+        let entities = vec![
+            storyboard,
+            command_slice(
+                "place-order-slice",
+                "place-order",
+                &["order.placed", "order.placed"],
+            ),
+            command_slice("refund-slice", "refund", &[]),
+            event("order.placed", 1, "Order placed"),
+            placed_v2,
+            subdomain,
+            domain,
+        ];
+        let tree = namespace_tree(NS, &entities);
+        assert_eq!(
+            render_tree(&tree),
+            "\
+shop
+├── domain retail  Retail
+│   └── subdomain ordering  Ordering
+├── storyboard checkout  Checkout
+│   ├── command_slice place-order-slice  place-order-slice title
+│   │   ├── command place-order
+│   │   └── event order.placed  Order placed
+│   └── slice gone-slice  (not found)
+└── (not in a storyboard)
+    └── command_slice refund-slice  refund-slice title
+        └── command refund
+"
+        );
+        let json = serde_json::to_value(&tree).unwrap();
+        assert_eq!(
+            json["storyboards"][0]["children"][0]["children"][1]["version"],
+            1
+        );
+        assert!(json["domains"][0]["children"][0].get("children").is_none());
     }
 }
