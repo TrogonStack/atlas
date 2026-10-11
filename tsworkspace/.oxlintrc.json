@@ -1,0 +1,27 @@
+{
+  "plugins": ["eslint", "typescript", "unicorn", "oxc", "import", "react", "jsx-a11y", "vitest", "node"],
+  "categories": {
+    "correctness": "error"
+  },
+  "env": {
+    "builtin": true
+  },
+  "rules": {
+    "typescript/no-explicit-any": "warn",
+    "react/no-array-index-key": "warn",
+    "typescript/no-non-null-assertion": "warn",
+    "react/refs": "off",
+    "react/set-state-in-effect": "off",
+    "vitest/require-mock-type-parameters": "off",
+    "vitest/no-conditional-expect": "off"
+  },
+  "ignorePatterns": ["**/*.proto"],
+  "overrides": [
+    {
+      "files": ["webapps/studio/src/**/*.ts", "webapps/studio/src/**/*.tsx"],
+      "rules": {
+        "typescript/no-explicit-any": "error"
+      }
+    }
+  ]
+}

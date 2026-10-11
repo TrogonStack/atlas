@@ -140,6 +140,6 @@ describe('Sidebar namespace picker', () => {
       namespaceLabels: {},
     });
 
-    getByRole('checkbox', { name: 'legacy-ns' });
+    expect(getByRole('checkbox', { name: 'legacy-ns' })).toBeTruthy();
   });
 });

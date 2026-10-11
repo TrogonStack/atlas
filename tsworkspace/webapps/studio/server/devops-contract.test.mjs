@@ -555,7 +555,7 @@ describe('nats websocket listener security contract', () => {
       .join('\n');
   const wsBlock = (() => {
     const start = natsConf.indexOf('websocket {');
-    expect(start, 'nats-server.conf must define a websocket block').toBeGreaterThan(-1);
+    if (start < 0) throw new Error('nats-server.conf must define a websocket block');
     let depth = 0;
     for (let i = natsConf.indexOf('{', start); i < natsConf.length; i += 1) {
       if (natsConf[i] === '{') depth += 1;

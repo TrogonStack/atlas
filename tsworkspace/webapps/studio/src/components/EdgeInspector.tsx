@@ -73,7 +73,7 @@ export function EdgeInspector({
             <div className="space-y-1">
               {metadata.map((m, i) => (
                 <pre
-                  // biome-ignore lint/suspicious/noArrayIndexKey: annotations have no stable id
+                  // oxlint-disable-next-line react/no-array-index-key -- annotations have no stable id
                   key={i}
                   className="overflow-x-auto rounded-md border border-border bg-muted/40 p-2 text-[10px]"
                 >

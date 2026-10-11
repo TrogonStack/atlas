@@ -66,7 +66,7 @@ function ScreenFrameNode({ data }: NodeProps & { data: ScreenFrameData & { momen
           <div key={rm.key} className="rounded border border-emerald-200 bg-emerald-50/60 px-2 py-1.5">
             <div className="truncate text-[10px] font-semibold text-emerald-800">{rm.title}</div>
             {(rm.fields.length > 0 ? rm.fields.slice(0, 3) : [undefined, undefined]).map((f, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: skeleton rows
+              // oxlint-disable-next-line react/no-array-index-key -- skeleton rows
               <div key={i} className="mt-1 flex items-center gap-1.5">
                 <span className="h-1.5 w-1/3 rounded-full bg-emerald-200/80" />
                 <span className="text-[9px] font-mono text-emerald-700/70">{f ? String(f.name ?? '') : ''}</span>

@@ -366,7 +366,6 @@ export function ModelShell({
   const onRefetchRef = useRef(onRefetch);
   onRefetchRef.current = onRefetch;
   const scopedBranchReadyRef = useRef(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: branch is the trigger, not a read
   useEffect(() => {
     if (!scoped) return;
     if (!scopedBranchReadyRef.current) {

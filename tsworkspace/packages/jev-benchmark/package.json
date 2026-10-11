@@ -8,16 +8,17 @@
     "benchmark": "node --experimental-transform-types src/benchmark.ts",
     "test": "node --experimental-transform-types --test src/benchmark.test.ts",
     "test:coverage": "node --experimental-transform-types --test --experimental-test-coverage src/benchmark.test.ts",
-    "lint": "biome check .",
-    "format": "biome check --write .",
+    "lint": "oxlint -c ../../.oxlintrc.json . && oxfmt -c ../../.oxfmtrc.json --check .",
+    "format": "oxfmt -c ../../.oxfmtrc.json --write . && oxlint -c ../../.oxlintrc.json --fix .",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.15",
     "@types/node": "26.6.4",
+    "oxfmt": "0.72.0",
+    "oxlint": "1.87.0",
     "typescript": "7.0.2"
   }
 }

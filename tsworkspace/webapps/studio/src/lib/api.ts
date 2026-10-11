@@ -66,6 +66,7 @@ export function subscribeUnauthenticated(listener: UnauthenticatedListener): () 
  */
 export function reportUnauthenticated(message: string): void {
   onUnauthenticated();
+  // oxlint-disable-next-line unicorn/no-useless-spread -- snapshot current listeners so late (un)registrations during dispatch don't affect this pass
   for (const listener of [...unauthenticatedListeners]) listener(message);
 }
 

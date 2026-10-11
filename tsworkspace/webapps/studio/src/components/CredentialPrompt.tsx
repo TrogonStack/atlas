@@ -20,6 +20,7 @@ export function CredentialPrompt({ message, onDismiss }: { message?: string; onD
 
   return (
     <div
+      // oxlint-disable-next-line jsx-a11y/prefer-tag-over-role -- native <dialog> needs .showModal() wiring; out of scope for this lint migration
       role="dialog"
       aria-modal="true"
       aria-labelledby="credential-prompt-title"

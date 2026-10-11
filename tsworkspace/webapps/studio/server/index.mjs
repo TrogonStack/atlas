@@ -876,7 +876,7 @@ function branchHandler(fn) {
 /** @template T, U @param {T[]} items @param {number} concurrency @param {(item: T) => Promise<U>} fn @returns {Promise<U[]>} */
 async function limitedMap(items, concurrency, fn) {
   /** @type {U[]} */
-  const results = new Array(items.length);
+  const results = Array.from({ length: items.length });
   let index = 0;
   async function worker() {
     while (index < items.length) {
