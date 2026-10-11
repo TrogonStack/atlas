@@ -534,7 +534,7 @@ describe('layoutBoard', () => {
       .filter((e) => e.source === command?.id && (e.data as { relation?: string })?.relation === 'emits')
       .map((e) => {
         const target = nodes.find((n) => n.id === e.target);
-        return (target?.data as { entity?: { id?: { slug?: string } } }).entity?.id?.slug;
+        return (target?.data as { entity?: { id?: { slug?: string } } } | undefined)?.entity?.id?.slug;
       })
       .sort();
 
@@ -562,7 +562,7 @@ describe('layoutBoard', () => {
     const { nodes } = layoutBoard(model);
     const lane = nodes.find((n) => n.id === 'lane:reserved:ui:unassigned');
     expect(lane).toBeDefined();
-    expect((lane?.data as { label?: string }).label).toBe('UI');
+    expect((lane?.data as { label?: string } | undefined)?.label).toBe('UI');
 
     const uiNode = nodes.find((n) => (n.data as { entity?: { kind?: string } }).entity?.kind === 'ui');
     expect(uiNode).toBeDefined();
@@ -842,6 +842,6 @@ describe('lane id families', () => {
     const lane = layoutBoard(buildModel(entities as never)).nodes.find(
       (n) => n.id === 'lane:entity:swimlane:shop/order',
     );
-    expect((lane?.data as { label?: string }).label).toBe('Order v2');
+    expect((lane?.data as { label?: string } | undefined)?.label).toBe('Order v2');
   });
 });

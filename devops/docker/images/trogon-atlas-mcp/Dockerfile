@@ -2,7 +2,7 @@
 # trogon-atlas-store uses Duration::from_mins, stable since Rust 1.91.
 # Compile on the build platform and cross-link for the target: rustc and
 # cargo under QEMU arm64 emulation hang the image job for hours.
-FROM --platform=$BUILDPLATFORM rust:1.94-bookworm AS builder
+FROM --platform=$BUILDPLATFORM rust:1.99-bookworm AS builder
 ARG TARGETARCH
 ARG BUILDARCH
 RUN case "$TARGETARCH" in \
@@ -33,7 +33,7 @@ RUN --mount=type=bind,source=rsworkspace,target=/src \
  && mkdir -p /out \
  && cp "/target/$(cat /target.txt)/release/trogon-atlas-mcp" /out/trogon-atlas-mcp
 
-FROM alpine:3.20 AS runtime
+FROM alpine:3.24 AS runtime
 RUN apk add --no-cache ca-certificates tini \
  && addgroup -S trogon-atlas \
  && adduser -S -G trogon-atlas trogon-atlas

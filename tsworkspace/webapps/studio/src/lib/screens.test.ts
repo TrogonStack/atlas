@@ -147,7 +147,7 @@ describe('buildScreens: automation slice produces a systemStep', () => {
     ] as never);
     const { nodes } = buildScreens(model);
     const step = nodes.find((n) => n.type === 'systemStep');
-    expect((step?.data as SystemStepData).lines).toEqual([{ text: 'Notifier', glyph: 'automation' }]);
+    expect((step?.data as SystemStepData | undefined)?.lines).toEqual([{ text: 'Notifier', glyph: 'automation' }]);
   });
 });
 
