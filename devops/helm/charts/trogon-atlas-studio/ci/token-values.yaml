@@ -1,0 +1,4 @@
+auth:
+  token:
+    value: ci-token
+  passthrough: true

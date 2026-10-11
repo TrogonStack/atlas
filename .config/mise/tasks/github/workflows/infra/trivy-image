@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#MISE description="Scan every built trogon-atlas image with trivy, write one SARIF per image, and fail only on a CRITICAL vulnerability with an available fix"
+set -euo pipefail
+
+root="$MISE_PROJECT_ROOT"
+results_dir="$root/trivy-results"
+mkdir -p "$results_dir"
+
+status=0
+
+for dockerfile in "$root"/devops/docker/images/*/Dockerfile; do
+  name="$(basename "$(dirname "$dockerfile")")"
+  image="trogon-atlas/$name:local"
+  sarif="$results_dir/$name.sarif"
+
+  echo "scanning $image (full report, SARIF)" >&2
+  trivy image --format sarif --output "$sarif.raw" --exit-code 0 "$image"
+  jq --arg id "trivy-image/$name/" '.runs[].automationDetails = {id: $id}' "$sarif.raw" >"$sarif"
+  rm "$sarif.raw"
+
+  echo "scanning $image (failing check: CRITICAL with a fix available)" >&2
+  trivy image --severity CRITICAL --ignore-unfixed --exit-code 1 "$image" || status=1
+done
+
+exit "$status"

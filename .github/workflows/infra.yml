@@ -1,0 +1,155 @@
+name: Infra
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - devops/**
+      - "**/Dockerfile*"
+      - .hadolint.yaml
+      - ct.yaml
+      - .config/mise/tasks/github/workflows/infra/**
+      - .config/mise/tasks/github/actions/docker-buildx/**
+      - .config/mise/tasks/images/**
+      - .github/workflows/infra.yml
+      - mise.toml
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - labeled
+      - unlabeled
+    paths:
+      - devops/**
+      - "**/Dockerfile*"
+      - .hadolint.yaml
+      - ct.yaml
+      - .config/mise/tasks/github/workflows/infra/**
+      - .config/mise/tasks/github/actions/docker-buildx/**
+      - .config/mise/tasks/images/**
+      - .github/workflows/infra.yml
+      - mise.toml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  runs-on:
+    uses: ./.github/workflows/runs-on.yml
+
+  hadolint:
+    name: Hadolint
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: hadolint
+        run: mise run github:workflows:infra:hadolint
+
+  helm:
+    name: Helm
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: helm lint
+        run: mise run github:workflows:infra:helm-lint
+
+      - name: kubeconform
+        run: mise run github:workflows:infra:kubeconform
+
+  charts:
+    name: Charts
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: ct lint
+        run: mise run github:workflows:infra:ct-lint
+
+  docker:
+    name: Docker
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: Reclaim runner disk
+        run: mise run github:workflows:ci:reclaim-disk
+
+      - name: Set up buildx
+        run: mise run github:actions:docker-buildx:setup
+
+      - name: Expose the Actions cache to buildx
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            for (const [key, value] of Object.entries(process.env)) {
+              if (key.startsWith('ACTIONS_')) core.exportVariable(key, value);
+            }
+
+      - name: build images
+        run: mise run github:workflows:infra:docker-build
+
+      - name: trivy image
+        run: mise run github:workflows:infra:trivy-image
+
+      - name: upload trivy SARIF
+        if: ${{ !cancelled() && hashFiles('trivy-results/*.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: trivy-results
+
+  trivy:
+    name: Trivy
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+
+      - name: trivy config
+        run: mise run github:workflows:infra:trivy-config

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+#MISE description="helm lint every chart under devops/helm/charts against each ci/*-values.yaml, or its defaults when it has none"
+set -euo pipefail
+
+root="$MISE_PROJECT_ROOT"
+charts_dir="$root/devops/helm/charts"
+
+for chart in "$charts_dir"/*/; do
+  name="$(basename "$chart")"
+  if grep -q '^dependencies:' "$chart/Chart.yaml"; then
+    helm dependency build "$chart" >/dev/null
+  fi
+
+  values_files=("$chart"ci/*-values.yaml)
+  if [ ! -e "${values_files[0]}" ]; then
+    echo "linting $name (defaults)" >&2
+    helm lint --strict "$chart"
+    continue
+  fi
+
+  for values in "${values_files[@]}"; do
+    echo "linting $name ($(basename "$values"))" >&2
+    helm lint --strict "$chart" --values "$values"
+  done
+done

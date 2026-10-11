@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+#MISE description="helm template every chart under devops/helm/charts against each ci/*-values.yaml, or its defaults when it has none, and validate the output with kubeconform, CRDs included"
+set -euo pipefail
+
+root="$MISE_PROJECT_ROOT"
+charts_dir="$root/devops/helm/charts"
+crd_schemas='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+
+validate() {
+  kubeconform -strict -summary \
+    -schema-location default \
+    -schema-location "$crd_schemas"
+}
+
+for chart in "$charts_dir"/*/; do
+  name="$(basename "$chart")"
+  if grep -q '^dependencies:' "$chart/Chart.yaml"; then
+    helm dependency build "$chart" >/dev/null
+  fi
+
+  values_files=("$chart"ci/*-values.yaml)
+  if [ ! -e "${values_files[0]}" ]; then
+    echo "validating $name (defaults)" >&2
+    helm template "$name" "$chart" | validate
+    continue
+  fi
+
+  for values in "${values_files[@]}"; do
+    echo "validating $name ($(basename "$values"))" >&2
+    helm template "$name" "$chart" --values "$values" | validate
+  done
+done
