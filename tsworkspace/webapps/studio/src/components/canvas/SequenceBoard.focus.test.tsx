@@ -98,8 +98,9 @@ describe('SequenceBoard sticky focus parity with Board', () => {
       { wrapper: withNuqsTestingAdapter() },
     );
 
-    const nodes = (flowProps.current?.nodes as FlowNode[]).filter((n) => n.type === 'seqSticky');
-    const edges = flowProps.current?.edges as FlowEdge[];
+    if (!flowProps.current) throw new Error('ReactFlow was never rendered');
+    const nodes = (flowProps.current.nodes as FlowNode[]).filter((n) => n.type === 'seqSticky');
+    const edges = flowProps.current.edges as FlowEdge[];
     const selected = nodes.find((n) => n.data.entity?.key === 'readModel:demo/things@1');
     const unrelated = nodes.find((n) => n.data.entity?.key === 'readModel:demo/others@1');
 

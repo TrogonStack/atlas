@@ -5,6 +5,8 @@ targets = []
 ignore = [
   # rustls-pemfile is unmaintained with no known exploit; tonic 0.12 TLS pulls it in until tonic moves on.
   "RUSTSEC-2025-0134",
+  # Fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru.
+  "RUSTSEC-2026-0253",
 ]
 
 [licenses]
@@ -37,7 +39,6 @@ skip = [
   { name = "axum" },
   { name = "axum-core" },
   { name = "base64" },
-  { name = "chacha20" },
   { name = "darling" },
   { name = "darling_core" },
   { name = "darling_macro" },
@@ -63,20 +64,18 @@ skip = [
   { name = "tonic-types" },
   { name = "tower" },
   { name = "webpki-roots" },
+  # async-nats needs nkeys 0.4, whose latest release still signs with ed25519-dalek 2 and
+  # signatory 0.27, keeping the pre-0.11 RustCrypto digest stack alive beside ours.
+  { crate = "block-buffer@0.10", reason = "nkeys 0.4 via ed25519-dalek 2" },
+  { crate = "const-oid@0.9", reason = "nkeys 0.4 via signatory 0.27" },
+  { crate = "crypto-common@0.1", reason = "nkeys 0.4 via ed25519-dalek 2" },
+  { crate = "digest@0.10", reason = "nkeys 0.4 via ed25519-dalek 2" },
+  { crate = "sha2@0.10", reason = "nkeys 0.4 via ed25519-dalek 2" },
   # Tiny transitive duplicates from testcontainers/getrandom version spread.
   { name = "cpufeatures" },
   { name = "linux-raw-sys" },
   { name = "r-efi" },
   { name = "windows-sys" },
-  { name = "windows-targets" },
-  { name = "windows_aarch64_gnullvm" },
-  { name = "windows_aarch64_msvc" },
-  { name = "windows_i686_gnu" },
-  { name = "windows_i686_gnullvm" },
-  { name = "windows_i686_msvc" },
-  { name = "windows_x86_64_gnu" },
-  { name = "windows_x86_64_gnullvm" },
-  { name = "windows_x86_64_msvc" },
 ]
 
 [sources]

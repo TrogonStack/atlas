@@ -115,6 +115,6 @@ describe('buildContextMap', () => {
     const { edges } = buildContextMap(model);
     const seam = edges.find((e) => e.source === 'ctx:orders' && e.target === 'ctx:billing');
     expect(seam).toBeDefined();
-    expect((seam?.data as { intent?: string }).intent).toBe('customer supplier');
+    expect((seam?.data as { intent?: string } | undefined)?.intent).toBe('customer supplier');
   });
 });
