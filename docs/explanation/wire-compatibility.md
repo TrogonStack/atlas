@@ -1,8 +1,9 @@
 # Wire compatibility and mixed-version operation
 
-The trogon-atlas CLI, the MCP adapter, the Studio gateway and the server ship from one tree,
-but they are not upgraded at the same instant. An agent's MCP adapter can be a
-release ahead of the server it talks to, or a release behind. This page
+The trogon-atlas CLI, the Studio gateway and the server ship from one tree,
+but they are not upgraded at the same instant. An agent's CLI can be a
+release ahead of the server it talks to, or a release behind. The MCP tools
+are served by the server itself, so they always match it. This page
 explains what keeps those combinations safe: a breaking-change gate on the
 protobuf contract, and a discovery handshake that runs before any mutation.
 

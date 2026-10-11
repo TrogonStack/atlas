@@ -1,39 +1,32 @@
 # trogon-atlas-mcp
 
-Model Context Protocol (MCP) adapter: a stdio bridge that exposes
-each `EventModelService` gRPC RPC as an MCP tool that an AI agent
-can call directly.
+Model Context Protocol (MCP) tools over Streamable HTTP that expose each
+`EventModelService` gRPC RPC as an MCP tool that an AI agent can call
+directly. This crate is a library: `trogon-atlas-server` serves it at `/mcp`
+on the same listener as gRPC and runs every tool call through the same
+authentication and authorization as a gRPC caller.
 
-## Running
+## Connecting
 
-```sh
-# Defaults: gRPC at http://127.0.0.1:50069, no auth.
-trogon-atlas-mcp
+Enable it on the server with `TROGON_ATLAS_MCP` (see the
+[server README](../trogon-atlas-server/README.md)), then point an MCP client
+at `http://<host>:<grpc-port>/mcp`. The endpoint is stateless, so any replica
+can answer any request.
 
-# Pointing at a remote server with a bearer token.
-trogon-atlas-mcp \
-  --grpc https://trogon-atlas.example.com:443 \
-  --auth-token "$TROGON_ATLAS_AUTH_TOKEN"
-```
+The endpoint holds no credential of its own. Each MCP request acts as its
+own `Authorization: Bearer <token>` header, so the server authenticates and
+authorizes the calling client, and `tools/list` shows only the tools that
+client's role can call. A request without the header is refused unless the
+server allows anonymous callers; a header that is not a bearer token is
+rejected.
 
-The adapter speaks MCP over stdio (the canonical transport). It is
-typically launched as a sub-process by an MCP-aware host (Claude Code,
-custom agent harness, etc.) rather than invoked directly.
+Send `x-trogon-atlas-branch: <name>` on a request to scope its tool calls
+to that branch. Omit it for baseline.
 
 For validation repairs, use the
 [repair playbook](../../../docs/how-to/repair-validation-findings.md), which
 covers dependency discovery, guarded mutations, verification, and preserving
 the procedure for future runs.
-
-## Configuration
-
-| Flag / Env var | Default | Description |
-|---|---|---|
-| `--grpc` / `TROGON_ATLAS_GRPC` | `http://127.0.0.1:50069` | gRPC endpoint. `https://` endpoints use TLS with native roots. |
-| `--auth-token` / `TROGON_ATLAS_AUTH_TOKEN` | _(none)_ | Shared bearer token matching the server's `TROGON_ATLAS_AUTH_TOKEN`. The value is redacted from logs and `--help` output. |
-| `--max-message-bytes` / `TROGON_ATLAS_MCP_MAX_MESSAGE_BYTES` | `4194304` (4 MiB) | Maximum gRPC message size for encoding and decoding. Must match the server's cap; set both sides in lock-step when raising the limit. Startup fails with a clear error if the env var is set to a non-numeric value. |
-| `--rpc-timeout-secs` / `TROGON_ATLAS_MCP_RPC_TIMEOUT_SECS` | `120` | Timeout in seconds for each gRPC call. LLM-backed tools (`infer_data_flow`, `check_information_completeness`) can take 60 seconds or more. The connect timeout is always 5 seconds. |
-| `--branch` / `TROGON_ATLAS_BRANCH` | _(none)_ | Branch for every call, sent in the `x-trogon-atlas-branch` header. Omit to use baseline. To change branch, restart the adapter. |
 
 ## What the tools return
 

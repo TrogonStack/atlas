@@ -38,6 +38,8 @@ for the full list. The key ones:
 | `--protect-baseline`              | `TROGON_ATLAS_PROTECT_BASELINE`        | `false`                |
 | `--protect-baseline-namespaces`   | `TROGON_ATLAS_PROTECT_BASELINE_NAMESPACES` | (unset)            |
 | `--metrics-listen`                | `TROGON_ATLAS_METRICS_LISTEN`          | (off)                  |
+| `--mcp`                           | `TROGON_ATLAS_MCP`                     | `false`                |
+| `--mcp-allowed-hosts`             | `TROGON_ATLAS_MCP_ALLOWED_HOSTS`       | `localhost,127.0.0.1,::1` |
 | `--git-mirror`                    | `TROGON_ATLAS_GIT_MIRROR`              | (off)                  |
 
 `--nats-url` accepts credentials as userinfo
@@ -52,6 +54,19 @@ the debug files double mirror size and clutter git diffs.
 When `--git-mirror` is on, schedule the `reconcile` subcommand (see
 "Reconciling the mirror" below). A mirror write can fail while the store
 commit succeeds, and nothing else detects that divergence.
+
+## Serve MCP
+
+Set `TROGON_ATLAS_MCP` to serve the
+[MCP tools](../trogon-atlas-mcp/README.md) at `/mcp`, on the same listener
+as gRPC. Every tool call runs through the same bearer authentication and
+role checks as a gRPC call, made as the MCP request's own `Authorization`
+header.
+
+`TROGON_ATLAS_MCP_ALLOWED_HOSTS` lists the `Host` header values `/mcp`
+accepts, guarding against DNS rebinding; it has no effect on gRPC. Add
+every name clients use to reach the listener. Entries without a port match
+any port; `*` disables the check.
 
 ## Run Jev field inference
 
