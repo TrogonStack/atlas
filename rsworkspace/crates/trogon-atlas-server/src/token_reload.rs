@@ -187,15 +187,11 @@ mod tests {
         path
     }
 
-    fn tempdir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "trogon-atlas-reload-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("create tempdir");
-        dir
+    fn tempdir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("trogon-atlas-reload-")
+            .tempdir()
+            .expect("create tempdir")
     }
 
     const ONE: &str = r#"
@@ -207,6 +203,7 @@ tokens = ["first-key"]
     #[test]
     fn a_new_key_authenticates_without_a_restart() {
         let dir = tempdir();
+        let dir = dir.path().to_path_buf();
         let path = write(&dir, "tokens.toml", ONE);
         let live = LiveRegistry::new(Arc::new(TokenRegistry::load(&path).expect("initial load")));
 
@@ -243,6 +240,7 @@ tokens = ["second-key"]
     #[test]
     fn a_removed_key_stops_authenticating() {
         let dir = tempdir();
+        let dir = dir.path().to_path_buf();
         let path = write(
             &dir,
             "tokens.toml",
@@ -271,6 +269,7 @@ tokens = ["revoke-me"]
     #[test]
     fn a_broken_registry_is_refused_and_the_old_one_keeps_working() {
         let dir = tempdir();
+        let dir = dir.path().to_path_buf();
         let path = write(&dir, "tokens.toml", ONE);
         let live = LiveRegistry::new(Arc::new(TokenRegistry::load(&path).expect("initial load")));
 
@@ -292,6 +291,7 @@ tokens = ["revoke-me"]
     #[test]
     fn a_registry_that_grants_the_same_thing_is_not_a_change() {
         let dir = tempdir();
+        let dir = dir.path().to_path_buf();
         let path = write(&dir, "tokens.toml", ONE);
         let live = LiveRegistry::new(Arc::new(TokenRegistry::load(&path).expect("initial load")));
 
@@ -311,6 +311,7 @@ tokens = ["revoke-me"]
     #[test]
     fn a_rotated_secret_file_is_picked_up() {
         let dir = tempdir();
+        let dir = dir.path().to_path_buf();
         write(&dir, "ci.key", "old-secret\n");
         let path = write(
             &dir,
@@ -337,6 +338,7 @@ tokens = ["revoke-me"]
     #[tokio::test(start_paused = true)]
     async fn the_watcher_installs_a_change_and_publishes_memberships() {
         let dir = tempdir();
+        let dir = dir.path().to_path_buf();
         let path = write(
             &dir,
             "tokens.toml",

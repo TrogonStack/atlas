@@ -110,9 +110,11 @@ const NON_CANONICAL_EVENT: &str = "apiVersion: eventmodel.atlas.trogonstack.com/
 
 #[test]
 fn fmt_format_json_carries_the_canonical_text_in_data_not_on_raw_stdout() {
-    let dir = std::env::temp_dir().join(format!("trogon-atlas-format-test-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("event.yaml");
+    let dir = tempfile::Builder::new()
+        .prefix("trogon-atlas-format-test-")
+        .tempdir()
+        .unwrap();
+    let path = dir.path().join("event.yaml");
     std::fs::write(&path, NON_CANONICAL_EVENT).unwrap();
 
     let out = trogon_atlas(&["--format", "json", "fmt", path.to_str().unwrap()]);
@@ -131,10 +133,10 @@ fn fmt_format_json_carries_the_canonical_text_in_data_not_on_raw_stdout() {
 
 #[test]
 fn export_format_json_reports_a_local_validation_failure_as_a_failed_outcome() {
-    let dir = std::env::temp_dir().join(format!(
-        "trogon-atlas-format-export-test-{}",
-        std::process::id()
-    ));
+    let dir = tempfile::Builder::new()
+        .prefix("trogon-atlas-format-export-test-")
+        .tempdir()
+        .unwrap();
     let out = trogon_atlas(&[
         "--format",
         "json",
@@ -142,7 +144,7 @@ fn export_format_json_reports_a_local_validation_failure_as_a_failed_outcome() {
         "--namespace",
         "",
         "-o",
-        dir.to_str().unwrap(),
+        dir.path().to_str().unwrap(),
     ]);
     assert!(!out.status.success(), "{out:?}");
     assert_eq!(

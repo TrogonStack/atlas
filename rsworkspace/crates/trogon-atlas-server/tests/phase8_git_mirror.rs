@@ -33,16 +33,11 @@ fn make_event(ns: &str, slug: &str, version: u64) -> pb::Entity {
     }
 }
 
-fn tempdir(suffix: &str) -> std::path::PathBuf {
-    let mut p = std::env::temp_dir();
-    let pid = std::process::id();
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+fn tempdir(suffix: &str) -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix(&format!("trogon-atlas-{suffix}-"))
+        .tempdir()
         .unwrap()
-        .as_nanos();
-    p.push(format!("trogon-atlas-{suffix}-{pid}-{nanos}"));
-    std::fs::create_dir_all(&p).unwrap();
-    p
 }
 
 async fn make_store() -> Arc<dyn trogon_atlas_store::Store> {
@@ -79,6 +74,7 @@ fn commit_count(dir: &std::path::Path) -> u32 {
 #[tokio::test(flavor = "multi_thread")]
 async fn put_entity_writes_commit() {
     let dir = tempdir("mirror-put");
+    let dir = dir.path().to_path_buf();
     let mirror = GitMirror::open(
         dir.clone(),
         MirrorAuthor {
@@ -120,6 +116,7 @@ async fn put_entity_writes_commit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn batch_mutate_one_commit() {
     let dir = tempdir("mirror-batch");
+    let dir = dir.path().to_path_buf();
     let mirror = GitMirror::open(
         dir.clone(),
         MirrorAuthor {
@@ -177,6 +174,7 @@ async fn batch_mutate_one_commit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_entity_removes_file_and_commits() {
     let dir = tempdir("mirror-del");
+    let dir = dir.path().to_path_buf();
     let mirror = GitMirror::open(
         dir.clone(),
         MirrorAuthor {
@@ -227,6 +225,7 @@ async fn delete_entity_removes_file_and_commits() {
 #[tokio::test(flavor = "multi_thread")]
 async fn concurrent_apply_produces_sequential_commits() {
     let dir = tempdir("mirror-concurrent");
+    let dir = dir.path().to_path_buf();
     let mirror = GitMirror::open(
         dir.clone(),
         MirrorAuthor {
@@ -279,6 +278,7 @@ async fn concurrent_apply_produces_sequential_commits() {
 #[tokio::test(flavor = "multi_thread")]
 async fn walk_repo_imports_entities() {
     let dir = tempdir("mirror-import");
+    let dir = dir.path().to_path_buf();
     let mirror = GitMirror::open(
         dir.clone(),
         MirrorAuthor {
@@ -314,6 +314,7 @@ async fn walk_repo_imports_entities() {
 #[tokio::test(flavor = "multi_thread")]
 async fn batch_mutate_mixed_put_and_delete_one_commit() {
     let dir = tempdir("mirror-batch-mixed");
+    let dir = dir.path().to_path_buf();
     let mirror = GitMirror::open(
         dir.clone(),
         MirrorAuthor {
@@ -398,6 +399,7 @@ async fn batch_mutate_mixed_put_and_delete_one_commit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn put_entity_caps_oversized_author_headers() {
     let dir = tempdir("mirror-sanitize");
+    let dir = dir.path().to_path_buf();
     let mirror = GitMirror::open(
         dir.clone(),
         MirrorAuthor {

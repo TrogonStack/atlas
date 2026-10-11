@@ -103,22 +103,11 @@ fn trogon_atlas_branched(endpoint: &str, branch: &str, args: &[&str]) -> TrogonA
     }
 }
 
-fn tempfile_dir() -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "trogon-atlas-export-repair-cli-test-{}",
-        uuid_like()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-fn uuid_like() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+fn tempfile_dir() -> tempfile::TempDir {
+    tempfile::Builder::new()
+        .prefix("trogon-atlas-export-repair-cli-test-")
+        .tempdir()
         .unwrap()
-        .as_nanos();
-    format!("{nanos}-{:?}", std::thread::current().id())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -132,7 +121,8 @@ async fn trogon_atlas_export_writes_files_and_exits_0_when_clean() {
         .await
         .unwrap();
 
-    let out_dir = tempfile_dir().join("out");
+    let base_dir = tempfile_dir();
+    let out_dir = base_dir.path().join("out");
     let exported = trogon_atlas(
         &endpoint,
         &[
@@ -191,7 +181,8 @@ async fn trogon_atlas_export_reports_skipped_entities_and_exits_1() {
     };
     client.put_entity(put_req(poisoned, true)).await.unwrap();
 
-    let out_dir = tempfile_dir().join("out");
+    let base_dir = tempfile_dir();
+    let out_dir = base_dir.path().join("out");
     let exported = trogon_atlas(
         &endpoint,
         &[
@@ -222,7 +213,8 @@ async fn trogon_atlas_export_reports_skipped_entities_and_exits_1() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trogon_atlas_export_missing_namespace_errors_nonzero() {
     let endpoint = start_server().await;
-    let out_dir = tempfile_dir().join("out");
+    let base_dir = tempfile_dir();
+    let out_dir = base_dir.path().join("out");
     let exported = trogon_atlas(
         &endpoint,
         &[
@@ -295,7 +287,8 @@ async fn trogon_atlas_export_layout_slices_writes_nested_self_contained_files() 
         .await
         .unwrap();
 
-    let out_dir = tempfile_dir().join("out");
+    let base_dir = tempfile_dir();
+    let out_dir = base_dir.path().join("out");
     let exported = trogon_atlas(
         &endpoint,
         &[
@@ -348,7 +341,8 @@ async fn trogon_atlas_export_refuses_nonempty_out_dir_without_force() {
         .await
         .unwrap();
 
-    let out_dir = tempfile_dir().join("out");
+    let base_dir = tempfile_dir();
+    let out_dir = base_dir.path().join("out");
     let first = trogon_atlas(
         &endpoint,
         &[
@@ -424,6 +418,7 @@ async fn trogon_atlas_branch_update_rebases_and_reports_remaining_conflicts() {
     // one baseline moves: update_branch can rebase it cleanly (no
     // conflicts), so `resp.rebased_count` shows up and exit code is 0.
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("update.yaml");
     std::fs::write(
         &manifest_path,
@@ -477,6 +472,7 @@ async fn trogon_atlas_branch_update_reports_conflicts_and_exits_1() {
     assert!(created.status.success(), "{:?}", created.stderr);
 
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("update-conflict.yaml");
     std::fs::write(
         &manifest_path,
@@ -537,6 +533,7 @@ async fn trogon_atlas_branch_resolve_take_theirs_then_merge_lands_baseline_value
     assert!(created.status.success(), "{:?}", created.stderr);
 
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("resolve-tt.yaml");
     std::fs::write(
         &manifest_path,
@@ -629,6 +626,7 @@ async fn trogon_atlas_branch_resolve_keep_ours_then_merge_lands_branch_value() {
     assert!(created.status.success(), "{:?}", created.stderr);
 
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("resolve-ko.yaml");
     std::fs::write(
         &manifest_path,
@@ -780,6 +778,7 @@ async fn trogon_atlas_branch_resolve_exits_stale_when_the_entry_moved_after_diff
     assert!(created.status.success(), "{:?}", created.stderr);
 
     let dir = tempfile_dir();
+    let dir = dir.path().to_path_buf();
     let manifest_path = dir.join("resolve-stale.yaml");
     std::fs::write(
         &manifest_path,

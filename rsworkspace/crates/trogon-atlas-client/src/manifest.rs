@@ -906,16 +906,12 @@ spec:
 
     #[test]
     fn load_paths_rejects_explicit_non_yaml_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "trogon-atlas-manifest-nonyaml-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let yaml_path = dir.join("ok.yaml");
-        let txt_path = dir.join("override.json");
+        let dir = tempfile::Builder::new()
+            .prefix("trogon-atlas-manifest-nonyaml-")
+            .tempdir()
+            .unwrap();
+        let yaml_path = dir.path().join("ok.yaml");
+        let txt_path = dir.path().join("override.json");
         std::fs::write(
             &yaml_path,
             r"
@@ -940,6 +936,5 @@ spec: { title: A }
                 || msg.contains("unsupported"),
             "error should name the rejected file or reason, got: {msg}"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

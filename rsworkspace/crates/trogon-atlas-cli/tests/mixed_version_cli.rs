@@ -34,12 +34,11 @@ fn current_server_info() -> pb::GetServerInfoResponse {
 }
 
 async fn trogon_atlas(endpoint: &str, args: &[&str]) -> Output {
-    let dir = std::env::temp_dir().join(format!(
-        "trogon-atlas-compat-{}",
-        trogon_atlas_testsupport::unique_suffix_for_test()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    let manifest = dir.join("event.yaml");
+    let dir = tempfile::Builder::new()
+        .prefix("trogon-atlas-compat-")
+        .tempdir()
+        .unwrap();
+    let manifest = dir.path().join("event.yaml");
     std::fs::write(&manifest, MANIFEST).unwrap();
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_trogon-atlas"));
     command
@@ -53,7 +52,6 @@ async fn trogon_atlas(endpoint: &str, args: &[&str]) -> Output {
     let output = tokio::task::spawn_blocking(move || command.output().unwrap())
         .await
         .unwrap();
-    std::fs::remove_dir_all(&dir).ok();
     output
 }
 
