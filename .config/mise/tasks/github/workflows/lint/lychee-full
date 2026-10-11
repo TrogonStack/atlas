@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
-exec lychee "**/*.md"
+exec lychee --config .config/lychee.toml "**/*.md"

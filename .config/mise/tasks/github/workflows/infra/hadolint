@@ -7,7 +7,7 @@ status=0
 
 while IFS= read -r -d '' dockerfile; do
   echo "linting $dockerfile" >&2
-  hadolint --config "$root/.hadolint.yaml" "$dockerfile" || status=1
+  hadolint --config "$root/.config/hadolint.yaml" "$dockerfile" || status=1
 done < <(find "$root/devops" \( -name 'Dockerfile' -o -name '*.Dockerfile' \) -print0)
 
 exit "$status"

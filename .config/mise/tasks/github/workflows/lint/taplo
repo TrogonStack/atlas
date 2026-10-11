@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
-exec taplo fmt --check
+exec taplo fmt --check --config .config/taplo.toml

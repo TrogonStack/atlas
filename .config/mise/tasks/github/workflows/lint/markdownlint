@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
-exec markdownlint-cli2
+exec markdownlint-cli2 --config .config/markdownlint-cli2.yaml

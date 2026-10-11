@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
-exec lychee --offline "**/*.md"
+exec lychee --config .config/lychee.toml --offline "**/*.md"
