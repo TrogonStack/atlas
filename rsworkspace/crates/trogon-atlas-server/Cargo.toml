@@ -46,7 +46,8 @@ chrono = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 parking_lot = "0.12"
 metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
+metrics-exporter-prometheus = { version = "0.18", default-features = false }
+metrics-util = { version = "0.20", default-features = false }
 toml = "1.1"
 tower = { version = "0.5", features = ["timeout", "util"] }
 http = "1"
@@ -67,6 +68,8 @@ proptest = "1"
 async-trait = { workspace = true }
 tempfile = { workspace = true }
 rmcp = { version = "2", features = ["client", "transport-streamable-http-client-reqwest"] }
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic", "metrics"] }
 
 [lints]
 workspace = true

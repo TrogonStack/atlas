@@ -17,12 +17,6 @@ spec:
       targetPort: grpc
       protocol: TCP
       appProtocol: grpc
-    {{- if .Values.metrics.enabled }}
-    - name: metrics
-      port: {{ .Values.metrics.port }}
-      targetPort: metrics
-      protocol: TCP
-    {{- end }}
   selector:
     {{- include "trogon-atlas-server.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: server

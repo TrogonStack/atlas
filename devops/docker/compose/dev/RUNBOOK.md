@@ -246,7 +246,7 @@ The `.env` file is gitignored and never committed.
   OrbStack resolves every container by DNS regardless.
 - trogon-atlas-server readiness: <http://127.0.0.1:50069/-/readiness?verbose>
   (`/-/liveness` for liveness)
-- trogon-atlas-server metrics: <http://127.0.0.1:9100/metrics>
+- trogon-atlas-server metrics: <http://127.0.0.1:50069/-/metrics>
 
 ## Rolling deploys and batch recovery
 

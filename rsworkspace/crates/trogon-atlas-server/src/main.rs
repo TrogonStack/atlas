@@ -96,21 +96,11 @@ struct Args {
         default_value = "trogon-atlas@local"
     )]
     git_author_email: String,
-    /// `host:port` to bind the Prometheus exporter on. Omit to disable metrics.
-    /// Binding a non-loopback address also requires --metrics-allow-external.
-    #[arg(long, env = "TROGON_ATLAS_METRICS_LISTEN")]
-    metrics_listen: Option<String>,
-    /// Explicitly allow the Prometheus /metrics endpoint to bind on a
-    /// non-loopback interface. Required when --metrics-listen resolves to
-    /// a public or private-network address. Loopback binding is always
-    /// permitted and does not require this flag. Set
-    /// `TROGON_ATLAS_METRICS_ALLOW_EXTERNAL=true` to enable.
-    #[arg(
-        long,
-        env = "TROGON_ATLAS_METRICS_ALLOW_EXTERNAL",
-        default_value_t = false
-    )]
-    metrics_allow_external: bool,
+    /// Serve a Prometheus scrape at `/-/metrics` on this same listener,
+    /// outside auth. Off by default: metrics are pushed over OTLP when
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+    #[arg(long, env = "TROGON_ATLAS_PROMETHEUS_METRICS", default_value_t = false)]
+    prometheus_metrics: bool,
     /// Serve MCP over Streamable HTTP at `/mcp`, on this same gRPC listener.
     /// Off by default. Every MCP request acts as its own `Authorization:
     /// Bearer` token, exactly as a gRPC call would.
@@ -774,15 +764,10 @@ async fn main() -> Result<()> {
         .parse()
         .with_context(|| format!("parsing --listen={}", args.listen))?;
 
-    if let Some(metrics_addr) = args.metrics_listen.as_deref() {
-        let parsed = metrics_addr
-            .parse()
-            .with_context(|| format!("parsing --metrics-listen={metrics_addr}"))?;
-        trogon_atlas_server::telemetry::install_prometheus_exporter(
-            parsed,
-            args.metrics_allow_external,
-        )?;
-        tracing::info!(metrics_addr = %parsed, "prometheus exporter started");
+    let metrics =
+        trogon_atlas_server::metrics_export::MetricsExporters::from_env(args.prometheus_metrics)?
+            .install()?;
+    if metrics.is_recording() {
         trogon_atlas_server::telemetry::spawn_change_stream_stats_publisher(
             store.clone(),
             Duration::from_secs(30),
@@ -1039,14 +1024,24 @@ async fn main() -> Result<()> {
     // OUTSIDE the auth stack so probes (kubelet, kube-proxy, GCP HC, etc.)
     // can reach it without holding a bearer token. It exposes only
     // readiness and liveness -- no entity data -- so the bypass is
-    // intentional and bounded. Anything touching the EventModelService data
-    // plane must stay inside `data_plane`.
+    // intentional and bounded. The opt-in Prometheus scrape at /-/metrics
+    // sits beside them for the same reason: scrapers hold no token and the
+    // payload is operational counters only. Anything touching the
+    // EventModelService data plane must stay inside `data_plane`.
     let mut routes = tonic::service::Routes::builder();
     routes.add_service(health.grpc_service());
     routes.add_service(data_plane.clone());
     let mut routes = routes.routes();
     let merged = routes.axum_router_mut().clone().merge(health.router());
     *routes.axum_router_mut() = merged;
+    let merged = routes.axum_router_mut().clone().merge(metrics.router());
+    *routes.axum_router_mut() = merged;
+    if metrics.serves_prometheus() {
+        tracing::info!(
+            "serving Prometheus metrics at {} on the gRPC listener",
+            trogon_atlas_server::metrics_export::METRICS_PATH
+        );
+    }
     if args.mcp {
         let mcp_router = trogon_atlas_server::mcp::mcp_router(
             data_plane,
@@ -1086,9 +1081,10 @@ async fn main() -> Result<()> {
         })
         .await?;
 
-    // Flush any spans the batch OTLP exporter still has queued. Must run
-    // before the process exits or the last few seconds of trace data are
+    // Flush any spans and metrics the OTLP exporters still have queued. Must
+    // run before the process exits or the last few seconds of telemetry are
     // silently dropped.
+    metrics.shutdown();
     tracing_guard.shutdown();
     Ok(())
 }

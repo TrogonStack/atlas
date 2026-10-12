@@ -44,9 +44,8 @@ RUN apk add --no-cache git ca-certificates tini wget \
 COPY --from=builder /out/trogon-atlas-server /usr/local/bin/trogon-atlas-server
 USER 100:101
 ENV TROGON_ATLAS_LISTEN=0.0.0.0:50069 \
-    TROGON_ATLAS_STORE=nats \
-    TROGON_ATLAS_METRICS_LISTEN=0.0.0.0:9100
-EXPOSE 50069 9100
+    TROGON_ATLAS_STORE=nats
+EXPOSE 50069
 HEALTHCHECK --interval=5s --timeout=3s --retries=10 --start-period=10s \
-  CMD ["wget", "--spider", "-q", "http://127.0.0.1:9100/metrics"]
+  CMD ["wget", "--spider", "-q", "http://127.0.0.1:50069/-/liveness"]
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/trogon-atlas-server"]

@@ -60,11 +60,10 @@ services:
       # service above; override both together.
       TROGON_ATLAS_NATS_URL: nats://service:${TROGON_ATLAS_NATS_PASSWORD:-localdevpass}@nats:4222
       TROGON_ATLAS_GIT_MIRROR: /var/lib/trogon-atlas/mirror
-      TROGON_ATLAS_METRICS_LISTEN: 0.0.0.0:9100
-      # /metrics must bind non-loopback for the host port mapping to work;
-      # the published port stays on 127.0.0.1, so this opt-in exposes
-      # nothing beyond the local machine and the compose network.
-      TROGON_ATLAS_METRICS_ALLOW_EXTERNAL: "true"
+      # Prometheus scrape at /-/metrics on the gRPC port, for local
+      # inspection. Off by default outside this stack, where metrics are
+      # pushed over OTLP instead.
+      TROGON_ATLAS_PROMETHEUS_METRICS: "true"
       TROGON_ATLAS_MCP: "true"
       TROGON_ATLAS_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,::1,trogon-atlas-server,trogon-atlas-server.trogon-atlas.orb.local
       # Deliberately not defaulted to the empty string. clap reads a
@@ -87,7 +86,6 @@ services:
       - trogon-atlas-mirror:/var/lib/trogon-atlas/mirror
     ports:
       - "127.0.0.1:50069:50069"
-      - "127.0.0.1:9100:9100"
     networks:
       - trogon-atlas
     depends_on:
