@@ -1,8 +1,9 @@
 # trogon-atlas-server Helm chart
 
 Deploys the `trogon-atlas-server` gRPC service (port 50069), which also
-serves an MCP endpoint over Streamable HTTP at `/mcp` on that same port,
-and an optional Prometheus metrics endpoint (port 9100).
+serves an MCP endpoint over Streamable HTTP at `/mcp` on that same port.
+Metrics and traces are pushed over OTLP; a Prometheus scrape at
+`/-/metrics` on that same port is opt-in.
 
 NATS JetStream is a required external dependency and is not installed by
 this chart. Point `config.natsUrl` at an existing NATS installation with
@@ -91,6 +92,16 @@ The probes are `httpGet` requests to `/-/readiness` and `/-/liveness` on the gRP
 
 Add `?verbose` to either path to list each check. The same states are served over `grpc.health.v1.Health` as the services `readiness`, `liveness`, and `""` (readiness).
 
+## Telemetry
+
+Traces and metrics are pushed over OTLP gRPC to `config.otlpEndpoint`, typically an OpenTelemetry Collector; with it empty, neither is exported. There is no metrics port.
+
+`metrics.prometheus.enabled=true` additionally serves a Prometheus scrape at `/-/metrics` on the gRPC port, outside auth like the probes: a scraper holds no bearer token, and the payload is operational counters with no entity data. With it off, `/-/metrics` answers 404. Point your own scrape config at the Service's `grpc` port; the chart creates no ServiceMonitor.
+
+### Upgrading from 0.x
+
+1.0.0 removes the dedicated metrics port (9100), its Service port, the `metrics.enabled`, `metrics.port` and `metrics.serviceMonitor.*` values, and the ServiceMonitor template. Send metrics to a Collector with `config.otlpEndpoint`, or set `metrics.prometheus.enabled=true` and scrape `/-/metrics` on the gRPC port.
+
 ## Scaling: the server is single-writer
 
 **`replicaCount` must stay `1`.** The chart refuses to render otherwise.
@@ -151,10 +162,10 @@ Not done by the server, deliberately: a daemon holding push credentials is a dif
 | `spicedb.skipStartupSync` | `false` | stop the server publishing schema and grants; requires `sync.enabled` |
 | `spicedb.sync.enabled` | `false` | CronJob running `sync-spicedb` to re-derive every grant (requires `endpoint`) |
 | `spicedb.sync.schedule` | `*/15 * * * *` | schedule for that job |
-| `metrics.enabled` | `true` | expose `/metrics` on port 9100 |
+| `config.otlpEndpoint` | `""` | OTLP gRPC endpoint traces and metrics are pushed to; empty exports neither |
+| `metrics.prometheus.enabled` | `false` | serve a Prometheus scrape at `/-/metrics` on the gRPC port, without auth |
 | `mcp.enabled` | `true` | serve MCP at `/mcp`, on the gRPC port |
 | `mcp.allowedHosts` | `[]` | extra `Host` header values `/mcp` accepts, beyond loopback and this release's Service names |
-| `metrics.serviceMonitor.enabled` | `false` | create a Prometheus Operator ServiceMonitor |
 | `gitMirror.enabled` | `false` | mount a PVC at `/var/lib/trogon-atlas/mirror` and enable the git mirror |
 | `gitMirror.reconcile.enabled` | `true` | CronJob detecting store/mirror divergence (mirror must be enabled) |
 | `gitMirror.gc.enabled` | `true` | CronJob repacking the mirror repository (mirror must be enabled) |

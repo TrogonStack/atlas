@@ -1,6 +1,5 @@
 use std::{
     future::Future,
-    net::SocketAddr,
     pin::Pin,
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -14,6 +13,13 @@ use tower::{Layer, Service};
 use tracing::Span;
 
 pub const GRPC_SYSTEM: &str = "grpc";
+pub const SERVICE_NAME: &str = "trogon-atlas-server";
+
+pub(crate) fn resource() -> opentelemetry_sdk::Resource {
+    opentelemetry_sdk::Resource::builder()
+        .with_service_name(SERVICE_NAME)
+        .build()
+}
 
 /// Shutdown handle returned by `init_tracing`. When OTLP is enabled, this
 /// wraps the batch `TracerProvider` so the graceful-shutdown path can
@@ -70,21 +76,18 @@ pub fn init_tracing() -> anyhow::Result<TracingGuard> {
     match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
         Ok(endpoint) if !endpoint.is_empty() => {
             use opentelemetry::trace::TracerProvider as _;
-            use opentelemetry_otlp::WithExportConfig as _;
+            use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
             let exporter = opentelemetry_otlp::SpanExporter::builder()
                 .with_tonic()
                 .with_endpoint(endpoint.clone())
+                .with_tls_config(otlp_tls_config())
                 .build()
                 .map_err(|e| anyhow::anyhow!("building OTLP exporter for {endpoint}: {e}"))?;
             let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                 .with_batch_exporter(exporter)
-                .with_resource(
-                    opentelemetry_sdk::Resource::builder()
-                        .with_service_name("trogon-atlas-server")
-                        .build(),
-                )
+                .with_resource(resource())
                 .build();
-            let tracer = provider.tracer("trogon-atlas-server");
+            let tracer = provider.tracer(SERVICE_NAME);
             // Set the global provider so opentelemetry::global::tracer works,
             // and keep a clone for explicit shutdown so the batch exporter
             // flushes queued spans before the process exits.
@@ -102,6 +105,12 @@ pub fn init_tracing() -> anyhow::Result<TracingGuard> {
             Ok(TracingGuard { provider: None })
         }
     }
+}
+
+/// Trusts the system roots for an `https://` collector; the exporter only
+/// applies it when the endpoint scheme is `https`.
+pub fn otlp_tls_config() -> opentelemetry_otlp::tonic_types::transport::ClientTlsConfig {
+    opentelemetry_otlp::tonic_types::transport::ClientTlsConfig::new().with_native_roots()
 }
 
 fn rpc_span_from_path(path: &str) -> Span {
@@ -275,35 +284,8 @@ fn split_grpc_path(path: &str) -> (&str, &str) {
     }
 }
 
-/// Install the global Prometheus metrics recorder and spawn an HTTP exporter.
-///
-/// The exporter serves `/metrics` (and reports its own healthcheck on `/`).
-/// Returns an error if a recorder is already installed or the listener cannot bind.
-///
-/// When `addr` binds a non-loopback interface the caller must also pass
-/// `allow_external = true`; otherwise startup is refused with a clear error.
-/// Loopback addresses (127.x.x.x / `::1`) are always permitted. Set
-/// `TROGON_ATLAS_METRICS_ALLOW_EXTERNAL=true` to opt in to external binding.
-pub fn install_prometheus_exporter(addr: SocketAddr, allow_external: bool) -> anyhow::Result<()> {
-    let is_loopback = addr.ip().is_loopback();
-    if !is_loopback && !allow_external {
-        anyhow::bail!(
-            "metrics listen address {addr} is non-loopback but \
-             TROGON_ATLAS_METRICS_ALLOW_EXTERNAL is not set. Set it to `true` to \
-             explicitly opt in to exposing /metrics on a non-loopback interface, \
-             or change --metrics-listen to a loopback address (e.g. 127.0.0.1:9090)."
-        );
-    }
-    use metrics_exporter_prometheus::PrometheusBuilder;
-    PrometheusBuilder::new()
-        .with_http_listener(addr)
-        .install()
-        .map_err(|e| anyhow::anyhow!("install prometheus exporter on {addr}: {e}"))?;
-    Ok(())
-}
-
 /// Periodically poll the store for change-stream retention stats and
-/// publish them as Prometheus gauges. SREs alert on these to detect
+/// publish them as gauges. SREs alert on these to detect
 /// imminent `JetStream` retention pressure before the stream evicts data.
 ///
 /// Emitted gauges (no labels, the stream is a singleton per server):

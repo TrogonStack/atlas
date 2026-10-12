@@ -85,7 +85,8 @@ config:
   rpcTimeoutSecs: 60
   shutdownDrainSecs: 30
   logLevel: info
-  # OTLP endpoint for trace export, e.g. http://otel-collector:4317
+  # OTLP gRPC endpoint traces and metrics are pushed to, e.g.
+  # http://otel-collector:4317. Empty exports neither.
   otlpEndpoint: ""
   # Standard-base64, 32-byte key sealing ListChanges pagination cursors.
   # Safe to leave unset for a single-process deployment; required once more
@@ -146,14 +147,11 @@ spicedb:
     resources: {}
     extraEnv: []
 
+# Metrics are pushed over OTLP to config.otlpEndpoint. Prometheus is
+# opt-in: it serves a scrape at /-/metrics on the gRPC port, outside auth.
 metrics:
-  enabled: true
-  port: 9100
-  serviceMonitor:
+  prometheus:
     enabled: false
-    interval: 30s
-    scrapeTimeout: 10s
-    labels: {}
 
 # MCP over Streamable HTTP at /mcp, on the same port as gRPC. Holds no
 # Secret: each MCP request acts as its own Authorization bearer token,

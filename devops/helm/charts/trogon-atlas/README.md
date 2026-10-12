@@ -4,7 +4,8 @@ Umbrella chart deploying the event model stack to Kubernetes:
 
 - `server` (alias for trogon-atlas-server): the gRPC service (port 50069),
   which also serves an MCP endpoint over Streamable HTTP at `/mcp` on that
-  same port, and an optional Prometheus metrics endpoint (port 9100).
+  same port. Metrics and traces are pushed over OTLP; a Prometheus scrape
+  at `/-/metrics` on that same port is opt-in.
 - `studio` (alias for trogon-atlas-studio): the web UI and gateway
   (port 80), reaching the server over gRPC.
 
@@ -57,6 +58,10 @@ feeds. To share the server's token Secret, point
 `server.auth.token.existingSecret` or `server.auth.tokensFile.existingSecret`
 uses.
 
+## Upgrading from 0.x
+
+1.0.0 carries trogon-atlas-server 1.0.0, which drops the metrics port and the ServiceMonitor in favor of OTLP push and an opt-in `/-/metrics` on the gRPC port. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-0x).
+
 ## Notable values
 
 | Value | Default | Purpose |
@@ -65,6 +70,8 @@ uses.
 | `server.enabled` | `true` | install trogon-atlas-server |
 | `studio.enabled` | `true` | install trogon-atlas-studio |
 | `server.mcp.enabled` | `true` | serve MCP at `/mcp` from trogon-atlas-server |
+| `server.config.otlpEndpoint` | `""` | OTLP gRPC endpoint the server pushes traces and metrics to |
+| `server.metrics.prometheus.enabled` | `false` | serve a Prometheus scrape at `/-/metrics` on the server's gRPC port |
 
 See the subchart READMEs linked above for every `server.*` and `studio.*`
 value.

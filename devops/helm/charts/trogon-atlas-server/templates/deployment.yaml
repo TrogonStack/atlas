@@ -59,11 +59,6 @@ spec:
             - name: grpc
               containerPort: {{ $server.service.grpcPort }}
               protocol: TCP
-            {{- if $server.metrics.enabled }}
-            - name: metrics
-              containerPort: {{ $server.metrics.port }}
-              protocol: TCP
-            {{- end }}
           env:
             - name: TROGON_ATLAS_LISTEN
               value: 0.0.0.0:{{ $server.service.grpcPort }}
@@ -112,10 +107,8 @@ spec:
                   name: {{ $server.config.changeCursorKey.existingSecret }}
                   key: {{ $server.config.changeCursorKey.key }}
             {{- end }}
-            {{- if $server.metrics.enabled }}
-            - name: TROGON_ATLAS_METRICS_LISTEN
-              value: 0.0.0.0:{{ $server.metrics.port }}
-            - name: TROGON_ATLAS_METRICS_ALLOW_EXTERNAL
+            {{- if $server.metrics.prometheus.enabled }}
+            - name: TROGON_ATLAS_PROMETHEUS_METRICS
               value: "true"
             {{- end }}
             {{- if $server.mcp.enabled }}

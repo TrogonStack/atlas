@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use tonic::transport::{Identity, Server, ServerTlsConfig};
+use tonic::transport::{server::TcpIncoming, Server};
 use trogon_atlas_core::WriterRole;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
@@ -96,21 +96,11 @@ struct Args {
         default_value = "trogon-atlas@local"
     )]
     git_author_email: String,
-    /// `host:port` to bind the Prometheus exporter on. Omit to disable metrics.
-    /// Binding a non-loopback address also requires --metrics-allow-external.
-    #[arg(long, env = "TROGON_ATLAS_METRICS_LISTEN")]
-    metrics_listen: Option<String>,
-    /// Explicitly allow the Prometheus /metrics endpoint to bind on a
-    /// non-loopback interface. Required when --metrics-listen resolves to
-    /// a public or private-network address. Loopback binding is always
-    /// permitted and does not require this flag. Set
-    /// `TROGON_ATLAS_METRICS_ALLOW_EXTERNAL=true` to enable.
-    #[arg(
-        long,
-        env = "TROGON_ATLAS_METRICS_ALLOW_EXTERNAL",
-        default_value_t = false
-    )]
-    metrics_allow_external: bool,
+    /// Serve a Prometheus scrape at `/-/metrics` on this same listener,
+    /// outside auth. Off by default: metrics are pushed over OTLP when
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+    #[arg(long, env = "TROGON_ATLAS_PROMETHEUS_METRICS", default_value_t = false)]
+    prometheus_metrics: bool,
     /// Serve MCP over Streamable HTTP at `/mcp`, on this same gRPC listener.
     /// Off by default. Every MCP request acts as its own `Authorization:
     /// Bearer` token, exactly as a gRPC call would.
@@ -774,41 +764,36 @@ async fn main() -> Result<()> {
         .parse()
         .with_context(|| format!("parsing --listen={}", args.listen))?;
 
-    if let Some(metrics_addr) = args.metrics_listen.as_deref() {
-        let parsed = metrics_addr
-            .parse()
-            .with_context(|| format!("parsing --metrics-listen={metrics_addr}"))?;
-        trogon_atlas_server::telemetry::install_prometheus_exporter(
-            parsed,
-            args.metrics_allow_external,
-        )?;
-        tracing::info!(metrics_addr = %parsed, "prometheus exporter started");
+    let metrics =
+        trogon_atlas_server::metrics_export::MetricsExporters::from_env(args.prometheus_metrics)?
+            .install()?;
+    if metrics.is_recording() {
         trogon_atlas_server::telemetry::spawn_change_stream_stats_publisher(
             store.clone(),
             Duration::from_secs(30),
         );
     }
 
-    let mut builder = Server::builder();
-    match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
+    let tls = match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
         (Some(cert), Some(key)) => {
             let cert_pem = std::fs::read(cert)
                 .with_context(|| format!("reading --tls-cert={}", cert.display()))?;
             let key_pem = std::fs::read(key)
                 .with_context(|| format!("reading --tls-key={}", key.display()))?;
-            builder = builder
-                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert_pem, key_pem)))
+            let acceptor = trogon_atlas_server::tls::TlsAcceptor::from_pem(&cert_pem, &key_pem)
                 .context("configuring TLS")?;
             tracing::info!("TLS enabled");
+            Some(acceptor)
         }
         (None, None) => {
             tracing::warn!(
                 "serving plaintext gRPC; set TROGON_ATLAS_TLS_CERT/TROGON_ATLAS_TLS_KEY or terminate \
                  TLS in front of this process"
             );
+            None
         }
         _ => anyhow::bail!("--tls-cert and --tls-key must be set together"),
-    }
+    };
 
     let registry = if let Some(path) = args.auth_tokens_file.as_ref() {
         // Tokens file takes precedence over legacy --auth-token.
@@ -1039,14 +1024,24 @@ async fn main() -> Result<()> {
     // OUTSIDE the auth stack so probes (kubelet, kube-proxy, GCP HC, etc.)
     // can reach it without holding a bearer token. It exposes only
     // readiness and liveness -- no entity data -- so the bypass is
-    // intentional and bounded. Anything touching the EventModelService data
-    // plane must stay inside `data_plane`.
+    // intentional and bounded. The opt-in Prometheus scrape at /-/metrics
+    // sits beside them for the same reason: scrapers hold no token and the
+    // payload is operational counters only. Anything touching the
+    // EventModelService data plane must stay inside `data_plane`.
     let mut routes = tonic::service::Routes::builder();
     routes.add_service(health.grpc_service());
     routes.add_service(data_plane.clone());
     let mut routes = routes.routes();
     let merged = routes.axum_router_mut().clone().merge(health.router());
     *routes.axum_router_mut() = merged;
+    let merged = routes.axum_router_mut().clone().merge(metrics.router());
+    *routes.axum_router_mut() = merged;
+    if metrics.serves_prometheus() {
+        tracing::info!(
+            "serving Prometheus metrics at {} on the gRPC listener",
+            trogon_atlas_server::metrics_export::METRICS_PATH
+        );
+    }
     if args.mcp {
         let mcp_router = trogon_atlas_server::mcp::mcp_router(
             data_plane,
@@ -1065,31 +1060,46 @@ async fn main() -> Result<()> {
 
     tracing::info!(%addr, "trogon-atlas-server starting");
 
-    let mut builder = builder.concurrency_limit_per_connection(args.concurrency_limit);
+    let mut builder = Server::builder().concurrency_limit_per_connection(args.concurrency_limit);
     if let Some(rpc_timeout) = rpc_timeout {
         builder = builder.timeout(rpc_timeout);
     }
     // The kubelet's httpGet probes and MCP clients speak HTTP/1.1; the gRPC
     // listener is HTTP/2 only by default.
     builder = builder.accept_http1(true);
+    let tcp = TcpIncoming::bind(addr)
+        .with_context(|| format!("binding {addr}"))?
+        .with_nodelay(Some(true));
     health.mark_live().await;
-    builder
+    let router = builder
         .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new())
         .layer(inflight)
         .trace_fn(trogon_atlas_server::telemetry::rpc_span_from_request)
-        .add_routes(routes)
-        .serve_with_shutdown(addr, async {
-            shutdown_requested().await;
-            let _ = health_shutdown_tx.send(true);
-            health.begin_shutdown().await;
-            await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
-        })
-        .await?;
+        .add_routes(routes);
+    let shutdown = async {
+        shutdown_requested().await;
+        let _ = health_shutdown_tx.send(true);
+        health.begin_shutdown().await;
+        await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
+    };
+    match tls {
+        Some(tls) => {
+            router
+                .serve_with_incoming_shutdown(tls.incoming(tcp), shutdown)
+                .await?;
+        }
+        None => router.serve_with_incoming_shutdown(tcp, shutdown).await?,
+    }
 
-    // Flush any spans the batch OTLP exporter still has queued. Must run
-    // before the process exits or the last few seconds of trace data are
-    // silently dropped.
-    tracing_guard.shutdown();
+    // Flush any spans and metrics the OTLP exporters still have queued. Must
+    // run before the process exits or the last few seconds of telemetry are
+    // silently dropped. Both flushes block on the exporters, so they run off
+    // the async runtime the exporters themselves depend on.
+    tokio::task::spawn_blocking(move || {
+        metrics.shutdown();
+        tracing_guard.shutdown();
+    })
+    .await?;
     Ok(())
 }
 

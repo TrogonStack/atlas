@@ -7,8 +7,8 @@ The gRPC server. Implements every RPC on the
 ## Binary
 
 `trogon-atlas-server` is both a library and a binary. The binary wires
-up tracing, the OpenTelemetry exporter, the Prometheus metrics
-endpoint, the configured store, the optional LLM analyzer, and an
+up tracing, OTLP trace and metric export, the opt-in Prometheus scrape
+at `/-/metrics`, the configured store, the optional LLM analyzer, and an
 optional git mirror; then serves tonic over the configured listen
 address.
 
@@ -37,7 +37,7 @@ for the full list. The key ones:
 | `--insecure-allow-anonymous`      | `TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS`| `false`                |
 | `--protect-baseline`              | `TROGON_ATLAS_PROTECT_BASELINE`        | `false`                |
 | `--protect-baseline-namespaces`   | `TROGON_ATLAS_PROTECT_BASELINE_NAMESPACES` | (unset)            |
-| `--metrics-listen`                | `TROGON_ATLAS_METRICS_LISTEN`          | (off)                  |
+| `--prometheus-metrics`            | `TROGON_ATLAS_PROMETHEUS_METRICS`      | `false`                |
 | `--mcp`                           | `TROGON_ATLAS_MCP`                     | `false`                |
 | `--mcp-allowed-hosts`             | `TROGON_ATLAS_MCP_ALLOWED_HOSTS`       | `localhost,127.0.0.1,::1` |
 | `--git-mirror`                    | `TROGON_ATLAS_GIT_MIRROR`              | (off)                  |
@@ -434,7 +434,8 @@ crash window between a write committing and its changeset landing.
 - `git_mirror`: optional write-through to a git working tree, useful
   for auditing changes by commit.
 - `search`: in-RAM tantivy index for `Search`.
-- `telemetry`: OTLP + Prometheus wiring.
+- `telemetry`: tracing and OTLP trace export.
+- `metrics_export`: OTLP metric export and the Prometheus scrape.
 
 ## Tests
 
