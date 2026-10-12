@@ -1083,9 +1083,13 @@ async fn main() -> Result<()> {
 
     // Flush any spans and metrics the OTLP exporters still have queued. Must
     // run before the process exits or the last few seconds of telemetry are
-    // silently dropped.
-    metrics.shutdown();
-    tracing_guard.shutdown();
+    // silently dropped. Both flushes block on the exporters, so they run off
+    // the async runtime the exporters themselves depend on.
+    tokio::task::spawn_blocking(move || {
+        metrics.shutdown();
+        tracing_guard.shutdown();
+    })
+    .await?;
     Ok(())
 }
 
