@@ -120,18 +120,12 @@ fn rpc_span_from_path(path: &str) -> Span {
 /// `http.route` for a request that is not gRPC, when the path names a route
 /// this listener knows about outside the gRPC services it serves.
 fn http_route_for_path(path: &str) -> Option<&'static str> {
-    [
-        trogon_atlas_mcp::MCP_PATH,
-        crate::health::READINESS_PATH,
-        crate::health::LIVENESS_PATH,
-    ]
-    .into_iter()
-    .find(|route| *route == path)
+    (path == trogon_atlas_mcp::MCP_PATH).then_some(trogon_atlas_mcp::MCP_PATH)
 }
 
 /// Build an HTTP server span following OTel's HTTP semantic conventions, for
-/// a request on the gRPC listener that is not itself gRPC (MCP's `/mcp` and
-/// the health probes).
+/// a request on the gRPC listener that is not itself gRPC (currently, MCP's
+/// `/mcp`).
 fn http_span_from_request<B>(req: &http::Request<B>) -> Span {
     let method = req.method().clone();
     let path = req.uri().path().to_owned();
@@ -163,6 +157,9 @@ fn http_span_from_request<B>(req: &http::Request<B>) -> Span {
 /// span instead, so it is never mislabeled as an RPC with no real service or
 /// method.
 pub fn rpc_span_from_request<B>(req: &http::Request<B>) -> Span {
+    if is_operational_path(req.uri().path()) {
+        return Span::none();
+    }
     let span = if is_grpc_request(req) {
         rpc_span_from_path(req.uri().path())
     } else {
@@ -172,6 +169,12 @@ pub fn rpc_span_from_request<B>(req: &http::Request<B>) -> Span {
         request_id_from_headers(req.headers()).unwrap_or_else(|| short_request_id(req));
     span.record("request_id", tracing::field::display(&request_id));
     span
+}
+
+/// Probes and health checks hit these paths every few seconds; tracing them
+/// would spend sampling budget and export bandwidth on requests nobody reads.
+fn is_operational_path(path: &str) -> bool {
+    path.starts_with("/-/") || path.starts_with("/grpc.health.v1.Health/")
 }
 
 /// Whether a request on the gRPC listener is actually gRPC, as opposed to a
@@ -599,7 +602,7 @@ mod tests {
 
     use tower::{Layer, Service};
 
-    use super::{is_grpc_request, split_grpc_path, RpcMetricsLayer};
+    use super::{is_grpc_request, is_operational_path, split_grpc_path, RpcMetricsLayer};
 
     #[test]
     fn parses_canonical_grpc_path() {
@@ -621,6 +624,18 @@ mod tests {
         let (svc, method) = split_grpc_path("/M");
         assert_eq!(svc, "");
         assert_eq!(method, "M");
+    }
+
+    #[test]
+    fn probes_and_health_checks_are_operational_paths() {
+        assert!(is_operational_path("/-/readiness"));
+        assert!(is_operational_path("/-/liveness"));
+        assert!(is_operational_path("/grpc.health.v1.Health/Check"));
+        assert!(is_operational_path("/grpc.health.v1.Health/Watch"));
+        assert!(!is_operational_path("/mcp"));
+        assert!(!is_operational_path(
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/PutEntity"
+        ));
     }
 
     #[test]
