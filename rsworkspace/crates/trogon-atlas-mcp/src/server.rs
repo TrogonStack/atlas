@@ -1258,7 +1258,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Fetch a single entity by (kind, namespace, slug, version) as proto3 JSON, with an opaque etag for use with put_entity / delete_entity if_match. format=binpb returns the base64 protobuf that put_entity's entity_b64 takes instead.",
+        description = "Fetch a single entity by (kind, namespace, slug, version) as proto3 JSON, with an opaque etag for use with put_entity / delete_entity if_match. format=binpb returns {binpb_base64, etag} instead: binpb_base64 is the base64 Entity protobuf that put_entity's entity_b64 takes.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1282,9 +1282,17 @@ impl McpServer {
             .map_err(tool_err("get_entity"))?
             .into_inner();
         if p.format == ResultFormat::Binpb {
-            return Ok(CallToolResult::structured(
-                serde_json::json!({ "binpb_base64": encode_b64(&resp) }),
-            ));
+            // put_entity decodes entity_b64 as an Entity, so the bytes must be
+            // the Entity alone; the etag rides beside them for if_match.
+            let entity = resp.entity.ok_or_else(|| {
+                rmcp::ErrorData::from(McpError::Internal(
+                    "get_entity response has no entity".to_string(),
+                ))
+            })?;
+            return Ok(CallToolResult::structured(serde_json::json!({
+                "binpb_base64": encode_b64(&entity),
+                "etag": resp.etag,
+            })));
         }
         ok_json(&mut client, &resp).await
     }

@@ -68,7 +68,7 @@ pub struct GetEntityParams {
     #[schemars(description = "Schema version number (>0), e.g. 1")]
     pub version: u64,
     #[schemars(
-        description = "json (default) returns the GetEntityResponse as proto3 JSON. binpb returns {\"binpb_base64\": ...}, the bytes to edit and pass back as put_entity's entity_b64."
+        description = "json (default) returns the GetEntityResponse as proto3 JSON. binpb returns {\"binpb_base64\": ..., \"etag\": ...}, where binpb_base64 is the Entity protobuf to edit and pass back as put_entity's entity_b64."
     )]
     #[serde(default)]
     pub format: ResultFormat,
