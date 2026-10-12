@@ -978,6 +978,23 @@ async fn ok_json<M: ApiMessage>(
     json_result(&tenant_types_for(client, &scope).await?, msg).map_err(internal)
 }
 
+/// [`ok_json`] for a tool whose RPC already changed state. A render failure
+/// there must not read as a failed write, or the agent retries a write that
+/// landed, so the result stays a success and carries the protobuf instead.
+async fn ok_json_after_write<M: ApiMessage>(client: &mut Client, msg: &M) -> CallToolResult {
+    match ok_json(client, msg).await {
+        Ok(result) => result,
+        Err(e) => unrendered_write_result(msg, &e.message),
+    }
+}
+
+fn unrendered_write_result<M: Message>(msg: &M, render_error: &str) -> CallToolResult {
+    CallToolResult::structured(serde_json::json!({
+        "binpb_base64": encode_b64(msg),
+        "render_error": render_error,
+    }))
+}
+
 /// `BatchMutateResponse.status == STATUS_FAILED` is an RPC that returned
 /// `Ok` while carrying a domain failure in its body; `ok_json` alone
 /// would report it to the agent as a successful tool call. Classify it the
@@ -1100,7 +1117,7 @@ impl McpServer {
             .await
             .map_err(tool_err("register_namespace"))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -1126,7 +1143,7 @@ impl McpServer {
             .await
             .map_err(tool_err("move_namespace"))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -1258,7 +1275,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Fetch a single entity by (kind, namespace, slug, version) as proto3 JSON, with an opaque etag for use with put_entity / delete_entity if_match. format=binpb returns the base64 protobuf that put_entity's entity_b64 takes instead.",
+        description = "Fetch a single entity by (kind, namespace, slug, version) as proto3 JSON, with an opaque etag for use with put_entity / delete_entity if_match. format=binpb returns {binpb_base64, etag} instead: binpb_base64 is the base64 Entity protobuf that put_entity's entity_b64 takes.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1282,9 +1299,17 @@ impl McpServer {
             .map_err(tool_err("get_entity"))?
             .into_inner();
         if p.format == ResultFormat::Binpb {
-            return Ok(CallToolResult::structured(
-                serde_json::json!({ "binpb_base64": encode_b64(&resp) }),
-            ));
+            // put_entity decodes entity_b64 as an Entity, so the bytes must be
+            // the Entity alone; the etag rides beside them for if_match.
+            let entity = resp.entity.ok_or_else(|| {
+                rmcp::ErrorData::from(McpError::Internal(
+                    "get_entity response has no entity".to_string(),
+                ))
+            })?;
+            return Ok(CallToolResult::structured(serde_json::json!({
+                "binpb_base64": encode_b64(&entity),
+                "etag": resp.etag,
+            })));
         }
         ok_json(&mut client, &resp).await
     }
@@ -1608,7 +1633,7 @@ impl McpServer {
             .await
             .map_err(tool_err("retarget_references"))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -1799,7 +1824,7 @@ impl McpServer {
             .map_err(tool_err("put_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -1885,7 +1910,7 @@ impl McpServer {
             .map_err(tool_err("put_entity_json"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -1929,7 +1954,7 @@ impl McpServer {
         if resp.status == pb::batch_mutate_response::Status::Failed as i32 {
             return Err(McpError::from(batch_mutate_failure(&resp)).into());
         }
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -1964,7 +1989,7 @@ impl McpServer {
             .map_err(tool_err("delete_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -2092,7 +2117,7 @@ impl McpServer {
             let err: rmcp::ErrorData = McpError::from(batch_mutate_failure(&resp)).into();
             return Err(attach_operation_id(err, &operation_id));
         }
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -2234,7 +2259,7 @@ impl McpServer {
             .map_err(tool_err("revert_changeset"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -2398,7 +2423,7 @@ impl McpServer {
             .await
             .map_err(tool_err("delete_by_query"))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -2491,7 +2516,7 @@ impl McpServer {
             .await
             .map_err(tool_err("infer_data_flow"))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -2516,7 +2541,7 @@ impl McpServer {
             .await
             .map_err(tool_err("check_information_completeness"))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -2669,11 +2694,11 @@ impl McpServer {
         let info = trogon_atlas_client::branch::create_branch(&mut client, &p.name, &p.doc)
             .await
             .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
-        ok_json(
+        Ok(ok_json_after_write(
             &mut client,
             &pb::CreateBranchResponse { branch: Some(info) },
         )
-        .await
+        .await)
     }
 
     #[tool(
@@ -2769,7 +2794,7 @@ impl McpServer {
             .map_err(tool_err("merge_branch"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -2792,7 +2817,7 @@ impl McpServer {
             .await
             .map_err(tool_err("update_branch"))?
             .into_inner();
-        ok_json(&mut client, &resp).await
+        Ok(ok_json_after_write(&mut client, &resp).await)
     }
 
     #[tool(
@@ -3201,6 +3226,20 @@ mod tests {
         let text: serde_json::Value =
             serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap();
         assert_eq!(text, expected);
+    }
+
+    #[test]
+    fn a_write_whose_response_cannot_render_is_still_a_success_with_its_bytes() {
+        let resp = pb::PutEntityResponse {
+            etag: "8".into(),
+            ..Default::default()
+        };
+        let result = unrendered_write_result(&resp, "no type library for shop.Order");
+        assert_eq!(result.is_error, Some(false));
+        let body = result.structured_content.unwrap();
+        assert_eq!(body["render_error"], "no type library for shop.Order");
+        let raw = B64.decode(body["binpb_base64"].as_str().unwrap()).unwrap();
+        assert_eq!(pb::PutEntityResponse::decode(raw.as_slice()).unwrap(), resp);
     }
 
     #[test]

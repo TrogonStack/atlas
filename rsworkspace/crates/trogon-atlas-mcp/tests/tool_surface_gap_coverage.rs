@@ -731,9 +731,25 @@ async fn mcp_put_entity_binpb_variant() {
     let raw = base64::engine::general_purpose::STANDARD
         .decode(get_body["binpb_base64"].as_str().unwrap())
         .unwrap();
-    let got = pb::GetEntityResponse::decode(raw.as_slice()).unwrap();
-    assert!(!got.etag.is_empty(), "{got:?}");
-    assert_eq!(got.entity.and_then(|e| e.kind), entity.kind);
+    let got = pb::Entity::decode(raw.as_slice()).unwrap();
+    assert_eq!(got.kind, entity.kind);
+    let etag = get_body["etag"].as_str().unwrap();
+    assert!(!etag.is_empty(), "{get_body}");
+
+    // The bytes and etag go straight back into put_entity unchanged.
+    let round_trip = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("put_entity").with_arguments(args_obj(&[
+                ("entity_b64", serde_json::json!(get_body["binpb_base64"])),
+                ("if_match", serde_json::json!(etag)),
+            ])),
+        )
+        .await
+        .unwrap();
+    assert!(!round_trip.is_error.unwrap_or(false), "{round_trip:?}");
+    let round_trip_decoded: pb::PutEntityResponse =
+        support::structured_as(&round_trip, "PutEntityResponse");
+    assert!(round_trip_decoded.no_op, "{round_trip_decoded:?}");
 
     mcp_service.cancel().await.unwrap();
 }

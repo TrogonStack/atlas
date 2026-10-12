@@ -44,8 +44,8 @@ A tenant-typed `Any` renders through the type libraries of the namespaces
 the response names.
 
 `get_entity` takes `format: "binpb"` to return
-`{ "binpb_base64": "<base64-encoded protobuf>" }` instead, for the
-`put_entity` / `batch_mutate` path that takes protobuf in. The `json` flag
+`{ "binpb_base64": "<base64-encoded Entity protobuf>", "etag": "..." }`
+instead, for the `put_entity` / `batch_mutate` path that takes protobuf in. The `json` flag
 that some tools used to take is still accepted and has no effect.
 
 ## Error contract
