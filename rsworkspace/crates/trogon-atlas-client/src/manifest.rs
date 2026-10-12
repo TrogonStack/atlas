@@ -229,7 +229,7 @@ pub fn parse_str(text: &str, source: &str) -> Result<Vec<LoadedManifest>> {
 pub fn read_str(text: &str, source: &str) -> Result<Vec<ManifestDocument>> {
     use serde::Deserialize as _;
     let mut out = Vec::new();
-    for (i, doc) in serde_yaml::Deserializer::from_str(text).enumerate() {
+    for (i, doc) in serde_norway::Deserializer::from_str(text).enumerate() {
         let value = Value::deserialize(doc)
             .map_err(|e| invalid_input(format!("{source}#doc{i}: invalid YAML: {e}")))?;
         if value.is_null() {
@@ -771,7 +771,7 @@ spec: { title: B }
             format!("{err:#}").contains("no manifest documents"),
             "{err:#}"
         );
-        let _ = serde_json::Value::deserialize(serde_yaml::Deserializer::from_str("x: 1"))
+        let _ = serde_json::Value::deserialize(serde_norway::Deserializer::from_str("x: 1"))
             .expect("yaml to json");
     }
 

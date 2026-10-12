@@ -34,7 +34,7 @@ pub(crate) fn manifest_kind(kind: pb::EntityKind) -> String {
 }
 
 /// Render one entity as a manifest document (JSON value; YAML comes from
-/// serde_yaml at write time). Strips `id` (moves to metadata) and the
+/// serde_norway at write time). Strips `id` (moves to metadata) and the
 /// server-owned `system` block. Shared with `fmt`, which re-manifests
 /// entities freshly parsed from disk rather than fetched from the store.
 pub(crate) fn entity_to_manifest(
@@ -239,7 +239,7 @@ fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Value>) -> Result<String> 
         if i > 0 {
             out.push_str("---\n");
         }
-        out.push_str(&serde_yaml::to_string(doc).context("rendering YAML")?);
+        out.push_str(&serde_norway::to_string(doc).context("rendering YAML")?);
     }
     Ok(out)
 }
