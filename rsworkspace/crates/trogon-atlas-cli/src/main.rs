@@ -695,7 +695,8 @@ async fn run(
             let mut client =
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
             let entity = view::fetch_entity(&mut client, &address).await?;
-            let (manifest, yaml) = view::entity_manifest(&mut client, &entity).await?;
+            let types = view::entity_types(&mut client, &entity).await?;
+            let (manifest, yaml) = view::entity_manifest(&entity, &types)?;
             if text {
                 print!("{yaml}");
             }
@@ -710,7 +711,8 @@ async fn run(
                 view::fetch_references(&mut client, &entity, view::Direction::Outgoing).await?;
             let incoming =
                 view::fetch_references(&mut client, &entity, view::Direction::Incoming).await?;
-            let description = view::describe(&entity, &outgoing, &incoming);
+            let types = view::entity_types(&mut client, &entity).await?;
+            let description = view::describe(&entity, &types, &outgoing, &incoming);
             if text {
                 print!("{}", view::render_description(&description));
             }

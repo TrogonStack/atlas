@@ -9,7 +9,11 @@ use prost::Message as _;
 use prost_reflect::DynamicMessage;
 use serde::Serialize;
 use serde_json::Value;
-use trogon_atlas_core::{entity_id, entity_kind, schema::entity_fields};
+use trogon_atlas_core::{
+    entity_id, entity_kind,
+    schema::{entity_schema, schema_fields_in},
+    transcode::TranscodePool,
+};
 use trogon_atlas_proto as pb;
 
 use crate::{client::Client, export, failure::invalid_input};
@@ -86,14 +90,18 @@ pub async fn fetch_entity(client: &mut Client, address: &EntityAddress) -> Resul
     })
 }
 
-/// The entity as the same manifest document `export` writes, both as JSON
-/// and as rendered YAML.
-pub async fn entity_manifest(client: &mut Client, entity: &pb::Entity) -> Result<(Value, String)> {
+/// The built-in types plus the tenant types of the entity's namespace.
+pub async fn entity_types(client: &mut Client, entity: &pb::Entity) -> Result<TranscodePool> {
     let namespace = entity_id(entity)
         .map(|id| id.namespace.clone())
         .unwrap_or_default();
-    let types = export::namespace_types(client, &namespace).await?;
-    let (_, _, doc) = export::entity_to_manifest(entity, &types)?;
+    export::namespace_types(client, &namespace).await
+}
+
+/// The entity as the same manifest document `export` writes, both as JSON
+/// and as rendered YAML.
+pub fn entity_manifest(entity: &pb::Entity, types: &TranscodePool) -> Result<(Value, String)> {
+    let (_, _, doc) = export::entity_to_manifest(entity, types)?;
     let yaml = export::render_docs([&doc])?;
     Ok((doc, yaml))
 }
@@ -163,8 +171,11 @@ pub struct RefLine {
     pub entity: String,
 }
 
+/// `types` must know the entity's tenant types, or a tenant-typed schema
+/// shows no fields.
 pub fn describe(
     entity: &pb::Entity,
+    types: &TranscodePool,
     outgoing: &[pb::Reference],
     incoming: &[pb::Reference],
 ) -> Description {
@@ -173,7 +184,7 @@ pub fn describe(
         Some(pb::EntityKind::Event | pb::EntityKind::Command | pb::EntityKind::ReadModel)
     );
     let fields = has_schema.then(|| {
-        entity_fields(entity)
+        schema_fields_in(types, entity_schema(entity))
             .iter()
             .map(|f| {
                 let label = f
@@ -287,6 +298,10 @@ mod tests {
     use super::*;
 
     const NS: &str = "shop";
+
+    fn builtin() -> TranscodePool {
+        TranscodePool::builtin().unwrap()
+    }
 
     fn id(slug: &str, version: u64) -> pb::Id {
         pb::Id {
@@ -428,7 +443,7 @@ mod tests {
                 (pb::EntityKind::Event, "order.placed"),
             ),
         ];
-        let d = describe(&placed, &outgoing, &incoming);
+        let d = describe(&placed, &builtin(), &outgoing, &incoming);
         assert_eq!(
             render_description(&d),
             "\
@@ -454,9 +469,51 @@ Referenced by:
     }
 
     #[test]
+    fn describe_resolves_tenant_schema_fields_through_the_given_types() {
+        use prost_types::{
+            field_descriptor_proto::Type, DescriptorProto, FieldDescriptorProto,
+            FileDescriptorProto,
+        };
+        let file = FileDescriptorProto {
+            name: Some("shop/orders/v1/placed.proto".into()),
+            package: Some("shop.orders.v1".into()),
+            syntax: Some("proto3".into()),
+            message_type: vec![DescriptorProto {
+                name: Some("OrderPlaced".into()),
+                field: vec![FieldDescriptorProto {
+                    name: Some("order_id".into()),
+                    json_name: Some("orderId".into()),
+                    number: Some(1),
+                    r#type: Some(Type::String as i32),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut placed = event("order.placed", 1, "Order placed");
+        if let Some(pb::entity::Kind::Event(e)) = placed.kind.as_mut() {
+            e.schema = Some(prost_types::Any {
+                type_url: "type.googleapis.com/shop.orders.v1.OrderPlaced".into(),
+                value: vec![],
+            });
+        }
+        let tenant = builtin().with_files([file]).unwrap();
+        let fields = describe(&placed, &tenant, &[], &[]).fields.unwrap();
+        assert_eq!(
+            fields,
+            vec![FieldLine {
+                name: "order_id".into(),
+                field_type: "string".into(),
+            }]
+        );
+        assert_eq!(describe(&placed, &builtin(), &[], &[]).fields, Some(vec![]));
+    }
+
+    #[test]
     fn describe_omits_fields_for_kinds_without_a_schema() {
         let slice = command_slice("place-order-slice", "place-order", &[]);
-        let d = describe(&slice, &[], &[]);
+        let d = describe(&slice, &builtin(), &[], &[]);
         assert_eq!(d.fields, None);
         assert!(serde_json::to_value(&d).unwrap().get("fields").is_none());
         assert!(
