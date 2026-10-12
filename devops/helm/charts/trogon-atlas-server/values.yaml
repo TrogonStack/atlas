@@ -26,9 +26,11 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# The one serving port, named `private`: callers reach it from inside the
+# cluster only. It carries gRPC, MCP and the probes.
 service:
   type: ClusterIP
-  grpcPort: 50069
+  port: 50069
   annotations: {}
 
 # The server refuses to start without authentication unless anonymous
@@ -148,7 +150,7 @@ spicedb:
     extraEnv: []
 
 # Metrics are pushed over OTLP to config.otlpEndpoint. Prometheus is
-# opt-in: it serves a scrape at /-/metrics on the gRPC port, outside auth.
+# opt-in: it serves a scrape at /-/metrics on the private port, outside auth.
 metrics:
   prometheus:
     enabled: false
@@ -163,7 +165,8 @@ mcp:
   allowedHosts: []
 
 # Serve gRPC over in-process TLS from a kubernetes.io/tls Secret. The
-# probes switch to HTTPS with it.
+# probes switch to HTTPS with it, and the Service port drops its
+# kubernetes.io/h2c appProtocol.
 tls:
   existingSecret: ""
 

@@ -245,8 +245,10 @@ services:
         limits:
           memory: 1g
           cpus: "1.0"
+    # Port 80 is Vite, which proxies only /api, so the probe asks the bridge
+    # directly.
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80/api/info"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8787/-/readiness"]
       interval: 5s
       timeout: 3s
       retries: 30

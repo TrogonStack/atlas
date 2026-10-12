@@ -56,12 +56,12 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: grpc
-              containerPort: {{ $server.service.grpcPort }}
+            - name: private
+              containerPort: {{ $server.service.port }}
               protocol: TCP
           env:
             - name: TROGON_ATLAS_LISTEN
-              value: 0.0.0.0:{{ $server.service.grpcPort }}
+              value: 0.0.0.0:{{ $server.service.port }}
             - name: TROGON_ATLAS_STORE
               value: nats
             {{- if $server.config.natsUrlSecret.name }}
@@ -192,7 +192,7 @@ spec:
           startupProbe:
             httpGet:
               path: /-/liveness
-              port: grpc
+              port: private
               {{- if $server.tls.existingSecret }}
               scheme: HTTPS
               {{- end }}
@@ -201,7 +201,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /-/readiness
-              port: grpc
+              port: private
               {{- if $server.tls.existingSecret }}
               scheme: HTTPS
               {{- end }}
@@ -209,7 +209,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /-/liveness
-              port: grpc
+              port: private
               {{- if $server.tls.existingSecret }}
               scheme: HTTPS
               {{- end }}

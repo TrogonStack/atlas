@@ -247,10 +247,11 @@ Two consequences worth knowing before you turn it on:
   is never the identity a caller is authorized as, and the bridge no longer
   falls back to it if a caller's token goes missing partway through a
   request: that is a bug, not a caller to quietly wave through as itself.
-  The one exception is `/api/info`, the single route that answers before the
-  auth guard runs and so never has a caller token to forward; GA deployments
-  that turn passthrough on still need `TROGON_ATLAS_AUTH_TOKEN` set to a
-  `reader` key for that route alone.
+  The exceptions are `/api/info`, the single route that answers before the
+  auth guard runs and so never has a caller token to forward, and the
+  background upstream check behind the bridge's `/-/readiness`; GA
+  deployments that turn passthrough on still need `TROGON_ATLAS_AUTH_TOKEN`
+  set to a `reader` key for those.
 - The browser needs somewhere to put a key. It prompts on the first refusal
   and keeps what you give it for that tab only. Closing the tab forgets it.
 

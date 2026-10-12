@@ -17,7 +17,7 @@ dependencies:
     alias: server
     condition: server.enabled
   - name: trogon-atlas-studio
-    version: 0.1.2
+    version: 1.0.0
     repository: file://../trogon-atlas-studio
     alias: studio
     condition: studio.enabled
