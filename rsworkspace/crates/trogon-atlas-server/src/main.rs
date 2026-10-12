@@ -9,6 +9,7 @@ use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{
     auth::{BearerAuth, TokenRegistry},
     git_mirror::{GitMirror, MirrorAuthor},
+    health::StoreStatus,
 };
 use trogon_atlas_store::{
     nats::{NatsStore, NatsStoreConfig},
@@ -918,9 +919,9 @@ async fn main() -> Result<()> {
         .max_decoding_message_size(args.max_message_bytes)
         .max_encoding_message_size(args.max_message_bytes);
 
-    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    let health = trogon_atlas_server::health::Health::new().await;
 
-    // Verify store connectivity before advertising SERVING. A cheap list
+    // Verify store connectivity before advertising readiness. A cheap list
     // with limit=1 is enough to confirm the backend is reachable.
     match store
         .list(
@@ -931,27 +932,28 @@ async fn main() -> Result<()> {
         .await
     {
         Ok(_) => {
-            health_reporter.set_serving::<ServiceServer>().await;
-            tracing::info!("store connectivity verified; health=SERVING");
+            health.set_store(StoreStatus::Reachable).await;
+            tracing::info!("store connectivity verified; readiness=ok");
         }
         Err(err) => {
+            health.set_store(StoreStatus::Unreachable).await;
             tracing::error!(
                 error = %err,
-                "store connectivity check failed; health remains NOT_SERVING"
+                "store connectivity check failed; readiness remains not ready"
             );
-            // Keep NOT_SERVING so load balancers withhold traffic until the
+            // Stay not ready so load balancers withhold traffic until the
             // store is reachable. The server still starts so it can be
-            // probed and will become SERVING once a mutation succeeds.
+            // probed, and becomes ready once the background check succeeds.
         }
     }
 
-    // Background health probe: re-checks the store every 15 seconds and
-    // toggles the gRPC health status accordingly. The task stops when the
+    // Background store check: re-checks the store every 15 seconds and
+    // records the result for the readiness probe. The task stops when the
     // shutdown channel fires.
     let (health_shutdown_tx, mut health_shutdown_rx) = tokio::sync::watch::channel(false);
     {
         let store_for_health = store.clone();
-        let health_reporter_bg = health_reporter.clone();
+        let health_bg = health.clone();
         tokio::spawn(async move {
             const HEALTH_INTERVAL: Duration = Duration::from_secs(15);
             let mut interval = tokio::time::interval(HEALTH_INTERVAL);
@@ -970,11 +972,11 @@ async fn main() -> Result<()> {
                     .await
                 {
                     Ok(_) => {
-                        health_reporter_bg.set_serving::<ServiceServer>().await;
+                        health_bg.set_store(StoreStatus::Reachable).await;
                     }
                     Err(err) => {
-                        tracing::warn!(error = %err, "health probe: store unreachable; health=NOT_SERVING");
-                        health_reporter_bg.set_not_serving::<ServiceServer>().await;
+                        tracing::warn!(error = %err, "store check: store unreachable; readiness=not ready");
+                        health_bg.set_store(StoreStatus::Unreachable).await;
                     }
                 }
             }
@@ -1033,16 +1035,18 @@ async fn main() -> Result<()> {
         }
     };
 
-    // The health service is mounted OUTSIDE the auth stack so
-    // liveness/readiness probes (kube-proxy, GCP HC, etc.) can reach it
-    // without holding a bearer token. It exposes only liveness -- no
-    // entity data -- so the bypass is intentional and bounded. Anything
-    // touching the EventModelService data plane must stay inside
-    // `data_plane`.
+    // Health, over gRPC and at /-/readiness and /-/liveness, is mounted
+    // OUTSIDE the auth stack so probes (kubelet, kube-proxy, GCP HC, etc.)
+    // can reach it without holding a bearer token. It exposes only
+    // readiness and liveness -- no entity data -- so the bypass is
+    // intentional and bounded. Anything touching the EventModelService data
+    // plane must stay inside `data_plane`.
     let mut routes = tonic::service::Routes::builder();
-    routes.add_service(health_service);
+    routes.add_service(health.grpc_service());
     routes.add_service(data_plane.clone());
     let mut routes = routes.routes();
+    let merged = routes.axum_router_mut().clone().merge(health.router());
+    *routes.axum_router_mut() = merged;
     if args.mcp {
         let mcp_router = trogon_atlas_server::mcp::mcp_router(
             data_plane,
@@ -1065,11 +1069,10 @@ async fn main() -> Result<()> {
     if let Some(rpc_timeout) = rpc_timeout {
         builder = builder.timeout(rpc_timeout);
     }
-    if args.mcp {
-        // MCP clients speak HTTP/1.1; the gRPC listener is HTTP/2 only by
-        // default.
-        builder = builder.accept_http1(true);
-    }
+    // The kubelet's httpGet probes and MCP clients speak HTTP/1.1; the gRPC
+    // listener is HTTP/2 only by default.
+    builder = builder.accept_http1(true);
+    health.mark_live().await;
     builder
         .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new())
         .layer(inflight)
@@ -1077,11 +1080,8 @@ async fn main() -> Result<()> {
         .add_routes(routes)
         .serve_with_shutdown(addr, async {
             shutdown_requested().await;
-            // Stop the background health probe before toggling the status so
-            // the probe cannot race and flip back to SERVING after we set
-            // NOT_SERVING here.
             let _ = health_shutdown_tx.send(true);
-            health_reporter.set_not_serving::<ServiceServer>().await;
+            health.begin_shutdown().await;
             await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
         })
         .await?;

@@ -92,7 +92,7 @@ services:
       spicedb:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9100/metrics"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:50069/-/readiness"]
       interval: 2s
       timeout: 3s
       retries: 30

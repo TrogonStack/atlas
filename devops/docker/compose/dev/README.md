@@ -197,8 +197,9 @@ Prometheus recorder and exposes `/metrics`. Emitted families:
 configured store (NATS only; `MemStore` reports nothing), and
 `llm_requests_total` / `llm_request_duration_seconds` /
 `llm_tokens_total` / `llm_prompt_truncations_total` when the LLM path is
-enabled. A standard gRPC health service (`grpc.health.v1.Health`) is
-served alongside the main service for readiness probes.
+enabled. Readiness and liveness are served on the gRPC port, over plain
+HTTP at `/-/readiness` and `/-/liveness` and over `grpc.health.v1.Health`
+as the services `readiness`, `liveness`, and `""` (readiness).
 
 Suggested alerts on the change-stream gauges:
 

@@ -120,12 +120,18 @@ fn rpc_span_from_path(path: &str) -> Span {
 /// `http.route` for a request that is not gRPC, when the path names a route
 /// this listener knows about outside the gRPC services it serves.
 fn http_route_for_path(path: &str) -> Option<&'static str> {
-    (path == trogon_atlas_mcp::MCP_PATH).then_some(trogon_atlas_mcp::MCP_PATH)
+    [
+        trogon_atlas_mcp::MCP_PATH,
+        crate::health::READINESS_PATH,
+        crate::health::LIVENESS_PATH,
+    ]
+    .into_iter()
+    .find(|route| *route == path)
 }
 
 /// Build an HTTP server span following OTel's HTTP semantic conventions, for
-/// a request on the gRPC listener that is not itself gRPC (currently, MCP's
-/// `/mcp`).
+/// a request on the gRPC listener that is not itself gRPC (MCP's `/mcp` and
+/// the health probes).
 fn http_span_from_request<B>(req: &http::Request<B>) -> Span {
     let method = req.method().clone();
     let path = req.uri().path().to_owned();

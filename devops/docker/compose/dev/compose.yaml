@@ -102,7 +102,7 @@ services:
           memory: 1g
           cpus: "2.0"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9100/metrics"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:50069/-/readiness"]
       interval: 5s
       timeout: 3s
       retries: 10

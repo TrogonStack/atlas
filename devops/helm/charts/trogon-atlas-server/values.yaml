@@ -164,9 +164,8 @@ mcp:
   # loopback, e.g. the hostname of an Ingress or Gateway you route to it.
   allowedHosts: []
 
-# Serve gRPC over in-process TLS from a kubernetes.io/tls Secret.
-# Note: with TLS enabled the probes fall back to tcpSocket because the
-# kubelet gRPC probe does not support TLS.
+# Serve gRPC over in-process TLS from a kubernetes.io/tls Secret. The
+# probes switch to HTTPS with it.
 tls:
   existingSecret: ""
 

@@ -51,8 +51,9 @@ The server already has authentication, but no authorization:
 - The server refuses to start without a token unless
   `--insecure-allow-anonymous` (`TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS=true`) is
   passed explicitly. This escape hatch exists for local development and CI.
-- The gRPC health service is mounted outside the interceptor so probes work
-  without credentials.
+- Health, `/-/readiness` and `/-/liveness` over HTTP and the
+  `grpc.health.v1.Health` service, is mounted outside the interceptor so
+  probes work without credentials.
 
 The gaps:
 

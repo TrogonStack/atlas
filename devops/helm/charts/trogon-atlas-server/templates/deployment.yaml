@@ -196,36 +196,32 @@ spec:
             {{- with $server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if $server.tls.existingSecret }}
           startupProbe:
-            tcpSocket:
+            httpGet:
+              path: /-/liveness
               port: grpc
+              {{- if $server.tls.existingSecret }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 2
             failureThreshold: 30
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /-/readiness
               port: grpc
+              {{- if $server.tls.existingSecret }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 10
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /-/liveness
               port: grpc
-            periodSeconds: 15
-          {{- else }}
-          startupProbe:
-            grpc:
-              port: {{ $server.service.grpcPort }}
-            periodSeconds: 2
-            failureThreshold: 30
-          readinessProbe:
-            grpc:
-              port: {{ $server.service.grpcPort }}
-            periodSeconds: 10
-          livenessProbe:
-            grpc:
-              port: {{ $server.service.grpcPort }}
+              {{- if $server.tls.existingSecret }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 15
             failureThreshold: 6
-          {{- end }}
           {{- with $server.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

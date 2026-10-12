@@ -87,7 +87,9 @@ Gateway that routes to the server to `mcp.allowedHosts`.
 
 ## Probes
 
-Readiness and liveness use the standard gRPC health-checking protocol, which the server exposes without auth. The server reports NOT_SERVING until NATS is reachable and during shutdown drain (`config.shutdownDrainSecs`, default 30s; `terminationGracePeriodSeconds` defaults to 40s to cover it). When `tls.existingSecret` is set, probes fall back to tcpSocket because the kubelet gRPC probe does not support TLS.
+The probes are `httpGet` requests to `/-/readiness` and `/-/liveness` on the gRPC port, which the server answers without auth; `scheme` switches to `HTTPS` when `tls.existingSecret` is set. Readiness tracks the server's background store check, which runs every 15 seconds, and goes not ready as soon as shutdown begins, ahead of the drain (`config.shutdownDrainSecs`, default 30s; `terminationGracePeriodSeconds` defaults to 40s to cover it). Liveness depends on no store or other dependency, so an unreachable NATS takes the pod out of the Service without restarting it. The startup probe uses `/-/liveness`.
+
+Add `?verbose` to either path to list each check. The same states are served over `grpc.health.v1.Health` as the services `readiness`, `liveness`, and `""` (readiness).
 
 ## Scaling: the server is single-writer
 
