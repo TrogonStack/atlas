@@ -31,7 +31,8 @@ trogon-atlas describe command_slice/shop/place-order-slice # title, doc, fields,
 
 `get` and `describe` are read-only. They take the same kind names
 as manifests (`read-model`, `read_model`, `ReadModel`). A missing entity
-exits `6` (`not_found`).
+exits `6` (`not_found`). They also take the ids that `describe`
+prints, such as `event:shop/order.placed@1`.
 
 Connection flags (or environment):
 

@@ -115,13 +115,15 @@ enum Cmd {
     /// Print one entity as the manifest YAML document `export` writes.
     /// Omit `@version` to read the latest version.
     Get {
-        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `event/shop/order.placed`.
+        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `event/shop/order.placed`,
+        /// or an id that `describe` prints.
         entity: String,
     },
     /// Print one entity as readable text: title, doc, schema fields, and
     /// the references it holds and receives.
     Describe {
-        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `command_slice/shop/place-order-slice`.
+        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `command_slice/shop/place-order-slice`,
+        /// or an id that `describe` prints.
         entity: String,
     },
     /// Manage branch lifecycle (Phase 1: Isolation). Branch scope for

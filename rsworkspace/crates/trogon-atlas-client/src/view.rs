@@ -18,7 +18,8 @@ use trogon_atlas_proto as pb;
 
 use crate::{client::Client, export, failure::invalid_input};
 
-/// `<kind>/<namespace>/<slug>[@version]`; `version: None` means latest.
+/// `<kind>/<namespace>/<slug>[@version]`, or the `<kind>:<namespace>/<slug>[@version]`
+/// form `describe` prints; `version: None` means latest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityAddress {
     pub kind: pb::EntityKind,
@@ -28,8 +29,9 @@ pub struct EntityAddress {
 }
 
 pub fn parse_address(s: &str) -> Result<EntityAddress> {
-    let mut parts = s.splitn(3, '/');
-    let (Some(kind), Some(namespace), Some(rest)) = (parts.next(), parts.next(), parts.next())
+    let Some((kind, namespace, rest)) = s
+        .split_once([':', '/'])
+        .and_then(|(kind, rest)| rest.split_once('/').map(|(ns, rest)| (kind, ns, rest)))
     else {
         crate::invalid_input!("expected <kind>/<namespace>/<slug>[@version], got {s:?}");
     };
@@ -388,9 +390,21 @@ mod tests {
     }
 
     #[test]
+    fn parse_address_accepts_the_id_describe_prints() {
+        let printed = pb::canonical::id_string(pb::EntityKind::CommandSlice, &id("place-order", 3));
+        let parsed = parse_address(&printed).unwrap();
+        assert_eq!(
+            parsed,
+            parse_address("command_slice/shop/place-order@3").unwrap()
+        );
+        assert_eq!(parse_address("event:shop/x").unwrap().version, None);
+    }
+
+    #[test]
     fn parse_address_rejects_malformed_input_as_validation() {
         for (input, needle) in [
             ("event/shop", "expected <kind>/<namespace>/<slug>"),
+            ("event:shop", "expected <kind>/<namespace>/<slug>"),
             ("widget/shop/x", "unknown entity kind: widget"),
             ("event/shop/x@0", "version must be a positive integer"),
             ("event/shop/x@v2", "version must be a positive integer"),
