@@ -593,18 +593,18 @@ impl McpServer {
     }
 
     /// Learn the caller's own role via `WhoAmI`, gated on the server
-    /// advertising the `who_am_i` feature flag. Any absence or failure
-    /// degrades to `None` (list every tool unfiltered) rather than
-    /// failing the listing: the server enforces the role on every call
-    /// regardless, so a client-side listing miss is never a safety gap,
-    /// only a worse-than-ideal tool menu.
+    /// advertising the `who_am_i` feature flag. A server that predates the
+    /// flag yields `None` (list every tool unfiltered), the menu it offered
+    /// before role filtering existed. A failed `GetServerInfo` or `WhoAmI`
+    /// yields `Reader` instead, so a transient error never shows a reader
+    /// the names and schemas of tools it cannot call.
     async fn learn_role(&self) -> Option<ToolRole> {
         let mut client = self.client();
         let info = match client.get_server_info(pb::GetServerInfoRequest {}).await {
             Ok(resp) => resp.into_inner(),
             Err(e) => {
-                tracing::warn!(error = %e, "learn_role: GetServerInfo failed; listing every tool");
-                return None;
+                tracing::warn!(error = %e, "learn_role: GetServerInfo failed; listing reader tools");
+                return Some(ToolRole::Reader);
             }
         };
         if !info.features.unwrap_or_default().who_am_i {
@@ -619,8 +619,8 @@ impl McpServer {
                 ))
             }
             Err(e) => {
-                tracing::warn!(error = %e, "learn_role: WhoAmI failed; listing every tool");
-                None
+                tracing::warn!(error = %e, "learn_role: WhoAmI failed; listing reader tools");
+                Some(ToolRole::Reader)
             }
         }
     }

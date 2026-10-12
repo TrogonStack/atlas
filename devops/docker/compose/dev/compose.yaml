@@ -66,7 +66,7 @@ services:
       # nothing beyond the local machine and the compose network.
       TROGON_ATLAS_METRICS_ALLOW_EXTERNAL: "true"
       TROGON_ATLAS_MCP: "true"
-      TROGON_ATLAS_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,trogon-atlas-server,trogon-atlas-server.trogon-atlas.orb.local
+      TROGON_ATLAS_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,::1,trogon-atlas-server,trogon-atlas-server.trogon-atlas.orb.local
       # Deliberately not defaulted to the empty string. clap reads a
       # set-but-empty env var as a value, which sends the server down the
       # legacy-token path and makes it reject the anonymous callers this

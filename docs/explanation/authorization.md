@@ -938,11 +938,12 @@ list, a hand-rolled client, a cached response) is refused exactly as before.
 Tool filtering is a courtesy that spares a well-behaved agent a round trip
 it was always going to lose, not a second authorization system.
 
-A server that predates the `who_am_i` feature flag, or a `WhoAmI` call that
-fails for any reason, leaves the adapter without a role to filter by. It
-degrades to listing every tool, the same menu it offered before role
-filtering existed, because a client-side listing miss is never a safety
-gap; the server decides what actually executes.
+A server that predates the `who_am_i` feature flag leaves the adapter without
+a role to filter by, so it lists every tool, the same menu it offered before
+role filtering existed. A `GetServerInfo` or `WhoAmI` call that fails lists
+only the reader tools instead: the server still decides what executes, but a
+transient error should not show a reader the names and schemas of admin
+tools.
 
 ## Decisions and rationale
 

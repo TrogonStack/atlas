@@ -433,6 +433,22 @@ async fn a_host_outside_the_allow_list_is_refused() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_bracketed_ipv6_loopback_host_matches_the_default_allow_list() {
+    let http = McpHttp::start_with_hosts(
+        authenticated_registry(),
+        "localhost,127.0.0.1,::1".parse().unwrap(),
+    )
+    .await;
+
+    let authorization = format!("Bearer {ADMIN_TOKEN}");
+    let host = format!("[::1]:{}", http.addr.port());
+    let (status, response) = raw_http(http.addr, &tools_list(&host, &authorization)).await;
+    assert_eq!(status, 200, "got: {response}");
+
+    http.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn grpc_and_mcp_share_the_same_port() {
     let http = McpHttp::start(authenticated_registry()).await;
     let client = http.client(Some(ADMIN_TOKEN)).await;
