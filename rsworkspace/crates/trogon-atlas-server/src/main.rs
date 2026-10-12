@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use tonic::transport::{Identity, Server, ServerTlsConfig};
+use tonic::transport::{server::TcpIncoming, Server};
 use trogon_atlas_core::WriterRole;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
@@ -774,26 +774,26 @@ async fn main() -> Result<()> {
         );
     }
 
-    let mut builder = Server::builder();
-    match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
+    let tls = match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
         (Some(cert), Some(key)) => {
             let cert_pem = std::fs::read(cert)
                 .with_context(|| format!("reading --tls-cert={}", cert.display()))?;
             let key_pem = std::fs::read(key)
                 .with_context(|| format!("reading --tls-key={}", key.display()))?;
-            builder = builder
-                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert_pem, key_pem)))
+            let acceptor = trogon_atlas_server::tls::TlsAcceptor::from_pem(&cert_pem, &key_pem)
                 .context("configuring TLS")?;
             tracing::info!("TLS enabled");
+            Some(acceptor)
         }
         (None, None) => {
             tracing::warn!(
                 "serving plaintext gRPC; set TROGON_ATLAS_TLS_CERT/TROGON_ATLAS_TLS_KEY or terminate \
                  TLS in front of this process"
             );
+            None
         }
         _ => anyhow::bail!("--tls-cert and --tls-key must be set together"),
-    }
+    };
 
     let registry = if let Some(path) = args.auth_tokens_file.as_ref() {
         // Tokens file takes precedence over legacy --auth-token.
@@ -1060,26 +1060,36 @@ async fn main() -> Result<()> {
 
     tracing::info!(%addr, "trogon-atlas-server starting");
 
-    let mut builder = builder.concurrency_limit_per_connection(args.concurrency_limit);
+    let mut builder = Server::builder().concurrency_limit_per_connection(args.concurrency_limit);
     if let Some(rpc_timeout) = rpc_timeout {
         builder = builder.timeout(rpc_timeout);
     }
     // The kubelet's httpGet probes and MCP clients speak HTTP/1.1; the gRPC
     // listener is HTTP/2 only by default.
     builder = builder.accept_http1(true);
+    let tcp = TcpIncoming::bind(addr)
+        .with_context(|| format!("binding {addr}"))?
+        .with_nodelay(Some(true));
     health.mark_live().await;
-    builder
+    let router = builder
         .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new())
         .layer(inflight)
         .trace_fn(trogon_atlas_server::telemetry::rpc_span_from_request)
-        .add_routes(routes)
-        .serve_with_shutdown(addr, async {
-            shutdown_requested().await;
-            let _ = health_shutdown_tx.send(true);
-            health.begin_shutdown().await;
-            await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
-        })
-        .await?;
+        .add_routes(routes);
+    let shutdown = async {
+        shutdown_requested().await;
+        let _ = health_shutdown_tx.send(true);
+        health.begin_shutdown().await;
+        await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
+    };
+    match tls {
+        Some(tls) => {
+            router
+                .serve_with_incoming_shutdown(tls.incoming(tcp), shutdown)
+                .await?;
+        }
+        None => router.serve_with_incoming_shutdown(tcp, shutdown).await?,
+    }
 
     // Flush any spans and metrics the OTLP exporters still have queued. Must
     // run before the process exits or the last few seconds of telemetry are

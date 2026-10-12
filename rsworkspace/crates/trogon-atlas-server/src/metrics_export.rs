@@ -38,10 +38,11 @@ const DURATION_SECONDS_BOUNDARIES: [f64; 14] = [
 /// An OTLP meter provider exporting over gRPC to `endpoint`, the way
 /// `init_tracing` exports spans.
 pub fn otlp_meter_provider(endpoint: &str) -> anyhow::Result<SdkMeterProvider> {
-    use opentelemetry_otlp::WithExportConfig as _;
+    use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
     let exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint.to_owned())
+        .with_tls_config(crate::telemetry::otlp_tls_config())
         .build()
         .map_err(|e| anyhow::anyhow!("building OTLP metric exporter for {endpoint}: {e}"))?;
     Ok(SdkMeterProvider::builder()

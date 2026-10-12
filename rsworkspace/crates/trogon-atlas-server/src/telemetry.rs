@@ -76,10 +76,11 @@ pub fn init_tracing() -> anyhow::Result<TracingGuard> {
     match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
         Ok(endpoint) if !endpoint.is_empty() => {
             use opentelemetry::trace::TracerProvider as _;
-            use opentelemetry_otlp::WithExportConfig as _;
+            use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
             let exporter = opentelemetry_otlp::SpanExporter::builder()
                 .with_tonic()
                 .with_endpoint(endpoint.clone())
+                .with_tls_config(otlp_tls_config())
                 .build()
                 .map_err(|e| anyhow::anyhow!("building OTLP exporter for {endpoint}: {e}"))?;
             let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
@@ -104,6 +105,12 @@ pub fn init_tracing() -> anyhow::Result<TracingGuard> {
             Ok(TracingGuard { provider: None })
         }
     }
+}
+
+/// Trusts the system roots for an `https://` collector; the exporter only
+/// applies it when the endpoint scheme is `https`.
+pub fn otlp_tls_config() -> opentelemetry_otlp::tonic_types::transport::ClientTlsConfig {
+    opentelemetry_otlp::tonic_types::transport::ClientTlsConfig::new().with_native_roots()
 }
 
 fn rpc_span_from_path(path: &str) -> Span {

@@ -300,8 +300,7 @@ MCP client's own bearer token. Operating points:
 The server can serve TLS directly via `--tls-cert` / `--tls-key`. The
 reference compose stack ships plaintext on `127.0.0.1:50069` and
 expects the operator to terminate TLS in front of it (Envoy, Caddy, or
-the cloud LB); that path is simpler to operate and gives you HTTP/2
-ALPN negotiation for free. Two supported postures:
+the cloud LB); that path is simpler to operate. Two supported postures:
 
 ### Posture A: terminate at a reverse proxy (recommended)
 
@@ -312,15 +311,18 @@ ALPN negotiation for free. Two supported postures:
    rewrites into `authorization` so the server never sees external
    credentials.
 
-### Posture B: direct tonic-rustls
+### Posture B: direct rustls
 
 1. Provision a PEM certificate chain and private key for the listen
    host.
 2. Set `TROGON_ATLAS_TLS_CERT=/path/cert.pem` and
    `TROGON_ATLAS_TLS_KEY=/path/key.pem`.
 3. Point clients at `https://...:50069`. The studio bridge accepts
-   `https://` URLs for `TROGON_ATLAS_GRPC` without configuration. The
-   MCP listener stays plaintext; terminate TLS in front of it.
+   `https://` URLs for `TROGON_ATLAS_GRPC` without configuration.
+
+The port offers both `h2` and `http/1.1` over ALPN, so gRPC clients,
+HTTP/1.1-only clients such as `curl --http1.1` and MCP clients, and
+clients that send no ALPN at all share the one TLS listener.
 
 Either posture: never serve plaintext gRPC across an untrusted network.
 The server still emits a startup warning when TLS is not configured.

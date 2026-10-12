@@ -21,6 +21,7 @@ pub mod search;
 pub mod service;
 pub mod spicedb;
 pub mod telemetry;
+pub mod tls;
 pub mod token_reload;
 pub mod type_libraries;
 pub mod validation;
