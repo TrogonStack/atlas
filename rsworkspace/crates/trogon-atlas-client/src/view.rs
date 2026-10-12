@@ -355,9 +355,11 @@ pub fn namespace_tree(namespace: &str, entities: &[pb::Entity]) -> NamespaceTree
         .map(|domain| {
             let subdomains = of_kind(pb::EntityKind::Subdomain)
                 .filter(|s| {
-                    refs_of(s)
-                        .iter()
-                        .any(|r| r.from_field == "domain" && r.to_id == domain.id())
+                    refs_of(s).iter().any(|r| {
+                        r.from_field == "domain"
+                            && r.to_id.namespace == domain.namespace
+                            && r.to_id.slug == domain.slug
+                    })
                 })
                 .map(|s| node(s, vec![]))
                 .collect();
@@ -388,6 +390,8 @@ pub fn namespace_tree(namespace: &str, entities: &[pb::Entity]) -> NamespaceTree
         node(key, children)
     };
 
+    // Keyed without the version, so a storyboard that pins an older slice
+    // still places that slice's newer versions.
     let mut placed = HashSet::new();
     let mut storyboards = Vec::new();
     for storyboard in of_kind(pb::EntityKind::Storyboard) {
@@ -402,9 +406,8 @@ pub fn namespace_tree(namespace: &str, entities: &[pb::Entity]) -> NamespaceTree
                 .find(|k| index.contains_key(k));
             slices.push(match found {
                 Some(key) => {
-                    let n = slice_node(&key);
-                    placed.insert(key);
-                    n
+                    placed.insert((key.kind, key.namespace.clone(), key.slug.clone()));
+                    slice_node(&key)
                 }
                 None => TreeNode {
                     kind: "slice",
@@ -420,7 +423,10 @@ pub fn namespace_tree(namespace: &str, entities: &[pb::Entity]) -> NamespaceTree
     }
     let unplaced_slices = latest
         .iter()
-        .filter(|k| SLICE_KINDS.contains(&k.kind) && !placed.contains(**k))
+        .filter(|k| {
+            SLICE_KINDS.contains(&k.kind)
+                && !placed.contains(&(k.kind, k.namespace.clone(), k.slug.clone()))
+        })
         .map(|k| slice_node(k))
         .collect();
     NamespaceTree {
@@ -780,5 +786,55 @@ shop
             1
         );
         assert!(json["domains"][0]["children"][0].get("children").is_none());
+    }
+
+    #[test]
+    fn tree_attaches_children_that_pin_an_older_version_of_their_parent() {
+        let domain = |version| {
+            entity(pb::entity::Kind::Domain(pb::Domain {
+                id: Some(id("retail", version)),
+                title: format!("Retail v{version}"),
+                ..Default::default()
+            }))
+        };
+        let subdomain = entity(pb::entity::Kind::Subdomain(pb::Subdomain {
+            id: Some(id("ordering", 1)),
+            title: "Ordering".into(),
+            domain: Some(pb::DomainRef {
+                id: Some(id("retail", 1)),
+            }),
+            ..Default::default()
+        }));
+        let storyboard = entity(pb::entity::Kind::Storyboard(pb::Storyboard {
+            id: Some(id("checkout", 1)),
+            title: "Checkout".into(),
+            slices: vec![pb::SliceRef {
+                id: Some(id("place-order-slice", 1)),
+            }],
+            ..Default::default()
+        }));
+        let mut slice_v2 = command_slice("place-order-slice", "place-order", &[]);
+        if let Some(pb::entity::Kind::CommandSlice(s)) = slice_v2.kind.as_mut() {
+            s.id = Some(id("place-order-slice", 2));
+        }
+        let entities = vec![
+            domain(1),
+            domain(2),
+            subdomain,
+            storyboard,
+            command_slice("place-order-slice", "place-order", &[]),
+            slice_v2,
+        ];
+        assert_eq!(
+            render_tree(&namespace_tree(NS, &entities)),
+            "\
+shop
+├── domain retail@2  Retail v2
+│   └── subdomain ordering  Ordering
+└── storyboard checkout  Checkout
+    └── command_slice place-order-slice  place-order-slice title
+        └── command place-order
+"
+        );
     }
 }
