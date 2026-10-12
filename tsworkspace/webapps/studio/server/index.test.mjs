@@ -307,7 +307,7 @@ describe('Global API auth middleware', () => {
     delete process.env.TROGON_ATLAS_AUTH_TOKEN;
   });
 
-  it('allows /api/info without a token (public health endpoint)', async () => {
+  it('allows /api/info without a token', async () => {
     const res = await request(authApp).get('/api/info');
     expect(res.status).toBe(200);
   });
@@ -1687,6 +1687,128 @@ describe('Type library routes', () => {
     for (const q of ['', '?namespace=a,b', '?namespace=..']) {
       const res = await request(app).get(`/api/type-libraries/messages${q}`);
       expect(res.status).toBe(400);
+    }
+  });
+});
+
+describe('/-/readiness and /-/liveness', () => {
+  /** @param {() => Promise<any>} load @param {Record<string, string>} [env] */
+  async function freshServer(load, env = {}) {
+    Object.assign(process.env, env, { NODE_ENV: 'test' });
+    const mod = await load();
+    for (const key of Object.keys(env)) delete process.env[key];
+    return mod;
+  }
+
+  /** @param {(req: unknown, meta: unknown, opts: unknown, cb: Function) => void} impl @param {() => Promise<void>} fn */
+  async function withServerInfo(impl, fn) {
+    const original = fakeClient.getServerInfo;
+    fakeClient.getServerInfo = impl;
+    try {
+      await fn();
+    } finally {
+      fakeClient.getServerInfo = original;
+    }
+  }
+
+  const unavailable = (_req, _meta, _opts, cb) => cb(Object.assign(new Error('connection refused'), { code: 14 }));
+  const unauthenticated = (_req, _meta, _opts, cb) => cb(Object.assign(new Error('unauthenticated'), { code: 16 }));
+
+  it('answers both probes without a token while one is configured', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-auth'), { TROGON_ATLAS_AUTH_TOKEN: 'probe-secret' });
+    await mod.checkUpstream();
+    const readiness = await request(mod.app).get('/-/readiness');
+    const liveness = await request(mod.app).get('/-/liveness');
+    expect(readiness.status).toBe(200);
+    expect(readiness.text).toBe('ok\n');
+    expect(liveness.status).toBe(200);
+    expect(liveness.text).toBe('ok\n');
+  });
+
+  it('is not ready before the first upstream check, while live', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-unchecked'));
+    const readiness = await request(mod.app).get('/-/readiness');
+    expect(readiness.status).toBe(503);
+    expect(readiness.text).toBe('not ready\n');
+    expect((await request(mod.app).get('/-/liveness')).status).toBe(200);
+  });
+
+  it('is not ready when the last upstream check failed, and ready again once one passes', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-failed'));
+    await mod.checkUpstream();
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+    await withServerInfo(unavailable, () => mod.checkUpstream());
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(503);
+    expect((await request(mod.app).get('/-/liveness')).status).toBe(200);
+    await mod.checkUpstream();
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+  });
+
+  it('does not call upstream when probed', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-held'));
+    await mod.checkUpstream();
+    let calls = 0;
+    await withServerInfo(
+      (_req, _meta, _opts, cb) => {
+        calls += 1;
+        cb(Object.assign(new Error('connection refused'), { code: 14 }));
+      },
+      async () => {
+        expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+      },
+    );
+    expect(calls).toBe(0);
+  });
+
+  it('treats an unauthenticated answer as not ready when the bridge holds a token', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-badtoken'), { TROGON_ATLAS_AUTH_TOKEN: 'stale-secret' });
+    await withServerInfo(unauthenticated, () => mod.checkUpstream());
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(503);
+  });
+
+  it('treats an unauthenticated answer as reachable for a pass-through bridge with no token of its own', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-anonymous'), { TROGON_ATLAS_AUTH_PASSTHROUGH: 'true' });
+    await withServerInfo(unauthenticated, () => mod.checkUpstream());
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+  });
+
+  it('lists each check with ?verbose', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-verbose'));
+    await withServerInfo(unavailable, () => mod.checkUpstream());
+    const readiness = await request(mod.app).get('/-/readiness?verbose');
+    expect(readiness.status).toBe(503);
+    expect(readiness.text).toBe('[+]ping ok\n[-]upstream failed\n[+]shutdown ok\nreadiness check failed\n');
+    const liveness = await request(mod.app).get('/-/liveness?a=1&verbose=true');
+    expect(liveness.status).toBe(200);
+    expect(liveness.text).toBe('[+]ping ok\nliveness check passed\n');
+    expect((await request(mod.app).get('/-/liveness?verbosely')).text).toBe('ok\n');
+  });
+
+  it('goes not ready on shutdown while liveness keeps passing', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-shutdown'));
+    await mod.checkUpstream();
+    expect((await request(mod.app).get('/-/readiness')).status).toBe(200);
+    mod.beginShutdown();
+    await mod.checkUpstream();
+    const readiness = await request(mod.app).get('/-/readiness?verbose');
+    expect(readiness.status).toBe(503);
+    expect(readiness.text).toBe('[+]ping ok\n[+]upstream ok\n[-]shutdown failed\nreadiness check failed\n');
+    expect((await request(mod.app).get('/-/liveness')).status).toBe(200);
+  });
+
+  it('keeps probes out of the access log', async () => {
+    const mod = await freshServer(() => import('./index.mjs?t=health-quiet'));
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    try {
+      await request(mod.app).get('/-/liveness');
+      await request(mod.app).get('/-/readiness');
+      const probeLines = write.mock.calls.map(([line]) => String(line));
+      expect(probeLines.some((line) => line.includes('"http_request"'))).toBe(false);
+      await request(mod.app).get('/api/info');
+      const logged = write.mock.calls.map(([line]) => String(line));
+      expect(logged.some((line) => line.includes('"http_request"'))).toBe(true);
+    } finally {
+      write.mockRestore();
     }
   });
 });

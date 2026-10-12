@@ -1,10 +1,10 @@
 {{- if .Values.server.enabled }}
 trogon-atlas-server (gRPC):
-  {{ include "trogon-atlas.server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.server.service.grpcPort }}
+  {{ include "trogon-atlas.server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.server.service.port }}
 {{- if .Values.server.mcp.enabled }}
 
 trogon-atlas-server (MCP, Streamable HTTP, same port as gRPC):
-  http://{{ include "trogon-atlas.server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.server.service.grpcPort }}/mcp
+  http://{{ include "trogon-atlas.server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.server.service.port }}/mcp
   Each request acts as its own Authorization bearer token.
 {{- end }}
 {{- if .Values.server.auth.insecureAllowAnonymous }}

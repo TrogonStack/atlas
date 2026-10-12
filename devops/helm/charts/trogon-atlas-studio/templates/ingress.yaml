@@ -31,7 +31,7 @@ spec:
               service:
                 name: {{ include "trogon-atlas-studio.fullname" $ }}
                 port:
-                  name: http
+                  name: public
           {{- end }}
     {{- end }}
 {{- end }}

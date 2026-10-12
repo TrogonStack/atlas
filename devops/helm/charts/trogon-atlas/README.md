@@ -2,12 +2,12 @@
 
 Umbrella chart deploying the event model stack to Kubernetes:
 
-- `server` (alias for trogon-atlas-server): the gRPC service (port 50069),
+- `server` (alias for trogon-atlas-server): the gRPC service (`private` port 50069),
   which also serves an MCP endpoint over Streamable HTTP at `/mcp` on that
   same port. Metrics and traces are pushed over OTLP; a Prometheus scrape
   at `/-/metrics` on that same port is opt-in.
 - `studio` (alias for trogon-atlas-studio): the web UI and gateway
-  (port 80), reaching the server over gRPC.
+  (`public` port 80), reaching the server over gRPC.
 
 Each is a standalone chart under `../trogon-atlas-server` and
 `../trogon-atlas-studio`; this chart wires them together with local
@@ -60,7 +60,9 @@ uses.
 
 ## Upgrading from 0.x
 
-1.0.0 carries trogon-atlas-server 1.0.0, which drops the metrics port and the ServiceMonitor in favor of OTLP push and an opt-in `/-/metrics` on the gRPC port. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-0x).
+1.0.0 carries trogon-atlas-server 1.0.0, which drops the metrics port and the ServiceMonitor in favor of OTLP push and an opt-in `/-/metrics` on the `private` port. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-0x).
+
+Port names now follow who reaches them: the server's `grpc` port is `private` and studio's `http` port is `public`, on the containers and the Services. `server.service.grpcPort` is now `server.service.port`, and `studio.server.grpcPort` is now `studio.server.port`. Update any NetworkPolicy, ServiceMonitor, Ingress, or Gateway route that names either port. See the [studio upgrade notes](../trogon-atlas-studio/README.md#upgrading-from-0x) too.
 
 ## Notable values
 
@@ -71,7 +73,7 @@ uses.
 | `studio.enabled` | `true` | install trogon-atlas-studio |
 | `server.mcp.enabled` | `true` | serve MCP at `/mcp` from trogon-atlas-server |
 | `server.config.otlpEndpoint` | `""` | OTLP gRPC endpoint the server pushes traces and metrics to |
-| `server.metrics.prometheus.enabled` | `false` | serve a Prometheus scrape at `/-/metrics` on the server's gRPC port |
+| `server.metrics.prometheus.enabled` | `false` | serve a Prometheus scrape at `/-/metrics` on the server's `private` port |
 
 See the subchart READMEs linked above for every `server.*` and `studio.*`
 value.

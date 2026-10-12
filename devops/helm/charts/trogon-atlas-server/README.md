@@ -86,9 +86,13 @@ rebinding; gRPC is unaffected by this guard. The chart allows loopback and
 every name of this release's Service; add the hostname of any Ingress or
 Gateway that routes to the server to `mcp.allowedHosts`.
 
+## Port
+
+The server listens on one port, named `private` on the container and the Service: its callers (studio, agents, the CLI) reach it from inside the cluster, and the chart creates no Ingress for it. `service.port` (default `50069`) sets it. Without TLS the Service port declares `appProtocol: kubernetes.io/h2c`, so meshes and gateways speak HTTP/2 cleartext to it rather than guess; with `tls.existingSecret` set it declares none.
+
 ## Probes
 
-The probes are `httpGet` requests to `/-/readiness` and `/-/liveness` on the gRPC port, which the server answers without auth; `scheme` switches to `HTTPS` when `tls.existingSecret` is set. Readiness tracks the server's background store check, which runs every 15 seconds, and goes not ready as soon as shutdown begins, ahead of the drain (`config.shutdownDrainSecs`, default 30s; `terminationGracePeriodSeconds` defaults to 40s to cover it). Liveness depends on no store or other dependency, so an unreachable NATS takes the pod out of the Service without restarting it. The startup probe uses `/-/liveness`.
+The probes are `httpGet` requests to `/-/readiness` and `/-/liveness` on the `private` port, which the server answers without auth; `scheme` switches to `HTTPS` when `tls.existingSecret` is set. Readiness tracks the server's background store check, which runs every 15 seconds, and goes not ready as soon as shutdown begins, ahead of the drain (`config.shutdownDrainSecs`, default 30s; `terminationGracePeriodSeconds` defaults to 40s to cover it). Liveness depends on no store or other dependency, so an unreachable NATS takes the pod out of the Service without restarting it. The startup probe uses `/-/liveness`.
 
 Add `?verbose` to either path to list each check. The same states are served over `grpc.health.v1.Health` as the services `readiness`, `liveness`, and `""` (readiness).
 
@@ -96,11 +100,13 @@ Add `?verbose` to either path to list each check. The same states are served ove
 
 Traces and metrics are pushed over OTLP gRPC to `config.otlpEndpoint`, typically an OpenTelemetry Collector; with it empty, neither is exported. There is no metrics port.
 
-`metrics.prometheus.enabled=true` additionally serves a Prometheus scrape at `/-/metrics` on the gRPC port, outside auth like the probes: a scraper holds no bearer token, and the payload is operational counters with no entity data. With it off, `/-/metrics` answers 404. Point your own scrape config at the Service's `grpc` port; the chart creates no ServiceMonitor.
+`metrics.prometheus.enabled=true` additionally serves a Prometheus scrape at `/-/metrics` on the `private` port, outside auth like the probes: a scraper holds no bearer token, and the payload is operational counters with no entity data. With it off, `/-/metrics` answers 404. Point your own scrape config at the Service's `private` port; the chart creates no ServiceMonitor.
 
 ### Upgrading from 0.x
 
-1.0.0 removes the dedicated metrics port (9100), its Service port, the `metrics.enabled`, `metrics.port` and `metrics.serviceMonitor.*` values, and the ServiceMonitor template. Send metrics to a Collector with `config.otlpEndpoint`, or set `metrics.prometheus.enabled=true` and scrape `/-/metrics` on the gRPC port.
+1.0.0 removes the dedicated metrics port (9100), its Service port, the `metrics.enabled`, `metrics.port` and `metrics.serviceMonitor.*` values, and the ServiceMonitor template. Send metrics to a Collector with `config.otlpEndpoint`, or set `metrics.prometheus.enabled=true` and scrape `/-/metrics` on the `private` port.
+
+It also renames the serving port from `grpc` to `private`, on the container and the Service, and the value `service.grpcPort` to `service.port` (default unchanged at `50069`). Update any NetworkPolicy, ServiceMonitor, or Gateway route that names the port, and move a `service.grpcPort` override to `service.port`. Without TLS the Service port's `appProtocol` changes from `grpc` to `kubernetes.io/h2c`; with TLS it carries none.
 
 ## Scaling: the server is single-writer
 
@@ -147,6 +153,7 @@ Not done by the server, deliberately: a daemon holding push credentials is a dif
 |---|---|---|
 | `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories |
 | `image.repository` | `atlas/trogon-atlas-server` | server image |
+| `service.port` | `50069` | the `private` port serving gRPC, MCP, and the probes |
 | `replicaCount` | `1` | must stay 1; the server is single-writer |
 | `acknowledgeSingleWriter` | `false` | override the `replicaCount > 1` refusal |
 | `config.natsUrl` | `nats://nats:4222` | NATS JetStream URL. Credentials may be embedded as userinfo, but land in the Deployment env in plaintext |
@@ -163,8 +170,8 @@ Not done by the server, deliberately: a daemon holding push credentials is a dif
 | `spicedb.sync.enabled` | `false` | CronJob running `sync-spicedb` to re-derive every grant (requires `endpoint`) |
 | `spicedb.sync.schedule` | `*/15 * * * *` | schedule for that job |
 | `config.otlpEndpoint` | `""` | OTLP gRPC endpoint traces and metrics are pushed to; empty exports neither |
-| `metrics.prometheus.enabled` | `false` | serve a Prometheus scrape at `/-/metrics` on the gRPC port, without auth |
-| `mcp.enabled` | `true` | serve MCP at `/mcp`, on the gRPC port |
+| `metrics.prometheus.enabled` | `false` | serve a Prometheus scrape at `/-/metrics` on the `private` port, without auth |
+| `mcp.enabled` | `true` | serve MCP at `/mcp`, on the `private` port |
 | `mcp.allowedHosts` | `[]` | extra `Host` header values `/mcp` accepts, beyond loopback and this release's Service names |
 | `gitMirror.enabled` | `false` | mount a PVC at `/var/lib/trogon-atlas/mirror` and enable the git mirror |
 | `gitMirror.reconcile.enabled` | `true` | CronJob detecting store/mirror divergence (mirror must be enabled) |
