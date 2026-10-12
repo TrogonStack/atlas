@@ -32,7 +32,7 @@ pub fn canonicalize(text: &str, source: &str) -> Result<String> {
             out.push_str("---\n");
         }
         let (_, _, doc) = export::entity_to_manifest(&loaded.entity, &types)?;
-        out.push_str(&serde_yaml::to_string(&doc).context("rendering canonical YAML")?);
+        out.push_str(&serde_norway::to_string(&doc).context("rendering canonical YAML")?);
     }
     Ok(out)
 }
