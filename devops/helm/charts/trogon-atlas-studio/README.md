@@ -12,8 +12,13 @@ here is just `auth.token.value`.
 ```bash
 helm install trogon-atlas-studio devops/helm/charts/trogon-atlas-studio \
   --set server.host=trogon-atlas-server \
-  --set auth.token.value=change-me
+  --set auth.token.value=change-me \
+  --set image.tag=canary
 ```
+
+Only the `canary` tag is published so far, built from every push to `main`.
+The image tag otherwise defaults to the chart's `appVersion`, which has no
+published image yet.
 
 ## Pointing at the server
 
