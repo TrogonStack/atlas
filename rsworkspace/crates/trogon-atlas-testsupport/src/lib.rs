@@ -19,7 +19,7 @@ use testcontainers::{
 };
 use testcontainers_modules::nats::{Nats, NatsServerCmd};
 use tokio::sync::OnceCell;
-use trogon_atlas_store::{NatsStore, NatsStoreConfig};
+use trogon_atlas_store::{NatsStore, NatsStoreConfig, StoreMetrics};
 
 static SHARED: OnceCell<TestNats> = OnceCell::const_new();
 static SHARED_SPICEDB: OnceCell<TestSpiceDb> = OnceCell::const_new();
@@ -92,7 +92,7 @@ impl TestNats {
     /// Returns an error if the store fails to connect or configure.
     pub async fn try_store(&self) -> Result<NatsStore, String> {
         let suffix = unique_suffix();
-        let mut config = NatsStoreConfig::new(&self.url);
+        let mut config = NatsStoreConfig::new(&self.url, StoreMetrics::default());
         config.bucket = format!("test-{suffix}");
         config.branches_bucket = format!("test-branches-{suffix}");
         config.changesets_bucket = format!("test-changesets-{suffix}");

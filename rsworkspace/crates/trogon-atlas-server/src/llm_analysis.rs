@@ -26,18 +26,12 @@ pub struct LlmAnalyzer {
 }
 
 impl LlmAnalyzer {
-    pub fn new(client: Arc<dyn LlmClient>) -> Self {
+    pub fn new(client: Arc<dyn LlmClient>, metrics: ServerMetrics) -> Self {
         Self {
             client,
             user_prompt_char_budget: DEFAULT_USER_PROMPT_BUDGET,
-            metrics: ServerMetrics::default(),
+            metrics,
         }
-    }
-
-    #[must_use]
-    pub fn with_metrics(mut self, metrics: ServerMetrics) -> Self {
-        self.metrics = metrics;
-        self
     }
 
     #[must_use]
@@ -685,7 +679,10 @@ mod tests {
   ]
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -721,7 +718,10 @@ mod tests {
   }]
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("created_at", "timestamp")]),
@@ -744,7 +744,10 @@ mod tests {
     async fn infer_ignores_prose_around_json() {
         let response = "Sure, here is the answer:\n```json\n{\"mappings\":[]}\n```\nThanks!";
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -760,7 +763,10 @@ mod tests {
     #[tokio::test]
     async fn infer_surfaces_parse_error_for_malformed_json() {
         let client = FixedClient::new("not json at all");
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -787,7 +793,10 @@ mod tests {
   "overall_score": 0.5
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("buyer_id", "string")]),
@@ -809,7 +818,10 @@ mod tests {
     #[tokio::test]
     async fn empty_scope_errors_without_calling_llm_so_handler_can_fall_back() {
         let client = FixedClient::new("should-not-be-used");
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let scope = pb::AnalysisScope {
             scope: Some(pb::analysis_scope::Scope::Slice(pb::EntityRef {
                 kind: pb::EntityKind::CommandSlice as i32,
@@ -984,7 +996,11 @@ mod tests {
     #[tokio::test]
     async fn prompt_budget_wipeout_must_error_so_handler_can_fall_back() {
         let client = FixedClient::new(r#"{"mappings":[]}"#);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>).with_prompt_budget(1);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        )
+        .with_prompt_budget(1);
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -1036,7 +1052,7 @@ mod tests {
   }]
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(client as Arc<dyn LlmClient>, ServerMetrics::default());
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -1075,7 +1091,7 @@ mod tests {
   "overall_score": 1.0
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(client as Arc<dyn LlmClient>, ServerMetrics::default());
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),

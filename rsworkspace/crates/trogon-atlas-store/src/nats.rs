@@ -306,12 +306,12 @@ pub struct NatsStoreConfig {
     /// Cap the change log at this many bytes. `None` means unlimited.
     pub changes_max_bytes: Option<i64>,
     pub open_mode: StoreOpenMode,
-    /// Where the store records its metrics. Defaults to recording nothing.
+    /// Where the store records its metrics.
     pub metrics: StoreMetrics,
 }
 
 impl NatsStoreConfig {
-    pub fn new(url: impl Into<String>) -> Self {
+    pub fn new(url: impl Into<String>, metrics: StoreMetrics) -> Self {
         let (url, credentials) = split_url_credentials(&url.into());
         Self {
             url,
@@ -334,7 +334,7 @@ impl NatsStoreConfig {
             changes_max_msgs: Some(1_000_000),
             changes_max_bytes: None,
             open_mode: StoreOpenMode::Serve,
-            metrics: StoreMetrics::default(),
+            metrics,
         }
     }
 
@@ -556,8 +556,8 @@ impl NatsStore {
     }
 
     /// Connect with default bucket/stream names and retention limits.
-    pub async fn connect(url: &str) -> StoreResult<Self> {
-        Self::connect_with(NatsStoreConfig::new(url)).await
+    pub async fn connect(url: &str, metrics: StoreMetrics) -> StoreResult<Self> {
+        Self::connect_with(NatsStoreConfig::new(url, metrics)).await
     }
 
     /// Connect to NATS, ensure the entities KV bucket and changes stream
@@ -5663,7 +5663,7 @@ mod tests {
 
     #[test]
     fn config_defaults_bound_the_changes_stream() {
-        let c = NatsStoreConfig::new("nats://example:4222");
+        let c = NatsStoreConfig::new("nats://example:4222", StoreMetrics::default());
         assert_eq!(c.bucket, DEFAULT_KV_BUCKET);
         assert_eq!(c.stream, DEFAULT_CHANGES_STREAM);
         assert_eq!(c.subject_wildcard(), "atlas.changes.>");
@@ -5863,14 +5863,15 @@ mod tests {
     }
     #[test]
     fn a_plain_url_carries_no_credentials() {
-        let config = NatsStoreConfig::new("nats://nats:4222");
+        let config = NatsStoreConfig::new("nats://nats:4222", StoreMetrics::default());
         assert_eq!(config.url, "nats://nats:4222");
         assert!(config.credentials.is_none());
     }
 
     #[test]
     fn userinfo_is_lifted_out_of_the_url() {
-        let config = NatsStoreConfig::new("nats://service:s3cr3t@nats:4222");
+        let config =
+            NatsStoreConfig::new("nats://service:s3cr3t@nats:4222", StoreMetrics::default());
         assert_eq!(config.url, "nats://nats:4222");
         let credentials = config.credentials.expect("credentials");
         assert_eq!(credentials.user(), "service");
@@ -5905,7 +5906,7 @@ mod tests {
 
     #[test]
     fn explicit_credentials_win_over_the_url() {
-        let mut config = NatsStoreConfig::new("nats://nats:4222");
+        let mut config = NatsStoreConfig::new("nats://nats:4222", StoreMetrics::default());
         config.url = "nats://fromurl:pw@nats:4222".into();
         config.credentials = Some(NatsCredentials::new("explicit", Some("pw")));
         config.take_url_credentials();

@@ -14,7 +14,9 @@ use tonic::{Code, Request};
 use tonic_types::StatusExt;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::{operation_receipts::OperationAttempt, service::EventModelServiceImpl};
+use trogon_atlas_server::{
+    metrics::ServerMetrics, operation_receipts::OperationAttempt, service::EventModelServiceImpl,
+};
 use trogon_atlas_store::Store;
 
 fn id(ns: &str, slug: &str) -> pb::Id {
@@ -50,7 +52,7 @@ fn put_req(entity: pb::Entity, operation_id: &str) -> pb::PutEntityRequest {
 async fn svc_with_store() -> (EventModelServiceImpl, Arc<dyn Store>) {
     let nats = trogon_atlas_testsupport::shared().await;
     let store: Arc<dyn Store> = Arc::new(nats.store().await);
-    let svc = EventModelServiceImpl::try_new(Arc::clone(&store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::clone(&store), ServerMetrics::default()).unwrap();
     (svc, store)
 }
 

@@ -18,6 +18,7 @@ use trogon_atlas_server::{
     auth::{BearerAuth, RegistryFile, TokenRegistry},
     health::{Health, StoreStatus, LIVENESS_PATH, READINESS_PATH},
     mcp::data_plane,
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
 
@@ -41,8 +42,9 @@ struct HealthHttp {
 impl HealthHttp {
     async fn start() -> Self {
         let store = trogon_atlas_testsupport::shared().await.store().await;
-        let service =
-            EventModelServiceServer::new(EventModelServiceImpl::try_new(Arc::new(store)).unwrap());
+        let service = EventModelServiceServer::new(
+            EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap(),
+        );
         let data_plane = data_plane(service, BearerAuth::new(authenticated_registry()));
         let health = Health::new().await;
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tonic::Request;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     pb::Id {
@@ -33,7 +33,7 @@ fn make_event(ns: &str, slug: &str, version: u64) -> pb::Entity {
 async fn svc() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    EventModelServiceImpl::try_new(Arc::new(store)).unwrap()
+    EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]

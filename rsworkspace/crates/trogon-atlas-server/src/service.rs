@@ -479,8 +479,8 @@ fn passes_lifecycle_filter(
 }
 
 impl EventModelServiceImpl {
-    pub fn try_new(store: Arc<dyn Store>) -> anyhow::Result<Self> {
-        Self::try_new_with_directory(store, Arc::new(NamespaceDirectory::new()))
+    pub fn try_new(store: Arc<dyn Store>, metrics: ServerMetrics) -> anyhow::Result<Self> {
+        Self::try_new_with_directory(store, Arc::new(NamespaceDirectory::new()), metrics)
     }
 
     /// As [`Self::try_new`], but with the registry cache supplied by the
@@ -488,6 +488,7 @@ impl EventModelServiceImpl {
     pub fn try_new_with_directory(
         store: Arc<dyn Store>,
         directory: Arc<NamespaceDirectory>,
+        metrics: ServerMetrics,
     ) -> anyhow::Result<Self> {
         let store_for_authorizer = store.clone();
         let search_index = Arc::new(
@@ -519,7 +520,7 @@ impl EventModelServiceImpl {
             type_libraries: crate::type_libraries::TypeLibraryGate::default(),
             owner_snapshot_cache: tokio::sync::RwLock::new(HashMap::new()),
             owner_reverse_index_cache: tokio::sync::RwLock::new(HashMap::new()),
-            metrics: ServerMetrics::default(),
+            metrics,
         })
     }
 
@@ -806,11 +807,6 @@ impl EventModelServiceImpl {
 
     pub fn with_git_mirror(mut self, mirror: Arc<GitMirror>) -> Self {
         self.git_mirror = Some(mirror);
-        self
-    }
-
-    pub fn with_metrics(mut self, metrics: ServerMetrics) -> Self {
-        self.metrics = metrics;
         self
     }
 

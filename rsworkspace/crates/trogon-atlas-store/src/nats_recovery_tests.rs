@@ -5,6 +5,7 @@ use trogon_atlas_proto::{Entity, EntityKind, Id};
 use super::{entity_key, NatsStore, NatsStoreConfig};
 use crate::{
     error::StoreError,
+    metrics::StoreMetrics,
     recovery::{RecoveryAction, RecoveryPolicy, RecoveryResult},
     store::{
         ChangeKind, ChangesetRecord, ChangesetRef, MutationOp, RevisionPage, Store, WriteContext,
@@ -17,7 +18,7 @@ const RPC: &str = "BatchMutate";
 async fn isolated_store() -> NatsStore {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("rec-{suffix}");
     config.branches_bucket = format!("rec-branches-{suffix}");
     config.changesets_bucket = format!("rec-changesets-{suffix}");

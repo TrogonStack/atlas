@@ -39,6 +39,7 @@ use trogon_atlas_proto::{
 };
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    metrics::ServerMetrics,
     ownership::{
         Lens, NamespaceAuthorizer, NamespaceDirectory, Visibility, WriteVerdict, DEFAULT_OWNER,
     },
@@ -212,7 +213,12 @@ async fn a_move_made_by_another_replica_takes_effect_within_one_interval() {
     let directory = Arc::new(NamespaceDirectory::with_freshness(
         ReloadInterval::from_secs(1),
     ));
-    let svc = EventModelServiceImpl::try_new_with_directory(store.clone(), directory).unwrap();
+    let svc = EventModelServiceImpl::try_new_with_directory(
+        store.clone(),
+        directory,
+        ServerMetrics::default(),
+    )
+    .unwrap();
     let mut c = serve(svc).await;
 
     c.put_entity(authed(put_req(event("mine", "placed")), ACME_TOKEN))
@@ -325,7 +331,7 @@ async fn revoking_a_grant_outside_this_server_stops_the_entities_being_served() 
         .await
         .unwrap();
     let authorizer = Arc::new(RevocableAuthorizer::new("shared"));
-    let svc = EventModelServiceImpl::try_new(store)
+    let svc = EventModelServiceImpl::try_new(store, ServerMetrics::default())
         .unwrap()
         .with_authorizer(authorizer.clone());
     let mut c = serve(svc).await;
@@ -363,7 +369,7 @@ async fn revoking_a_grant_outside_this_server_empties_the_reverse_index_too() {
         .await
         .unwrap();
     let authorizer = Arc::new(RevocableAuthorizer::new("indexed"));
-    let svc = EventModelServiceImpl::try_new(store)
+    let svc = EventModelServiceImpl::try_new(store, ServerMetrics::default())
         .unwrap()
         .with_authorizer(authorizer.clone());
     let mut c = serve(svc).await;

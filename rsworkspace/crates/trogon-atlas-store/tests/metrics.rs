@@ -41,14 +41,13 @@ async fn read_changes_records_each_consumer_through_the_injected_metrics() {
 
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::new(&meter));
     config.bucket = format!("metrics-{suffix}");
     config.branches_bucket = format!("metrics-branches-{suffix}");
     config.lease_bucket = format!("metrics-writer-lease-{suffix}");
     config.stream = format!("METRICS_{}", suffix.replace('-', "_").to_uppercase());
     config.subject_root = format!("metrics.{suffix}");
     config.changes_max_age = None;
-    config.metrics = StoreMetrics::new(&meter);
     let store = NatsStore::connect_with(config).await.expect("connect");
 
     store.read_changes(0, 10).await.expect("read changes");

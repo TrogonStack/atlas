@@ -12,7 +12,7 @@ use tokio::task;
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
     store::{ChangeKind, ListFilter, MutationOp, MutationOutcome},
-    NatsStoreConfig, Store, StoreError, WriteContext,
+    NatsStoreConfig, Store, StoreError, StoreMetrics, WriteContext,
 };
 
 fn event(ns: &str, slug: &str, version: u64, title: &str) -> pb::Entity {
@@ -719,7 +719,7 @@ async fn batch_apply_put_cas_race_found_must_differ_from_expected() {
 async fn batch_apply_create_over_empty_put_tombstone() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("test-{suffix}");
     config.branches_bucket = format!("test-branches-{suffix}");
     config.stream = format!("TEST_{}", suffix.replace('-', "_").to_uppercase());
@@ -787,7 +787,7 @@ async fn batch_apply_create_over_empty_put_tombstone() {
 async fn create_succeeds_over_empty_put_tombstone() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("test-{suffix}");
     config.branches_bucket = format!("test-branches-{suffix}");
     config.stream = format!("TEST_{}", suffix.replace('-', "_").to_uppercase());
@@ -925,7 +925,7 @@ async fn concurrent_unconditional_deletes_race() {
 async fn schema_marker_written_on_fresh_bucket() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("test-{suffix}");
     config.stream = format!("TEST_{}", suffix.replace('-', "_").to_uppercase());
     config.subject_root = format!("test.{suffix}");
@@ -962,7 +962,7 @@ async fn schema_marker_written_on_fresh_bucket() {
 async fn schema_marker_reopen_matching_version_succeeds() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("test-{suffix}");
     config.stream = format!("TEST_{}", suffix.replace('-', "_").to_uppercase());
     config.subject_root = format!("test.{suffix}");
@@ -1002,7 +1002,7 @@ async fn schema_marker_mismatch_fails_construction() {
         .await
         .expect("write wrong marker");
 
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = bucket;
     config.stream = format!("TEST_{}", suffix.replace('-', "_").to_uppercase());
     config.subject_root = format!("test.{suffix}");
@@ -1110,7 +1110,7 @@ async fn batch_apply_rejects_oversized_batch() {
 async fn read_changes_skips_undecodable_payload_and_continues() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("test-badchg-{suffix}");
     config.branches_bucket = format!("test-badchg-branches-{suffix}");
     config.stream = format!("TEST_BADCHG_{}", suffix.replace('-', "_").to_uppercase());

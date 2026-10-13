@@ -446,7 +446,7 @@ async fn build_nats_store(
 ) -> Result<NatsStore> {
     match args.store.as_str() {
         "nats" => {
-            let mut config = NatsStoreConfig::new(&args.nats_url);
+            let mut config = NatsStoreConfig::new(&args.nats_url, metrics);
             config.bucket = args.nats_bucket.clone();
             config.stream = args.nats_stream.clone();
             config.subject_root = args.nats_subject_root.clone();
@@ -465,7 +465,6 @@ async fn build_nats_store(
             config.operations_retention = Duration::from_secs(args.operations_retention_secs);
             config.role = args.role;
             config.open_mode = open_mode;
-            config.metrics = metrics;
             NatsStore::connect_with(config)
                 .await
                 .map_err(|e| anyhow::anyhow!("nats connect {}: {e}", args.nats_url))
@@ -598,7 +597,7 @@ async fn run(
         }
         Some(Cmd::Seed { fixture }) => {
             let store = build_store(&args, store_metrics).await?;
-            return run_seed(fixture, store).await;
+            return run_seed(fixture, store, server_metrics).await;
         }
         Some(Cmd::Reconcile { mirror }) => {
             let store = build_store(&args, store_metrics).await?;
@@ -669,9 +668,9 @@ async fn run(
     let mut svc = trogon_atlas_server::service::EventModelServiceImpl::try_new_with_directory(
         store.clone(),
         directory,
+        server_metrics.clone(),
     )
     .context("constructing event modeling service")?
-    .with_metrics(server_metrics.clone())
     .with_baseline_protection(baseline_protection.clone());
     match args.change_cursor_key.as_deref() {
         Some(encoded) => {
@@ -763,9 +762,11 @@ async fn run(
              this server to untrusted content contributors"
         );
         let analyzer = Arc::new(
-            trogon_atlas_server::llm_analysis::LlmAnalyzer::new(client.clone())
-                .with_prompt_budget(args.llm_prompt_budget)
-                .with_metrics(server_metrics.clone()),
+            trogon_atlas_server::llm_analysis::LlmAnalyzer::new(
+                client.clone(),
+                server_metrics.clone(),
+            )
+            .with_prompt_budget(args.llm_prompt_budget),
         );
         svc = svc.with_llm_analyzer(analyzer);
     }
@@ -1751,13 +1752,13 @@ async fn run_reconcile(mirror: PathBuf, store: Arc<dyn Store>) -> Result<()> {
     Ok(())
 }
 
-async fn run_seed(fixture: PathBuf, store: Arc<dyn Store>) -> Result<()> {
+async fn run_seed(fixture: PathBuf, store: Arc<dyn Store>, metrics: ServerMetrics) -> Result<()> {
     let bytes = std::fs::read(&fixture)
         .with_context(|| format!("reading fixture {}", fixture.display()))?;
     let request = trogon_atlas_server::fixtures::decode_batch_mutate_fixture(&fixture, &bytes)?;
     let op_count = request.ops.len();
 
-    let svc = trogon_atlas_server::service::EventModelServiceImpl::try_new(store.clone())
+    let svc = trogon_atlas_server::service::EventModelServiceImpl::try_new(store.clone(), metrics)
         .context("constructing event modeling service for seed")?;
     let response = svc
         .batch_mutate(tonic::Request::new(request))

@@ -93,11 +93,15 @@ pub struct AnthropicClient {
 }
 
 impl AnthropicClient {
-    pub fn new(config: AnthropicConfig) -> Result<Self> {
-        Self::with_concurrency(config, DEFAULT_CONCURRENCY_LIMIT)
+    pub fn new(config: AnthropicConfig, metrics: ServerMetrics) -> Result<Self> {
+        Self::with_concurrency(config, DEFAULT_CONCURRENCY_LIMIT, metrics)
     }
 
-    pub fn with_concurrency(config: AnthropicConfig, max_in_flight: usize) -> Result<Self> {
+    pub fn with_concurrency(
+        config: AnthropicConfig,
+        max_in_flight: usize,
+        metrics: ServerMetrics,
+    ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(config.request_timeout)
             .build()
@@ -106,13 +110,8 @@ impl AnthropicClient {
             config,
             http,
             concurrency: Arc::new(Semaphore::new(max_in_flight.max(1))),
-            metrics: ServerMetrics::default(),
+            metrics,
         })
-    }
-
-    pub fn with_metrics(mut self, metrics: ServerMetrics) -> Self {
-        self.metrics = metrics;
-        self
     }
 
     fn build_request_body(&self, system: &str, user: &str) -> MessagesRequest {
@@ -483,8 +482,7 @@ pub fn build(
                 config.request_timeout = Duration::from_secs(secs);
             }
             let max_in_flight = concurrency.unwrap_or(DEFAULT_CONCURRENCY_LIMIT);
-            let client =
-                AnthropicClient::with_concurrency(config, max_in_flight)?.with_metrics(metrics);
+            let client = AnthropicClient::with_concurrency(config, max_in_flight, metrics)?;
             Ok(Some(Arc::new(client)))
         }
     }
@@ -497,7 +495,9 @@ mod tests {
 
     #[test]
     fn anthropic_request_body_shape() {
-        let client = AnthropicClient::new(AnthropicConfig::new("test-key")).unwrap();
+        let client =
+            AnthropicClient::new(AnthropicConfig::new("test-key"), ServerMetrics::default())
+                .unwrap();
         let body = client.build_request_body("sys", "hi");
         let json = serde_json::to_value(&body).unwrap();
         assert_eq!(json["model"], DEFAULT_ANTHROPIC_MODEL);

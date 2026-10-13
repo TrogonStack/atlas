@@ -7,7 +7,7 @@ use tokio::sync::broadcast;
 use tonic::Request;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 use trogon_atlas_store::{
     store::{
         BranchInfo, ChangeRecord, ChangeStreamStats, ListFilter, MutationOp, MutationOutcome,
@@ -43,7 +43,7 @@ fn make_event(ns: &str, slug: &str, version: u64) -> pb::Entity {
 async fn svc() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    EventModelServiceImpl::try_new(Arc::new(store)).unwrap()
+    EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap()
 }
 
 // ===== validate_project tests =====
@@ -805,7 +805,7 @@ async fn delete_by_query_happy_path_deletes_matching_entities() {
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_by_query_batch_store_error_returns_internal() {
     let store = Arc::new(FailingBatchStore::new().await);
-    let svc = EventModelServiceImpl::try_new(store.clone()).unwrap();
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
 
     for slug in ["a", "b"] {
         store
@@ -868,7 +868,7 @@ async fn batch_mutate_partial_apply_is_unavailable_and_names_the_journal() {
         })
         .await,
     );
-    let svc = EventModelServiceImpl::try_new(store).unwrap();
+    let svc = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
 
     let err = svc
         .batch_mutate(Request::new(pb::BatchMutateRequest {
@@ -896,7 +896,7 @@ async fn batch_mutate_failure_issue_does_not_leak_backend_detail() {
         })
         .await,
     );
-    let svc = EventModelServiceImpl::try_new(store).unwrap();
+    let svc = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
 
     let resp = svc
         .batch_mutate(Request::new(pb::BatchMutateRequest {
@@ -3240,8 +3240,8 @@ async fn svc_with_failing_llm(error_msg: &str) -> EventModelServiceImpl {
     let client = Arc::new(AlwaysFailingLlmClient {
         message: error_msg.to_owned(),
     });
-    let analyzer = Arc::new(LlmAnalyzer::new(client));
-    EventModelServiceImpl::try_new(Arc::new(store))
+    let analyzer = Arc::new(LlmAnalyzer::new(client, ServerMetrics::default()));
+    EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
         .unwrap()
         .with_llm_analyzer(analyzer)
 }
@@ -3462,7 +3462,7 @@ async fn author_from_metadata_prefers_principal_over_spoofed_header() {
 
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
 
     // Build a request that spoofs the author name via header but also
     // carries a verified Principal in extensions.
