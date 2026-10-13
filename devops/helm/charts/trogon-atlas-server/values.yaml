@@ -149,12 +149,6 @@ spicedb:
     resources: {}
     extraEnv: []
 
-# Metrics are pushed over OTLP to config.otlpEndpoint. Prometheus is
-# opt-in: it serves a scrape at /-/metrics on the private port, outside auth.
-metrics:
-  prometheus:
-    enabled: false
-
 # MCP over Streamable HTTP at /mcp, on the same port as gRPC. Holds no
 # Secret: each MCP request acts as its own Authorization bearer token,
 # through the same auth as gRPC.
@@ -193,7 +187,7 @@ gitMirror:
     size: 1Gi
 
   # Detects store/mirror divergence. A mirror write can fail while the store
-  # commit succeeds (git_mirror_failures_total), and the mirror is the
+  # commit succeeds (trogon_atlas.git_mirror.failures), and the mirror is the
   # documented restore path, so nothing else catches it before restore day.
   # Exits non-zero on drift: alert on the resulting failed Job.
   reconcile:

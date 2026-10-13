@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tracing::Instrument as _;
+use trogon_atlas_semconv::semconv::{llmattr, llmmetric};
 
 /// Sonnet is the deliberate default: the analysis prompts are structured
 /// JSON inference where it matches Opus-class quality at a fraction of the
@@ -213,10 +214,16 @@ impl AnthropicClient {
             )
         })?;
         if let Some(usage) = parsed.usage.as_ref() {
-            metrics::counter!("llm_tokens_total", "model" => self.config.model.clone(), "type" => "input")
-                .increment(usage.input_tokens);
-            metrics::counter!("llm_tokens_total", "model" => self.config.model.clone(), "type" => "output")
-                .increment(usage.output_tokens);
+            crate::metrics::LLM_TOKENS.add(
+                usage.input_tokens,
+                self.config.model.clone().into(),
+                llmattr::TokenTypeAttr::Input,
+            );
+            crate::metrics::LLM_TOKENS.add(
+                usage.output_tokens,
+                self.config.model.clone().into(),
+                llmattr::TokenTypeAttr::Output,
+            );
         }
         extract_text(&parsed).map_err(RequestError::Fatal)
     }
@@ -315,19 +322,16 @@ impl LlmClient for AnthropicClient {
                 .map_err(|e| anyhow::anyhow!("llm concurrency semaphore closed: {e}"))?;
             let started = Instant::now();
             let result = self.complete_with_retry(system, user).await;
-            metrics::histogram!(
-                "llm_request_duration_seconds",
-                "provider" => self.provider(),
-                "model" => self.config.model.clone(),
-            )
-            .record(started.elapsed().as_secs_f64());
-            metrics::counter!(
-                "llm_requests_total",
-                "provider" => self.provider(),
-                "model" => self.config.model.clone(),
-                "outcome" => if result.is_ok() { "ok" } else { "error" },
-            )
-            .increment(1);
+            crate::metrics::LLM_REQUEST_DURATION.record(
+                started.elapsed().as_secs_f64(),
+                self.config.model.clone().into(),
+                self.provider().into(),
+                result.is_err().then(|| {
+                    llmmetric::RequestDurationHistogramAttr::ErrorType(
+                        crate::metrics::ERROR_TYPE_OTHER.into(),
+                    )
+                }),
+            );
             result
         }
         .instrument(span)

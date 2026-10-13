@@ -60,10 +60,6 @@ services:
       # service above; override both together.
       TROGON_ATLAS_NATS_URL: nats://service:${TROGON_ATLAS_NATS_PASSWORD:-localdevpass}@nats:4222
       TROGON_ATLAS_GIT_MIRROR: /var/lib/trogon-atlas/mirror
-      # Prometheus scrape at /-/metrics on the gRPC port, for local
-      # inspection. Off by default outside this stack, where metrics are
-      # pushed over OTLP instead.
-      TROGON_ATLAS_PROMETHEUS_METRICS: "true"
       TROGON_ATLAS_MCP: "true"
       TROGON_ATLAS_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,::1,trogon-atlas-server,trogon-atlas-server.trogon-atlas.orb.local
       # Deliberately not defaulted to the empty string. clap reads a

@@ -575,11 +575,11 @@ impl NatsStore {
             .event_callback(|event| async move {
                 match event {
                     async_nats::Event::Disconnected => {
-                        metrics::counter!("trogon_atlas_store_nats_disconnects_total").increment(1);
+                        crate::metrics::NATS_DISCONNECTS.add(1);
                         tracing::warn!("nats: disconnected from server");
                     }
                     async_nats::Event::Connected => {
-                        metrics::counter!("trogon_atlas_store_nats_reconnects_total").increment(1);
+                        crate::metrics::NATS_RECONNECTS.add(1);
                         tracing::info!("nats: reconnected to server");
                     }
                     _ => {}
@@ -1448,7 +1448,7 @@ impl NatsStore {
     /// a failed write -- the same posture `record_change` takes.
     async fn record_revision(&self, ctx: WriteContext<'_>, revision: &Revision) {
         if let Err(error) = self.try_record_revision(ctx, revision).await {
-            metrics::counter!("trogon_atlas_store_revisions_lost_total").increment(1);
+            crate::metrics::REVISIONS_LOST.add(1);
             tracing::error!(
                 error = %error,
                 "record_revision failed; entity write committed but its revision was not recorded"
@@ -1924,7 +1924,7 @@ async fn run_change_tail(
             }
             Err(err) => {
                 reconnect_counter.fetch_add(1, Ordering::Relaxed);
-                metrics::counter!("trogon_atlas_store_change_tail_reconnects_total").increment(1);
+                crate::metrics::CHANGE_TAIL_RECONNECTS.add(1);
                 tracing::warn!(
                     stream = %config.stream,
                     error = %err,
@@ -2814,7 +2814,7 @@ impl Store for NatsStore {
             .await
         {
             self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            metrics::counter!("trogon_atlas_store_change_events_lost_total").increment(1);
+            crate::metrics::CHANGE_EVENTS_LOST.add(1);
             tracing::error!(
                 entity_ref = ?entity_ref,
                 "create: change event lost after successful KV write"
@@ -2900,7 +2900,7 @@ impl Store for NatsStore {
             .await
         {
             self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            metrics::counter!("trogon_atlas_store_change_events_lost_total").increment(1);
+            crate::metrics::CHANGE_EVENTS_LOST.add(1);
             tracing::error!(
                 entity_ref = ?entity_ref,
                 "put: change event lost after successful KV write"
@@ -3048,7 +3048,7 @@ impl Store for NatsStore {
             .await
         {
             self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            metrics::counter!("trogon_atlas_store_change_events_lost_total").increment(1);
+            crate::metrics::CHANGE_EVENTS_LOST.add(1);
             tracing::error!(
                 entity_ref = ?entity_ref,
                 "update: change event lost after successful KV write"
@@ -3237,7 +3237,7 @@ impl Store for NatsStore {
                     .await
                 {
                     self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-                    metrics::counter!("trogon_atlas_store_change_events_lost_total").increment(1);
+                    crate::metrics::CHANGE_EVENTS_LOST.add(1);
                     tracing::error!(
                         entity_ref = ?entity_ref,
                         "delete: change event lost after successful KV write"
@@ -3509,7 +3509,7 @@ impl Store for NatsStore {
             // To bound accumulation from rapid polling, inactive_threshold is set
             // to 5s (down from the NATS default of 30s) so abandoned ephemeral
             // consumers are reaped quickly by the server.
-            metrics::counter!("trogon_atlas_store_read_changes_consumers_total").increment(1);
+            crate::metrics::READ_CHANGES_CONSUMERS.add(1);
             let consumer = tokio::time::timeout(
                 JS_OP_TIMEOUT,
                 stream.create_consumer(PullConfig {
@@ -4119,8 +4119,7 @@ impl Store for NatsStore {
                     complete = false;
                     if matches!(error, StoreError::ChangeEventLost) {
                         self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-                        metrics::counter!("trogon_atlas_store_change_events_lost_total")
-                            .increment(1);
+                        crate::metrics::CHANGE_EVENTS_LOST.add(1);
                     }
                     tracing::error!(
                         %error,
@@ -4132,7 +4131,7 @@ impl Store for NatsStore {
             }
             if let Err(error) = self.try_record_revision(ctx, revision).await {
                 complete = false;
-                metrics::counter!("trogon_atlas_store_revisions_lost_total").increment(1);
+                crate::metrics::REVISIONS_LOST.add(1);
                 tracing::error!(
                     %error,
                     journal = %batch_journal.id(),
@@ -4146,7 +4145,7 @@ impl Store for NatsStore {
                 tracing::warn!(journal = %id, %error, "batch_apply: journal not advanced");
             }
         } else {
-            metrics::counter!("trogon_atlas_store_batches_pending_recovery_total").increment(1);
+            crate::metrics::BATCHES_PENDING_RECOVERY.add(1);
         }
 
         Ok(outcomes)
@@ -4839,7 +4838,7 @@ impl Store for NatsStore {
                 Ok(_) => {}
                 Err(StoreError::ChangeEventLost) => {
                     self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-                    metrics::counter!("trogon_atlas_store_change_events_lost_total").increment(1);
+                    crate::metrics::CHANGE_EVENTS_LOST.add(1);
                     tracing::error!(
                         entity_ref = ?eref,
                         "land_branch_merge: change event lost after successful KV write"
@@ -5773,7 +5772,7 @@ mod tests {
         );
     }
 
-    /// `read_changes_consumers_total` counter increments once per call.
+    /// `trogon_atlas.store.read_changes.consumers` counter increments once per call.
     #[test]
     fn read_changes_consumer_counter_increments() {
         // Verify that the metrics counter pattern compiles and the atomic

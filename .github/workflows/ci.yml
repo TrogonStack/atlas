@@ -168,6 +168,25 @@ jobs:
           TROGON_ATLAS_PROTO_BASELINE_REF: origin/main
         run: mise run github:workflows:ci:proto-breaking
 
+  semconv:
+    name: Semantic conventions
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+
+      - name: weaver registry check
+        run: mise run github:workflows:ci:otel-check
+
+      - name: generated code is up to date
+        run: mise run github:workflows:ci:otel-generated
+
   workflows:
     name: Workflows
     needs: [runs-on, changes]

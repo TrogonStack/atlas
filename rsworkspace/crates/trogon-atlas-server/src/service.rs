@@ -14,6 +14,7 @@ use trogon_atlas_core::{
     NamespaceId, NamespaceName, OwnerId, WriterRole,
 };
 use trogon_atlas_proto as pb;
+use trogon_atlas_semconv::semconv::streamattr;
 use trogon_atlas_store::{
     store::{ChangeRecord, ListFilter, MutationOp, MutationOutcome, OperationStatus, WriterStatus},
     ChangeKind, ChangesetOp, ChangesetPage, ChangesetRecord, ChangesetRef, ChangesetScope,
@@ -1615,7 +1616,7 @@ impl EventModelServiceImpl {
             let fut = async {
                 if let Err(err) = mirror.apply(batch).await {
                     tracing::warn!(error = %err, "git mirror apply failed");
-                    metrics::counter!("git_mirror_failures_total").increment(1);
+                    crate::metrics::GIT_MIRROR_FAILURES.add(1);
                 }
             };
             fut.instrument(tracing::info_span!("mirror_apply")).await;
@@ -1687,7 +1688,7 @@ impl EventModelServiceImpl {
             if let Err(err) = index.apply_put(&entity) {
                 tracing::warn!(error = %err, "search index put failed; index will rebuild");
                 ready.store(false, Ordering::Release);
-                metrics::counter!("trogon_atlas_search_index_errors_total").increment(1);
+                crate::metrics::SEARCH_INDEX_ERRORS.add(1);
             }
         });
     }
@@ -1703,7 +1704,7 @@ impl EventModelServiceImpl {
             if let Err(err) = index.apply_delete(kind, &id) {
                 tracing::warn!(error = %err, "search index delete failed; index will rebuild");
                 ready.store(false, Ordering::Release);
-                metrics::counter!("trogon_atlas_search_index_errors_total").increment(1);
+                crate::metrics::SEARCH_INDEX_ERRORS.add(1);
             }
         });
     }
@@ -1762,15 +1763,15 @@ impl EventModelServiceImpl {
     /// narrower than the change feed's: losing a changeset takes a KV write
     /// failing on a store that just accepted the entity writes, whereas the
     /// change feed drops events whenever a publish exhausts its retries.
-    /// Watch `trogon_atlas_changesets_lost_total` alongside
-    /// `trogon_atlas_store_change_events_lost_total`.
+    /// Watch `trogon_atlas.changesets.lost` alongside
+    /// `trogon_atlas.store.change_events.lost`.
     async fn record_changeset(&self, changeset: PendingChangeset, message: String) {
         if changeset.ops.is_empty() {
             return;
         }
         let record = changeset.into_record(message);
         if let Err(err) = self.store.append_changeset(&record).await {
-            metrics::counter!("trogon_atlas_changesets_lost_total").increment(1);
+            crate::metrics::CHANGESETS_LOST.add(1);
             tracing::error!(
                 changeset_id = %record.id,
                 rpc = %record.rpc,
@@ -5433,7 +5434,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let tx_panic = tx.clone();
         let inner = tokio::spawn(async move {
             let _guard = stream_counter;
-            let mut termination = crate::telemetry::StreamTerminationGuard::new("StreamChanges");
+            let mut termination = crate::telemetry::StreamTerminationGuard::new(
+                pb::event_model_service_server::SERVICE_NAME,
+                "StreamChanges",
+            );
             let mut last_sent = after_seq;
             let mut subscriber = subscriber;
             // Drain the backlog one page at a time. A page that returns
@@ -5446,7 +5450,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     Ok(p) => p,
                     Err(err) => {
                         let _ = tx.send(Err(store_err(err))).await;
-                        termination.mark("backlog_error");
+                        termination.mark(streamattr::OutcomeAttr::BacklogError);
                         return;
                     }
                 };
@@ -5460,7 +5464,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         && change_record_visible(&record, &lens)
                         && tx.send(Ok(change_record_to_event(record))).await.is_err()
                     {
-                        termination.mark("client_disconnected_backlog");
+                        termination.mark(streamattr::OutcomeAttr::ClientDisconnectedBacklog);
                         return;
                     }
                     last_sent = next_seq;
@@ -5493,7 +5497,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                     Ok(p) => p,
                                     Err(err) => {
                                         let _ = tx.send(Err(store_err(err))).await;
-                                        termination.mark("gap_error");
+                                        termination.mark(streamattr::OutcomeAttr::GapError);
                                         return;
                                     }
                                 };
@@ -5532,7 +5536,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                                     .await
                                                     .is_err()
                                             {
-                                                termination.mark("client_disconnected_gap");
+                                                termination.mark(
+                                                    streamattr::OutcomeAttr::ClientDisconnectedGap,
+                                                );
                                                 return;
                                             }
                                             gap_start = next_seq;
@@ -5566,7 +5572,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         // `read_changes`. Terminating with DataLoss forced
                         // every slow subscriber to reconnect and re-list
                         // even though the store still held the records.
-                        metrics::counter!("broadcast_lag_events_total").increment(missed);
+                        crate::metrics::BROADCAST_LAG_EVENTS.add(missed);
                         tracing::warn!(
                             missed,
                             last_sent,
@@ -5574,7 +5580,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         );
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        termination.mark("source_closed");
+                        termination.mark(streamattr::OutcomeAttr::SourceClosed);
                         return;
                     }
                 }

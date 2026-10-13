@@ -2,8 +2,7 @@
 
 Deploys the `trogon-atlas-server` gRPC service (port 50069), which also
 serves an MCP endpoint over Streamable HTTP at `/mcp` on that same port.
-Metrics and traces are pushed over OTLP; a Prometheus scrape at
-`/-/metrics` on that same port is opt-in.
+Metrics and traces are pushed over OTLP; there is no scrape endpoint.
 
 NATS JetStream is a required external dependency and is not installed by
 this chart. Point `config.natsUrl` at an existing NATS installation with
@@ -103,13 +102,15 @@ Add `?verbose` to either path to list each check. The same states are served ove
 
 ## Telemetry
 
-Traces and metrics are pushed over OTLP gRPC to `config.otlpEndpoint`, typically an OpenTelemetry Collector; with it empty, neither is exported. There is no metrics port.
+Traces and metrics are pushed over OTLP gRPC to `config.otlpEndpoint`, typically an OpenTelemetry Collector; with it empty, neither is exported. There is no metrics port and no scrape endpoint.
 
-`metrics.prometheus.enabled=true` additionally serves a Prometheus scrape at `/-/metrics` on the `private` port, outside auth like the probes: a scraper holds no bearer token, and the payload is operational counters with no entity data. With it off, `/-/metrics` answers 404. Point your own scrape config at the Service's `private` port; the chart creates no ServiceMonitor.
+### Upgrading from 1.x
+
+2.0.0 removes the opt-in metrics scrape endpoint and the `metrics` values that enabled it; drop any `metrics` override. Metrics are OTLP push only; send them to a Collector with `config.otlpEndpoint`.
 
 ### Upgrading from 0.x
 
-1.0.0 removes the dedicated metrics port (9100), its Service port, the `metrics.enabled`, `metrics.port` and `metrics.serviceMonitor.*` values, and the ServiceMonitor template. Send metrics to a Collector with `config.otlpEndpoint`, or set `metrics.prometheus.enabled=true` and scrape `/-/metrics` on the `private` port.
+1.0.0 removes the dedicated metrics port (9100), its Service port, the `metrics.enabled`, `metrics.port` and `metrics.serviceMonitor.*` values, and the ServiceMonitor template. Send metrics to a Collector with `config.otlpEndpoint`.
 
 It also renames the serving port from `grpc` to `private`, on the container and the Service, and the value `service.grpcPort` to `service.port` (default unchanged at `50069`). Update any NetworkPolicy, ServiceMonitor, or Gateway route that names the port, and move a `service.grpcPort` override to `service.port`. Without TLS the Service port's `appProtocol` changes from `grpc` to `kubernetes.io/h2c`; with TLS it carries none.
 
@@ -130,7 +131,7 @@ Scaling the write path needs a leader lease or per-scope locks in KV, which does
 
 With `gitMirror.enabled=true` the chart provisions the mirror PVC and two CronJobs.
 
-**`reconcile` (`gitMirror.reconcile`, default on, `17 3 * * *`).** A mirror write can fail while the store commit succeeds: the server logs a warning, increments `git_mirror_failures_total`, and lets the RPC succeed, so the two diverge silently. Since the mirror is the documented restore path for entities (`import-git`), an unwatched divergence is discovered on restore day. This job compares store against mirror and **exits non-zero on drift**, so alert on the resulting failed Job.
+**`reconcile` (`gitMirror.reconcile`, default on, `17 3 * * *`).** A mirror write can fail while the store commit succeeds: the server logs a warning, increments `trogon_atlas.git_mirror.failures`, and lets the RPC succeed, so the two diverge silently. Since the mirror is the documented restore path for entities (`import-git`), an unwatched divergence is discovered on restore day. This job compares store against mirror and **exits non-zero on drift**, so alert on the resulting failed Job.
 
 **`gc` (`gitMirror.gc`, default on, `43 4 * * 0`).** The server only ever commits; it never repacks. Every mutation is a commit and every entity a blob, so without this the object store grows unbounded against a fixed PVC.
 
@@ -144,9 +145,9 @@ Both jobs mount the mirror PVC, which is `ReadWriteOnce` by default, so both def
 
 | Metric | Meaning |
 |---|---|
-| `git_mirror_failures_total` | a store commit succeeded but its mirror write did not; the mirror is now behind |
-| `trogon_atlas_store_change_events_lost_total` | a KV write is durable but its change event was never published; every change-feed consumer now has a hole. Not mirror-specific, and worth alerting on even with the mirror off |
-| `trogon_atlas_changesets_lost_total` | writes committed but their changeset never landed, so those changes have no durable attribution. Not mirror-specific, and worth alerting on even with the mirror off |
+| `trogon_atlas.git_mirror.failures` | a store commit succeeded but its mirror write did not; the mirror is now behind |
+| `trogon_atlas.store.change_events.lost` | a KV write is durable but its change event was never published; every change-feed consumer now has a hole. Not mirror-specific, and worth alerting on even with the mirror off |
+| `trogon_atlas.changesets.lost` | writes committed but their changeset never landed, so those changes have no durable attribution. Not mirror-specific, and worth alerting on even with the mirror off |
 
 ### Pushing the mirror off-box
 
@@ -175,7 +176,6 @@ Not done by the server, deliberately: a daemon holding push credentials is a dif
 | `spicedb.sync.enabled` | `false` | CronJob running `sync-spicedb` to re-derive every grant (requires `endpoint`) |
 | `spicedb.sync.schedule` | `*/15 * * * *` | schedule for that job |
 | `config.otlpEndpoint` | `""` | OTLP gRPC endpoint traces and metrics are pushed to; empty exports neither |
-| `metrics.prometheus.enabled` | `false` | serve a Prometheus scrape at `/-/metrics` on the `private` port, without auth |
 | `mcp.enabled` | `true` | serve MCP at `/mcp`, on the `private` port |
 | `mcp.allowedHosts` | `[]` | extra `Host` header values `/mcp` accepts, beyond loopback and this release's Service names |
 | `gitMirror.enabled` | `false` | mount a PVC at `/var/lib/trogon-atlas/mirror` and enable the git mirror |

@@ -80,9 +80,9 @@ docker compose -f devops/docker/compose/dev/compose.yaml up --build
 The compose file is the recommended deployment shape: NATS JetStream is the
 store (data survives restarts via the `nats-data` volume), the server's git
 mirror is persisted on `trogon-atlas-mirror`, every service is set to
-`restart: unless-stopped`, NATS reports a healthcheck against its monitoring
-port, and the server serves a Prometheus scrape at
-`http://127.0.0.1:50069/-/metrics`.
+`restart: unless-stopped`, and NATS reports a healthcheck against its
+monitoring port. The server's metrics go out over OTLP; see
+"Observability" below.
 
 `devops/docker/images/trogon-atlas-server/Dockerfile` is a multi-stage build
 that compiles the binary against `*-unknown-linux-musl` and ships from Alpine
@@ -150,7 +150,6 @@ and return proto3 JSON instead. See "What the tools return" in
 | `--git-mirror` | `TROGON_ATLAS_GIT_MIRROR` | unset |
 | `--git-author-name` | `TROGON_ATLAS_GIT_AUTHOR_NAME` | `trogon-atlas-server` |
 | `--git-author-email` | `TROGON_ATLAS_GIT_AUTHOR_EMAIL` | `trogon-atlas@local` |
-| `--prometheus-metrics` | `TROGON_ATLAS_PROMETHEUS_METRICS` | `false` (serves `/-/metrics` on the gRPC listener when set) |
 | `--mcp` | `TROGON_ATLAS_MCP` | `false` (serves `/mcp` on the gRPC listener when set) |
 | `--mcp-allowed-hosts` | `TROGON_ATLAS_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` (`*` disables the check) |
 | `--auth-token` | `TROGON_ATLAS_AUTH_TOKEN` | unset (auth disabled, dev only) |
@@ -184,35 +183,36 @@ span named `rpc` with the gRPC method path attached. Set `RUST_LOG` (e.g.
 `RUST_LOG=info,trogon_atlas_server=debug`) to control verbosity.
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT` (e.g. `http://otel-collector:4317`) to
-export the `rpc` and `llm.complete` spans over OTLP/gRPC; without it spans
-are only visible in the logs.
-
-The same endpoint also turns on metric export over OTLP/gRPC. Pass
-`--prometheus-metrics` (`TROGON_ATLAS_PROMETHEUS_METRICS=true`, which this
-compose stack sets) to also serve a Prometheus scrape at `/-/metrics` on the
-gRPC port, outside auth. Both can be on at once. Emitted families:
-`rpc_requests_total{service,method,code}`,
-`rpc_request_duration_seconds{service,method}`,
-`rpc_errors_total{service,method,code}` for the subset where `code != "ok"`,
-`rpc_stream_terminations_total{method,outcome}` for server-streaming RPCs,
-`changes_stream_messages` / `changes_stream_bytes` /
-`changes_stream_oldest_age_seconds` gauges polled every 30s from the
-configured store (NATS only; `MemStore` reports nothing), and
-`llm_requests_total` / `llm_request_duration_seconds` /
-`llm_tokens_total` / `llm_prompt_truncations_total` when the LLM path is
-enabled. Readiness and liveness are served on the gRPC port, over plain
-HTTP at `/-/readiness` and `/-/liveness` and over `grpc.health.v1.Health`
-as the services `readiness`, `liveness`, and `""` (readiness).
+export the `rpc` and `llm.complete` spans, and metrics, over OTLP/gRPC to
+your own Collector; without it, neither is exported and spans are only
+visible in the logs. This compose stack does not run a Collector itself,
+so point the variable at one reachable from the `trogon-atlas` network.
+There is no scrape endpoint: metrics are push-only. Emitted instruments:
+`rpc.server.call.duration` (histogram, seconds; `rpc.system.name`,
+`rpc.method`, `rpc.response.status_code`, `error.type` on failure),
+`trogon_atlas.rpc.server.stream.terminations` (`rpc.method`,
+`trogon_atlas.stream.outcome`) for server-streaming RPCs,
+`trogon_atlas.change_stream.message.count` /
+`trogon_atlas.change_stream.size` (bytes) /
+`trogon_atlas.change_stream.oldest_message.age` (seconds) gauges polled
+every 30s from the configured store (NATS only; `MemStore` reports
+nothing), and `trogon_atlas.llm.request.duration` (histogram, seconds) /
+`trogon_atlas.llm.tokens` (`trogon_atlas.llm.token.type=input|output`) /
+`trogon_atlas.llm.prompt_truncations` when the LLM path is enabled.
+Readiness and liveness are served on the gRPC port, over plain HTTP at
+`/-/readiness` and `/-/liveness` and over `grpc.health.v1.Health` as the
+services `readiness`, `liveness`, and `""` (readiness).
 
 Suggested alerts on the change-stream gauges:
 
-- `changes_stream_oldest_age_seconds > $((85 * 24 * 3600))` when the
-  configured `--changes-max-age-days=90`: retention is about to bite.
-- `changes_stream_messages > 0.9 * $TROGON_ATLAS_CHANGES_MAX_MSGS`: same
-  for the message cap.
-- `changes_stream_oldest_age_seconds == 0` for more than an hour while
-  the model is being actively edited: the publisher loop or the NATS
-  connection is broken.
+- `trogon_atlas.change_stream.oldest_message.age > $((85 * 24 * 3600))`
+  when the configured `--changes-max-age-days=90`: retention is about to
+  bite.
+- `trogon_atlas.change_stream.message.count > 0.9 * $TROGON_ATLAS_CHANGES_MAX_MSGS`:
+  same for the message cap.
+- `trogon_atlas.change_stream.oldest_message.age == 0` for more than an
+  hour while the model is being actively edited: the publisher loop or
+  the NATS connection is broken.
 
 ## Status
 

@@ -96,11 +96,6 @@ struct Args {
         default_value = "trogon-atlas@local"
     )]
     git_author_email: String,
-    /// Serve a Prometheus scrape at `/-/metrics` on this same listener,
-    /// outside auth. Off by default: metrics are pushed over OTLP when
-    /// `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
-    #[arg(long, env = "TROGON_ATLAS_PROMETHEUS_METRICS", default_value_t = false)]
-    prometheus_metrics: bool,
     /// Serve MCP over Streamable HTTP at `/mcp`, on this same gRPC listener.
     /// Off by default. Every MCP request acts as its own `Authorization:
     /// Bearer` token, exactly as a gRPC call would.
@@ -556,7 +551,7 @@ async fn await_inflight_drain(
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let tracing_guard = trogon_atlas_server::telemetry::init_tracing()?;
+    let telemetry = trogon_atlas_server::telemetry::init_telemetry()?;
 
     let args = Args::parse();
 
@@ -764,10 +759,7 @@ async fn main() -> Result<()> {
         .parse()
         .with_context(|| format!("parsing --listen={}", args.listen))?;
 
-    let metrics =
-        trogon_atlas_server::metrics_export::MetricsExporters::from_env(args.prometheus_metrics)?
-            .install()?;
-    if metrics.is_recording() {
+    if telemetry.exports_metrics() {
         trogon_atlas_server::telemetry::spawn_change_stream_stats_publisher(
             store.clone(),
             Duration::from_secs(30),
@@ -1024,24 +1016,14 @@ async fn main() -> Result<()> {
     // OUTSIDE the auth stack so probes (kubelet, kube-proxy, GCP HC, etc.)
     // can reach it without holding a bearer token. It exposes only
     // readiness and liveness -- no entity data -- so the bypass is
-    // intentional and bounded. The opt-in Prometheus scrape at /-/metrics
-    // sits beside them for the same reason: scrapers hold no token and the
-    // payload is operational counters only. Anything touching the
-    // EventModelService data plane must stay inside `data_plane`.
+    // intentional and bounded. Anything touching the EventModelService data
+    // plane must stay inside `data_plane`.
     let mut routes = tonic::service::Routes::builder();
     routes.add_service(health.grpc_service());
     routes.add_service(data_plane.clone());
     let mut routes = routes.routes();
     let merged = routes.axum_router_mut().clone().merge(health.router());
     *routes.axum_router_mut() = merged;
-    let merged = routes.axum_router_mut().clone().merge(metrics.router());
-    *routes.axum_router_mut() = merged;
-    if metrics.serves_prometheus() {
-        tracing::info!(
-            "serving Prometheus metrics at {} on the gRPC listener",
-            trogon_atlas_server::metrics_export::METRICS_PATH
-        );
-    }
     // Must run before `/mcp` is merged: a single-RPC deadline would cut off
     // MCP tool calls that issue several RPCs, each already timed out on its own.
     if let Some(rpc_timeout) = rpc_timeout {
@@ -1101,11 +1083,7 @@ async fn main() -> Result<()> {
     // run before the process exits or the last few seconds of telemetry are
     // silently dropped. Both flushes block on the exporters, so they run off
     // the async runtime the exporters themselves depend on.
-    tokio::task::spawn_blocking(move || {
-        metrics.shutdown();
-        tracing_guard.shutdown();
-    })
-    .await?;
+    tokio::task::spawn_blocking(move || telemetry.shutdown()).await?;
     Ok(())
 }
 

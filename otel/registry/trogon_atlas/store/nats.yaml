@@ -1,0 +1,65 @@
+file_format: definition/2
+metrics:
+  - name: trogon_atlas.store.nats.disconnects
+    requirement_level: recommended
+    instrument: counter
+    unit: "{disconnect}"
+    stability: stable
+    brief: NATS client disconnect events.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.store.nats.reconnects
+    requirement_level: recommended
+    instrument: counter
+    unit: "{reconnect}"
+    stability: stable
+    brief: NATS client reconnect events.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.store.revisions.lost
+    requirement_level: recommended
+    instrument: counter
+    unit: "{revision}"
+    stability: stable
+    brief: Entity revisions that could not be recorded after their write committed.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.store.change_tail.reconnects
+    requirement_level: recommended
+    instrument: counter
+    unit: "{reconnect}"
+    stability: stable
+    brief: Live change-tail subscriptions that had to reconnect.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.store.change_events.lost
+    requirement_level: recommended
+    instrument: counter
+    unit: "{event}"
+    stability: stable
+    brief: Change events that could not be published after their write committed.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.store.read_changes.consumers
+    requirement_level: recommended
+    instrument: counter
+    unit: "{consumer}"
+    stability: stable
+    brief: Ephemeral JetStream pull consumers created to serve a read_changes call.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.store.batches.pending_recovery
+    requirement_level: recommended
+    instrument: counter
+    unit: "{batch}"
+    stability: stable
+    brief: Batches left for background recovery after a partial apply.
+    annotations:
+      code_generation:
+        metric_value_type: int

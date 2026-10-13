@@ -4,8 +4,8 @@ Umbrella chart deploying the event model stack to Kubernetes:
 
 - `server` (alias for trogon-atlas-server): the gRPC service (`private` port 50069),
   which also serves an MCP endpoint over Streamable HTTP at `/mcp` on that
-  same port. Metrics and traces are pushed over OTLP; a Prometheus scrape
-  at `/-/metrics` on that same port is opt-in.
+  same port. Metrics and traces are pushed over OTLP; there is no scrape
+  endpoint.
 - `studio` (alias for trogon-atlas-studio): the web UI and gateway
   (`public` port 80), reaching the server over gRPC.
 
@@ -64,9 +64,13 @@ feeds. To share the server's token Secret, point
 `server.auth.token.existingSecret` or `server.auth.tokensFile.existingSecret`
 uses.
 
+## Upgrading from 1.x
+
+2.0.0 carries trogon-atlas-server 2.0.0, which drops the opt-in metrics scrape endpoint and the `server.metrics` values in favor of OTLP push only. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-1x).
+
 ## Upgrading from 0.x
 
-1.0.0 carries trogon-atlas-server 1.0.0, which drops the metrics port and the ServiceMonitor in favor of OTLP push and an opt-in `/-/metrics` on the `private` port. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-0x).
+1.0.0 carries trogon-atlas-server 1.0.0, which drops the metrics port and the ServiceMonitor in favor of OTLP push. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-0x).
 
 Port names now follow who reaches them: the server's `grpc` port is `private` and studio's `http` port is `public`, on the containers and the Services. `server.service.grpcPort` is now `server.service.port`, and `studio.server.grpcPort` is now `studio.server.port`. Update any NetworkPolicy, ServiceMonitor, Ingress, or Gateway route that names either port. See the [studio upgrade notes](../trogon-atlas-studio/README.md#upgrading-from-0x) too.
 
@@ -79,7 +83,6 @@ Port names now follow who reaches them: the server's `grpc` port is `private` an
 | `studio.enabled` | `true` | install trogon-atlas-studio |
 | `server.mcp.enabled` | `true` | serve MCP at `/mcp` from trogon-atlas-server |
 | `server.config.otlpEndpoint` | `""` | OTLP gRPC endpoint the server pushes traces and metrics to |
-| `server.metrics.prometheus.enabled` | `false` | serve a Prometheus scrape at `/-/metrics` on the server's `private` port |
 
 See the subchart READMEs linked above for every `server.*` and `studio.*`
 value.

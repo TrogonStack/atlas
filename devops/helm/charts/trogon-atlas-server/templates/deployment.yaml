@@ -107,10 +107,6 @@ spec:
                   name: {{ $server.config.changeCursorKey.existingSecret }}
                   key: {{ $server.config.changeCursorKey.key }}
             {{- end }}
-            {{- if $server.metrics.prometheus.enabled }}
-            - name: TROGON_ATLAS_PROMETHEUS_METRICS
-              value: "true"
-            {{- end }}
             {{- if $server.mcp.enabled }}
             - name: TROGON_ATLAS_MCP
               value: "true"

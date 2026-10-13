@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#MISE description="Fail when the committed generated semantic convention code is out of date with otel/registry"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+mise run otel:generate
+
+path=rsworkspace/crates/trogon-atlas-semconv/src/semconv
+drift="$(git status --porcelain -- "$path")"
+if [ -n "$drift" ]; then
+  echo "ERROR: generated semantic convention code is out of date:"
+  echo "$drift"
+  echo ""
+  echo "Run 'mise run otel:generate' and commit the result."
+  exit 1
+fi
+
+echo "Generated semantic convention code is up to date."

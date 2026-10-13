@@ -11,29 +11,56 @@ use std::{
 
 use tower::{Layer, Service};
 use tracing::Span;
+use trogon_atlas_semconv::semconv::{
+    cacheattr, rpcmetric::ServerCallDurationHistogramAttr, streamattr,
+};
 
 pub const GRPC_SYSTEM: &str = "grpc";
 pub const SERVICE_NAME: &str = "trogon-atlas-server";
+/// `error.type` for a call whose inner service failed before producing any
+/// response, so no gRPC status exists.
+const ERROR_TYPE_TRANSPORT: &str = "transport_error";
 
-pub(crate) fn resource() -> opentelemetry_sdk::Resource {
-    opentelemetry_sdk::Resource::builder()
+/// `OTEL_SERVICE_NAME` wins over a `service.name` in
+/// `OTEL_RESOURCE_ATTRIBUTES`, which wins over [`SERVICE_NAME`].
+/// `Resource::builder()` lets `OTEL_RESOURCE_ATTRIBUTES` override
+/// `OTEL_SERVICE_NAME`, so the precedence is built explicitly.
+fn resource() -> opentelemetry_sdk::Resource {
+    use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
+
+    let mut builder = opentelemetry_sdk::Resource::builder_empty()
         .with_service_name(SERVICE_NAME)
-        .build()
+        .with_detector(Box::new(TelemetryResourceDetector))
+        .with_detector(Box::new(EnvResourceDetector::new()));
+
+    if let Ok(name) = std::env::var("OTEL_SERVICE_NAME") {
+        if !name.is_empty() {
+            builder = builder.with_service_name(name);
+        }
+    }
+
+    builder.build()
 }
 
-/// Shutdown handle returned by `init_tracing`. When OTLP is enabled, this
-/// wraps the batch `TracerProvider` so the graceful-shutdown path can
-/// flush queued spans before the process exits. When OTLP is disabled (or
-/// failed to initialize), `shutdown` is a no-op.
-pub struct TracingGuard {
-    provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+/// Shutdown handle returned by `init_telemetry`. When OTLP is enabled, this
+/// wraps the batch `TracerProvider` and the periodic `SdkMeterProvider` so
+/// the graceful-shutdown path can flush queued spans and metrics before the
+/// process exits. When OTLP is disabled, `shutdown` is a no-op.
+pub struct TelemetryGuard {
+    trace_provider: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+    meter_provider: Option<opentelemetry_sdk::metrics::SdkMeterProvider>,
 }
 
-impl TracingGuard {
-    /// Flush any spans buffered by the batch exporter and tear down the
-    /// provider. Safe to call multiple times; subsequent calls are no-ops.
+impl TelemetryGuard {
+    pub fn exports_metrics(&self) -> bool {
+        self.meter_provider.is_some()
+    }
+
+    /// Flush any spans and metrics buffered by the batch/periodic exporters
+    /// and tear down both providers. Safe to call multiple times; subsequent
+    /// calls are no-ops.
     pub fn shutdown(mut self) {
-        if let Some(provider) = self.provider.take() {
+        if let Some(provider) = self.trace_provider.take() {
             if let Err(err) = provider.force_flush() {
                 tracing::warn!(error = ?err, "otlp force_flush failed");
             }
@@ -41,15 +68,26 @@ impl TracingGuard {
                 tracing::warn!(error = ?err, "otlp tracer provider shutdown failed");
             }
         }
+        if let Some(provider) = self.meter_provider.take() {
+            if let Err(err) = provider.force_flush() {
+                tracing::warn!(error = ?err, "otlp metrics force_flush failed");
+            }
+            if let Err(err) = provider.shutdown() {
+                tracing::warn!(error = ?err, "otlp meter provider shutdown failed");
+            }
+        }
     }
 }
 
 /// Initialize JSON logging plus, when `OTEL_EXPORTER_OTLP_ENDPOINT` is set,
-/// an OTLP span exporter so the `rpc`/`llm.complete` spans leave the
-/// process instead of dying in stdout. Returns a `TracingGuard` whose
-/// `shutdown` method MUST be called on graceful shutdown so the batch
-/// exporter flushes its in-memory queue.
-pub fn init_tracing() -> anyhow::Result<TracingGuard> {
+/// OTLP span and metric exporters. Returns a `TelemetryGuard` whose
+/// `shutdown` method MUST be called on graceful shutdown so the batch and
+/// periodic exporters flush their in-memory queues.
+///
+/// Call this before anything records a metric: instruments in
+/// `crate::metrics` and `trogon_atlas_store::metrics` bind to whichever
+/// global `MeterProvider` is installed when they are first touched.
+pub fn init_telemetry() -> anyhow::Result<TelemetryGuard> {
     use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
     let env_filter = match tracing_subscriber::EnvFilter::try_from_default_env() {
@@ -77,32 +115,54 @@ pub fn init_tracing() -> anyhow::Result<TracingGuard> {
         Ok(endpoint) if !endpoint.is_empty() => {
             use opentelemetry::trace::TracerProvider as _;
             use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
-            let exporter = opentelemetry_otlp::SpanExporter::builder()
+
+            let resource = resource();
+
+            let span_exporter = opentelemetry_otlp::SpanExporter::builder()
                 .with_tonic()
                 .with_endpoint(endpoint.clone())
                 .with_tls_config(otlp_tls_config())
                 .build()
-                .map_err(|e| anyhow::anyhow!("building OTLP exporter for {endpoint}: {e}"))?;
-            let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-                .with_batch_exporter(exporter)
-                .with_resource(resource())
+                .map_err(|e| anyhow::anyhow!("building OTLP span exporter for {endpoint}: {e}"))?;
+            let trace_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                .with_batch_exporter(span_exporter)
+                .with_resource(resource.clone())
                 .build();
-            let tracer = provider.tracer(SERVICE_NAME);
+            let tracer = trace_provider.tracer(SERVICE_NAME);
             // Set the global provider so opentelemetry::global::tracer works,
             // and keep a clone for explicit shutdown so the batch exporter
             // flushes queued spans before the process exits.
-            opentelemetry::global::set_tracer_provider(provider.clone());
+            opentelemetry::global::set_tracer_provider(trace_provider.clone());
+
+            let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
+                .with_tonic()
+                .with_endpoint(endpoint.clone())
+                .with_tls_config(otlp_tls_config())
+                .build()
+                .map_err(|e| {
+                    anyhow::anyhow!("building OTLP metric exporter for {endpoint}: {e}")
+                })?;
+            let meter_provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+                .with_periodic_exporter(metric_exporter)
+                .with_resource(resource)
+                .build();
+            opentelemetry::global::set_meter_provider(meter_provider.clone());
+
             registry
                 .with(tracing_opentelemetry::layer().with_tracer(tracer))
                 .init();
-            tracing::info!(endpoint = %endpoint, "otlp trace exporter enabled");
-            Ok(TracingGuard {
-                provider: Some(provider),
+            tracing::info!(endpoint = %endpoint, "otlp trace and metric exporters enabled");
+            Ok(TelemetryGuard {
+                trace_provider: Some(trace_provider),
+                meter_provider: Some(meter_provider),
             })
         }
         _ => {
             registry.init();
-            Ok(TracingGuard { provider: None })
+            Ok(TelemetryGuard {
+                trace_provider: None,
+                meter_provider: None,
+            })
         }
     }
 }
@@ -250,17 +310,21 @@ impl Drop for InflightGuard {
 /// Record the time a caller spent blocked acquiring the global mutation
 /// lock. Exposes contention as a histogram alongside the other RPC metrics.
 pub fn record_mutation_lock_wait(seconds: f64) {
-    metrics::histogram!("mutation_lock_wait_seconds").record(seconds);
+    crate::metrics::MUTATION_LOCK_WAIT_DURATION.record(seconds);
 }
 
 /// Snapshot-cache hit/miss counters. Both are emitted as counters (not
 /// gauges) so the rate of misses is alertable.
 pub fn record_snapshot_cache_hit() {
-    metrics::counter!("snapshot_cache_hits_total").increment(1);
+    crate::metrics::CACHE_LOOKUPS.add(1, cacheattr::NameAttr::Snapshot, cacheattr::ResultAttr::Hit);
 }
 
 pub fn record_snapshot_cache_miss() {
-    metrics::counter!("snapshot_cache_misses_total").increment(1);
+    crate::metrics::CACHE_LOOKUPS.add(
+        1,
+        cacheattr::NameAttr::Snapshot,
+        cacheattr::ResultAttr::Miss,
+    );
 }
 
 /// Branch-search index cache hit/miss counters. A miss means one branch
@@ -269,11 +333,19 @@ pub fn record_snapshot_cache_miss() {
 /// every search, or the cache is too small for the number of branches under
 /// review.
 pub fn record_branch_search_index_hit() {
-    metrics::counter!("branch_search_index_cache_hits_total").increment(1);
+    crate::metrics::CACHE_LOOKUPS.add(
+        1,
+        cacheattr::NameAttr::BranchSearchIndex,
+        cacheattr::ResultAttr::Hit,
+    );
 }
 
 pub fn record_branch_search_index_miss() {
-    metrics::counter!("branch_search_index_cache_misses_total").increment(1);
+    crate::metrics::CACHE_LOOKUPS.add(
+        1,
+        cacheattr::NameAttr::BranchSearchIndex,
+        cacheattr::ResultAttr::Miss,
+    );
 }
 
 fn split_grpc_path(path: &str) -> (&str, &str) {
@@ -288,11 +360,11 @@ fn split_grpc_path(path: &str) -> (&str, &str) {
 /// publish them as gauges. SREs alert on these to detect
 /// imminent `JetStream` retention pressure before the stream evicts data.
 ///
-/// Emitted gauges (no labels, the stream is a singleton per server):
-/// - `changes_stream_messages`: current message count.
-/// - `changes_stream_bytes`: current byte count.
-/// - `changes_stream_oldest_age_seconds`: age of the oldest retained
-///   message; `0` when the stream is empty.
+/// Emitted gauges (no attributes, the stream is a singleton per server):
+/// - `trogon_atlas.change_stream.message_count`: current message count.
+/// - `trogon_atlas.change_stream.size`: current byte count.
+/// - `trogon_atlas.change_stream.oldest_message_age`: age of the oldest
+///   retained message; `0` when the stream is empty.
 ///
 /// Backends that do not report stats yield a `None`
 /// from `change_stream_stats` and this loop becomes a no-op heartbeat.
@@ -309,21 +381,18 @@ pub fn spawn_change_stream_stats_publisher(
             match store.change_stream_stats().await {
                 Ok(Some(stats)) => {
                     consecutive_failures = 0;
-                    #[allow(clippy::cast_precision_loss)]
-                    {
-                        metrics::gauge!("changes_stream_messages").set(stats.messages as f64);
-                        metrics::gauge!("changes_stream_bytes").set(stats.bytes as f64);
-                    }
+                    crate::metrics::CHANGE_STREAM_MESSAGE_COUNT
+                        .record(i64::try_from(stats.messages).unwrap_or(i64::MAX));
+                    crate::metrics::CHANGE_STREAM_SIZE
+                        .record(i64::try_from(stats.bytes).unwrap_or(i64::MAX));
                     let age = match stats.oldest_message_unix_seconds {
                         Some(secs) => {
                             let now = chrono::Utc::now().timestamp();
-                            #[allow(clippy::cast_precision_loss)]
-                            let age_f = (now - secs).max(0) as f64;
-                            age_f
+                            (now - secs).max(0)
                         }
-                        None => 0.0,
+                        None => 0,
                     };
-                    metrics::gauge!("changes_stream_oldest_age_seconds").set(age);
+                    crate::metrics::CHANGE_STREAM_OLDEST_MESSAGE_AGE.record(age);
                 }
                 Ok(None) => {
                     consecutive_failures = 0;
@@ -345,24 +414,10 @@ pub fn spawn_change_stream_stats_publisher(
     });
 }
 
-/// Tower middleware that records per-RPC counters and a duration histogram.
-///
-/// Emitted metrics (labelled by `service` + `method`, plus `code` on the
-/// counters):
-/// - `rpc_requests_total{service, method, code}`: every RPC, success or fail.
-/// - `rpc_request_duration_seconds{service, method}`: wall-clock latency
-///   measured from request entry to response head.
-/// - `rpc_errors_total{service, method, code}`: subset of `rpc_requests_total`
-///   where `code != "ok"`.
-///
-/// gRPC status is read from the `grpc-status` response header. For
-/// "trailers-only" error responses tonic emits that header inline, so we
-/// observe it directly. For successful unary responses tonic emits the
-/// status only in trailers, which a Tower layer cannot observe without
-/// wrapping the body; we default the code to `"ok"` when the header is
-/// absent, which is accurate for unary RPCs. Server-streaming RPCs record
-/// their terminal outcome separately via [`StreamTerminationGuard`]
-/// (`rpc_stream_terminations_total{method, outcome}`).
+/// Tower middleware that records the `rpc.server.call.duration` histogram
+/// for every incoming gRPC call. Server-streaming RPCs end past the response
+/// head this layer observes, so they also record their terminal outcome via
+/// [`StreamTerminationGuard`].
 #[derive(Clone, Default)]
 pub struct RpcMetricsLayer;
 
@@ -371,32 +426,32 @@ pub struct RpcMetricsLayer;
 /// stream and `mark` the outcome; dropping it unmarked means the client
 /// went away first.
 pub struct StreamTerminationGuard {
-    method: &'static str,
-    outcome: Option<&'static str>,
+    rpc_method: String,
+    outcome: Option<streamattr::OutcomeAttr>,
 }
 
 impl StreamTerminationGuard {
     #[must_use]
-    pub fn new(method: &'static str) -> Self {
+    pub fn new(service: &str, method: &str) -> Self {
         Self {
-            method,
+            rpc_method: format!("{service}/{method}"),
             outcome: None,
         }
     }
 
-    pub fn mark(&mut self, outcome: &'static str) {
+    pub fn mark(&mut self, outcome: streamattr::OutcomeAttr) {
         self.outcome = Some(outcome);
     }
 }
 
 impl Drop for StreamTerminationGuard {
     fn drop(&mut self) {
-        metrics::counter!(
-            "rpc_stream_terminations_total",
-            "method" => self.method,
-            "outcome" => self.outcome.unwrap_or("client_disconnected"),
-        )
-        .increment(1);
+        crate::metrics::RPC_SERVER_STREAM_TERMINATIONS.add(
+            1,
+            std::mem::take(&mut self.rpc_method).into(),
+            self.outcome
+                .unwrap_or(streamattr::OutcomeAttr::ClientDisconnected),
+        );
     }
 }
 
@@ -436,13 +491,7 @@ where
     }
 
     fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
-        let grpc = is_grpc_request(&req);
-        let (service, method) = if grpc {
-            let (s, m) = split_grpc_path(req.uri().path());
-            (s.to_owned(), m.to_owned())
-        } else {
-            (String::new(), String::new())
-        };
+        let rpc_method = is_grpc_request(&req).then(|| rpc_method_from_path(req.uri().path()));
         let started = Instant::now();
 
         let clone = self.inner.clone();
@@ -450,54 +499,39 @@ where
 
         Box::pin(async move {
             let result = inner.call(req).await;
-            if !grpc {
-                // A merged non-gRPC route (MCP's `/mcp`): its own tool calls
-                // already record RPC metrics through the inner `data_plane`
-                // stack, so this outer layer would otherwise double-count
-                // every MCP request under a fake method label.
+            // A merged non-gRPC route (MCP's `/mcp`): its own tool calls
+            // already record RPC metrics through the inner `data_plane`
+            // stack, so this outer layer would otherwise double-count every
+            // MCP request under a fake method.
+            let Some(rpc_method) = rpc_method else {
                 return result;
-            }
-            let elapsed = started.elapsed().as_secs_f64();
-            let code = match &result {
-                Ok(resp) => header_grpc_status(resp).unwrap_or_else(|| "ok".to_string()),
-                Err(_) => "transport_error".to_string(),
             };
-
-            metrics::counter!(
-                "rpc_requests_total",
-                "service" => service.clone(),
-                "method" => method.clone(),
-                "code" => code.clone(),
-            )
-            .increment(1);
-
-            metrics::histogram!(
-                "rpc_request_duration_seconds",
-                "service" => service.clone(),
-                "method" => method.clone(),
-            )
-            .record(elapsed);
-
-            // Treat "ok" (tonic's label) and numeric 0 (gRPC spec) as
-            // success. Parse the raw header value to a tonic::Code so any
-            // future label changes or non-string representations are handled
-            // uniformly rather than by growing the string-match list.
-            let is_ok = code == "ok"
-                || code
-                    .parse::<i32>()
-                    .ok()
-                    .map(tonic::Code::from)
-                    .is_some_and(|c| c == tonic::Code::Ok);
-            if !is_ok {
-                metrics::counter!(
-                    "rpc_errors_total",
-                    "service" => service,
-                    "method" => method,
-                    "code" => code,
-                )
-                .increment(1);
+            let elapsed = started.elapsed().as_secs_f64();
+            let mut attributes = vec![ServerCallDurationHistogramAttr::RpcMethod(
+                rpc_method.into(),
+            )];
+            match &result {
+                Ok(resp) => {
+                    let code = grpc_status_code(resp);
+                    let name = grpc_status_code_name(code);
+                    attributes.push(ServerCallDurationHistogramAttr::RpcResponseStatusCode(
+                        name.into(),
+                    ));
+                    if code != tonic::Code::Ok {
+                        attributes.push(ServerCallDurationHistogramAttr::ErrorType(name.into()));
+                    }
+                }
+                Err(_) => {
+                    attributes.push(ServerCallDurationHistogramAttr::ErrorType(
+                        ERROR_TYPE_TRANSPORT.into(),
+                    ));
+                }
             }
-
+            crate::metrics::RPC_SERVER_CALL_DURATION.record(
+                elapsed,
+                GRPC_SYSTEM.into(),
+                attributes,
+            );
             result
         })
     }
@@ -569,22 +603,47 @@ where
     }
 }
 
-fn header_grpc_status<B>(resp: &http::Response<B>) -> Option<String> {
+/// The call's gRPC status from the `grpc-status` response header. Tonic only
+/// puts it there for trailers-only responses; a successful unary response
+/// carries it in trailers this layer cannot see, so an absent header is OK.
+fn grpc_status_code<B>(resp: &http::Response<B>) -> tonic::Code {
     resp.headers()
         .get("grpc-status")
-        .and_then(|v| v.to_str().ok())
-        .map(std::borrow::ToOwned::to_owned)
+        .map_or(tonic::Code::Ok, |v| tonic::Code::from_bytes(v.as_bytes()))
+}
+
+fn grpc_status_code_name(code: tonic::Code) -> &'static str {
+    match code {
+        tonic::Code::Ok => "OK",
+        tonic::Code::Cancelled => "CANCELLED",
+        tonic::Code::Unknown => "UNKNOWN",
+        tonic::Code::InvalidArgument => "INVALID_ARGUMENT",
+        tonic::Code::DeadlineExceeded => "DEADLINE_EXCEEDED",
+        tonic::Code::NotFound => "NOT_FOUND",
+        tonic::Code::AlreadyExists => "ALREADY_EXISTS",
+        tonic::Code::PermissionDenied => "PERMISSION_DENIED",
+        tonic::Code::ResourceExhausted => "RESOURCE_EXHAUSTED",
+        tonic::Code::FailedPrecondition => "FAILED_PRECONDITION",
+        tonic::Code::Aborted => "ABORTED",
+        tonic::Code::OutOfRange => "OUT_OF_RANGE",
+        tonic::Code::Unimplemented => "UNIMPLEMENTED",
+        tonic::Code::Internal => "INTERNAL",
+        tonic::Code::Unavailable => "UNAVAILABLE",
+        tonic::Code::DataLoss => "DATA_LOSS",
+        tonic::Code::Unauthenticated => "UNAUTHENTICATED",
+    }
+}
+
+/// `rpc.method` in its `{fully.qualified.Service}/{Method}` form.
+fn rpc_method_from_path(path: &str) -> String {
+    path.strip_prefix('/').unwrap_or(path).to_owned()
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use std::sync::{atomic::AtomicU64, Arc};
-
-    use tower::{Layer, Service};
-
-    use super::{is_grpc_request, is_operational_path, split_grpc_path, RpcMetricsLayer};
+    use super::{is_grpc_request, is_operational_path, split_grpc_path};
 
     #[test]
     fn parses_canonical_grpc_path() {
@@ -636,99 +695,5 @@ mod tests {
 
         let no_content_type = http::Request::builder().body(()).unwrap();
         assert!(!is_grpc_request(&no_content_type));
-    }
-
-    async fn ok_service(
-        _req: http::Request<()>,
-    ) -> Result<http::Response<()>, std::convert::Infallible> {
-        Ok(http::Response::new(()))
-    }
-
-    /// Recorder that funnels every counter increment into one shared total,
-    /// regardless of key, so a test can ask "was anything counted at all".
-    struct CountingRecorder {
-        total: Arc<AtomicU64>,
-    }
-
-    impl metrics::Recorder for CountingRecorder {
-        fn describe_counter(
-            &self,
-            _key: metrics::KeyName,
-            _unit: Option<metrics::Unit>,
-            _description: metrics::SharedString,
-        ) {
-        }
-
-        fn describe_gauge(
-            &self,
-            _key: metrics::KeyName,
-            _unit: Option<metrics::Unit>,
-            _description: metrics::SharedString,
-        ) {
-        }
-
-        fn describe_histogram(
-            &self,
-            _key: metrics::KeyName,
-            _unit: Option<metrics::Unit>,
-            _description: metrics::SharedString,
-        ) {
-        }
-
-        fn register_counter(
-            &self,
-            _key: &metrics::Key,
-            _metadata: &metrics::Metadata<'_>,
-        ) -> metrics::Counter {
-            metrics::Counter::from_arc(self.total.clone())
-        }
-
-        fn register_gauge(
-            &self,
-            _key: &metrics::Key,
-            _metadata: &metrics::Metadata<'_>,
-        ) -> metrics::Gauge {
-            metrics::Gauge::noop()
-        }
-
-        fn register_histogram(
-            &self,
-            _key: &metrics::Key,
-            _metadata: &metrics::Metadata<'_>,
-        ) -> metrics::Histogram {
-            metrics::Histogram::noop()
-        }
-    }
-
-    /// Drives one request through `RpcMetricsLayer` and returns how many
-    /// counter increments its recorder observed.
-    fn counted_increments(content_type: Option<&str>) -> u64 {
-        let total = Arc::new(AtomicU64::new(0));
-        let recorder = CountingRecorder {
-            total: total.clone(),
-        };
-        let mut service = RpcMetricsLayer::new().layer(tower::service_fn(ok_service));
-        let mut req = http::Request::builder()
-            .uri("/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListNamespaces");
-        if let Some(content_type) = content_type {
-            req = req.header(http::header::CONTENT_TYPE, content_type);
-        }
-        let req = req.body(()).unwrap();
-
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        metrics::with_local_recorder(&recorder, || rt.block_on(service.call(req))).unwrap();
-        total.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[test]
-    fn a_grpc_request_is_counted() {
-        assert_eq!(counted_increments(Some("application/grpc+proto")), 1);
-    }
-
-    #[test]
-    fn a_non_grpc_request_is_not_counted() {
-        assert_eq!(counted_increments(Some("application/json")), 0);
     }
 }

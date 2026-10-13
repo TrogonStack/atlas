@@ -1,0 +1,8 @@
+schema_url: https://github.com/TrogonStack/atlas/otel/1.0.0
+description: >
+  Semantic conventions for Atlas's own services: the metrics
+  trogon-atlas-server and trogon-atlas-store emit.
+stability: development
+dependencies:
+  - schema_url: https://opentelemetry.io/schemas/1.44.0
+    registry_path: "https://github.com/open-telemetry/semantic-conventions.git@v1.44.0[model]"
