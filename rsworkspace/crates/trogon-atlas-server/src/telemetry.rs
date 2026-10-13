@@ -27,7 +27,24 @@ const ERROR_TYPE_TRANSPORT: &str = "transport_error";
 /// `Resource::builder()` lets `OTEL_RESOURCE_ATTRIBUTES` override
 /// `OTEL_SERVICE_NAME`, so the precedence is built explicitly.
 fn resource() -> opentelemetry_sdk::Resource {
-    use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector};
+    use opentelemetry_sdk::resource::EnvResourceDetector;
+
+    let resource_attributes = opentelemetry_sdk::Resource::builder_empty()
+        .with_detector(Box::new(EnvResourceDetector::new()))
+        .build();
+    resource_from(
+        &resource_attributes,
+        std::env::var("OTEL_SERVICE_NAME").ok(),
+    )
+}
+
+/// Each step overwrites the keys set before it, which is what gives
+/// [`resource`] its precedence.
+fn resource_from(
+    resource_attributes: &opentelemetry_sdk::Resource,
+    otel_service_name: Option<String>,
+) -> opentelemetry_sdk::Resource {
+    use opentelemetry_sdk::resource::TelemetryResourceDetector;
 
     let mut builder = opentelemetry_sdk::Resource::builder_empty()
         .with_service_name(SERVICE_NAME)
@@ -36,12 +53,14 @@ fn resource() -> opentelemetry_sdk::Resource {
             SERVICE_NAMESPACE,
         ))
         .with_detector(Box::new(TelemetryResourceDetector))
-        .with_detector(Box::new(EnvResourceDetector::new()));
+        .with_attributes(
+            resource_attributes
+                .iter()
+                .map(|(key, value)| opentelemetry::KeyValue::new(key.clone(), value.clone())),
+        );
 
-    if let Ok(name) = std::env::var("OTEL_SERVICE_NAME") {
-        if !name.is_empty() {
-            builder = builder.with_service_name(name);
-        }
+    if let Some(name) = otel_service_name.filter(|name| !name.is_empty()) {
+        builder = builder.with_service_name(name);
     }
 
     builder.build()
@@ -650,18 +669,82 @@ fn rpc_method_from_path(path: &str) -> String {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use super::{is_grpc_request, is_operational_path, resource, split_grpc_path};
+    use super::{is_grpc_request, is_operational_path, resource_from, split_grpc_path};
+
+    fn resource_attributes(pairs: &[(&'static str, &'static str)]) -> opentelemetry_sdk::Resource {
+        opentelemetry_sdk::Resource::builder_empty()
+            .with_attributes(
+                pairs
+                    .iter()
+                    .map(|(key, value)| opentelemetry::KeyValue::new(*key, *value)),
+            )
+            .build()
+    }
+
+    fn attribute(resource: &opentelemetry_sdk::Resource, key: &'static str) -> Option<String> {
+        resource
+            .get(&opentelemetry::Key::from_static_str(key))
+            .map(|value| value.to_string())
+    }
 
     #[test]
     fn resource_names_the_service_within_the_trogon_atlas_namespace() {
-        let resource = resource();
+        let resource = resource_from(&resource_attributes(&[]), None);
         assert_eq!(
-            resource.get(&opentelemetry::Key::from_static_str("service.namespace")),
-            Some(opentelemetry::Value::from("trogon-atlas"))
+            attribute(&resource, "service.name").as_deref(),
+            Some("trogon-atlas-server")
         );
-        assert!(resource
-            .get(&opentelemetry::Key::from_static_str("service.name"))
-            .is_some());
+        assert_eq!(
+            attribute(&resource, "service.namespace").as_deref(),
+            Some("trogon-atlas")
+        );
+    }
+
+    #[test]
+    fn resource_attributes_override_the_defaults() {
+        let resource = resource_from(
+            &resource_attributes(&[
+                ("service.name", "from-attributes"),
+                ("service.namespace", "custom"),
+            ]),
+            None,
+        );
+        assert_eq!(
+            attribute(&resource, "service.name").as_deref(),
+            Some("from-attributes")
+        );
+        assert_eq!(
+            attribute(&resource, "service.namespace").as_deref(),
+            Some("custom")
+        );
+    }
+
+    #[test]
+    fn otel_service_name_overrides_resource_attributes() {
+        let resource = resource_from(
+            &resource_attributes(&[
+                ("service.name", "from-attributes"),
+                ("service.namespace", "custom"),
+            ]),
+            Some("from-service-name".to_owned()),
+        );
+        assert_eq!(
+            attribute(&resource, "service.name").as_deref(),
+            Some("from-service-name")
+        );
+        assert_eq!(
+            attribute(&resource, "service.namespace").as_deref(),
+            Some("custom")
+        );
+    }
+
+    #[test]
+    fn empty_otel_service_name_keeps_the_resolved_name() {
+        let resource = resource_from(&resource_attributes(&[]), Some(String::new()));
+        assert_eq!(
+            attribute(&resource, "service.name").as_deref(),
+            Some("trogon-atlas-server")
+        );
     }
 
     #[test]
