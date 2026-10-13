@@ -9,6 +9,7 @@ import { api } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
 import { buildIssueIndex, EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import { buildModel, type Model } from '@/lib/model';
+import { activeSnapshot } from '@/lib/snapshot';
 
 export function EventModelPage({ namespace, slug }: { namespace: string; slug: string }) {
   const [model, setModel] = useState<Model>();
@@ -100,7 +101,8 @@ export function EventModelPage({ namespace, slug }: { namespace: string; slug: s
       scopedTitle={em?.title ?? `${namespace}/${slug}`}
       backHref={withBranchQuery('/', branch)}
       issues={issues}
-      onRefetch={load}
+      // A snapshot cannot change, so it gets no refetch and therefore no live feed.
+      onRefetch={activeSnapshot() ? undefined : load}
     />
   );
 }

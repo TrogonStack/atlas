@@ -82,4 +82,34 @@ describe('TopBar', () => {
     );
     expect(screen.getByRole('button', { name: /review/i })).toBeDefined();
   });
+
+  describe('snapshot', () => {
+    const snapshot = { capturedAt: '2026-10-13T17:10:00.000Z', branch: 'alex/x' };
+
+    it('replaces the live controls with when and where the snapshot was taken', () => {
+      render(
+        <TopBar
+          realtime={{ state: 'live' }}
+          onRefresh={vi.fn()}
+          onSelectBranch={vi.fn()}
+          backHref="/"
+          info={{ serverVersion: '0.1.0' }}
+          snapshot={snapshot}
+        />,
+      );
+      const badge = screen.getByRole('status', { name: 'Snapshot' });
+      expect(badge.textContent).toContain('branch alex/x');
+      expect(badge.textContent).toContain('server 0.1.0');
+      expect(screen.queryByRole('status', { name: 'Live updates' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
+      expect(screen.queryByRole('link')).toBeNull();
+    });
+
+    it('labels a snapshot without a branch as the baseline', () => {
+      render(
+        <TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} snapshot={{ capturedAt: snapshot.capturedAt }} />,
+      );
+      expect(screen.getByRole('status', { name: 'Snapshot' }).textContent).toContain('baseline');
+    });
+  });
 });

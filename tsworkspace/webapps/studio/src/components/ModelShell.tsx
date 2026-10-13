@@ -30,6 +30,7 @@ import type { BoardEdgeData } from '@/lib/layout';
 import { buildModel, entityKey, type Model } from '@/lib/model';
 import { layoutBoards } from '@/lib/multiboard';
 import type { RealtimeStatus } from '@/lib/realtime';
+import { activeSnapshot } from '@/lib/snapshot';
 import { invalidateEntityHomes } from '@/lib/useEntityHomes';
 import { isSafeNamespace } from '../../shared/safe-namespace.mjs';
 
@@ -510,6 +511,7 @@ export function ModelShell({
         onRefresh={() => (scoped ? onRefetch?.() : refresh(namespaces))}
         scopedTitle={scopedTitle}
         backHref={backHref}
+        snapshot={activeSnapshot()}
         branch={branch}
         onSelectBranch={(next) => {
           setBranch(next);

@@ -1,5 +1,6 @@
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
+import { activeSnapshot, snapshotResponse } from '@/lib/snapshot';
 
 // Hard ceiling on every browser → gateway request. Long-running RPCs are
 // expected to stream (SSE / NATS WS); a 30 s wall clock for a single JSON
@@ -98,6 +99,8 @@ function isTimeoutAbort(timeoutSignal: AbortSignal, callerSignal: AbortSignal | 
 }
 
 async function getJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
+  const snapshot = activeSnapshot();
+  if (snapshot) return snapshotResponse(snapshot, url) as T;
   // Compose the caller's signal (if any) with our internal timeout so an
   // unmount-during-fetch cancels the network call, not just the rendered
   // state. Native AbortSignal.any is widely supported but not universal yet,
@@ -133,6 +136,7 @@ async function getJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
 }
 
 async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}): Promise<T> {
+  if (activeSnapshot()) throw new Error(`not in this snapshot: ${url}`);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const timeoutCtrl = new AbortController();
   const timer =
