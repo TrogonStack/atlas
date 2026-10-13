@@ -183,12 +183,8 @@ const LIVE_TAIL_RETRY_DELAY_MAX: Duration = Duration::from_secs(30);
 #[derive(Clone, PartialEq, Eq)]
 pub struct NatsCredentials {
     user: String,
-    /// `None` means the URL (or caller) supplied a user with no password,
-    /// as opposed to a password that happens to be empty. async-nats has no
-    /// way to send a username without a password, so [`Self::apply`] sends
-    /// an empty string in that case; keeping the distinction here means that
-    /// choice is made once, explicitly, rather than baked into how the
-    /// credentials were parsed.
+    /// async-nats cannot send a user without a password, so [`Self::apply`]
+    /// sends an empty one when this is `None`.
     password: Option<String>,
 }
 
