@@ -109,11 +109,7 @@ fn grpc_timeout_response() -> Response {
     Response::from_parts(parts, axum::body::Body::empty())
 }
 
-/// Parse a `grpc-timeout` header value into the deadline it names.
-///
-/// `pub` only so the fuzz target in `fuzz/` can drive this parser directly
-/// with attacker-controlled header bytes; every in-process caller still goes
-/// through `enforce_grpc_timeout`.
+/// `pub` only so the fuzz target can drive this parser directly.
 pub fn client_grpc_timeout(headers: &axum::http::HeaderMap) -> Option<Duration> {
     let value = headers.get("grpc-timeout")?.to_str().ok()?;
     if value.is_empty() || value.len() > 9 {
