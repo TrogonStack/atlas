@@ -93,14 +93,6 @@ a server outage takes studio out of the Service without restarting it.
 The startup probe uses `/-/liveness`. Add `?verbose` to either path to
 list each check.
 
-## Upgrading from 0.x
-
-1.0.0 renames the port from `http` to `public`, on the container and the
-Service, and the value `server.grpcPort` to `server.port`. Update any
-Ingress, NetworkPolicy, or Gateway route of your own that names the port,
-and move a `server.grpcPort` override to `server.port`. The probes move
-from `/api/info` and TCP checks to `/-/readiness` and `/-/liveness`.
-
 ## Notable values
 
 | Value | Default | Purpose |

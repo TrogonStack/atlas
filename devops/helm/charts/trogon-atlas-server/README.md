@@ -104,16 +104,6 @@ Add `?verbose` to either path to list each check. The same states are served ove
 
 Traces and metrics are pushed over OTLP gRPC to `config.otlpEndpoint`, typically an OpenTelemetry Collector; with it empty, neither is exported. There is no metrics port and no scrape endpoint.
 
-### Upgrading from 1.x
-
-2.0.0 removes the opt-in metrics scrape endpoint and the `metrics` values that enabled it; drop any `metrics` override. Metrics are OTLP push only; send them to a Collector with `config.otlpEndpoint`.
-
-### Upgrading from 0.x
-
-1.0.0 removes the dedicated metrics port (9100), its Service port, the `metrics.enabled`, `metrics.port` and `metrics.serviceMonitor.*` values, and the ServiceMonitor template. Send metrics to a Collector with `config.otlpEndpoint`.
-
-It also renames the serving port from `grpc` to `private`, on the container and the Service, and the value `service.grpcPort` to `service.port` (default unchanged at `50069`). Update any NetworkPolicy, ServiceMonitor, or Gateway route that names the port, and move a `service.grpcPort` override to `service.port`. Without TLS the Service port's `appProtocol` changes from `grpc` to `kubernetes.io/h2c`; with TLS it carries none.
-
 ## Scaling: the server is single-writer
 
 **`replicaCount` must stay `1`.** The chart refuses to render otherwise.
