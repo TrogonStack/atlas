@@ -204,7 +204,10 @@ pub(crate) async fn namespace_types(client: &mut Client, namespace: &str) -> Res
     tenant_types::transcode_pool(client, &scope).await
 }
 
-async fn fetch_namespace_entities(client: &mut Client, namespace: &str) -> Result<Vec<pb::Entity>> {
+pub async fn fetch_namespace_entities(
+    client: &mut Client,
+    namespace: &str,
+) -> Result<Vec<pb::Entity>> {
     let mut entities: Vec<pb::Entity> = Vec::new();
     let mut page_token = String::new();
     loop {

@@ -27,9 +27,12 @@ trogon-atlas fmt manifests/ --write               # rewrite files in place
 trogon-atlas fmt manifests/ --check               # CI gate: exit 1 and list files that would change
 trogon-atlas get event/shop/order.placed          # one entity as manifest YAML (latest version unless @<version>)
 trogon-atlas describe command_slice/shop/place-order-slice # title, doc, fields, references in and out
+trogon-atlas tree shop                            # domains, storyboards, slices and what each slice connects
+trogon-atlas tree                                 # the same for every namespace that holds entities
+trogon-atlas namespaces                           # namespaces you can see, with ids and entity counts
 ```
 
-`get` and `describe` are read-only. They take the same kind names
+`get`, `describe`, `tree` and `namespaces` are read-only. They take the same kind names
 as manifests (`read-model`, `read_model`, `ReadModel`). A missing entity
 exits `6` (`not_found`). They also take the ids that `describe`
 prints, such as `event:shop/order.placed@1`.

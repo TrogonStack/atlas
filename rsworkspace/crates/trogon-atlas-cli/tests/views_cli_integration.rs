@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-// `trogon-atlas get` and `describe` against an in-process gRPC
+// `trogon-atlas get`, `describe` and `tree` against an in-process gRPC
 // server, spawning the compiled binary like export_cli_integration.rs. A
 // blocking Command::output on the current_thread runtime deadlocks the
 // in-process server, so every test here uses the multi_thread flavor.
@@ -69,7 +69,7 @@ fn stdout(output: &std::process::Output) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn get_and_describe_read_a_seeded_entity() {
+async fn get_describe_and_tree_read_a_seeded_namespace() {
     let endpoint = start_server().await;
     let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)
         .await
@@ -141,6 +141,83 @@ async fn get_and_describe_read_a_seeded_entity() {
         "{outcome}"
     );
 
+    let tree = trogon_atlas(&endpoint, &["tree", NS]);
+    assert!(tree.status.success(), "{tree:?}");
+    assert!(
+        stdout(&tree).contains(
+            "└── command_slice place-order-slice  Place order\n        ├── command place-order  Place order\n        └── event order.placed  Order placed\n"
+        ),
+        "{}",
+        stdout(&tree)
+    );
+
     let missing = trogon_atlas(&endpoint, &["get", "event/cli-views/nope"]);
     assert_eq!(missing.status.code(), Some(6), "{missing:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn namespaces_lists_counts_and_bare_tree_covers_every_namespace() {
+    let endpoint = start_server().await;
+    let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)
+        .await
+        .unwrap();
+    let event = |namespace: &str, slug: &str| {
+        pb::entity::Kind::Event(pb::Event {
+            id: Some(pb::Id {
+                namespace: namespace.into(),
+                slug: slug.into(),
+                version: 1,
+            }),
+            ..Default::default()
+        })
+    };
+    put(&mut client, event("cli-views-ns", "a")).await;
+    put(&mut client, event("cli-views-ns", "b")).await;
+    let registered = client
+        .register_namespace(pb::RegisterNamespaceRequest {
+            name: "cli-views-registered".into(),
+            parent: String::new(),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    put(&mut client, event(&registered, "c")).await;
+
+    let listed = trogon_atlas(&endpoint, &["--format", "json", "namespaces"]);
+    assert!(listed.status.success(), "{listed:?}");
+    let outcome: serde_json::Value = serde_json::from_str(&stdout(&listed)).unwrap();
+    let entry = outcome["data"]["namespaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "cli-views-ns")
+        .cloned();
+    assert_eq!(entry.unwrap()["entity_count"], 2, "{outcome}");
+    let entry = outcome["data"]["namespaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "cli-views-registered")
+        .cloned();
+    assert_eq!(entry.unwrap()["id"], registered.as_str(), "{outcome}");
+
+    let text = trogon_atlas(&endpoint, &["namespaces"]);
+    assert!(stdout(&text).starts_with("NAME"), "{text:?}");
+    assert!(stdout(&text).contains("\ncli-views-ns "), "{text:?}");
+
+    let tree = trogon_atlas(&endpoint, &["--format", "json", "tree"]);
+    assert!(tree.status.success(), "{tree:?}");
+    let outcome: serde_json::Value = serde_json::from_str(&stdout(&tree)).unwrap();
+    let trees = outcome["data"]["trees"].as_array().unwrap();
+    assert!(
+        trees.iter().any(|t| t["namespace"] == "cli-views-ns"),
+        "{outcome}"
+    );
+    assert!(
+        trees.iter().any(|t| t["namespace"] == registered.as_str()),
+        "{outcome}"
+    );
 }

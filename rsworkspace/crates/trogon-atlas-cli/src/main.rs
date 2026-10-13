@@ -126,6 +126,16 @@ enum Cmd {
         /// or an id that `describe` prints.
         entity: String,
     },
+    /// Print a namespace's structure: domains with their subdomains, then
+    /// each storyboard's slices with the commands, events, read models and
+    /// processors they connect.
+    Tree {
+        /// Namespace id, as `namespaces` lists it. Omit to print every
+        /// namespace that holds entities.
+        namespace: Option<String>,
+    },
+    /// List the namespaces the caller can see, with their ids and entity counts.
+    Namespaces,
     /// Manage branch lifecycle (Phase 1: Isolation). Branch scope for
     /// Apply/Diff/Export is set via the top-level --branch flag, not here.
     Branch {
@@ -719,6 +729,45 @@ async fn run(
                 print!("{}", view::render_description(&description));
             }
             Ok((ExitCode::SUCCESS, Some(serde_json::to_value(&description)?)))
+        }
+        Cmd::Namespaces => {
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let namespaces = view::fetch_namespaces(&mut client).await?;
+            if text {
+                print!("{}", view::render_namespaces(&namespaces));
+            }
+            Ok((ExitCode::SUCCESS, Some(view::namespaces_json(&namespaces))))
+        }
+        Cmd::Tree { namespace } => {
+            if let Some(namespace) = &namespace {
+                trogon_atlas_core::validate_id_component(namespace).map_err(|e| {
+                    trogon_atlas_client::failure::invalid_input(format!("namespace {e}"))
+                })?;
+            }
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            // Without a namespace, skip empty ones: the export fetch refuses
+            // a namespace with no entities, and an empty tree says nothing.
+            let namespaces = match namespace {
+                Some(namespace) => vec![namespace],
+                None => view::fetch_namespaces(&mut client)
+                    .await?
+                    .into_iter()
+                    .filter(|n| n.entity_count > 0)
+                    .map(|n| n.id)
+                    .collect(),
+            };
+            let mut trees = Vec::new();
+            for namespace in &namespaces {
+                let entities = export::fetch_namespace_entities(&mut client, namespace).await?;
+                trees.push(view::namespace_tree(namespace, &entities));
+            }
+            if text {
+                let rendered: Vec<String> = trees.iter().map(view::render_tree).collect();
+                print!("{}", rendered.join("\n"));
+            }
+            Ok((ExitCode::SUCCESS, Some(json!({"trees": trees}))))
         }
         Cmd::Openslo {
             cmd:
