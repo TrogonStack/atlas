@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Decide which CI areas a change affects (github | diff BASE [HEAD])"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT"
+exec python3 .config/mise/lib/ci-changes/changes.py "$@"

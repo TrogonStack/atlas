@@ -1,0 +1,76 @@
+# Which CI areas a changed path affects. The first matching rule wins. A
+# path ending in "/" matches everything under it; any other path matches
+# exactly. A path no rule matches runs every area, so forgetting a rule
+# costs CI time, never coverage. Keep narrower rules above broader ones.
+
+areas = ["rust", "proto", "studio", "workflows"]
+
+[[rules]]
+reason = "changes how CI decides or runs jobs"
+all = true
+paths = [
+  ".github/workflows/ci.yml",
+  ".github/workflows/runs-on.yml",
+  ".config/mise/lib/ci-changes/",
+  ".config/mise/tasks/github/workflows/ci/",
+  "mise.toml",
+]
+
+[[rules]]
+reason = "proto sources feed the Rust codegen and the Studio runtime"
+areas = ["proto", "rust", "studio"]
+paths = ["proto/", ".config/buf/", ".config/mise/tasks/proto/"]
+
+[[rules]]
+reason = "committed generated proto code"
+areas = ["proto", "rust"]
+paths = ["rsworkspace/crates/trogon-atlas-proto/", "rsworkspace/crates/trogon-atlas-authzed/"]
+
+[[rules]]
+reason = "Rust workspace and the fixtures its tests read"
+areas = ["rust"]
+paths = ["rsworkspace/", "examples/", ".config/mise/tasks/rust/"]
+
+[[rules]]
+reason = "coverage upload settings for both coverage jobs"
+areas = ["rust", "studio"]
+paths = [".github/codecov.yml"]
+
+[[rules]]
+reason = "Studio workspace"
+areas = ["studio"]
+paths = ["tsworkspace/"]
+
+[[rules]]
+reason = "workflow definitions audited by zizmor"
+areas = ["workflows"]
+paths = [".github/workflows/", ".github/zizmor.yml"]
+
+[[rules]]
+reason = "covered by other workflows or read by no CI job"
+areas = []
+paths = [
+  "docs/",
+  "devops/",
+  "README.md",
+  "SECURITY.md",
+  "LICENSE",
+  "AGENTS.md",
+  ".gitignore",
+  ".config/AGENTS.md",
+  ".config/ct.yaml",
+  ".config/gitleaks.toml",
+  ".config/hadolint.yaml",
+  ".config/lychee.toml",
+  ".config/markdownlint-cli2.yaml",
+  ".config/taplo.toml",
+  ".config/typos.toml",
+  ".config/mise/lib/restore-drill/",
+  ".config/mise/tasks/compose/",
+  ".config/mise/tasks/images/",
+  ".config/mise/tasks/github/workflows/lint/",
+  ".config/mise/tasks/github/workflows/infra/",
+  ".config/mise/tasks/github/workflows/gitleaks/",
+  ".config/mise/tasks/github/workflows/osv-scanner/",
+  ".github/dependabot.yml",
+]

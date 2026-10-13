@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Run the CI change classifier tests"
+set -euo pipefail
+
+cd "$MISE_PROJECT_ROOT/.config/mise/lib/ci-changes"
+exec python3 -B -m unittest
