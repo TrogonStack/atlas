@@ -162,10 +162,6 @@ pub fn init_telemetry() -> anyhow::Result<TelemetryGuard> {
                 .with_resource(resource.clone())
                 .build();
             let tracer = trace_provider.tracer(SERVICE_NAME);
-            // Set the global provider so opentelemetry::global::tracer works,
-            // and keep a clone for explicit shutdown so the batch exporter
-            // flushes queued spans before the process exits.
-            opentelemetry::global::set_tracer_provider(trace_provider.clone());
 
             let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
                 .with_tonic()
