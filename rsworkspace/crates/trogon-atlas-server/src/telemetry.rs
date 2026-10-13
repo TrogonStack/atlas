@@ -15,12 +15,15 @@ use trogon_atlas_semconv::semconv::{attribute, metric::RpcServerCallDurationAttr
 
 pub const GRPC_SYSTEM: &str = "grpc";
 pub const SERVICE_NAME: &str = "trogon-atlas-server";
+pub const SERVICE_NAMESPACE: &str = "trogon-atlas";
 /// `error.type` for a call whose inner service failed before producing any
 /// response, so no gRPC status exists.
 const ERROR_TYPE_TRANSPORT: &str = "transport_error";
 
 /// `OTEL_SERVICE_NAME` wins over a `service.name` in
-/// `OTEL_RESOURCE_ATTRIBUTES`, which wins over [`SERVICE_NAME`].
+/// `OTEL_RESOURCE_ATTRIBUTES`, which wins over [`SERVICE_NAME`]. A
+/// `service.namespace` in `OTEL_RESOURCE_ATTRIBUTES` wins over
+/// [`SERVICE_NAMESPACE`].
 /// `Resource::builder()` lets `OTEL_RESOURCE_ATTRIBUTES` override
 /// `OTEL_SERVICE_NAME`, so the precedence is built explicitly.
 fn resource() -> opentelemetry_sdk::Resource {
@@ -28,6 +31,10 @@ fn resource() -> opentelemetry_sdk::Resource {
 
     let mut builder = opentelemetry_sdk::Resource::builder_empty()
         .with_service_name(SERVICE_NAME)
+        .with_attribute(opentelemetry::KeyValue::new(
+            "service.namespace",
+            SERVICE_NAMESPACE,
+        ))
         .with_detector(Box::new(TelemetryResourceDetector))
         .with_detector(Box::new(EnvResourceDetector::new()));
 
@@ -643,7 +650,19 @@ fn rpc_method_from_path(path: &str) -> String {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use super::{is_grpc_request, is_operational_path, split_grpc_path};
+    use super::{is_grpc_request, is_operational_path, resource, split_grpc_path};
+
+    #[test]
+    fn resource_names_the_service_within_the_trogon_atlas_namespace() {
+        let resource = resource();
+        assert_eq!(
+            resource.get(&opentelemetry::Key::from_static_str("service.namespace")),
+            Some(opentelemetry::Value::from("trogon-atlas"))
+        );
+        assert!(resource
+            .get(&opentelemetry::Key::from_static_str("service.name"))
+            .is_some());
+    }
 
     #[test]
     fn parses_canonical_grpc_path() {
