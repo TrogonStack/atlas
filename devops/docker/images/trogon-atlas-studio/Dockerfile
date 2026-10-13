@@ -6,7 +6,7 @@
 # pnpm workspace at /mnt/tsworkspace, so the install resolves against the
 # workspace lockfile. `pnpm deploy` then produces a self-contained studio
 # tree with production deps only.
-FROM --platform=$BUILDPLATFORM node:26-alpine AS build
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a AS build
 WORKDIR /src
 RUN npm install -g pnpm@10.3.0
 RUN --mount=type=bind,source=tsworkspace,target=/mnt/tsworkspace \
