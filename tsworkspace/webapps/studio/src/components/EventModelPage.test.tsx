@@ -68,6 +68,21 @@ describe('EventModelPage', () => {
     expect(screen.getByRole('link', { name: /back to overview/i })).toBeDefined();
   });
 
+  it('offers no overview link when a snapshot cannot load its board', async () => {
+    (api.eventModel as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('not in snapshot'));
+    const { container } = render(
+      <EventModelPage
+        namespace="shop"
+        slug="missing"
+        snapshot={{ capturedAt: '2026-10-13T00:00:00Z', branch: 'baseline' }}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText('not in snapshot')).toBeDefined();
+    });
+    expect(container.querySelector('a')).toBeNull();
+  });
+
   it('does not update state after unmount (aborts in-flight fetch)', async () => {
     let resolveModel!: (v: { entities: unknown[] }) => void;
     (api.eventModel as ReturnType<typeof vi.fn>).mockReturnValue(

@@ -87,9 +87,12 @@ export function EventModelPage({
             {namespace}/{slug}
           </div>
           <div className="mt-2">{error}</div>
-          <a href={withBranchQuery('/', branch)} className="mt-3 inline-block text-xs underline">
-            ← Back to Overview
-          </a>
+          {/* A snapshot holds one board, so it has no overview to go back to. */}
+          {!snapshot && (
+            <a href={withBranchQuery('/', branch)} className="mt-3 inline-block text-xs underline">
+              ← Back to Overview
+            </a>
+          )}
         </div>
       </div>
     );
