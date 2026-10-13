@@ -14,7 +14,7 @@ use trogon_atlas_core::{
     NamespaceId, NamespaceName, OwnerId, WriterRole,
 };
 use trogon_atlas_proto as pb;
-use trogon_atlas_semconv::semconv::streamattr;
+use trogon_atlas_semconv::semconv::attribute;
 use trogon_atlas_store::{
     store::{ChangeRecord, ListFilter, MutationOp, MutationOutcome, OperationStatus, WriterStatus},
     ChangeKind, ChangesetOp, ChangesetPage, ChangesetRecord, ChangesetRef, ChangesetScope,
@@ -5450,7 +5450,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     Ok(p) => p,
                     Err(err) => {
                         let _ = tx.send(Err(store_err(err))).await;
-                        termination.mark(streamattr::OutcomeAttr::BacklogError);
+                        termination.mark(attribute::StreamOutcome::BacklogError);
                         return;
                     }
                 };
@@ -5464,7 +5464,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         && change_record_visible(&record, &lens)
                         && tx.send(Ok(change_record_to_event(record))).await.is_err()
                     {
-                        termination.mark(streamattr::OutcomeAttr::ClientDisconnectedBacklog);
+                        termination.mark(attribute::StreamOutcome::ClientDisconnectedBacklog);
                         return;
                     }
                     last_sent = next_seq;
@@ -5497,7 +5497,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                     Ok(p) => p,
                                     Err(err) => {
                                         let _ = tx.send(Err(store_err(err))).await;
-                                        termination.mark(streamattr::OutcomeAttr::GapError);
+                                        termination.mark(attribute::StreamOutcome::GapError);
                                         return;
                                     }
                                 };
@@ -5537,7 +5537,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                                     .is_err()
                                             {
                                                 termination.mark(
-                                                    streamattr::OutcomeAttr::ClientDisconnectedGap,
+                                                    attribute::StreamOutcome::ClientDisconnectedGap,
                                                 );
                                                 return;
                                             }
@@ -5580,7 +5580,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         );
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        termination.mark(streamattr::OutcomeAttr::SourceClosed);
+                        termination.mark(attribute::StreamOutcome::SourceClosed);
                         return;
                     }
                 }

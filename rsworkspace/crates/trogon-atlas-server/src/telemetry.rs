@@ -11,9 +11,7 @@ use std::{
 
 use tower::{Layer, Service};
 use tracing::Span;
-use trogon_atlas_semconv::semconv::{
-    cacheattr, rpcmetric::ServerCallDurationHistogramAttr, streamattr,
-};
+use trogon_atlas_semconv::semconv::{attribute, metric::RpcServerCallDurationAttr};
 
 pub const GRPC_SYSTEM: &str = "grpc";
 pub const SERVICE_NAME: &str = "trogon-atlas-server";
@@ -316,14 +314,18 @@ pub fn record_mutation_lock_wait(seconds: f64) {
 /// Snapshot-cache hit/miss counters. Both are emitted as counters (not
 /// gauges) so the rate of misses is alertable.
 pub fn record_snapshot_cache_hit() {
-    crate::metrics::CACHE_LOOKUPS.add(1, cacheattr::NameAttr::Snapshot, cacheattr::ResultAttr::Hit);
+    crate::metrics::CACHE_LOOKUPS.add(
+        1,
+        attribute::CacheName::Snapshot,
+        attribute::CacheResult::Hit,
+    );
 }
 
 pub fn record_snapshot_cache_miss() {
     crate::metrics::CACHE_LOOKUPS.add(
         1,
-        cacheattr::NameAttr::Snapshot,
-        cacheattr::ResultAttr::Miss,
+        attribute::CacheName::Snapshot,
+        attribute::CacheResult::Miss,
     );
 }
 
@@ -335,16 +337,16 @@ pub fn record_snapshot_cache_miss() {
 pub fn record_branch_search_index_hit() {
     crate::metrics::CACHE_LOOKUPS.add(
         1,
-        cacheattr::NameAttr::BranchSearchIndex,
-        cacheattr::ResultAttr::Hit,
+        attribute::CacheName::BranchSearchIndex,
+        attribute::CacheResult::Hit,
     );
 }
 
 pub fn record_branch_search_index_miss() {
     crate::metrics::CACHE_LOOKUPS.add(
         1,
-        cacheattr::NameAttr::BranchSearchIndex,
-        cacheattr::ResultAttr::Miss,
+        attribute::CacheName::BranchSearchIndex,
+        attribute::CacheResult::Miss,
     );
 }
 
@@ -427,7 +429,7 @@ pub struct RpcMetricsLayer;
 /// went away first.
 pub struct StreamTerminationGuard {
     rpc_method: String,
-    outcome: Option<streamattr::OutcomeAttr>,
+    outcome: Option<attribute::StreamOutcome>,
 }
 
 impl StreamTerminationGuard {
@@ -439,7 +441,7 @@ impl StreamTerminationGuard {
         }
     }
 
-    pub fn mark(&mut self, outcome: streamattr::OutcomeAttr) {
+    pub fn mark(&mut self, outcome: attribute::StreamOutcome) {
         self.outcome = Some(outcome);
     }
 }
@@ -450,7 +452,7 @@ impl Drop for StreamTerminationGuard {
             1,
             std::mem::take(&mut self.rpc_method).into(),
             self.outcome
-                .unwrap_or(streamattr::OutcomeAttr::ClientDisconnected),
+                .unwrap_or(attribute::StreamOutcome::ClientDisconnected),
         );
     }
 }
@@ -507,22 +509,20 @@ where
                 return result;
             };
             let elapsed = started.elapsed().as_secs_f64();
-            let mut attributes = vec![ServerCallDurationHistogramAttr::RpcMethod(
-                rpc_method.into(),
-            )];
+            let mut attributes = vec![RpcServerCallDurationAttr::RpcMethod(rpc_method.into())];
             match &result {
                 Ok(resp) => {
                     let code = grpc_status_code(resp);
                     let name = grpc_status_code_name(code);
-                    attributes.push(ServerCallDurationHistogramAttr::RpcResponseStatusCode(
+                    attributes.push(RpcServerCallDurationAttr::RpcResponseStatusCode(
                         name.into(),
                     ));
                     if code != tonic::Code::Ok {
-                        attributes.push(ServerCallDurationHistogramAttr::ErrorType(name.into()));
+                        attributes.push(RpcServerCallDurationAttr::ErrorType(name.into()));
                     }
                 }
                 Err(_) => {
-                    attributes.push(ServerCallDurationHistogramAttr::ErrorType(
+                    attributes.push(RpcServerCallDurationAttr::ErrorType(
                         ERROR_TYPE_TRANSPORT.into(),
                     ));
                 }

@@ -8,24 +8,24 @@
 use std::sync::LazyLock;
 
 use trogon_atlas_semconv::{
-    semconv::{meter::Meter, options::InstrumentationOptions, storemetric},
+    semconv::{meter::Meter, metric, options::InstrumentationOptions},
     GlobalMeterProvider,
 };
 
 static METER: LazyLock<Meter> =
     LazyLock::new(|| Meter::new(&GlobalMeterProvider, InstrumentationOptions::default()));
 
-pub static BATCHES_PENDING_RECOVERY: LazyLock<storemetric::BatchesPendingRecoveryCounter> =
-    LazyLock::new(|| storemetric::BatchesPendingRecoveryCounter::new(&METER));
-pub static CHANGE_EVENTS_LOST: LazyLock<storemetric::ChangeEventsLostCounter> =
-    LazyLock::new(|| storemetric::ChangeEventsLostCounter::new(&METER));
-pub static CHANGE_TAIL_RECONNECTS: LazyLock<storemetric::ChangeTailReconnectsCounter> =
-    LazyLock::new(|| storemetric::ChangeTailReconnectsCounter::new(&METER));
-pub static NATS_DISCONNECTS: LazyLock<storemetric::NatsDisconnectsCounter> =
-    LazyLock::new(|| storemetric::NatsDisconnectsCounter::new(&METER));
-pub static NATS_RECONNECTS: LazyLock<storemetric::NatsReconnectsCounter> =
-    LazyLock::new(|| storemetric::NatsReconnectsCounter::new(&METER));
-pub static READ_CHANGES_CONSUMERS: LazyLock<storemetric::ReadChangesConsumersCounter> =
-    LazyLock::new(|| storemetric::ReadChangesConsumersCounter::new(&METER));
-pub static REVISIONS_LOST: LazyLock<storemetric::RevisionsLostCounter> =
-    LazyLock::new(|| storemetric::RevisionsLostCounter::new(&METER));
+pub static BATCHES_PENDING_RECOVERY: LazyLock<metric::StoreBatchesPendingRecovery> =
+    LazyLock::new(|| metric::StoreBatchesPendingRecovery::new(&METER));
+pub static CHANGE_EVENTS_LOST: LazyLock<metric::StoreChangeEventsLost> =
+    LazyLock::new(|| metric::StoreChangeEventsLost::new(&METER));
+pub static CHANGE_TAIL_RECONNECTS: LazyLock<metric::StoreChangeTailReconnects> =
+    LazyLock::new(|| metric::StoreChangeTailReconnects::new(&METER));
+pub static NATS_DISCONNECTS: LazyLock<metric::StoreNatsDisconnects> =
+    LazyLock::new(|| metric::StoreNatsDisconnects::new(&METER));
+pub static NATS_RECONNECTS: LazyLock<metric::StoreNatsReconnects> =
+    LazyLock::new(|| metric::StoreNatsReconnects::new(&METER));
+pub static READ_CHANGES_CONSUMERS: LazyLock<metric::StoreReadChangesConsumers> =
+    LazyLock::new(|| metric::StoreReadChangesConsumers::new(&METER));
+pub static REVISIONS_LOST: LazyLock<metric::StoreRevisionsLost> =
+    LazyLock::new(|| metric::StoreRevisionsLost::new(&METER));

@@ -9,6 +9,7 @@ use opentelemetry_sdk::metrics::{
     InMemoryMetricExporter, PeriodicReader, SdkMeterProvider,
 };
 use tower::Layer as _;
+use trogon_atlas_semconv::semconv::{attribute, metric};
 use trogon_atlas_server::telemetry::{
     record_branch_search_index_miss, record_snapshot_cache_hit, RpcMetricsLayer,
 };
@@ -103,7 +104,7 @@ async fn successful_call_records_duration_with_ok_status() {
         .await
         .unwrap();
 
-    let points = data_points("rpc.server.call.duration");
+    let points = data_points(metric::RpcServerCallDuration::NAME);
     let want = expected(&[
         ("rpc.system.name", "grpc"),
         ("rpc.method", "test.v1.OkService/Get"),
@@ -131,7 +132,7 @@ async fn failed_call_records_status_code_as_error_type() {
     .await
     .unwrap();
 
-    let points = data_points("rpc.server.call.duration");
+    let points = data_points(metric::RpcServerCallDuration::NAME);
     let want = expected(&[
         ("rpc.system.name", "grpc"),
         ("rpc.method", "test.v1.MissingService/Get"),
@@ -157,7 +158,7 @@ async fn transport_failure_records_transport_error_without_status() {
         .await
         .unwrap_err();
 
-    let points = data_points("rpc.server.call.duration");
+    let points = data_points(metric::RpcServerCallDuration::NAME);
     let want = expected(&[
         ("rpc.system.name", "grpc"),
         ("rpc.method", "test.v1.BrokenService/Get"),
@@ -181,7 +182,7 @@ async fn non_grpc_requests_are_not_recorded() {
         .await
         .unwrap();
 
-    let points = data_points("rpc.server.call.duration");
+    let points = data_points(metric::RpcServerCallDuration::NAME);
     assert!(
         points
             .iter()
@@ -197,14 +198,14 @@ fn cache_lookups_record_cache_name_and_result() {
     record_snapshot_cache_hit();
     record_branch_search_index_miss();
 
-    let points = data_points("trogon_atlas.cache.lookups");
+    let points = data_points(metric::CacheLookups::NAME);
     let snapshot_hits = expected(&[
-        ("trogon_atlas.cache.name", "snapshot"),
-        ("trogon_atlas.cache.result", "hit"),
+        (attribute::CacheName::KEY, "snapshot"),
+        (attribute::CacheResult::KEY, "hit"),
     ]);
     let index_misses = expected(&[
-        ("trogon_atlas.cache.name", "branch_search_index"),
-        ("trogon_atlas.cache.result", "miss"),
+        (attribute::CacheName::KEY, "branch_search_index"),
+        (attribute::CacheResult::KEY, "miss"),
     ]);
     assert!(
         points

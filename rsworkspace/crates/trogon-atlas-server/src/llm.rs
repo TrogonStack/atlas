@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tracing::Instrument as _;
-use trogon_atlas_semconv::semconv::{llmattr, llmmetric};
+use trogon_atlas_semconv::semconv::{attribute, metric};
 
 /// Sonnet is the deliberate default: the analysis prompts are structured
 /// JSON inference where it matches Opus-class quality at a fraction of the
@@ -217,12 +217,12 @@ impl AnthropicClient {
             crate::metrics::LLM_TOKENS.add(
                 usage.input_tokens,
                 self.config.model.clone().into(),
-                llmattr::TokenTypeAttr::Input,
+                attribute::LlmTokenType::Input,
             );
             crate::metrics::LLM_TOKENS.add(
                 usage.output_tokens,
                 self.config.model.clone().into(),
-                llmattr::TokenTypeAttr::Output,
+                attribute::LlmTokenType::Output,
             );
         }
         extract_text(&parsed).map_err(RequestError::Fatal)
@@ -327,7 +327,7 @@ impl LlmClient for AnthropicClient {
                 self.config.model.clone().into(),
                 self.provider().into(),
                 result.is_err().then(|| {
-                    llmmetric::RequestDurationHistogramAttr::ErrorType(
+                    metric::LlmRequestDurationAttr::ErrorType(
                         crate::metrics::ERROR_TYPE_OTHER.into(),
                     )
                 }),
