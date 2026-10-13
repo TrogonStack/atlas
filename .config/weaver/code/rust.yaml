@@ -1,5 +1,5 @@
 params:
-  instrumentation_name: trogon-atlas-server
+  instrumentation_name: trogon-atlas
   vendor_prefixes:
     - trogon_atlas
   header_source: otel/registry

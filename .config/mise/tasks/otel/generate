@@ -1,21 +1,24 @@
 #!/usr/bin/env bash
-#MISE description="Regenerate the trogon-atlas-semconv crate from otel/registry with OpenTelemetry Weaver"
+#MISE description="Regenerate every codegen target in .config/weaver/targets from otel/registry with OpenTelemetry Weaver"
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
 
-OUT="rsworkspace/crates/trogon-atlas-semconv/src/semconv"
 TEMPLATE_PACKAGE="https://github.com/TrogonStack/trogonstack-weaver-packages.git@v0.1.1[templates]"
 
-rm -rf "$OUT"
-mkdir -p "$OUT"
+while read -r target params out; do
+  rm -rf "$out"
+  mkdir -p "$out"
 
-weaver registry generate \
-  --v2 \
-  --registry otel/registry \
-  --params .config/weaver/params.yaml \
-  -t "$TEMPLATE_PACKAGE" \
-  code/rust \
-  "$OUT"
+  weaver registry generate \
+    --v2 \
+    --registry otel/registry \
+    --params "$params" \
+    -t "$TEMPLATE_PACKAGE" \
+    "$target" \
+    "$out"
 
-cargo fmt --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-semconv
+  case "$target" in
+    code/rust) cargo fmt --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-semconv ;;
+  esac
+done < .config/weaver/targets

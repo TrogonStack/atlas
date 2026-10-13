@@ -5,8 +5,12 @@ set -euo pipefail
 cd "$MISE_PROJECT_ROOT"
 mise run otel:generate
 
-path=rsworkspace/crates/trogon-atlas-semconv/src/semconv
-drift="$(git status --porcelain -- "$path")"
+outputs=()
+while read -r _ _ out; do
+  outputs+=("$out")
+done < .config/weaver/targets
+
+drift="$(git status --porcelain -- "${outputs[@]}")"
 if [ -n "$drift" ]; then
   echo "ERROR: generated semantic convention code is out of date:"
   echo "$drift"
