@@ -49,6 +49,9 @@ jobs:
       - name: ruff format --check
         run: mise run github:workflows:lint:ruff-format
 
+      - name: CI change classifier tests
+        run: mise run github:workflows:lint:ci-changes-test
+
       - name: typos
         run: mise run github:workflows:lint:typos
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-#MISE description="Run ruff format --check on the restore-drill Python helper"
+#MISE description="Run ruff format --check on the mise Python helpers"
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
-exec ruff format --config .config/mise/lib/restore-drill/ruff.toml --check .config/mise/lib/restore-drill
+exec ruff format --check .config/mise/lib
