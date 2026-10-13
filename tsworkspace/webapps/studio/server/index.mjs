@@ -702,9 +702,20 @@ function recordUpstream(status, err) {
   }
 }
 
+/** @type {Promise<void> | null} */
+let upstreamCheckInFlight = null;
+
+// Overlapping checks could let a stale failure overwrite a newer success.
+function checkUpstream() {
+  upstreamCheckInFlight ??= runUpstreamCheck().finally(() => {
+    upstreamCheckInFlight = null;
+  });
+  return upstreamCheckInFlight;
+}
+
 // A pass-through bridge with no token of its own has no identity to check
 // with, so the server refusing an anonymous caller still proves it answers.
-async function checkUpstream() {
+async function runUpstreamCheck() {
   try {
     await call("getServerInfo", {}, { timeoutMs: UPSTREAM_CHECK_TIMEOUT_MS, allowBridgeIdentity: true });
     recordUpstream("reachable");

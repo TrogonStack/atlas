@@ -28,6 +28,7 @@ use tonic::transport::server::TcpIncoming;
 pub const ALPN_H2: &[u8] = b"h2";
 pub const ALPN_HTTP_1_1: &[u8] = b"http/1.1";
 pub const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+pub const MAX_PENDING_HANDSHAKES: usize = 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TlsConfigError {
@@ -80,6 +81,7 @@ impl TlsAcceptor {
         TlsIncoming {
             tcp,
             acceptor: self.clone(),
+            tcp_done: false,
             handshakes: JoinSet::new(),
         }
     }
@@ -114,8 +116,11 @@ impl std::fmt::Debug for TlsAcceptor {
 
 /// Accepted connections that completed the TLS handshake. Each handshake runs
 /// on its own task, so a slow or failing client never holds up the next one.
+/// At most [`MAX_PENDING_HANDSHAKES`] run at once, so clients that never finish
+/// a handshake cannot exhaust sockets and memory.
 pub struct TlsIncoming {
     tcp: TcpIncoming,
+    tcp_done: bool,
     acceptor: TlsAcceptor,
     handshakes: JoinSet<Option<TlsStream<TcpStream>>>,
 }
@@ -126,22 +131,23 @@ impl Stream for TlsIncoming {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         loop {
-            match Pin::new(&mut this.tcp).poll_next(cx) {
-                Poll::Ready(Some(Ok(tcp))) => {
-                    this.handshakes.spawn(this.acceptor.clone().handshake(tcp));
+            while !this.tcp_done && this.handshakes.len() < MAX_PENDING_HANDSHAKES {
+                match Pin::new(&mut this.tcp).poll_next(cx) {
+                    Poll::Ready(Some(Ok(tcp))) => {
+                        this.handshakes.spawn(this.acceptor.clone().handshake(tcp));
+                    }
+                    Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
+                    Poll::Ready(None) => this.tcp_done = true,
+                    Poll::Pending => break,
                 }
-                Poll::Ready(Some(Err(error))) => return Poll::Ready(Some(Err(error))),
-                Poll::Ready(None) => return Poll::Ready(None),
-                Poll::Pending => break,
             }
-        }
-        loop {
             match this.handshakes.poll_join_next(cx) {
                 Poll::Ready(Some(Ok(Some(stream)))) => return Poll::Ready(Some(Ok(stream))),
                 Poll::Ready(Some(Ok(None))) => {}
                 Poll::Ready(Some(Err(error))) => {
                     tracing::warn!(%error, "TLS handshake task failed");
                 }
+                Poll::Ready(None) if this.tcp_done => return Poll::Ready(None),
                 Poll::Ready(None) | Poll::Pending => return Poll::Pending,
             }
         }
