@@ -361,9 +361,9 @@ fn split_grpc_path(path: &str) -> (&str, &str) {
 /// imminent `JetStream` retention pressure before the stream evicts data.
 ///
 /// Emitted gauges (no attributes, the stream is a singleton per server):
-/// - `trogon_atlas.change_stream.message_count`: current message count.
+/// - `trogon_atlas.change_stream.message.count`: current message count.
 /// - `trogon_atlas.change_stream.size`: current byte count.
-/// - `trogon_atlas.change_stream.oldest_message_age`: age of the oldest
+/// - `trogon_atlas.change_stream.oldest_message.age`: age of the oldest
 ///   retained message; `0` when the stream is empty.
 ///
 /// Backends that do not report stats yield a `None`
