@@ -1,4 +1,4 @@
-# Translation Layers
+# Translation layers
 
 When you map an existing codebase into an Event Model, the codebase's own
 abstractions don't translate 1:1 to Event Modeling concepts. The runtime tools
@@ -8,8 +8,8 @@ guarantees. Naively mapping "what the code does" onto "what the EM board
 declares" produces models that look right but lie about what's actually
 happening.
 
-This directory captures the translation rules for specific runtime tools:
-what each layer's primitives ARE in EM terms, and what they are NOT.
+A translation layer is the rule that says what a runtime tool's primitives
+ARE in EM terms, and what they are NOT.
 
 ## Why these matter
 
@@ -23,25 +23,26 @@ Get the translation wrong and the model passes validation while hiding
 sagas. Get it right and the model says what's actually happening at
 runtime, which is the whole point of building one.
 
-## Translation guides
+## Translations
 
-- [`temporal-and-event-modeling.md`](./temporal-and-event-modeling.md): Temporal
-  activities/workflows vs EM commands/sagas. **A Temporal activity is not a
-  command.** Loops inside an activity hide sagas.
-- [`grpc-handler-is-not-a-command.md`](./grpc-handler-is-not-a-command.md): gRPC
-  handlers vs EM commands. **A gRPC handler is not a command.** The handler is
-  transport; the command is the business intent it carries.
-- [`pubsub-message-is-not-an-event.md`](./pubsub-message-is-not-an-event.md): Pub/Sub
-  messages vs EM events. **A pub/sub message is not always an event.** Sometimes
-  the message IS the delivery of an event; sometimes the message is a notification
-  and the real event lives in a different system.
+- [Temporal and Event Modeling](temporal-and-event-modeling.md): **a Temporal
+  activity is not a command.** Loops inside an activity hide sagas.
+- [gRPC handler is not a command](grpc-handler-is-not-a-command.md): the
+  handler is transport; the command is the business intent it carries.
+- [Pub/sub message is not an event](pubsub-message-is-not-an-event.md):
+  sometimes the message IS the delivery of an event; sometimes the message is
+  a notification and the real event lives in a different system.
 
-## Open / future translations
+To apply these while modelling, follow
+[how to model runtime code as an Event Model](../how-to/model-runtime-code-as-an-event-model.md).
 
-Add a guide for each as it comes up in real mapping work:
+## Translations not yet written up
 
-- **HTTP route ≠ command.** Same reasoning as gRPC. Often the route dispatches the
-  real command into a workflow or queue.
+The same reasoning applies to other runtime primitives. Each gets its own
+page once real mapping work runs into it:
+
+- **HTTP route ≠ command.** Same reasoning as gRPC. Often the route dispatches
+  the real command into a workflow or queue.
 - **DB transaction ≠ command.** A transaction may bundle the side effects of
   one command, or it may span several saga steps (when it shouldn't).
 - **Background job / cron ≠ automation.** Background jobs are infrastructure;
@@ -58,18 +59,22 @@ Add a guide for each as it comes up in real mapping work:
   exactly-once delivery at the transport layer. Aggregate identity is about
   the consistency boundary at the model layer.
 
-## Convention for each guide
+## Shape of a translation page
 
-1. **Primitives.** Name the runtime tool / pattern and list what it gives
-   you.
-2. **Mapping.** Map each primitive to its EM equivalent (or "not an EM
-   concept").
-3. **The trap.** What naive translation breaks. The thing that looks
-   right and is wrong.
-4. **Spotting it.** Code-level signals that the trap is present.
-5. **How to model it.** The corrected shape.
-6. **Concrete example.** From this codebase or a mapped one, with names of
-   the actual entities involved.
+Each translation page covers the same ground, so readers can compare tools:
+
+- **Primitives:** the runtime tool's concepts and what each gives you.
+- **Mapping:** each primitive's EM equivalent, or "not an EM concept".
+- **The trap:** what naive translation breaks; the thing that looks right
+  and is wrong.
+- **Spotting it:** code-level signals that the trap is present.
+- **Concrete example:** from this codebase or a mapped one, naming the
+  actual entities involved.
+- **Rule of thumb:** the one-line test a reviewer can apply.
+
+The corrected modelling steps go in the
+[how-to guide](../how-to/model-runtime-code-as-an-event-model.md), not on the
+translation page.
 
 ## Rule of thumb across all translations
 

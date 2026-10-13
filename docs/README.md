@@ -1,0 +1,49 @@
+# Documentation
+
+## How-to guides
+
+Solve a specific problem:
+
+- [Assess the blast radius of a change](how-to/assess-change-impact.md)
+- [Check code against the model](how-to/check-code-drift.md)
+- [Declare an SLO](how-to/declare-an-slo.md)
+- [Draft and land a new entity version](how-to/draft-then-land.md)
+- [Issue an API key to a client](how-to/issue-an-api-key.md)
+- [Migrate legacy entity fields into `schema`](how-to/migrate-legacy-entity-fields.md)
+- [Model runtime code as an Event Model](how-to/model-runtime-code-as-an-event-model.md)
+- [Register a type library](how-to/register-a-type-library.md)
+- [Repair a validation finding](how-to/repair-validation-findings.md)
+- [Replan after a stale refusal](how-to/replan-after-a-stale-refusal.md)
+- [Ship a breaking proto change](how-to/ship-a-breaking-proto-change.md)
+- [Track a version migration](how-to/track-a-migration.md)
+
+## Reference
+
+Look up exact behavior:
+
+- [Failure reasons](reference/failure-reasons.md)
+- [Reliability validation rules](reference/reliability-rules.md)
+- [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)
+
+## Explanation
+
+Understand how Atlas works and why:
+
+- [Authorization design](explanation/authorization.md)
+- [Board renderer performance](explanation/board-renderer-performance.md)
+- [Branching](explanation/branching.md)
+- [Changesets](explanation/changesets.md)
+- [Reliability overlays](explanation/reliability-overlays.md)
+- [Single-writer fencing](explanation/single-writer.md)
+- [Snapshot identity](explanation/snapshot-identity.md)
+- [Stale plans](explanation/stale-plans.md)
+- [Where tenant types live](explanation/tenant-types.md)
+- [Validation repair patterns](explanation/validation-repair-patterns.md)
+- [Wire compatibility and mixed-version operation](explanation/wire-compatibility.md)
+
+Mapping existing code into an Event Model:
+
+- [Translation layers](explanation/translation-layers.md)
+- [Temporal and Event Modeling](explanation/temporal-and-event-modeling.md)
+- [gRPC handler is not a command](explanation/grpc-handler-is-not-a-command.md)
+- [Pub/sub message is not an event](explanation/pubsub-message-is-not-an-event.md)
