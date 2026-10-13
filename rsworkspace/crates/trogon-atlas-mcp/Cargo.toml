@@ -17,7 +17,7 @@ tokio = { workspace = true, features = ["net"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = "1"
-rmcp = { version = "2", features = ["server", "transport-streamable-http-server"] }
+rmcp = { version = "3", features = ["server", "transport-streamable-http-server"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 http = "1"
 tracing = { workspace = true }
@@ -35,7 +35,7 @@ tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true }
 tower = "0.5"
 toml = "1.1"
-rmcp = { version = "2", features = ["server", "client", "transport-streamable-http-client-reqwest"] }
+rmcp = { version = "3", features = ["server", "client", "transport-streamable-http-client-reqwest"] }
 
 [lints]
 workspace = true

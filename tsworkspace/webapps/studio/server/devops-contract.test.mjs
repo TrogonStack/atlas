@@ -562,7 +562,7 @@ describe('studio CI lockfile contract', () => {
     expect(miseVersion).toBe('10.3.0');
 
     const dockerfile = fs.readFileSync(studioDockerfile, 'utf8');
-    const dockerfileVersion = dockerfile.match(/npm install -g pnpm@([\d.]+)/)?.[1];
+    const dockerfileVersion = dockerfile.match(/^ARG PNPM_VERSION=([\d.]+)$/m)?.[1];
     expect(dockerfileVersion, 'studio Dockerfile must pin a pnpm version').toBeTruthy();
     expect(dockerfileVersion, 'CI pnpm version (mise.toml) must match the studio Dockerfile pnpm pin').toBe(
       miseVersion,
