@@ -36,7 +36,8 @@ RUN --mount=type=bind,source=rsworkspace,target=/src \
  && cp "/target/$(cat /target.txt)/release/trogon-atlas-server" /out/trogon-atlas-server
 
 FROM alpine:3.24 AS runtime
-RUN apk add --no-cache git ca-certificates tini wget \
+RUN apk upgrade --no-cache \
+ && apk add --no-cache git ca-certificates tini wget \
  && addgroup -g 101 -S trogon-atlas \
  && adduser -S -u 100 -G trogon-atlas trogon-atlas \
  && mkdir -p /var/lib/trogon-atlas/mirror \
