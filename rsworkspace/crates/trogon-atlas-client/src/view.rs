@@ -273,7 +273,7 @@ pub async fn fetch_namespaces(
         .await
         .context("ListNamespaces failed")?;
     let mut namespaces = resp.into_inner().namespaces;
-    namespaces.sort_by(|a, b| a.name.cmp(&b.name));
+    namespaces.sort_by(|a, b| (&a.name, &a.id).cmp(&(&b.name, &b.id)));
     Ok(namespaces)
 }
 
@@ -281,15 +281,23 @@ pub fn render_namespaces(namespaces: &[pb::list_namespaces_response::Namespace])
     if namespaces.is_empty() {
         return "no namespaces\n".to_string();
     }
-    let width = namespaces
-        .iter()
-        .map(|n| n.name.len())
-        .max()
-        .unwrap_or(0)
-        .max(4);
-    let mut out = format!("{:<width$}  ENTITIES\n", "NAME");
+    let width = |f: fn(&pb::list_namespaces_response::Namespace) -> &str, header: &str| {
+        namespaces
+            .iter()
+            .map(|n| f(n).len())
+            .max()
+            .unwrap_or(0)
+            .max(header.len())
+    };
+    let name_width = width(|n| &n.name, "NAME");
+    let id_width = width(|n| &n.id, "ID");
+    let mut out = format!("{:<name_width$}  {:<id_width$}  ENTITIES\n", "NAME", "ID");
     for n in namespaces {
-        let _ = writeln!(out, "{:<width$}  {}", n.name, n.entity_count);
+        let _ = writeln!(
+            out,
+            "{:<name_width$}  {:<id_width$}  {}",
+            n.name, n.id, n.entity_count
+        );
     }
     out
 }
@@ -297,7 +305,14 @@ pub fn render_namespaces(namespaces: &[pb::list_namespaces_response::Namespace])
 pub fn namespaces_json(namespaces: &[pb::list_namespaces_response::Namespace]) -> Value {
     let rows: Vec<Value> = namespaces
         .iter()
-        .map(|n| json!({"name": n.name, "entity_count": n.entity_count, "parent": n.parent}))
+        .map(|n| {
+            json!({
+                "id": n.id,
+                "name": n.name,
+                "entity_count": n.entity_count,
+                "parent": n.parent,
+            })
+        })
         .collect();
     json!({"namespaces": rows})
 }
@@ -771,21 +786,22 @@ Referenced by:
     }
 
     #[test]
-    fn namespaces_render_as_a_name_and_count_table() {
-        let ns = |name: &str, entity_count| pb::list_namespaces_response::Namespace {
+    fn namespaces_render_as_a_name_id_and_count_table() {
+        let ns = |name: &str, id: &str, entity_count| pb::list_namespaces_response::Namespace {
             name: name.into(),
+            id: id.into(),
             entity_count,
             ..Default::default()
         };
         assert_eq!(
-            render_namespaces(&[ns("acme-reviews", 35), ns("shop", 0)]),
-            "NAME          ENTITIES\nacme-reviews  35\nshop          0\n"
+            render_namespaces(&[ns("acme-reviews", "acme-reviews", 35), ns("shop", "ns_1", 0)]),
+            "NAME          ID            ENTITIES\nacme-reviews  acme-reviews  35\nshop          ns_1          0\n"
         );
         assert_eq!(render_namespaces(&[]), "no namespaces\n");
-        let json = namespaces_json(&[ns("shop", 2)]);
+        let json = namespaces_json(&[ns("shop", "ns_1", 2)]);
         assert_eq!(
             json,
-            serde_json::json!({"namespaces": [{"name": "shop", "entity_count": 2, "parent": ""}]})
+            serde_json::json!({"namespaces": [{"id": "ns_1", "name": "shop", "entity_count": 2, "parent": ""}]})
         );
     }
 

@@ -130,10 +130,11 @@ enum Cmd {
     /// each storyboard's slices with the commands, events, read models and
     /// processors they connect.
     Tree {
-        /// Omit to print every namespace that holds entities.
+        /// Namespace id, as `namespaces` lists it. Omit to print every
+        /// namespace that holds entities.
         namespace: Option<String>,
     },
-    /// List the namespaces the caller can see, with their entity counts.
+    /// List the namespaces the caller can see, with their ids and entity counts.
     Namespaces,
     /// Manage branch lifecycle (Phase 1: Isolation). Branch scope for
     /// Apply/Diff/Export is set via the top-level --branch flag, not here.
@@ -754,7 +755,7 @@ async fn run(
                     .await?
                     .into_iter()
                     .filter(|n| n.entity_count > 0)
-                    .map(|n| n.name)
+                    .map(|n| n.id)
                     .collect(),
             };
             let mut trees = Vec::new();

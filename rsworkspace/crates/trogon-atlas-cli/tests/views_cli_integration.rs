@@ -161,18 +161,30 @@ async fn namespaces_lists_counts_and_bare_tree_covers_every_namespace() {
     let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)
         .await
         .unwrap();
-    let event = |slug: &str| {
+    let event = |namespace: &str, slug: &str| {
         pb::entity::Kind::Event(pb::Event {
             id: Some(pb::Id {
-                namespace: "cli-views-ns".into(),
+                namespace: namespace.into(),
                 slug: slug.into(),
                 version: 1,
             }),
             ..Default::default()
         })
     };
-    put(&mut client, event("a")).await;
-    put(&mut client, event("b")).await;
+    put(&mut client, event("cli-views-ns", "a")).await;
+    put(&mut client, event("cli-views-ns", "b")).await;
+    let registered = client
+        .register_namespace(pb::RegisterNamespaceRequest {
+            name: "cli-views-registered".into(),
+            parent: String::new(),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    put(&mut client, event(&registered, "c")).await;
 
     let listed = trogon_atlas(&endpoint, &["--format", "json", "namespaces"]);
     assert!(listed.status.success(), "{listed:?}");
@@ -184,6 +196,13 @@ async fn namespaces_lists_counts_and_bare_tree_covers_every_namespace() {
         .find(|n| n["name"] == "cli-views-ns")
         .cloned();
     assert_eq!(entry.unwrap()["entity_count"], 2, "{outcome}");
+    let entry = outcome["data"]["namespaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["name"] == "cli-views-registered")
+        .cloned();
+    assert_eq!(entry.unwrap()["id"], registered.as_str(), "{outcome}");
 
     let text = trogon_atlas(&endpoint, &["namespaces"]);
     assert!(stdout(&text).starts_with("NAME"), "{text:?}");
@@ -195,6 +214,10 @@ async fn namespaces_lists_counts_and_bare_tree_covers_every_namespace() {
     let trees = outcome["data"]["trees"].as_array().unwrap();
     assert!(
         trees.iter().any(|t| t["namespace"] == "cli-views-ns"),
+        "{outcome}"
+    );
+    assert!(
+        trees.iter().any(|t| t["namespace"] == registered.as_str()),
         "{outcome}"
     );
 }
