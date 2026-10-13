@@ -5,7 +5,7 @@ pub struct Meter(opentelemetry::metrics::Meter);
 
 impl Meter {
     pub fn new(
-        provider: &impl opentelemetry::metrics::MeterProvider,
+        provider: &(impl opentelemetry::metrics::MeterProvider + ?Sized),
         options: InstrumentationOptions,
     ) -> Self {
         let meter = provider.meter_with_scope(options.scope.into());

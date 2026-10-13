@@ -4,7 +4,7 @@ set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
 
-TEMPLATE_PACKAGE="https://github.com/TrogonStack/trogonstack-weaver-packages.git@v0.1.2[templates]"
+TEMPLATE_PACKAGE="https://github.com/TrogonStack/trogonstack-weaver-packages.git@v0.1.3[templates]"
 
 while read -r target params out; do
   rm -rf "$out"
