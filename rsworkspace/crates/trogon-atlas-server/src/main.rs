@@ -10,6 +10,7 @@ use trogon_atlas_server::{
     auth::{BearerAuth, TokenRegistry},
     git_mirror::{GitMirror, MirrorAuthor},
     health::StoreStatus,
+    telemetry::TelemetryGuard,
 };
 use trogon_atlas_store::{
     nats::{NatsStore, NatsStoreConfig},
@@ -552,9 +553,17 @@ async fn await_inflight_drain(
 #[tokio::main]
 async fn main() -> Result<()> {
     let telemetry = trogon_atlas_server::telemetry::init_telemetry()?;
+    let result = Box::pin(run(Args::parse(), &telemetry)).await;
 
-    let args = Args::parse();
+    // Flush any spans and metrics the OTLP exporters still have queued. Must
+    // run before the process exits, on every path, or the last few seconds of
+    // telemetry are silently dropped. Both flushes block on the exporters, so
+    // they run off the async runtime the exporters themselves depend on.
+    tokio::task::spawn_blocking(move || telemetry.shutdown()).await?;
+    result
+}
 
+async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
     match args.cmd.clone() {
         Some(Cmd::ExportGit { path }) => {
             let store = build_store(&args).await?;
@@ -1078,12 +1087,6 @@ async fn main() -> Result<()> {
         }
         None => router.serve_with_incoming_shutdown(tcp, shutdown).await?,
     }
-
-    // Flush any spans and metrics the OTLP exporters still have queued. Must
-    // run before the process exits or the last few seconds of telemetry are
-    // silently dropped. Both flushes block on the exporters, so they run off
-    // the async runtime the exporters themselves depend on.
-    tokio::task::spawn_blocking(move || telemetry.shutdown()).await?;
     Ok(())
 }
 
