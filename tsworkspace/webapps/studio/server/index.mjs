@@ -74,11 +74,8 @@ const RATE_LIMIT_WINDOW_MS = Number(
 const RATE_LIMIT_MAX = Number(
   process.env.TROGON_ATLAS_STUDIO_RATE_MAX ?? 600,
 );
-// A single page view fetches dozens of static files (bundle chunks, fonts,
-// the SPA shell itself), so this ceiling sits well above the /api one.
-// Shares the /api window and disable toggle (TROGON_ATLAS_STUDIO_RATE_MAX=0)
-// so one knob turns off rate limiting everywhere a reverse proxy already
-// handles it.
+// A single page view fetches dozens of static files, so this ceiling sits
+// well above the /api one.
 const STATIC_RATE_LIMIT_MAX = Number(
   process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX ?? 1_000,
 );
@@ -698,8 +695,7 @@ app.use((/** @type {AppRequest} */ req, /** @type {Res} */ res, /** @type {Next}
 // Sliding-window per-IP rate limiter (in-memory) for /api. Sufficient for a
 // single-process gateway; multi-instance deployments should sit behind a
 // shared limiter (e.g. NGINX) and can disable this by setting
-// TROGON_ATLAS_STUDIO_RATE_MAX=0. The same toggle also disables the SPA/
-// static-asset limiter set up further down, next to `express.static`.
+// TROGON_ATLAS_STUDIO_RATE_MAX=0, which also disables the static limiter.
 const RATE_BUCKETS = new Map();
 const RATE_BUCKETS_MAX = 10_000;
 /** @param {AppRequest} req @param {Res} res @param {Next} next */
@@ -1777,12 +1773,8 @@ app.use("/api", (/** @type {AppRequest} */ _req, /** @type {Res} */ res) => {
 // server takes this role in development.
 const distDir = path.resolve(__dirname, "../dist");
 if (fs.existsSync(distDir)) {
-  // Every file served here comes straight off disk (`express.static` and the
-  // `sendFile` fallback below), so it needs the same denial-of-service
-  // backstop as /api. `express-rate-limit` is used here (rather than the
-  // hand-rolled `rateLimit`) because static assets and the SPA shell sit on
-  // a different request budget than JSON endpoints: a single page view can
-  // issue dozens of asset requests at once.
+  // express-rate-limit rather than `rateLimit`: CodeQL only recognizes
+  // known limiter packages as guarding these disk reads.
   if (RATE_LIMIT_MAX > 0) {
     app.use(
       expressRateLimit({

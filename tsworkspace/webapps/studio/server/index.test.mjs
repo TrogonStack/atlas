@@ -1265,13 +1265,17 @@ describe('BUG: SPA static fallback swallows /api and missing assets', () => {
 });
 
 describe('SPA/static fallback rate limiter', () => {
+  let createdDist = false;
+
   beforeAll(() => {
+    if (fs.existsSync(distDir)) return;
+    createdDist = true;
     fs.mkdirSync(distDir, { recursive: true });
     fs.writeFileSync(path.join(distDir, 'index.html'), '<!doctype html><html></html>');
   });
 
   afterAll(() => {
-    fs.rmSync(distDir, { recursive: true, force: true });
+    if (createdDist) fs.rmSync(distDir, { recursive: true, force: true });
   });
 
   it('returns 429 once the SPA fallback ceiling is exceeded', async () => {
