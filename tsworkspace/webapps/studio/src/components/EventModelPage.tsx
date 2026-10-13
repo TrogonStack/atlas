@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ModelShell } from '@/components/ModelShell';
 import { api } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
+import { exportBoardHtml } from '@/lib/export-html';
 import { buildIssueIndex, EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import { buildModel, type Model } from '@/lib/model';
 import type { SnapshotStamp } from '@/lib/snapshot';
@@ -107,15 +108,19 @@ export function EventModelPage({
   }
 
   const em = model.entities.find((e) => e.kind === 'eventModel' && e.id.namespace === namespace && e.id.slug === slug);
+  const title = em?.title ?? `${namespace}/${slug}`;
   return (
     <ModelShell
       model={model}
-      scopedTitle={em?.title ?? `${namespace}/${slug}`}
+      scopedTitle={title}
       backHref={withBranchQuery('/', branch)}
       issues={issues}
-      // A snapshot cannot change, so it gets no refetch and therefore no live feed.
       snapshot={snapshot}
+      // A snapshot cannot change, so it gets no refetch and therefore no live feed.
       onRefetch={snapshot ? undefined : load}
+      onExportHtml={
+        snapshot ? undefined : () => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })
+      }
     />
   );
 }

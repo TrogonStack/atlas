@@ -112,4 +112,25 @@ describe('TopBar', () => {
       expect(screen.getByRole('status', { name: 'Snapshot' }).textContent).toContain('baseline');
     });
   });
+
+  it('offers Export HTML only when the page can export', () => {
+    const { rerender } = render(<TopBar realtime={{ state: 'live' }} onRefresh={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /export html/i })).toBeNull();
+    const onExportHtml = vi.fn(() => Promise.resolve());
+    rerender(<TopBar realtime={{ state: 'live' }} onRefresh={vi.fn()} onExportHtml={onExportHtml} />);
+    fireEvent.click(screen.getByRole('button', { name: /export html/i }));
+    expect(onExportHtml).toHaveBeenCalledTimes(1);
+  });
+
+  it('never offers Export HTML inside a snapshot', () => {
+    render(
+      <TopBar
+        realtime={{ state: 'offline' }}
+        onRefresh={vi.fn()}
+        onExportHtml={vi.fn(() => Promise.resolve())}
+        snapshot={{ capturedAt: '2026-10-13T17:10:00.000Z' }}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /export html/i })).toBeNull();
+  });
 });

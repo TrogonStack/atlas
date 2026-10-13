@@ -16,7 +16,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.server.json",
-    "test:e2e": "playwright test"
+    "test:e2e": "pnpm run build:snapshot && playwright test"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",

@@ -69,6 +69,8 @@ export interface ModelShellProps {
   onRefetch?: () => void;
   /** Set when the board is a saved snapshot; the top bar then shows when it was taken. */
   snapshot?: SnapshotStamp;
+  /** Saves the board as one HTML file; omitted where there is no single board to save. */
+  onExportHtml?: () => Promise<void>;
 }
 
 // The empty model is structurally invariant and small; hoisted out of
@@ -82,6 +84,7 @@ export function ModelShell({
   issues = EMPTY_ISSUE_INDEX,
   onRefetch,
   snapshot,
+  onExportHtml,
 }: ModelShellProps) {
   const [internalModel, setInternalModel] = useState<Model>(modelProp ?? EMPTY_MODEL);
   const [info, setInfo] = useState<ServerInfo>();
@@ -515,6 +518,7 @@ export function ModelShell({
         scopedTitle={scopedTitle}
         backHref={backHref}
         snapshot={snapshot}
+        onExportHtml={onExportHtml}
         branch={branch}
         onSelectBranch={(next) => {
           setBranch(next);

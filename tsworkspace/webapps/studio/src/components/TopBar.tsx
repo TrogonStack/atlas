@@ -1,5 +1,6 @@
 import { Camera, ChevronLeft, Library, RefreshCw, Workflow } from 'lucide-react';
 import { BranchBar } from '@/components/BranchBar';
+import { ExportHtmlButton } from '@/components/ExportHtmlButton';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ServerInfo } from '@/lib/api';
@@ -15,6 +16,7 @@ export function TopBar({
   scopedTitle,
   backHref,
   snapshot,
+  onExportHtml,
   branch,
   onSelectBranch,
   onOpenBranchReview,
@@ -28,6 +30,8 @@ export function TopBar({
   backHref?: string;
   /** Set when the page is a saved snapshot: live controls give way to when and where it was taken. */
   snapshot?: SnapshotStamp;
+  /** Saves the board as one HTML file. Omit to hide the button. */
+  onExportHtml?: () => Promise<void>;
   /** Active branch, if any (Phase 3: Studio). Omit to hide the branch UI entirely. */
   branch?: string;
   onSelectBranch?: (name: string | undefined) => void;
@@ -86,6 +90,7 @@ export function TopBar({
               <RefreshCw />
               Refresh
             </Button>
+            {onExportHtml ? <ExportHtmlButton onExport={onExportHtml} /> : null}
             <a
               href="/namespaces"
               className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
