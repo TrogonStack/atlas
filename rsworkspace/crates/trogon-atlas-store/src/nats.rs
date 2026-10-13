@@ -183,14 +183,20 @@ const LIVE_TAIL_RETRY_DELAY_MAX: Duration = Duration::from_secs(30);
 #[derive(Clone, PartialEq, Eq)]
 pub struct NatsCredentials {
     user: String,
-    password: String,
+    /// `None` means the URL (or caller) supplied a user with no password,
+    /// as opposed to a password that happens to be empty. async-nats has no
+    /// way to send a username without a password, so [`Self::apply`] sends
+    /// an empty string in that case; keeping the distinction here means that
+    /// choice is made once, explicitly, rather than baked into how the
+    /// credentials were parsed.
+    password: Option<String>,
 }
 
 impl NatsCredentials {
-    pub fn new(user: impl Into<String>, password: impl Into<String>) -> Self {
+    pub fn new(user: impl Into<String>, password: Option<impl Into<String>>) -> Self {
         Self {
             user: user.into(),
-            password: password.into(),
+            password: password.map(Into::into),
         }
     }
 
@@ -200,7 +206,7 @@ impl NatsCredentials {
     }
 
     fn apply(&self, options: async_nats::ConnectOptions) -> async_nats::ConnectOptions {
-        options.user_and_password(self.user.clone(), self.password.clone())
+        options.user_and_password(self.user.clone(), self.password.clone().unwrap_or_default())
     }
 }
 
@@ -208,7 +214,7 @@ impl fmt::Debug for NatsCredentials {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("NatsCredentials")
             .field("user", &self.user)
-            .field("password", &"<redacted>")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -232,7 +238,10 @@ fn split_url_credentials(url: &str) -> (String, Option<NatsCredentials>) {
     };
     let userinfo = &rest[..at];
     let stripped = format!("{scheme}://{}", &rest[at + 1..]);
-    let (user, password) = userinfo.split_once(':').unwrap_or((userinfo, ""));
+    let (user, password) = match userinfo.split_once(':') {
+        Some((user, password)) => (user, Some(password)),
+        None => (userinfo, None),
+    };
     if user.is_empty() {
         return (stripped, None);
     }
@@ -5862,14 +5871,26 @@ mod tests {
         assert_eq!(config.url, "nats://nats:4222");
         let credentials = config.credentials.expect("credentials");
         assert_eq!(credentials.user(), "service");
-        assert_eq!(credentials.password, "s3cr3t");
+        assert_eq!(credentials.password.as_deref(), Some("s3cr3t"));
+    }
+
+    #[test]
+    fn a_user_without_a_password_has_no_password() {
+        let (url, credentials) = split_url_credentials("nats://service@nats:4222");
+        assert_eq!(url, "nats://nats:4222");
+        let credentials = credentials.expect("credentials");
+        assert_eq!(credentials.user(), "service");
+        assert_eq!(credentials.password, None);
     }
 
     #[test]
     fn a_password_may_contain_an_at_sign() {
         let (url, credentials) = split_url_credentials("nats://service:p@ss@nats:4222");
         assert_eq!(url, "nats://nats:4222");
-        assert_eq!(credentials.expect("credentials").password, "p@ss");
+        assert_eq!(
+            credentials.expect("credentials").password.as_deref(),
+            Some("p@ss")
+        );
     }
 
     #[test]
@@ -5883,7 +5904,7 @@ mod tests {
     fn explicit_credentials_win_over_the_url() {
         let mut config = NatsStoreConfig::new("nats://nats:4222");
         config.url = "nats://fromurl:pw@nats:4222".into();
-        config.credentials = Some(NatsCredentials::new("explicit", "pw"));
+        config.credentials = Some(NatsCredentials::new("explicit", Some("pw")));
         config.take_url_credentials();
         assert_eq!(config.url, "nats://nats:4222");
         assert_eq!(config.credentials.expect("credentials").user(), "explicit");
@@ -5891,8 +5912,14 @@ mod tests {
 
     #[test]
     fn a_password_is_never_printed() {
-        let rendered = format!("{:?}", NatsCredentials::new("service", "s3cr3t"));
+        let rendered = format!("{:?}", NatsCredentials::new("service", Some("s3cr3t")));
         assert!(rendered.contains("service"), "{rendered}");
         assert!(!rendered.contains("s3cr3t"), "{rendered}");
+    }
+
+    #[test]
+    fn a_missing_password_is_shown_as_absent_in_debug() {
+        let rendered = format!("{:?}", NatsCredentials::new("service", None::<String>));
+        assert!(rendered.contains("password: None"), "{rendered}");
     }
 }
