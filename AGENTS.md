@@ -1,4 +1,10 @@
-# Validation repair workflow
+# Atlas agent guidance
+
+Start with the [principles overview](docs/explanation/principles/README.md) unless
+already in context. Read only relevant pages, revisiting them when scope or
+context changes and before final review.
+
+## Validation repair workflow
 
 Before repairing a model validation finding, read
 [the repair playbook](docs/how-to/repair-validation-findings.md) and check

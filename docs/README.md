@@ -1,5 +1,8 @@
 # Documentation
 
+Start with the [Atlas principles](explanation/principles/README.md) for the
+shared direction behind the product, its modeling language, and its codebase.
+
 ## How-to guides
 
 Solve a specific problem:
@@ -29,6 +32,7 @@ Look up exact behavior:
 
 Understand how Atlas works and why:
 
+- [Atlas principles](explanation/principles/README.md)
 - [Authorization design](explanation/authorization.md)
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)
