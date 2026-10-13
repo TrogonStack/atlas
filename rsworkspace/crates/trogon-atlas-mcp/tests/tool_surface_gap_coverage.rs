@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-// Full MCP stdio-transport round trips for the tools still uncovered after
+mod support;
+
+// Full MCP in-process transport round trips for the tools still uncovered after
 // mcp_integration.rs and tool_lifecycle_integration.rs: get_server_info,
 // batch_get_entities, get_latest_version, get_supersession_chain,
 // get_incoming_references, get_outgoing_references, get_impact,
@@ -49,10 +51,7 @@ type McpServiceRunning =
 
 async fn start_mcp_client() -> (McpClient, McpServiceRunning, String) {
     let grpc_endpoint = start_server().await;
-    let mcp_server =
-        trogon_atlas_mcp::server::McpServer::connect(&grpc_endpoint, None, None, 30, None)
-            .await
-            .unwrap();
+    let mcp_server = support::mcp_server(&grpc_endpoint, None);
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(

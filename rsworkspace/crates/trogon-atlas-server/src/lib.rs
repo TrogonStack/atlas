@@ -10,6 +10,7 @@ pub mod graph;
 pub mod jev;
 pub mod llm;
 pub mod llm_analysis;
+pub mod mcp;
 pub mod merge3;
 pub mod operation_receipts;
 pub mod ownership;

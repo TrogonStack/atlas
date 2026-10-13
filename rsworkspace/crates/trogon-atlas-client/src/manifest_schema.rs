@@ -455,7 +455,7 @@ mod tests {
         let text = std::fs::read_to_string(path)
             .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
         let mut out = Vec::new();
-        for (i, doc) in serde_yaml::Deserializer::from_str(&text).enumerate() {
+        for (i, doc) in serde_norway::Deserializer::from_str(&text).enumerate() {
             let value = Value::deserialize(doc)
                 .unwrap_or_else(|err| panic!("{}#doc{i}: invalid YAML: {err}", path.display()));
             if value.is_null() {

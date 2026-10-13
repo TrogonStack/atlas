@@ -393,8 +393,9 @@ secrets system can materialize one:
 
 The repository must never contain real tokens. It ships only a documented
 example (`rsworkspace/crates/trogon-atlas-server/examples/tokens.toml`) with fake values, and
-each client stores only its own token in its environment (`TROGON_ATLAS_AUTH_TOKEN`
-on the MCP side, the gateway env on the Studio side).
+each client stores only its own token: an MCP client sends it as
+`Authorization: Bearer <token>`, the CLI reads `TROGON_ATLAS_AUTH_TOKEN`, and
+the Studio side keeps it in the gateway env.
 
 ### Request flow
 
@@ -920,9 +921,10 @@ the owner it is bound to. It is Reader-level, because a principal learning
 its own identity is never more privileged than the identity itself, and any
 authenticated caller can always ask who it is.
 
-The MCP adapter uses this to narrow what it offers rather than what the
-server will accept. On connect, it calls `GetServerInfo`, checks the
-`who_am_i` feature flag, and calls `WhoAmI`; the resulting role filters the
+The server's MCP endpoint uses this to narrow what it offers rather than what the
+server will accept. On each `tools/list`, with that request's own bearer
+token, it calls `GetServerInfo`, checks the `who_am_i` feature flag, and
+calls `WhoAmI`; the resulting role filters the
 tool list it hands back to `list_tools`, so a reader-scoped agent is never
 shown `put_entity` or `merge_branch` only to have the server refuse them with
 `PERMISSION_DENIED`. A tool the adapter does not yet have a policy for is
@@ -930,17 +932,18 @@ treated as admin-only rather than silently listed, so a new tool added
 without updating the policy table fails toward hiding it, not exposing it.
 
 None of this moves the enforcement boundary. `AuthzLayer` still authorizes
-every RPC on the server, independent of what the MCP adapter chose to list;
+every RPC on the server, independent of what the MCP endpoint chose to list;
 a caller that invokes a tool outside its role some other way (a stale tool
 list, a hand-rolled client, a cached response) is refused exactly as before.
 Tool filtering is a courtesy that spares a well-behaved agent a round trip
 it was always going to lose, not a second authorization system.
 
-A server that predates the `who_am_i` feature flag, or a `WhoAmI` call that
-fails for any reason, leaves the adapter without a role to filter by. It
-degrades to listing every tool, the same menu it offered before role
-filtering existed, because a client-side listing miss is never a safety
-gap; the server decides what actually executes.
+A server that predates the `who_am_i` feature flag leaves the adapter without
+a role to filter by, so it lists every tool, the same menu it offered before
+role filtering existed. A `GetServerInfo` or `WhoAmI` call that fails lists
+only the reader tools instead: the server still decides what executes, but a
+transient error should not show a reader the names and schemas of admin
+tools.
 
 ## Decisions and rationale
 
@@ -990,7 +993,7 @@ gap; the server decides what actually executes.
   realtime gap: NATS supports JWT auth natively, so the same issuer can mint
   scoped, expiring NATS user credentials for the browser instead of the
   shared `NATS_WS_AUTH_TOKEN`.
-- **mTLS** for service-to-service clients (MCP, Studio gateway) to remove
+- **mTLS** for service-to-service clients (Studio gateway) to remove
   shared secrets entirely. The server's tonic `tls` feature is already
   enabled.
 - **Owned changesets.** A changeset still carries no owner, which is why it

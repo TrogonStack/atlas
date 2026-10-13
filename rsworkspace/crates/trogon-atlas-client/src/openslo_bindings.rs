@@ -130,7 +130,7 @@ pub struct DataSourceConfig {
     #[serde(rename = "type")]
     pub source_type: String,
     #[serde(rename = "connectionDetails", default)]
-    pub connection_details: serde_yaml::Mapping,
+    pub connection_details: serde_norway::Mapping,
 }
 
 /// The OpenSLO query role a `metricSource` template fills. `Threshold`
@@ -173,13 +173,13 @@ pub struct MetricSourceConfig {
     #[serde(rename = "type", default)]
     pub source_type: Option<String>,
     #[serde(default)]
-    pub threshold: Option<serde_yaml::Mapping>,
+    pub threshold: Option<serde_norway::Mapping>,
     #[serde(default)]
-    pub good: Option<serde_yaml::Mapping>,
+    pub good: Option<serde_norway::Mapping>,
     #[serde(default)]
-    pub bad: Option<serde_yaml::Mapping>,
+    pub bad: Option<serde_norway::Mapping>,
     #[serde(default)]
-    pub total: Option<serde_yaml::Mapping>,
+    pub total: Option<serde_norway::Mapping>,
 }
 
 impl MetricSourceConfig {
@@ -188,7 +188,7 @@ impl MetricSourceConfig {
     /// in the caller (`openslo::Context::metric_source`), never silently
     /// substituted with something else.
     #[must_use]
-    pub fn role(&self, role: MetricRole) -> Option<&serde_yaml::Mapping> {
+    pub fn role(&self, role: MetricRole) -> Option<&serde_norway::Mapping> {
         match role {
             MetricRole::Threshold => self.threshold.as_ref(),
             MetricRole::Good => self.good.as_ref(),
@@ -220,7 +220,7 @@ pub struct BindingsConfig {
 
 impl BindingsConfig {
     pub fn parse(yaml: &str) -> Result<Self> {
-        serde_yaml::from_str(yaml).context("parsing openslo bindings YAML")
+        serde_norway::from_str(yaml).context("parsing openslo bindings YAML")
     }
 
     pub fn load(path: &Path) -> Result<Self> {

@@ -1,18 +1,25 @@
 // gRPC client plumbing: the same connect pattern shared by every surface that
-// talks to the trogon-atlas gRPC service: a multiplexing Channel, optional
+// talks to the trogon-atlas gRPC service: a multiplexing transport, optional
 // bearer token, x-request-id correlation.
 
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    OnceLock,
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock,
+    },
+    task::{Context, Poll},
 };
 
 use anyhow::{Context as _, Result};
 use tonic::{
+    body::Body,
     metadata::MetadataValue,
     service::interceptor::InterceptedService,
-    transport::{Channel, ClientTlsConfig},
+    transport::{Channel, ClientTlsConfig, Endpoint},
 };
+use tower::{util::BoxCloneSyncService, Service, ServiceExt as _};
 use trogon_atlas_proto::event_model_service_client::EventModelServiceClient;
 
 const DEFAULT_MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
@@ -55,7 +62,47 @@ impl tonic::service::Interceptor for BearerAuth {
     }
 }
 
-pub type Client = EventModelServiceClient<InterceptedService<Channel, BearerAuth>>;
+/// Whatever carries requests to the service: a network [`Channel`], or the
+/// server's own authenticated service stack when the caller runs inside it.
+#[derive(Clone)]
+pub struct Transport(BoxCloneSyncService<http::Request<Body>, http::Response<Body>, tonic::Status>);
+
+impl Transport {
+    pub fn new<S, B>(service: S) -> Self
+    where
+        S: Service<http::Request<Body>, Response = http::Response<B>>
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+        S::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+        S::Future: Send + 'static,
+        B: http_body::Body<Data = bytes::Bytes> + Send + 'static,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        Self(BoxCloneSyncService::new(
+            service
+                .map_response(|response| response.map(Body::new))
+                .map_err(|e| tonic::Status::from_error(e.into())),
+        ))
+    }
+}
+
+impl Service<http::Request<Body>> for Transport {
+    type Response = http::Response<Body>;
+    type Error = tonic::Status;
+    type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.0.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+        self.0.call(request)
+    }
+}
+
+pub type Client = EventModelServiceClient<InterceptedService<Transport, BearerAuth>>;
 
 /// Connection options beyond the bare endpoint/token/timeout: every caller
 /// so far wants "emclient" defaults, so these are optional overrides rather
@@ -97,19 +144,37 @@ pub async fn connect_with_options(
     rpc_timeout_secs: u64,
     options: ConnectOptions,
 ) -> Result<Client> {
-    let mut channel_builder = Channel::from_shared(endpoint.to_string())
-        .with_context(|| format!("invalid endpoint {endpoint:?}"))?;
-    if endpoint.starts_with("https://") {
-        channel_builder = channel_builder
-            .tls_config(ClientTlsConfig::new().with_native_roots())
-            .context("configuring client TLS")?;
-    }
-    let channel = channel_builder
-        .connect_timeout(std::time::Duration::from_secs(5))
-        .timeout(std::time::Duration::from_secs(rpc_timeout_secs))
+    let channel = endpoint_for(endpoint, rpc_timeout_secs)?
         .connect()
         .await
         .with_context(|| format!("connecting to {endpoint}"))?;
+    client_for_transport(Transport::new(channel), auth_token, &options)
+}
+
+/// The endpoint every surface connects through: TLS with native roots for
+/// `https://`, a 5-second connect timeout, and the per-RPC timeout. Callers
+/// that must start before the server is reachable connect it lazily.
+pub fn endpoint_for(endpoint: &str, rpc_timeout_secs: u64) -> Result<Endpoint> {
+    let mut builder = Channel::from_shared(endpoint.to_string())
+        .with_context(|| format!("invalid endpoint {endpoint:?}"))?;
+    if endpoint.starts_with("https://") {
+        builder = builder
+            .tls_config(ClientTlsConfig::new().with_native_roots())
+            .context("configuring client TLS")?;
+    }
+    Ok(builder
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(rpc_timeout_secs)))
+}
+
+/// Wrap a shared transport in a client that carries one caller's bearer
+/// token, so a multi-caller adapter can act as each caller without opening
+/// a connection per caller.
+pub fn client_for_transport(
+    transport: Transport,
+    auth_token: Option<&str>,
+    options: &ConnectOptions,
+) -> Result<Client> {
     let header = match auth_token {
         Some(token) => Some(
             format!("Bearer {token}")
@@ -130,7 +195,7 @@ pub async fn connect_with_options(
         None => None,
     };
     Ok(EventModelServiceClient::with_interceptor(
-        channel,
+        transport,
         BearerAuth {
             header,
             request_id_prefix,

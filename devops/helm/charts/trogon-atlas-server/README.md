@@ -1,7 +1,8 @@
 # trogon-atlas-server Helm chart
 
-Deploys the `trogon-atlas-server` gRPC service (port 50069) with an optional
-Prometheus metrics endpoint (port 9100).
+Deploys the `trogon-atlas-server` gRPC service (port 50069), which also
+serves an MCP endpoint over Streamable HTTP at `/mcp` on that same port,
+and an optional Prometheus metrics endpoint (port 9100).
 
 NATS JetStream is a required external dependency and is not installed by
 this chart. Point `config.natsUrl` at an existing NATS installation with
@@ -75,6 +76,20 @@ The Job mounts the same tokens Secret as the server and sets `TROGON_ATLAS_AUTH_
 
 trogon-atlas-studio can watch the entity bucket over a NATS WebSocket, and that listener admits every browser on one identical grant covering every namespace. See the trogon-atlas-studio chart's README for how it decides whether to use it.
 
+## MCP
+
+With `mcp.enabled` (the default) the server serves MCP at
+`http://<service>:50069/mcp`, on the same port as gRPC. The chart holds no
+credential for it: each MCP request acts as its own
+`Authorization: Bearer <token>`, so the same token registry, roles and
+namespace bounds apply as for gRPC, and `tools/list` shows only the tools
+the caller's role can call.
+
+`/mcp` refuses a `Host` header it does not expect, guarding against DNS
+rebinding; gRPC is unaffected by this guard. The chart allows loopback and
+every name of this release's Service; add the hostname of any Ingress or
+Gateway that routes to the server to `mcp.allowedHosts`.
+
 ## Probes
 
 Readiness and liveness use the standard gRPC health-checking protocol, which the server exposes without auth. The server reports NOT_SERVING until NATS is reachable and during shutdown drain (`config.shutdownDrainSecs`, default 30s; `terminationGracePeriodSeconds` defaults to 40s to cover it). When `tls.existingSecret` is set, probes fall back to tcpSocket because the kubelet gRPC probe does not support TLS.
@@ -140,6 +155,8 @@ Not done by the server, deliberately: a daemon holding push credentials is a dif
 | `spicedb.sync.enabled` | `false` | CronJob running `sync-spicedb` to re-derive every grant (requires `endpoint`) |
 | `spicedb.sync.schedule` | `*/15 * * * *` | schedule for that job |
 | `metrics.enabled` | `true` | expose `/metrics` on port 9100 |
+| `mcp.enabled` | `true` | serve MCP at `/mcp`, on the gRPC port |
+| `mcp.allowedHosts` | `[]` | extra `Host` header values `/mcp` accepts, beyond loopback and this release's Service names |
 | `metrics.serviceMonitor.enabled` | `false` | create a Prometheus Operator ServiceMonitor |
 | `gitMirror.enabled` | `false` | mount a PVC at `/var/lib/trogon-atlas/mirror` and enable the git mirror |
 | `gitMirror.reconcile.enabled` | `true` | CronJob detecting store/mirror divergence (mirror must be enabled) |

@@ -117,17 +117,66 @@ fn rpc_span_from_path(path: &str) -> Span {
     )
 }
 
-/// Build an RPC span seeded with the caller-supplied `x-request-id` (or a
+/// `http.route` for a request that is not gRPC, when the path names a route
+/// this listener knows about outside the gRPC services it serves.
+fn http_route_for_path(path: &str) -> Option<&'static str> {
+    (path == trogon_atlas_mcp::MCP_PATH).then_some(trogon_atlas_mcp::MCP_PATH)
+}
+
+/// Build an HTTP server span following OTel's HTTP semantic conventions, for
+/// a request on the gRPC listener that is not itself gRPC (currently, MCP's
+/// `/mcp`).
+fn http_span_from_request<B>(req: &http::Request<B>) -> Span {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let route = http_route_for_path(&path);
+    let otel_name = match route {
+        Some(route) => format!("{method} {route}"),
+        None => method.to_string(),
+    };
+    let span = tracing::info_span!(
+        "http",
+        otel.name = %otel_name,
+        otel.kind = "server",
+        http.request.method = %method,
+        url.path = %path,
+        http.route = tracing::field::Empty,
+        request_id = tracing::field::Empty,
+    );
+    if let Some(route) = route {
+        span.record("http.route", route);
+    }
+    span
+}
+
+/// Build a trace span seeded with the caller-supplied `x-request-id` (or a
 /// generated one when the caller did not propagate one). Use this from
 /// `Server::trace_fn` so every span carries a correlation id readable by
-/// log/trace consumers downstream.
+/// log/trace consumers downstream. A gRPC request gets the `rpc` span; any
+/// other request on the same listener (MCP's `/mcp`) gets an HTTP server
+/// span instead, so it is never mislabeled as an RPC with no real service or
+/// method.
 pub fn rpc_span_from_request<B>(req: &http::Request<B>) -> Span {
-    let path = req.uri().path();
-    let span = rpc_span_from_path(path);
+    let span = if is_grpc_request(req) {
+        rpc_span_from_path(req.uri().path())
+    } else {
+        http_span_from_request(req)
+    };
     let request_id =
         request_id_from_headers(req.headers()).unwrap_or_else(|| short_request_id(req));
     span.record("request_id", tracing::field::display(&request_id));
     span
+}
+
+/// Whether a request on the gRPC listener is actually gRPC, as opposed to a
+/// merged HTTP route such as MCP's `/mcp`. gRPC clients (and tonic's own
+/// generated clients, including the in-process one MCP tool calls build)
+/// always send `content-type: application/grpc[+proto|+json]`.
+fn is_grpc_request<B>(req: &http::Request<B>) -> bool {
+    req.headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/grpc"))
 }
 
 fn request_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
@@ -396,9 +445,12 @@ where
     }
 
     fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
-        let (service, method) = {
+        let grpc = is_grpc_request(&req);
+        let (service, method) = if grpc {
             let (s, m) = split_grpc_path(req.uri().path());
             (s.to_owned(), m.to_owned())
+        } else {
+            (String::new(), String::new())
         };
         let started = Instant::now();
 
@@ -407,6 +459,13 @@ where
 
         Box::pin(async move {
             let result = inner.call(req).await;
+            if !grpc {
+                // A merged non-gRPC route (MCP's `/mcp`): its own tool calls
+                // already record RPC metrics through the inner `data_plane`
+                // stack, so this outer layer would otherwise double-count
+                // every MCP request under a fake method label.
+                return result;
+            }
             let elapsed = started.elapsed().as_secs_f64();
             let code = match &result {
                 Ok(resp) => header_grpc_status(resp).unwrap_or_else(|| "ok".to_string()),
@@ -528,7 +587,13 @@ fn header_grpc_status<B>(resp: &http::Response<B>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_grpc_path;
+    #![allow(clippy::unwrap_used)]
+
+    use std::sync::{atomic::AtomicU64, Arc};
+
+    use tower::{Layer, Service};
+
+    use super::{is_grpc_request, split_grpc_path, RpcMetricsLayer};
 
     #[test]
     fn parses_canonical_grpc_path() {
@@ -550,5 +615,117 @@ mod tests {
         let (svc, method) = split_grpc_path("/M");
         assert_eq!(svc, "");
         assert_eq!(method, "M");
+    }
+
+    #[test]
+    fn is_grpc_request_matches_the_grpc_content_type_only() {
+        let grpc = http::Request::builder()
+            .header(http::header::CONTENT_TYPE, "application/grpc+proto")
+            .body(())
+            .unwrap();
+        assert!(is_grpc_request(&grpc));
+
+        let mcp = http::Request::builder()
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(())
+            .unwrap();
+        assert!(!is_grpc_request(&mcp));
+
+        let no_content_type = http::Request::builder().body(()).unwrap();
+        assert!(!is_grpc_request(&no_content_type));
+    }
+
+    async fn ok_service(
+        _req: http::Request<()>,
+    ) -> Result<http::Response<()>, std::convert::Infallible> {
+        Ok(http::Response::new(()))
+    }
+
+    /// Recorder that funnels every counter increment into one shared total,
+    /// regardless of key, so a test can ask "was anything counted at all".
+    struct CountingRecorder {
+        total: Arc<AtomicU64>,
+    }
+
+    impl metrics::Recorder for CountingRecorder {
+        fn describe_counter(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn describe_gauge(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn describe_histogram(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn register_counter(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            metrics::Counter::from_arc(self.total.clone())
+        }
+
+        fn register_gauge(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Gauge {
+            metrics::Gauge::noop()
+        }
+
+        fn register_histogram(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            metrics::Histogram::noop()
+        }
+    }
+
+    /// Drives one request through `RpcMetricsLayer` and returns how many
+    /// counter increments its recorder observed.
+    fn counted_increments(content_type: Option<&str>) -> u64 {
+        let total = Arc::new(AtomicU64::new(0));
+        let recorder = CountingRecorder {
+            total: total.clone(),
+        };
+        let mut service = RpcMetricsLayer::new().layer(tower::service_fn(ok_service));
+        let mut req = http::Request::builder()
+            .uri("/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListNamespaces");
+        if let Some(content_type) = content_type {
+            req = req.header(http::header::CONTENT_TYPE, content_type);
+        }
+        let req = req.body(()).unwrap();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        metrics::with_local_recorder(&recorder, || rt.block_on(service.call(req))).unwrap();
+        total.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn a_grpc_request_is_counted() {
+        assert_eq!(counted_increments(Some("application/grpc+proto")), 1);
+    }
+
+    #[test]
+    fn a_non_grpc_request_is_not_counted() {
+        assert_eq!(counted_increments(Some("application/json")), 0);
     }
 }

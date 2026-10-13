@@ -1,8 +1,8 @@
 apiVersion: v2
 name: trogon-atlas
-description: Event model gRPC server and studio UI backed by NATS JetStream
+description: Event model gRPC and MCP server and studio UI backed by NATS JetStream
 type: application
-version: 0.1.3
+version: 0.1.6
 appVersion: "0.1.0"
 keywords:
   - trogon-atlas
@@ -12,7 +12,7 @@ sources:
   - https://github.com/TrogonStack/atlas
 dependencies:
   - name: trogon-atlas-server
-    version: 0.1.3
+    version: 0.1.6
     repository: file://../trogon-atlas-server
     alias: server
     condition: server.enabled

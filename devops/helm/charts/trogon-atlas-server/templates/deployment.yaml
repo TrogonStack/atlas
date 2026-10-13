@@ -118,6 +118,12 @@ spec:
             - name: TROGON_ATLAS_METRICS_ALLOW_EXTERNAL
               value: "true"
             {{- end }}
+            {{- if $server.mcp.enabled }}
+            - name: TROGON_ATLAS_MCP
+              value: "true"
+            - name: TROGON_ATLAS_MCP_ALLOWED_HOSTS
+              value: {{ include "trogon-atlas-server.mcpAllowedHosts" . | quote }}
+            {{- end }}
             {{- if $tokensSecret }}
             - name: TROGON_ATLAS_AUTH_TOKENS_FILE
               value: /etc/trogon-atlas/auth/{{ $server.auth.tokensFile.key }}

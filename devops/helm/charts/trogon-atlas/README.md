@@ -2,12 +2,13 @@
 
 Umbrella chart deploying the event model stack to Kubernetes:
 
-- `server` (alias for trogon-atlas-server): the gRPC service (port 50069)
-  with an optional Prometheus metrics endpoint (port 9100).
+- `server` (alias for trogon-atlas-server): the gRPC service (port 50069),
+  which also serves an MCP endpoint over Streamable HTTP at `/mcp` on that
+  same port, and an optional Prometheus metrics endpoint (port 9100).
 - `studio` (alias for trogon-atlas-studio): the web UI and gateway
   (port 80), reaching the server over gRPC.
 
-Both are standalone charts under `../trogon-atlas-server` and
+Each is a standalone chart under `../trogon-atlas-server` and
 `../trogon-atlas-studio`; this chart wires them together with local
 `file://` dependencies and the `server.enabled`/`studio.enabled`
 conditions. Either can also be installed on its own, without this chart.
@@ -39,9 +40,9 @@ gitignored, not vendored.
 ## Aliases
 
 Every value under `server.*` is trogon-atlas-server's own top-level
-`values.yaml`, addressed through the `server` alias; `studio.*` is the
-same for trogon-atlas-studio. See each subchart's README for its full
-value reference:
+`values.yaml`, addressed through the `server` alias; `studio.*` is the same
+for trogon-atlas-studio. See each
+subchart's README for its full value reference:
 
 - [trogon-atlas-server](../trogon-atlas-server/README.md)
 - [trogon-atlas-studio](../trogon-atlas-studio/README.md)
@@ -66,9 +67,10 @@ uses.
 
 | Value | Default | Purpose |
 |---|---|---|
-| `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories in both subcharts |
+| `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories in every subchart |
 | `server.enabled` | `true` | install trogon-atlas-server |
 | `studio.enabled` | `true` | install trogon-atlas-studio |
+| `server.mcp.enabled` | `true` | serve MCP at `/mcp` from trogon-atlas-server |
 
 See the subchart READMEs linked above for every `server.*` and `studio.*`
 value.
