@@ -48,7 +48,7 @@ If you model the activity as one command:
 
 ## How to spot it
 
-Three code-level signals that an activity is hiding a saga:
+Code-level signals that an activity is hiding a saga:
 
 1. **A `for` / `while` / `loop` inside the activity that emits events
    per iteration.** Each iteration is its own command-effect; the next
@@ -64,28 +64,11 @@ Three code-level signals that an activity is hiding a saga:
    "Started", "tool requested", "tool result returned", "finished" are four
    distinct moments of state change. Each deserves a command.
 
-## How to model it
+## Modelling it
 
-1. Identify the **business-meaningful state transitions** the activity drives.
-   Drop the ones that are pure infrastructure (NATS publish, cache writes,
-   log lines, tool-server bootstrap, retry attempts).
-
-2. **One command per transition.** Each command lives on the same swimlane
-   the activity's events live on, OR on the appropriate aggregate's swimlane
-   if the transition is cross-aggregate (then a saga is also needed).
-
-3. **Connect them with AutomationSlices.** Each command's emitted event
-   flows into a read model that the next command's automation watches.
-   The processor for each automation is the part of the activity that
-   does the work between events.
-
-4. The original "activity" disappears as a modelling concept. It becomes
-   implementation glue between the commands. The EM model says nothing
-   about whether four commands run in one Temporal activity or four;
-   that's a deployment / atomicity decision, not a modelling one.
-
-5. Signals into the workflow become commands. Map each signal handler to
-   a CommandSlice on the workflow's swimlane.
+The corrected shape has one command per business-meaningful transition,
+connected by automations, with the activity reduced to implementation glue.
+The steps are in [decompose a Temporal activity](../how-to/model-runtime-code-as-an-event-model.md#decompose-a-temporal-activity).
 
 ## Concrete example
 
@@ -107,7 +90,8 @@ passed (all seven on the agent-turn lane; LLM-picked fields covered by
 `swimlane.state`). But it lies: those seven events span seconds to minutes,
 not one atomic moment.
 
-The honest decomposition: four commands, three automations, one loop edge:
+The honest decomposition: one command per transition, an automation in
+front of each, and a loop edge for the tool cycle:
 
 ```text
 [workflow-started-view RM]
@@ -179,3 +163,8 @@ falls off `swimlane.state` entirely.
 
 So this translation is enforced by review and convention, not by the
 validator. The rule of thumb above is the test.
+
+## Related
+
+- [Translation layers](translation-layers.md)
+- [How to model runtime code as an Event Model](../how-to/model-runtime-code-as-an-event-model.md)

@@ -1,4 +1,4 @@
-# gRPC Handler Is Not a Command
+# gRPC handler is not a command
 
 > A gRPC **handler** is NOT an Event Modeling **command**.
 > The handler is transport glue; the command is the business intent it carries.
@@ -37,9 +37,9 @@ This is wrong. `PutEntity` is the transport name. The command is the business ac
 `PutEntity` also:
 
 - validates the request format (not a state transition)
-- checks the auth token (not a state transition)
+- authorizes the caller for the target namespace (not a state transition)
 - runs scenario validation (a guard, not a transition)
-- calls `store.put()` (the real state transition)
+- writes to the store with `create`, `update`, or `put` (the real state transition)
 - invalidates the snapshot cache (infrastructure side effect)
 - fires the git-mirror side effect (infrastructure side effect)
 
@@ -54,7 +54,7 @@ it bundles two commands into one wire call. The EM board must split them.
 
 ## How to spot it
 
-Three code-level signals that a handler is hiding multiple commands or
+Code-level signals that a handler is hiding multiple commands or
 non-command logic:
 
 1. **The handler calls more than one store mutation.** Each mutation is
@@ -72,49 +72,36 @@ non-command logic:
    AutomationSlice's trigger logic or the CommandSlice's own preconditions,
    not as separate events on the board.
 
-## How to model it
+## Modelling it
 
-1. Identify the **business-meaningful state transitions** the handler drives.
-   A handler that calls one `store.put()` drives one command. A handler that
-   calls `store.create()` then `store.update()` in sequence drives two.
-
-2. **Name the command for the business act, not the RPC.** `put-entity` is a
-   transport name. `define-command-slice`, `supersede-read-model`, or
-   `delete-automation` are business names.
-
-3. **Map request fields to command payload and command trigger separately.**
-   Fields the EM model cares about become the CommandSlice's named fields.
-   Fields that are pure transport (auth headers, idempotency keys, page
-   tokens) do not appear on the board.
-
-4. **The response is a read model, not an event.** The handler returns a
-   view of the post-command state. Map that to a ReadModelSlice whose
-   projection is sourced by the command's emitted event.
-
-5. **Server-streaming handlers become change-feed read models.** The stream
-   delivers change records; each record contains an event. The EM board shows
-   the event; the streaming RPC is just how the client learns about it.
+The corrected shape names one command per business transition, keeps
+transport fields off the board, and treats the response as a read model. The
+steps are in [split a gRPC handler into commands](../how-to/model-runtime-code-as-an-event-model.md#split-a-grpc-handler-into-commands).
 
 ## Concrete example from this codebase
 
-`PutEntity` handler in `trogon-atlas-server/src/service.rs`:
+`PutEntity` handler in `rsworkspace/crates/trogon-atlas-server/src/service.rs`.
 
-The wire call is `PutEntity(PutEntityRequest { entity, validate_only, if_match, create_only })`.
+The wire call is `PutEntity(PutEntityRequest { entity, create_only, if_match,
+validate_only, force, operation_id })`.
 
 The EM command is one of:
 
-- **create-entity** (when `create_only=true`): a request to mint a new entity.
-  The `entity` field is the payload. `validate_only` and `if_match` are transport guards.
-- **update-entity** (when `if_match` is set): a request to replace an existing
-  entity at a specific ETag. The `entity` and `if_match` are payload.
-- **upsert-entity** (when neither flag is set): an unconditional write.
+- **create-entity** (when `create_only=true`): mint a new entity. The
+  `entity` field is the payload. `create_only` wins over `if_match`.
+- **update-entity** (when `if_match` is set): replace an existing entity at
+  a specific ETag. `entity` and `if_match` are payload.
+- **upsert-entity** (when neither flag is set): write regardless of the
+  current revision. An identical write is a no-op unless `force` is set.
 
 These are three distinct commands with different preconditions and different
 failure modes. The single `PutEntity` RPC carries all three; the EM board
-separates them.
+separates them. `validate_only` is a dry run that returns before any write,
+and `operation_id` is an idempotency key; neither appears on the board.
 
-The handler's auth-token check, scenario validation, snapshot invalidation,
-and git-mirror apply are **not** on the board. They are infrastructure wrapped
+The handler's namespace-scope authorization, scenario validation, mutation
+lock, changeset recording, search indexing, snapshot invalidation, and
+git-mirror apply are **not** on the board. They are infrastructure wrapped
 around the store write.
 
 ## Rule of thumb
@@ -123,3 +110,8 @@ around the store write.
 > message carries fields that have nothing to do with business state, the
 > handler is wrapping more than one command. Name the commands for the
 > business acts, not for the RPC names.
+
+## Related
+
+- [Translation layers](translation-layers.md)
+- [How to model runtime code as an Event Model](../how-to/model-runtime-code-as-an-event-model.md)
