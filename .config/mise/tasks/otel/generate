@@ -21,4 +21,4 @@ while read -r target params out; do
   case "$target" in
     code/rust) cargo fmt --manifest-path rsworkspace/Cargo.toml -p trogon-atlas-semconv ;;
   esac
-done < .config/weaver/targets
+done <.config/weaver/targets

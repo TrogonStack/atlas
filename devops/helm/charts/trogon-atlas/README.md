@@ -64,6 +64,16 @@ feeds. To share the server's token Secret, point
 `server.auth.token.existingSecret` or `server.auth.tokensFile.existingSecret`
 uses.
 
+## Upgrading from 1.0.0
+
+1.0.1 carries trogon-atlas-server 1.0.1, which removes `server.metrics.prometheus.enabled` and the `/-/metrics` scrape it served. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-100).
+
+## Upgrading from 0.x
+
+1.0.0 carries trogon-atlas-server 1.0.0, which drops the metrics port and the ServiceMonitor in favor of OTLP push. See [its upgrade notes](../trogon-atlas-server/README.md#upgrading-from-0x).
+
+Port names now follow who reaches them: the server's `grpc` port is `private` and studio's `http` port is `public`, on the containers and the Services. `server.service.grpcPort` is now `server.service.port`, and `studio.server.grpcPort` is now `studio.server.port`. Update any NetworkPolicy, ServiceMonitor, Ingress, or Gateway route that names either port. See the [studio upgrade notes](../trogon-atlas-studio/README.md#upgrading-from-0x) too.
+
 ## Notable values
 
 | Value | Default | Purpose |

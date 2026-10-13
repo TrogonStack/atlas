@@ -8,7 +8,7 @@ mise run otel:generate
 outputs=()
 while read -r _ _ out; do
   outputs+=("$out")
-done < .config/weaver/targets
+done <.config/weaver/targets
 
 drift="$(git status --porcelain -- "${outputs[@]}")"
 if [ -n "$drift" ]; then
