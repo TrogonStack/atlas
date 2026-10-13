@@ -19,7 +19,7 @@ RUN --mount=type=bind,source=tsworkspace,target=/mnt/tsworkspace \
 RUN pnpm --filter trogon-atlas-studio run build \
  && pnpm --filter trogon-atlas-studio deploy --legacy --prod /app
 
-FROM node:26-alpine
+FROM node:26-alpine@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a
 WORKDIR /app
 RUN addgroup -g 101 -S studio && adduser -S -u 100 -G studio studio \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
