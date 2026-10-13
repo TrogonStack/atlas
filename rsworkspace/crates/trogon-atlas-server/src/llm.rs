@@ -439,7 +439,7 @@ fn validate_base_url(url: &str) -> Result<()> {
 /// Build an LLM client from CLI/env-derived inputs. Returns `Ok(None)` when
 /// the provider is disabled; bails when configuration is incoherent
 /// (e.g. provider=anthropic but no API key).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct LlmSettings {
     pub api_key: Option<String>,
     pub model: Option<String>,
@@ -447,6 +447,19 @@ pub struct LlmSettings {
     pub max_tokens: Option<u32>,
     pub request_timeout_secs: Option<u64>,
     pub concurrency: Option<usize>,
+}
+
+impl std::fmt::Debug for LlmSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmSettings")
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("max_tokens", &self.max_tokens)
+            .field("request_timeout_secs", &self.request_timeout_secs)
+            .field("concurrency", &self.concurrency)
+            .finish()
+    }
 }
 
 pub fn build(
@@ -505,6 +518,15 @@ mod tests {
         assert_eq!(json["system"], "sys");
         assert_eq!(json["messages"][0]["role"], "user");
         assert_eq!(json["messages"][0]["content"], "hi");
+    }
+
+    #[test]
+    fn llm_settings_debug_redacts_api_key() {
+        let settings = LlmSettings {
+            api_key: Some("sk-super-secret".into()),
+            ..Default::default()
+        };
+        assert!(!format!("{settings:?}").contains("sk-super-secret"));
     }
 
     #[test]
