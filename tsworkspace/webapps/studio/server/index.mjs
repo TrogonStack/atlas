@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import grpc from "@grpc/grpc-js";
 import protoLoader from "@grpc/proto-loader";
 import express from "express";
+import { rateLimit as expressRateLimit } from "express-rate-limit";
 import protobuf from "protobufjs";
 import { isSafeBranchName, isSafeNamespace } from "../shared/safe-namespace.mjs";
 
@@ -72,6 +73,14 @@ const RATE_LIMIT_WINDOW_MS = Number(
 );
 const RATE_LIMIT_MAX = Number(
   process.env.TROGON_ATLAS_STUDIO_RATE_MAX ?? 600,
+);
+// A single page view fetches dozens of static files (bundle chunks, fonts,
+// the SPA shell itself), so this ceiling sits well above the /api one.
+// Shares the /api window and disable toggle (TROGON_ATLAS_STUDIO_RATE_MAX=0)
+// so one knob turns off rate limiting everywhere a reverse proxy already
+// handles it.
+const STATIC_RATE_LIMIT_MAX = Number(
+  process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX ?? 1_000,
 );
 // Comma-separated allowlist of browser origins permitted to call /api/*.
 // Empty (default) keeps the same-origin posture: no CORS headers emitted,
@@ -686,10 +695,11 @@ app.use((/** @type {AppRequest} */ req, /** @type {Res} */ res, /** @type {Next}
   withContext({ requestId: id }, () => next());
 });
 
-// Sliding-window per-IP rate limiter (in-memory). Sufficient for a
+// Sliding-window per-IP rate limiter (in-memory) for /api. Sufficient for a
 // single-process gateway; multi-instance deployments should sit behind a
 // shared limiter (e.g. NGINX) and can disable this by setting
-// TROGON_ATLAS_STUDIO_RATE_MAX=0.
+// TROGON_ATLAS_STUDIO_RATE_MAX=0. The same toggle also disables the SPA/
+// static-asset limiter set up further down, next to `express.static`.
 const RATE_BUCKETS = new Map();
 const RATE_BUCKETS_MAX = 10_000;
 /** @param {AppRequest} req @param {Res} res @param {Next} next */
@@ -1767,6 +1777,23 @@ app.use("/api", (/** @type {AppRequest} */ _req, /** @type {Res} */ res) => {
 // server takes this role in development.
 const distDir = path.resolve(__dirname, "../dist");
 if (fs.existsSync(distDir)) {
+  // Every file served here comes straight off disk (`express.static` and the
+  // `sendFile` fallback below), so it needs the same denial-of-service
+  // backstop as /api. `express-rate-limit` is used here (rather than the
+  // hand-rolled `rateLimit`) because static assets and the SPA shell sit on
+  // a different request budget than JSON endpoints: a single page view can
+  // issue dozens of asset requests at once.
+  if (RATE_LIMIT_MAX > 0) {
+    app.use(
+      expressRateLimit({
+        windowMs: RATE_LIMIT_WINDOW_MS,
+        limit: STATIC_RATE_LIMIT_MAX,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { error: "rate limit exceeded" },
+      }),
+    );
+  }
   app.use(express.static(distDir));
   // SPA shell only for document navigations. Script/module fetches send
   // Accept without text/html (often bare */*); returning index.html for
