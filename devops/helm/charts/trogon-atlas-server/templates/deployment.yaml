@@ -56,17 +56,12 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           ports:
-            - name: grpc
-              containerPort: {{ $server.service.grpcPort }}
+            - name: private
+              containerPort: {{ $server.service.port }}
               protocol: TCP
-            {{- if $server.metrics.enabled }}
-            - name: metrics
-              containerPort: {{ $server.metrics.port }}
-              protocol: TCP
-            {{- end }}
           env:
             - name: TROGON_ATLAS_LISTEN
-              value: 0.0.0.0:{{ $server.service.grpcPort }}
+              value: 0.0.0.0:{{ $server.service.port }}
             - name: TROGON_ATLAS_STORE
               value: nats
             {{- if $server.config.natsUrlSecret.name }}
@@ -112,10 +107,8 @@ spec:
                   name: {{ $server.config.changeCursorKey.existingSecret }}
                   key: {{ $server.config.changeCursorKey.key }}
             {{- end }}
-            {{- if $server.metrics.enabled }}
-            - name: TROGON_ATLAS_METRICS_LISTEN
-              value: 0.0.0.0:{{ $server.metrics.port }}
-            - name: TROGON_ATLAS_METRICS_ALLOW_EXTERNAL
+            {{- if $server.metrics.prometheus.enabled }}
+            - name: TROGON_ATLAS_PROMETHEUS_METRICS
               value: "true"
             {{- end }}
             {{- if $server.mcp.enabled }}
@@ -196,36 +189,32 @@ spec:
             {{- with $server.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if $server.tls.existingSecret }}
           startupProbe:
-            tcpSocket:
-              port: grpc
+            httpGet:
+              path: /-/liveness
+              port: private
+              {{- if $server.tls.existingSecret }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 2
             failureThreshold: 30
           readinessProbe:
-            tcpSocket:
-              port: grpc
+            httpGet:
+              path: /-/readiness
+              port: private
+              {{- if $server.tls.existingSecret }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 10
           livenessProbe:
-            tcpSocket:
-              port: grpc
-            periodSeconds: 15
-          {{- else }}
-          startupProbe:
-            grpc:
-              port: {{ $server.service.grpcPort }}
-            periodSeconds: 2
-            failureThreshold: 30
-          readinessProbe:
-            grpc:
-              port: {{ $server.service.grpcPort }}
-            periodSeconds: 10
-          livenessProbe:
-            grpc:
-              port: {{ $server.service.grpcPort }}
+            httpGet:
+              path: /-/liveness
+              port: private
+              {{- if $server.tls.existingSecret }}
+              scheme: HTTPS
+              {{- end }}
             periodSeconds: 15
             failureThreshold: 6
-          {{- end }}
           {{- with $server.resources }}
           resources:
             {{- toYaml . | nindent 12 }}

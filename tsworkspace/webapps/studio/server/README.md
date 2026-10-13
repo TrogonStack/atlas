@@ -14,7 +14,9 @@ Studio is an observation surface. Agents make every change, including namespace 
 
 | Method | Path | Auth required | Description |
 |--------|------|--------------|-------------|
-| GET | `/api/info` | No (public health endpoint) | Server version and feature flags |
+| GET | `/-/readiness` | No | `200` once the last background upstream check passed and shutdown has not begun, `503` otherwise |
+| GET | `/-/liveness` | No | `200` once the bridge has initialized, until it exits |
+| GET | `/api/info` | No | Server version and feature flags |
 | GET | `/api/namespaces` | Yes (when token configured) | Distinct namespaces from event model roots |
 | GET | `/api/namespaces/registry` | Yes (when token configured) | Namespace registry rows with owner, id, and entity count |
 | GET | `/api/branches` | Yes (when token configured) | Branches and their delta counts |
@@ -41,9 +43,9 @@ The server also serves the built SPA from `dist/` when it exists (container mode
 
 When `TROGON_ATLAS_AUTH_TOKEN` is set, all `/api/*` routes require a `Authorization: Bearer <token>` header. The comparison uses `crypto.timingSafeEqual` to prevent timing-based token enumeration.
 
-The single exception is `/api/info`, which remains public regardless of token configuration. Load balancers and monitoring probes use this endpoint before authentication is available.
+The exceptions are `/api/info`, which answers with the server version and feature flags only, and the probes under `/-/`, which are mounted ahead of authentication and rate limiting.
 
-With `TROGON_ATLAS_AUTH_PASSTHROUGH=true`, the bridge stops answering for everyone. The caller's own token is forwarded to the gRPC service, which resolves it to a principal and scopes what that principal may read and write. The bridge does not hold the token registry and so cannot validate a key it did not issue: it checks only that one was presented and lets the 401 come from upstream. `TROGON_ATLAS_AUTH_TOKEN` is never the identity anything is authorized as, and it is no longer a fallback for a caller's missing token: the only route that still uses it is `/api/info`, which answers before the auth guard runs and so never has a caller token to forward. A GA deployment that turns passthrough on still needs `TROGON_ATLAS_AUTH_TOKEN` set to a `reader` key for that one route.
+With `TROGON_ATLAS_AUTH_PASSTHROUGH=true`, the bridge stops answering for everyone. The caller's own token is forwarded to the gRPC service, which resolves it to a principal and scopes what that principal may read and write. The bridge does not hold the token registry and so cannot validate a key it did not issue: it checks only that one was presented and lets the 401 come from upstream. `TROGON_ATLAS_AUTH_TOKEN` is never the identity anything is authorized as, and it is no longer a fallback for a caller's missing token: the only things that still use it are `/api/info`, which answers before the auth guard runs and so never has a caller token to forward, and the background upstream check behind `/-/readiness`. A GA deployment that turns passthrough on still needs `TROGON_ATLAS_AUTH_TOKEN` set to a `reader` key for `/api/info`. Without one, the upstream check counts the server refusing an anonymous call as an answer, since there is no identity to check with.
 
 Leave it off for a single-operator deployment, where one bridge identity is exactly right. Turn it on wherever more than one person shares a studio, or every one of them sees the union of what the bridge can see.
 
@@ -70,6 +72,12 @@ In passthrough mode `/api/changes/stream` asks the server to vouch for the calle
 | `TROGON_ATLAS_STUDIO_RATE_WINDOW_MS` | `60000` | Rate limit window duration (ms) |
 | `TROGON_ATLAS_STUDIO_RATE_MAX` | `600` | Max requests per IP per window. Set to `0` to disable. |
 | `TROGON_ATLAS_STUDIO_SSE_MAX_PER_IP` | `4` | Max concurrent SSE streams per IP |
+
+## Probes
+
+`/-/readiness` and `/-/liveness` answer `ok` with `200` when passing and `503` otherwise, with no credential, ahead of rate limiting and the access log. Add `?verbose` to list each check one per line (`[+]upstream ok`, `[-]shutdown failed`), the same format as the trogon-atlas server's own probes.
+
+Neither calls the server. The bridge calls `GetServerInfo` every 10 seconds with a 2 second deadline and holds the result; readiness reads it, so it fails until the first check passes and whenever the last one failed. On `SIGTERM` or `SIGINT` readiness fails at once, before in-flight requests and SSE streams drain, while liveness keeps passing until the process exits. Liveness depends on nothing upstream, so a server outage takes the bridge out of rotation without restarting it.
 
 ## CORS Policy
 

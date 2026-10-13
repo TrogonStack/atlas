@@ -1,5 +1,5 @@
 auth:
   insecureAllowAnonymous: true
 metrics:
-  serviceMonitor:
+  prometheus:
     enabled: true

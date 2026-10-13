@@ -45,9 +45,8 @@ RUN apk upgrade --no-cache \
 COPY --from=builder /out/trogon-atlas-server /usr/local/bin/trogon-atlas-server
 USER 100:101
 ENV TROGON_ATLAS_LISTEN=0.0.0.0:50069 \
-    TROGON_ATLAS_STORE=nats \
-    TROGON_ATLAS_METRICS_LISTEN=0.0.0.0:9100
-EXPOSE 50069 9100
+    TROGON_ATLAS_STORE=nats
+EXPOSE 50069
 HEALTHCHECK --interval=5s --timeout=3s --retries=10 --start-period=10s \
-  CMD ["wget", "--spider", "-q", "http://127.0.0.1:9100/metrics"]
+  CMD ["/bin/sh", "-c", "if [ -n \"$TROGON_ATLAS_TLS_CERT\" ]; then exec wget --spider -q --no-check-certificate https://127.0.0.1:50069/-/liveness; else exec wget --spider -q http://127.0.0.1:50069/-/liveness; fi"]
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/trogon-atlas-server"]

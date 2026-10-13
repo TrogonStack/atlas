@@ -27,7 +27,7 @@ to. Left empty, the chart assumes a server installed under the same release
 name convention, one `-server` away from this release: a standalone studio
 release named `s` talks to `http://s-trogon-atlas-server:50069`, matching
 what an umbrella install's `server` alias would produce for a server
-release also named `s`. `server.grpcPort` (default `50069`) overrides the
+release also named `s`. `server.port` (default `50069`) overrides the
 port, and `config.grpcUrl` overrides the whole URL for anything that does
 not fit the naming convention (a server in another namespace, TLS, etc).
 
@@ -77,6 +77,30 @@ instead of a push.
 `ingress.hosts` and, for TLS, `ingress.tls`. Without it, `NOTES.txt`
 prints a `kubectl port-forward` command instead.
 
+Browsers reach studio through that edge, so its one port is named `public`
+on the container and the Service, and the Ingress routes to it by that
+name. It serves HTTP/1.1.
+
+## Probes
+
+The probes are `httpGet` requests to `/-/readiness` and `/-/liveness` on
+the `public` port, which the bridge answers ahead of auth and rate
+limiting. Readiness reads the result of a background `GetServerInfo` call
+the bridge makes every 10 seconds with its own credential, so it tracks
+whether the server answers without each probe calling it, and goes not
+ready as soon as shutdown begins. Liveness depends on nothing upstream, so
+a server outage takes studio out of the Service without restarting it.
+The startup probe uses `/-/liveness`. Add `?verbose` to either path to
+list each check.
+
+## Upgrading from 0.x
+
+1.0.0 renames the port from `http` to `public`, on the container and the
+Service, and the value `server.grpcPort` to `server.port`. Update any
+Ingress, NetworkPolicy, or Gateway route of your own that names the port,
+and move a `server.grpcPort` override to `server.port`. The probes move
+from `/api/info` and TCP checks to `/-/readiness` and `/-/liveness`.
+
 ## Notable values
 
 | Value | Default | Purpose |
@@ -84,7 +108,7 @@ prints a `kubectl port-forward` command instead.
 | `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories |
 | `image.repository` | `atlas/trogon-atlas-studio` | studio image |
 | `server.host` | `""` | server Service name; empty derives `<release>-trogon-atlas-server` |
-| `server.grpcPort` | `50069` | server gRPC port |
+| `server.port` | `50069` | the server Service's `private` port |
 | `config.grpcUrl` | `""` | full override of the derived server URL |
 | `auth.token.value` | `""` | bearer token sent to the server as `TROGON_ATLAS_AUTH_TOKEN` |
 | `auth.token.existingSecret` | `""` | read that token from an existing Secret instead |

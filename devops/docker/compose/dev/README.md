@@ -81,7 +81,8 @@ The compose file is the recommended deployment shape: NATS JetStream is the
 store (data survives restarts via the `nats-data` volume), the server's git
 mirror is persisted on `trogon-atlas-mirror`, every service is set to
 `restart: unless-stopped`, NATS reports a healthcheck against its monitoring
-port, and the server's Prometheus exporter is exposed on `:9100`.
+port, and the server serves a Prometheus scrape at
+`http://127.0.0.1:50069/-/metrics`.
 
 `devops/docker/images/trogon-atlas-server/Dockerfile` is a multi-stage build
 that compiles the binary against `*-unknown-linux-musl` and ships from Alpine
@@ -149,7 +150,7 @@ and return proto3 JSON instead. See "What the tools return" in
 | `--git-mirror` | `TROGON_ATLAS_GIT_MIRROR` | unset |
 | `--git-author-name` | `TROGON_ATLAS_GIT_AUTHOR_NAME` | `trogon-atlas-server` |
 | `--git-author-email` | `TROGON_ATLAS_GIT_AUTHOR_EMAIL` | `trogon-atlas@local` |
-| `--metrics-listen` | `TROGON_ATLAS_METRICS_LISTEN` | unset (disabled) |
+| `--prometheus-metrics` | `TROGON_ATLAS_PROMETHEUS_METRICS` | `false` (serves `/-/metrics` on the gRPC listener when set) |
 | `--mcp` | `TROGON_ATLAS_MCP` | `false` (serves `/mcp` on the gRPC listener when set) |
 | `--mcp-allowed-hosts` | `TROGON_ATLAS_MCP_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1` (`*` disables the check) |
 | `--auth-token` | `TROGON_ATLAS_AUTH_TOKEN` | unset (auth disabled, dev only) |
@@ -186,8 +187,10 @@ Set `OTEL_EXPORTER_OTLP_ENDPOINT` (e.g. `http://otel-collector:4317`) to
 export the `rpc` and `llm.complete` spans over OTLP/gRPC; without it spans
 are only visible in the logs.
 
-When `--metrics-listen=0.0.0.0:9100` is set, the server installs a global
-Prometheus recorder and exposes `/metrics`. Emitted families:
+The same endpoint also turns on metric export over OTLP/gRPC. Pass
+`--prometheus-metrics` (`TROGON_ATLAS_PROMETHEUS_METRICS=true`, which this
+compose stack sets) to also serve a Prometheus scrape at `/-/metrics` on the
+gRPC port, outside auth. Both can be on at once. Emitted families:
 `rpc_requests_total{service,method,code}`,
 `rpc_request_duration_seconds{service,method}`,
 `rpc_errors_total{service,method,code}` for the subset where `code != "ok"`,
@@ -197,8 +200,9 @@ Prometheus recorder and exposes `/metrics`. Emitted families:
 configured store (NATS only; `MemStore` reports nothing), and
 `llm_requests_total` / `llm_request_duration_seconds` /
 `llm_tokens_total` / `llm_prompt_truncations_total` when the LLM path is
-enabled. A standard gRPC health service (`grpc.health.v1.Health`) is
-served alongside the main service for readiness probes.
+enabled. Readiness and liveness are served on the gRPC port, over plain
+HTTP at `/-/readiness` and `/-/liveness` and over `grpc.health.v1.Health`
+as the services `readiness`, `liveness`, and `""` (readiness).
 
 Suggested alerts on the change-stream gauges:
 

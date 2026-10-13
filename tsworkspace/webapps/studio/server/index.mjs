@@ -192,13 +192,14 @@ if (NATS_WS_AUTH_TOKEN) {
 
 // A bridge token in passthrough mode is not the identity anywhere except
 // `/api/info`, the one route that runs before the auth guard can capture a
-// caller's token. Say so once at boot: an operator who sets both and expects
+// caller's token, and the background upstream check behind `/-/readiness`.
+// Say so once at boot: an operator who sets both and expects
 // the bridge token to stand in more broadly would otherwise find out from an
 // audit log.
 if (AUTH_PASSTHROUGH) {
   logEvent("info", "auth_passthrough_enabled", {
     msg: AUTH_TOKEN
-      ? "Forwarding each caller's own bearer token upstream; TROGON_ATLAS_AUTH_TOKEN is used only by /api/info, which runs before the auth guard"
+      ? "Forwarding each caller's own bearer token upstream; TROGON_ATLAS_AUTH_TOKEN is used only by /api/info, which runs before the auth guard, and by the upstream check behind /-/readiness"
       : "Forwarding each caller's own bearer token upstream; the bridge has no identity of its own",
   });
 }
@@ -241,8 +242,9 @@ const client = new pkg.EventModelService(target, credentials);
 function metadata(requestId, branch, { allowBridgeIdentity = false } = {}) {
   const md = new grpc.Metadata();
   // In passthrough mode the caller's token is the identity. The bridge's own
-  // token stands in only for the one route that runs before the auth guard
-  // can set a caller's token (`/api/info`, via `allowBridgeIdentity`); any
+  // token stands in only where no caller exists to forward: `/api/info`,
+  // which runs before the auth guard, and the readiness upstream check, both
+  // via `allowBridgeIdentity`; any
   // other route reaching here with no forwarded token is a bug, not a caller
   // the bridge should quietly vouch for, so it fails closed instead of
   // substituting its own identity for whoever is actually asking.
@@ -646,6 +648,107 @@ app.use((/** @type {AppRequest} */ req, /** @type {Res} */ res, /** @type {Next}
   next();
 });
 
+// Readiness and liveness, answered ahead of auth, rate limiting, the access
+// log and the /api routes. Probes read held state and never call upstream: a
+// background loop records the last upstream check and the process records its
+// own lifecycle. Mirrors the server's `/-/` probes in
+// `rsworkspace/crates/trogon-atlas-server/src/health.rs`.
+const UPSTREAM_CHECK_INTERVAL_MS = 10_000;
+const UPSTREAM_CHECK_TIMEOUT_MS = 2_000;
+const GRPC_UNAUTHENTICATED = 16;
+
+/** @typedef {"starting" | "running" | "shutting-down"} Lifecycle */
+/** @typedef {"unchecked" | "reachable" | "unreachable"} UpstreamStatus */
+/** @typedef {"readiness" | "liveness"} Probe */
+
+const healthState = {
+  /** @type {Lifecycle} */
+  lifecycle: "starting",
+  /** @type {UpstreamStatus} */
+  upstream: "unchecked",
+};
+
+/** @param {Probe} probe @returns {{ name: string, passed: boolean }[]} */
+function healthChecks(probe) {
+  const ping = { name: "ping", passed: healthState.lifecycle !== "starting" };
+  if (probe === "liveness") return [ping];
+  return [
+    ping,
+    { name: "upstream", passed: healthState.upstream === "reachable" },
+    { name: "shutdown", passed: healthState.lifecycle !== "shutting-down" },
+  ];
+}
+
+function markLive() {
+  if (healthState.lifecycle === "starting") healthState.lifecycle = "running";
+}
+
+// Stops advertising readiness for good, before in-flight requests drain.
+function beginShutdown() {
+  healthState.lifecycle = "shutting-down";
+}
+
+/** @param {UpstreamStatus} status @param {unknown} [err] */
+function recordUpstream(status, err) {
+  const previous = healthState.upstream;
+  healthState.upstream = status;
+  if (status === "unreachable" && previous !== "unreachable") {
+    logEvent("warn", "upstream_check_failed", {
+      upstream: maskEndpoint(GRPC_ENDPOINT),
+      error: maskError(err),
+    });
+  } else if (status === "reachable" && previous === "unreachable") {
+    logEvent("info", "upstream_check_recovered", { upstream: maskEndpoint(GRPC_ENDPOINT) });
+  }
+}
+
+/** @type {Promise<void> | null} */
+let upstreamCheckInFlight = null;
+
+// Overlapping checks could let a stale failure overwrite a newer success.
+function checkUpstream() {
+  upstreamCheckInFlight ??= runUpstreamCheck().finally(() => {
+    upstreamCheckInFlight = null;
+  });
+  return upstreamCheckInFlight;
+}
+
+// A pass-through bridge with no token of its own has no identity to check
+// with, so the server refusing an anonymous caller still proves it answers.
+async function runUpstreamCheck() {
+  try {
+    await call("getServerInfo", {}, { timeoutMs: UPSTREAM_CHECK_TIMEOUT_MS, allowBridgeIdentity: true });
+    recordUpstream("reachable");
+  } catch (err) {
+    const answeredAnonymous =
+      AUTH_PASSTHROUGH && !AUTH_TOKEN && /** @type {any} */ (err)?.code === GRPC_UNAUTHENTICATED;
+    recordUpstream(answeredAnonymous ? "reachable" : "unreachable", err);
+  }
+}
+
+/** @param {Probe} probe */
+function probeHandler(probe) {
+  return (/** @type {AppRequest} */ req, /** @type {Res} */ res) => {
+    const checks = healthChecks(probe);
+    const passed = checks.every((check) => check.passed);
+    const query = req.originalUrl.split("?")[1] ?? "";
+    const verbose = query.split("&").some((pair) => pair.split("=")[0] === "verbose");
+    res.status(passed ? 200 : 503);
+    res.type("text/plain");
+    res.setHeader("Cache-Control", "no-store");
+    if (!verbose) {
+      res.send(passed ? "ok\n" : `${probe === "readiness" ? "not ready" : "not live"}\n`);
+      return;
+    }
+    const lines = checks.map((check) => (check.passed ? `[+]${check.name} ok` : `[-]${check.name} failed`));
+    lines.push(`${probe} check ${passed ? "passed" : "failed"}`);
+    res.send(`${lines.join("\n")}\n`);
+  };
+}
+
+app.get("/-/readiness", probeHandler("readiness"));
+app.get("/-/liveness", probeHandler("liveness"));
+
 // CORS: only the explicitly allowlisted origins are permitted. With an
 // empty allowlist we emit no headers, so browsers enforce same-origin.
 /** @param {AppRequest} req */
@@ -778,9 +881,8 @@ function tokenDigest(token) {
 const AUTH_TOKEN_DIGEST = AUTH_TOKEN ? tokenDigest(AUTH_TOKEN) : null;
 
 // Global bearer-token guard for all /api/* routes. /api/info is kept
-// public (health/info endpoints are typically used by load balancers and
-// monitoring probes that run before auth is available). When AUTH_TOKEN is
-// not configured, all routes pass through.
+// public: it answers with the server version and feature flags only. When
+// AUTH_TOKEN is not configured, all routes pass through.
 /** @param {AppRequest} req @returns {string} */
 function bearerToken(req) {
   const header = req.headers.authorization ?? "";
@@ -1813,7 +1915,9 @@ app.use((/** @type {AppRequest} */ _req, /** @type {Res} */ res) => {
   res.status(404).end();
 });
 
-export { app, call };
+markLive();
+
+export { app, beginShutdown, call, checkUpstream };
 
 if (process.env.NODE_ENV !== "test") {
   // Crash loudly rather than silently: an unhandled rejection that reaches
@@ -1843,8 +1947,13 @@ if (process.env.NODE_ENV !== "test") {
     });
   });
 
+  void checkUpstream();
+  const upstreamCheck = setInterval(() => void checkUpstream(), UPSTREAM_CHECK_INTERVAL_MS);
+
   /** @param {string} signal */
   function shutdown(signal) {
+    beginShutdown();
+    clearInterval(upstreamCheck);
     logEvent("info", "studio_bridge_shutdown", { signal, activeSSECount: activeSSEResponses.size });
     // Drain active SSE streams with a fatal event before closing the HTTP
     // server. Without this, server.close() hard-drops them mid-stream and

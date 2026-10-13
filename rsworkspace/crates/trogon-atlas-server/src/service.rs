@@ -322,7 +322,7 @@ pub struct EventModelServiceImpl {
     snapshot_load_lock: tokio::sync::Mutex<()>,
     /// Counts RPCs currently executing. Drives the graceful-shutdown
     /// drain in `main.rs` -- drop on `Drop` of `RequestGuard`. Snapshot
-    /// cache hit/miss counts go through the Prometheus recorder
+    /// cache hit/miss counts go through the metrics recorder
     /// (`record_snapshot_cache_hit/miss`); we deliberately do not keep
     /// a duplicate atomic here.
     pub inflight_requests: Arc<std::sync::atomic::AtomicI64>,

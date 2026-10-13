@@ -26,9 +26,11 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# The one serving port, named `private`: callers reach it from inside the
+# cluster only. It carries gRPC, MCP and the probes.
 service:
   type: ClusterIP
-  grpcPort: 50069
+  port: 50069
   annotations: {}
 
 # The server refuses to start without authentication unless anonymous
@@ -85,7 +87,8 @@ config:
   rpcTimeoutSecs: 60
   shutdownDrainSecs: 30
   logLevel: info
-  # OTLP endpoint for trace export, e.g. http://otel-collector:4317
+  # OTLP gRPC endpoint traces and metrics are pushed to, e.g.
+  # http://otel-collector:4317. Empty exports neither.
   otlpEndpoint: ""
   # Standard-base64, 32-byte key sealing ListChanges pagination cursors.
   # Safe to leave unset for a single-process deployment; required once more
@@ -146,14 +149,11 @@ spicedb:
     resources: {}
     extraEnv: []
 
+# Metrics are pushed over OTLP to config.otlpEndpoint. Prometheus is
+# opt-in: it serves a scrape at /-/metrics on the private port, outside auth.
 metrics:
-  enabled: true
-  port: 9100
-  serviceMonitor:
+  prometheus:
     enabled: false
-    interval: 30s
-    scrapeTimeout: 10s
-    labels: {}
 
 # MCP over Streamable HTTP at /mcp, on the same port as gRPC. Holds no
 # Secret: each MCP request acts as its own Authorization bearer token,
@@ -164,9 +164,9 @@ mcp:
   # loopback, e.g. the hostname of an Ingress or Gateway you route to it.
   allowedHosts: []
 
-# Serve gRPC over in-process TLS from a kubernetes.io/tls Secret.
-# Note: with TLS enabled the probes fall back to tcpSocket because the
-# kubelet gRPC probe does not support TLS.
+# Serve gRPC over in-process TLS from a kubernetes.io/tls Secret. The
+# probes switch to HTTPS with it, and the Service port drops its
+# kubernetes.io/h2c appProtocol.
 tls:
   existingSecret: ""
 

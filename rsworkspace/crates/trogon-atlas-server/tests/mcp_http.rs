@@ -26,6 +26,7 @@ use trogon_atlas_mcp::server::{ToolRole, TOOL_POLICIES};
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
 use trogon_atlas_server::{
     auth::{BearerAuth, RegistryFile, TokenRegistry},
+    health::{Health, StoreStatus},
     mcp::{data_plane, mcp_router, AllowedHosts, MCP_PATH},
     service::EventModelServiceImpl,
     telemetry::InflightLayer,
@@ -75,12 +76,13 @@ impl McpHttp {
         let service =
             EventModelServiceServer::new(EventModelServiceImpl::try_new(Arc::new(store)).unwrap());
         let data_plane = data_plane(service, BearerAuth::new(registry));
-        let (_health_reporter, health_service) = tonic_health::server::health_reporter();
+        let health = Health::new().await;
+        health.set_store(StoreStatus::Reachable).await;
         let (drain_tx, _drain_rx) = tokio::sync::watch::channel(0i64);
         let inflight = InflightLayer::new(Arc::new(AtomicI64::new(0)), Arc::new(drain_tx));
 
         let mut routes = tonic::service::Routes::builder();
-        routes.add_service(health_service);
+        routes.add_service(health.grpc_service());
         routes.add_service(data_plane.clone());
         let mut routes = routes.routes();
         let mcp = mcp_router(
@@ -91,13 +93,18 @@ impl McpHttp {
             allowed_hosts,
         )
         .unwrap();
-        let merged = routes.axum_router_mut().clone().merge(mcp);
+        let merged = routes
+            .axum_router_mut()
+            .clone()
+            .merge(health.router())
+            .merge(mcp);
         *routes.axum_router_mut() = merged;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let incoming = TcpIncoming::from(listener);
         let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
+        health.mark_live().await;
         let task = tokio::spawn(
             Server::builder()
                 .accept_http1(true)
