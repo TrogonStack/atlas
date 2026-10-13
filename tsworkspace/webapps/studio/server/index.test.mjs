@@ -1,5 +1,11 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const distDir = path.resolve(here, '..', 'dist');
 
 vi.mock('@grpc/proto-loader', () => {
   return {
@@ -1255,6 +1261,66 @@ describe('BUG: SPA static fallback swallows /api and missing assets', () => {
       .set('Accept', '*/*');
     expect(res.status).toBe(404);
     expect(String(res.text)).not.toMatch(/<!doctype html>/i);
+  });
+});
+
+describe('SPA/static fallback rate limiter', () => {
+  let createdDist = false;
+
+  beforeAll(() => {
+    if (fs.existsSync(distDir)) return;
+    createdDist = true;
+    fs.mkdirSync(distDir, { recursive: true });
+    fs.writeFileSync(path.join(distDir, 'index.html'), '<!doctype html><html></html>');
+  });
+
+  afterAll(() => {
+    if (createdDist) fs.rmSync(distDir, { recursive: true, force: true });
+  });
+
+  it('returns 429 once the SPA fallback ceiling is exceeded', async () => {
+    process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX = '1';
+    process.env.NODE_ENV = 'test';
+    const mod = await import('./index.mjs?t=spa-rate-limit');
+    delete process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX;
+    const spaApp = mod.app;
+
+    const first = await request(spaApp).get('/some-page');
+    expect(first.status).not.toBe(429);
+
+    const second = await request(spaApp).get('/some-page');
+    expect(second.status).toBe(429);
+    expect(second.body).toHaveProperty('error');
+  });
+
+  it('does not count against the /api rate limiter', async () => {
+    process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX = '1';
+    process.env.NODE_ENV = 'test';
+    const mod = await import('./index.mjs?t=spa-rate-limit-api-isolation');
+    delete process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX;
+    const spaApp = mod.app;
+
+    await request(spaApp).get('/some-page');
+    await request(spaApp).get('/some-page');
+
+    const res = await request(spaApp).get('/api/info');
+    expect(res.status).toBe(200);
+  });
+
+  it('is disabled by the same toggle as the /api limiter', async () => {
+    process.env.TROGON_ATLAS_STUDIO_RATE_MAX = '0';
+    process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX = '1';
+    process.env.NODE_ENV = 'test';
+    const mod = await import('./index.mjs?t=spa-rate-limit-disabled');
+    delete process.env.TROGON_ATLAS_STUDIO_RATE_MAX;
+    delete process.env.TROGON_ATLAS_STUDIO_STATIC_RATE_MAX;
+    const spaApp = mod.app;
+
+    const first = await request(spaApp).get('/some-page');
+    expect(first.status).not.toBe(429);
+
+    const second = await request(spaApp).get('/some-page');
+    expect(second.status).not.toBe(429);
   });
 });
 
