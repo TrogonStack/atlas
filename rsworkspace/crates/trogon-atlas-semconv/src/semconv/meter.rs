@@ -4,8 +4,8 @@ use super::options::InstrumentationOptions;
 pub struct Meter(opentelemetry::metrics::Meter);
 
 impl Meter {
-    pub fn new(
-        provider: &(impl opentelemetry::metrics::MeterProvider + ?Sized),
+    pub fn new<P: opentelemetry::metrics::MeterProvider + ?Sized>(
+        provider: &P,
         options: InstrumentationOptions,
     ) -> Self {
         let meter = provider.meter_with_scope(options.scope.into());
