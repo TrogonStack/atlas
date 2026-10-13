@@ -1,16 +1,14 @@
 //! Metric instruments the store records, generated from `otel/registry` into
 //! `trogon-atlas-semconv`.
 
-use std::{fmt, sync::Arc};
+use std::fmt;
 
 use trogon_atlas_semconv::semconv::{meter::Meter, metric};
 
 /// The store's instruments, bound to the [`Meter`] they were built from.
 /// Cloning shares the instruments. [`Default`] records nothing.
 #[derive(Clone)]
-pub struct StoreMetrics(Arc<Instruments>);
-
-struct Instruments {
+pub struct StoreMetrics {
     batches_pending_recovery: metric::StoreBatchesPendingRecovery,
     change_events_lost: metric::StoreChangeEventsLost,
     change_tail_reconnects: metric::StoreChangeTailReconnects,
@@ -22,7 +20,7 @@ struct Instruments {
 
 impl StoreMetrics {
     pub fn new(meter: &Meter) -> Self {
-        Self(Arc::new(Instruments {
+        Self {
             batches_pending_recovery: metric::StoreBatchesPendingRecovery::new(meter),
             change_events_lost: metric::StoreChangeEventsLost::new(meter),
             change_tail_reconnects: metric::StoreChangeTailReconnects::new(meter),
@@ -30,35 +28,35 @@ impl StoreMetrics {
             nats_reconnects: metric::StoreNatsReconnects::new(meter),
             read_changes_consumers: metric::StoreReadChangesConsumers::new(meter),
             revisions_lost: metric::StoreRevisionsLost::new(meter),
-        }))
+        }
     }
 
     pub fn record_batch_pending_recovery(&self) {
-        self.0.batches_pending_recovery.add(1);
+        self.batches_pending_recovery.add(1);
     }
 
     pub fn record_change_event_lost(&self) {
-        self.0.change_events_lost.add(1);
+        self.change_events_lost.add(1);
     }
 
     pub fn record_change_tail_reconnect(&self) {
-        self.0.change_tail_reconnects.add(1);
+        self.change_tail_reconnects.add(1);
     }
 
     pub fn record_nats_disconnect(&self) {
-        self.0.nats_disconnects.add(1);
+        self.nats_disconnects.add(1);
     }
 
     pub fn record_nats_reconnect(&self) {
-        self.0.nats_reconnects.add(1);
+        self.nats_reconnects.add(1);
     }
 
     pub fn record_read_changes_consumer(&self) {
-        self.0.read_changes_consumers.add(1);
+        self.read_changes_consumers.add(1);
     }
 
     pub fn record_revision_lost(&self) {
-        self.0.revisions_lost.add(1);
+        self.revisions_lost.add(1);
     }
 }
 

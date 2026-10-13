@@ -1,7 +1,7 @@
 //! Metric instruments the server records, generated from `otel/registry`
 //! into `trogon-atlas-semconv`.
 
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, time::Duration};
 
 use trogon_atlas_semconv::semconv::{attribute, meter::Meter, metric};
 use trogon_atlas_store::ChangeStreamStats;
@@ -13,9 +13,7 @@ const ERROR_TYPE_OTHER: &str = "_OTHER";
 /// The server's instruments, bound to the [`Meter`] they were built from.
 /// Cloning shares the instruments. [`Default`] records nothing.
 #[derive(Clone)]
-pub struct ServerMetrics(Arc<Instruments>);
-
-struct Instruments {
+pub struct ServerMetrics {
     rpc_server_call_duration: metric::RpcServerCallDuration,
     rpc_server_stream_terminations: metric::RpcServerStreamTerminations,
     mutation_lock_wait_duration: metric::MutationLockWaitDuration,
@@ -40,7 +38,7 @@ struct Instruments {
 
 impl ServerMetrics {
     pub fn new(meter: &Meter) -> Self {
-        Self(Arc::new(Instruments {
+        Self {
             rpc_server_call_duration: metric::RpcServerCallDuration::new(meter),
             rpc_server_stream_terminations: metric::RpcServerStreamTerminations::new(meter),
             mutation_lock_wait_duration: metric::MutationLockWaitDuration::new(meter),
@@ -62,7 +60,7 @@ impl ServerMetrics {
             llm_prompt_truncations: metric::LlmPromptTruncations::new(meter),
             llm_request_duration: metric::LlmRequestDuration::new(meter),
             llm_tokens: metric::LlmTokens::new(meter),
-        }))
+        }
     }
 
     pub fn record_rpc_call(
@@ -70,7 +68,7 @@ impl ServerMetrics {
         elapsed: Duration,
         attributes: impl IntoIterator<Item = metric::RpcServerCallDurationAttr>,
     ) {
-        self.0.rpc_server_call_duration.record(
+        self.rpc_server_call_duration.record(
             elapsed.as_secs_f64(),
             crate::telemetry::GRPC_SYSTEM.into(),
             attributes,
@@ -78,15 +76,13 @@ impl ServerMetrics {
     }
 
     pub fn record_stream_termination(&self, rpc_method: String, outcome: attribute::StreamOutcome) {
-        self.0
-            .rpc_server_stream_terminations
+        self.rpc_server_stream_terminations
             .add(1, rpc_method.into(), outcome);
     }
 
     /// Time a caller spent blocked acquiring the global mutation lock.
     pub fn record_mutation_lock_wait(&self, waited: Duration) {
-        self.0
-            .mutation_lock_wait_duration
+        self.mutation_lock_wait_duration
             .record(waited.as_secs_f64());
     }
 
@@ -117,67 +113,64 @@ impl ServerMetrics {
     }
 
     fn record_cache_lookup(&self, name: attribute::CacheName, result: attribute::CacheResult) {
-        self.0.cache_lookups.add(1, name, result);
+        self.cache_lookups.add(1, name, result);
     }
 
     pub fn record_change_stream_stats(&self, stats: &ChangeStreamStats) {
-        self.0
-            .change_stream_message_count
+        self.change_stream_message_count
             .record(i64::try_from(stats.messages).unwrap_or(i64::MAX));
-        self.0
-            .change_stream_size
+        self.change_stream_size
             .record(i64::try_from(stats.bytes).unwrap_or(i64::MAX));
         let age = match stats.oldest_message_unix_seconds {
             Some(secs) => (chrono::Utc::now().timestamp() - secs).max(0),
             None => 0,
         };
-        self.0.change_stream_oldest_message_age.record(age);
+        self.change_stream_oldest_message_age.record(age);
     }
 
     pub fn record_auth_registry_reload(&self) {
-        self.0.auth_registry_reloads.add(1);
+        self.auth_registry_reloads.add(1);
     }
 
     pub fn record_auth_registry_reload_failure(&self) {
-        self.0.auth_registry_reload_failures.add(1);
+        self.auth_registry_reload_failures.add(1);
     }
 
     pub fn record_auth_registry_membership_publish_failure(&self) {
-        self.0.auth_registry_membership_publish_failures.add(1);
+        self.auth_registry_membership_publish_failures.add(1);
     }
 
     pub fn record_batch_recovery_failure(&self) {
-        self.0.batch_recovery_failures.add(1);
+        self.batch_recovery_failures.add(1);
     }
 
     pub fn record_batch_recovery_unresolved(&self, unresolved: usize) {
-        self.0
-            .batch_recovery_unresolved
+        self.batch_recovery_unresolved
             .add(u64::try_from(unresolved).unwrap_or(u64::MAX));
     }
 
     pub fn record_broadcast_lag(&self, missed: u64) {
-        self.0.broadcast_lag_events.add(missed);
+        self.broadcast_lag_events.add(missed);
     }
 
     pub fn record_changeset_lost(&self) {
-        self.0.changesets_lost.add(1);
+        self.changesets_lost.add(1);
     }
 
     pub fn record_git_mirror_failure(&self) {
-        self.0.git_mirror_failures.add(1);
+        self.git_mirror_failures.add(1);
     }
 
     pub fn record_graph_closure_truncation(&self) {
-        self.0.graph_closure_truncations.add(1);
+        self.graph_closure_truncations.add(1);
     }
 
     pub fn record_search_index_error(&self) {
-        self.0.search_index_errors.add(1);
+        self.search_index_errors.add(1);
     }
 
     pub fn record_llm_prompt_truncation(&self) {
-        self.0.llm_prompt_truncations.add(1);
+        self.llm_prompt_truncations.add(1);
     }
 
     pub fn record_llm_request<T, E>(
@@ -187,7 +180,7 @@ impl ServerMetrics {
         provider: attribute::LlmProvider,
         result: &Result<T, E>,
     ) {
-        self.0.llm_request_duration.record(
+        self.llm_request_duration.record(
             elapsed.as_secs_f64(),
             model,
             provider,
@@ -203,7 +196,7 @@ impl ServerMetrics {
         token_type: attribute::LlmTokenType,
         tokens: u64,
     ) {
-        self.0.llm_tokens.add(tokens, model, token_type);
+        self.llm_tokens.add(tokens, model, token_type);
     }
 }
 
