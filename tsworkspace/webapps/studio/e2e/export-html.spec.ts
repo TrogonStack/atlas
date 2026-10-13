@@ -1,16 +1,20 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
+import { ORDER_MODEL_ID, ORDER_PLACED_EVENT } from './fixtures/fake-grpc-server.mjs';
+
+const { namespace, slug } = ORDER_MODEL_ID;
+const eventTitle = ORDER_PLACED_EVENT.event.title;
 
 // The point of an exported board is that it opens with nothing else running,
 // so the saved file is opened in a fresh page with every network request refused.
 test('Export HTML saves a board that renders from disk with no network', async ({ page, browser }, testInfo) => {
-  await page.goto('/em/shop/order-service');
-  await expect(page.getByText('Order Placed')).toBeVisible();
+  await page.goto(`/em/${namespace}/${slug}`);
+  await expect(page.getByText(eventTitle)).toBeVisible();
 
   const downloading = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export HTML' }).click();
   const download = await downloading;
-  expect(download.suggestedFilename()).toMatch(/^order-service-\d{8}-\d{4}\.html$/);
+  expect(download.suggestedFilename()).toMatch(new RegExp(`^${slug}-\\d{8}-\\d{4}\\.html$`));
   // Keep the .html name: Chrome shows a file without it as plain text.
   const file = testInfo.outputPath(download.suggestedFilename());
   await download.saveAs(file);
@@ -28,7 +32,7 @@ test('Export HTML saves a board that renders from disk with no network', async (
   await offline.goto(`file://${file}`);
 
   await expect(offline.getByRole('heading', { name: 'Event Model Studio', level: 1 })).toBeVisible();
-  await expect(offline.getByText('Order Placed')).toBeVisible();
+  await expect(offline.getByText(eventTitle)).toBeVisible();
   await expect(offline.getByRole('status', { name: 'Snapshot' })).toContainText('baseline');
   await expect(offline.getByRole('button', { name: 'Refresh' })).toHaveCount(0);
   await expect(offline.getByRole('button', { name: 'Export HTML' })).toHaveCount(0);
@@ -38,9 +42,9 @@ test('Export HTML saves a board that renders from disk with no network', async (
   const html = await readFile(file, 'utf8');
   const data = html.match(/<script id="atlas-snapshot" type="application\/json">(.*?)<\/script>/s)?.[1];
   expect(Object.keys(JSON.parse(data ?? '{}').responses).sort()).toEqual([
-    '/api/event-model/shop/order-service',
+    `/api/event-model/${namespace}/${slug}`,
     '/api/info',
-    '/api/validate?namespace=shop&slug=order-service',
+    `/api/validate?namespace=${namespace}&slug=${slug}`,
   ]);
   await offline.close();
 });

@@ -54,16 +54,26 @@ export function buildSnapshotHtml({
 
 async function fetchRuntime(path: string): Promise<string> {
   const res = await fetch(path);
-  const text = res.ok ? await res.text() : '';
-  // A dev server without the build answers with the app's HTML shell.
-  if (!text || text.trimStart().startsWith('<')) {
+  // A server without the build answers a missing file with the app's HTML shell.
+  if (!res.ok || res.headers.get('content-type')?.startsWith('text/html')) {
     throw new Error('export needs the snapshot runtime: run build:snapshot');
   }
-  return text;
+  return res.text();
 }
 
-/** Read the board as the viewer sees it now and record the responses. */
-export async function captureSnapshot({
+let runtime: Promise<[string, string]> | undefined;
+
+/** The runtime does not change while Studio is open, so it is fetched once. */
+function loadRuntime(): Promise<[string, string]> {
+  runtime ??= Promise.all([fetchRuntime(RUNTIME_JS), fetchRuntime(RUNTIME_CSS)]).catch((e: unknown) => {
+    runtime = undefined;
+    throw e;
+  });
+  return runtime;
+}
+
+/** Read the board again, as the viewer would see it now, and record the responses. */
+async function captureSnapshot({
   namespace,
   slug,
   branch,
@@ -113,10 +123,6 @@ export async function exportBoardHtml(board: {
   branch?: string;
   title: string;
 }): Promise<void> {
-  const [snapshot, js, css] = await Promise.all([
-    captureSnapshot(board),
-    fetchRuntime(RUNTIME_JS),
-    fetchRuntime(RUNTIME_CSS),
-  ]);
+  const [snapshot, [js, css]] = await Promise.all([captureSnapshot(board), loadRuntime()]);
   download(snapshotFileName(snapshot), buildSnapshotHtml({ js, css, snapshot, title: board.title }));
 }

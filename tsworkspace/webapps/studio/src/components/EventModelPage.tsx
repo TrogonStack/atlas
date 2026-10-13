@@ -118,9 +118,8 @@ export function EventModelPage({
       snapshot={snapshot}
       // A snapshot cannot change, so it gets no refetch and therefore no live feed.
       onRefetch={snapshot ? undefined : load}
-      onExportHtml={
-        snapshot ? undefined : () => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })
-      }
+      // Read at click time: a branch switch in ModelShell does not re-render this page.
+      onExportHtml={() => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })}
     />
   );
 }
