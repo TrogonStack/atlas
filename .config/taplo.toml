@@ -1,5 +1,6 @@
 exclude = [
   "rsworkspace/Cargo.lock",
+  "rsworkspace/crates/*/fuzz/Cargo.lock",
   "proto/buf.lock",
   "rsworkspace/crates/trogon-atlas-proto/src/gen/**",
   "rsworkspace/crates/trogon-atlas-authzed/src/gen/**",

@@ -18,23 +18,23 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@base-ui/react": "1.8.0",
-    "@grpc/grpc-js": "1.14.5",
+    "@base-ui/react": "1.9.0",
+    "@grpc/grpc-js": "1.14.6",
     "@grpc/proto-loader": "0.8.1",
     "@tanstack/react-hotkeys": "0.13.0",
     "@xyflow/react": "12.12.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "express": "5.2.1",
+    "express": "5.3.0",
     "express-rate-limit": "8.7.1",
-    "lucide-react": "1.52.0",
+    "lucide-react": "1.54.0",
     "nats.ws": "1.30.3",
-    "nuqs": "2.10.1",
+    "nuqs": "2.10.2",
     "protobufjs": "8.8.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "tailwind-merge": "3.7.0",
-    "uuid": "14.0.2"
+    "uuid": "14.0.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.64.0",
