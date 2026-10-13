@@ -276,8 +276,9 @@ JetStream via testcontainers.
 ## Authentication
 
 The gRPC service uses a single shared bearer token configured via
-`--auth-token` / `TROGON_ATLAS_AUTH_TOKEN`. The MCP adapter and the studio
-bridge present the same token. Operating points:
+`--auth-token` / `TROGON_ATLAS_AUTH_TOKEN`. The studio bridge presents
+the same token; the server's `/mcp` endpoint holds none and acts as each
+MCP client's own bearer token. Operating points:
 
 - The server refuses to start with `--auth-token` unset unless
   `--insecure-allow-anonymous` (or
@@ -286,7 +287,7 @@ bridge present the same token. Operating points:
   127.0.0.1 inside the orb network; remove it for any deployment that
   exposes the listener beyond a trusted boundary.
 - Rotate the token by writing a new value into `.env`, restarting the
-  server, and updating the studio + MCP environments in the same
+  server, and updating the studio environment and MCP clients in the same
   window. Clients see a single transient `UNAUTHENTICATED` and recover.
 - For multi-tenant or per-client tokens, front the server with a
   reverse proxy that rewrites the `authorization` header per client;
@@ -316,8 +317,8 @@ ALPN negotiation for free. Two supported postures:
 2. Set `TROGON_ATLAS_TLS_CERT=/path/cert.pem` and
    `TROGON_ATLAS_TLS_KEY=/path/key.pem`.
 3. Point clients at `https://...:50069`. The studio bridge accepts
-   `https://` URLs for `TROGON_ATLAS_GRPC` without configuration; the
-   MCP adapter accepts the same.
+   `https://` URLs for `TROGON_ATLAS_GRPC` without configuration. The
+   MCP listener stays plaintext; terminate TLS in front of it.
 
 Either posture: never serve plaintext gRPC across an untrusted network.
 The server still emits a startup warning when TLS is not configured.

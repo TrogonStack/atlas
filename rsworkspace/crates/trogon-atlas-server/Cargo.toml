@@ -20,9 +20,12 @@ trogon-atlas-core = { workspace = true }
 trogon-atlas-store = { workspace = true }
 trogon-atlas-types = { workspace = true }
 trogon-atlas-authzed = { workspace = true }
+trogon-atlas-client = { workspace = true }
+trogon-atlas-mcp = { workspace = true }
 tonic = { workspace = true, features = ["tls-ring"] }
 tonic-health = { workspace = true }
 tonic-types = { workspace = true }
+axum = { version = "0.8", default-features = false }
 subtle = "2"
 sha2 = { workspace = true }
 chacha20poly1305 = { workspace = true }
@@ -45,7 +48,7 @@ parking_lot = "0.12"
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", default-features = false, features = ["http-listener"] }
 toml = "1.1"
-tower = "0.5"
+tower = { version = "0.5", features = ["timeout", "util"] }
 http = "1"
 http-body = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -60,10 +63,10 @@ tracing-opentelemetry = "0.34"
 wiremock = "0.6"
 trogon-atlas-testsupport = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
-trogon-atlas-client = { workspace = true }
 proptest = "1"
 async-trait = { workspace = true }
 tempfile = { workspace = true }
+rmcp = { version = "2", features = ["client", "transport-streamable-http-client-reqwest"] }
 
 [lints]
 workspace = true
