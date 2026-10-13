@@ -17,6 +17,9 @@ export interface StudioSnapshot {
   responses: Record<string, unknown>;
 }
 
+/** What a page shows about where a snapshot came from. */
+export type SnapshotStamp = Pick<StudioSnapshot, 'capturedAt' | 'branch'>;
+
 let active: StudioSnapshot | undefined;
 
 /** Answers every read from `snapshot` until the page unloads. */
@@ -28,21 +31,18 @@ export function activeSnapshot(): StudioSnapshot | undefined {
   return active;
 }
 
-/** Test-only: return to normal network reads. */
-export function clearSnapshot(): void {
-  active = undefined;
-}
-
 /**
  * The recorded body for `path`. A path the snapshot does not hold throws,
  * so a view that needs more than the board was saved with shows an error
  * instead of quietly rendering empty.
  */
 export function snapshotResponse(snapshot: StudioSnapshot, path: string): unknown {
-  if (!Object.hasOwn(snapshot.responses, path)) {
-    throw new Error(`not in this snapshot: ${path}`);
-  }
+  if (!Object.hasOwn(snapshot.responses, path)) throw notInSnapshot(path);
   return snapshot.responses[path];
+}
+
+export function notInSnapshot(path: string): Error {
+  return new Error(`not in this snapshot: ${path}`);
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

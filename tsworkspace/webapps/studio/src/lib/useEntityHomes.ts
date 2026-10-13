@@ -12,7 +12,6 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { readBranchFromUrl } from '@/lib/branch';
 import { buildModel, type Entity, type EntityId, wireKind } from '@/lib/model';
-import { activeSnapshot } from '@/lib/snapshot';
 
 interface Index {
   // key: `${entityKind}:${namespace}/${slug}` → EventModel entities
@@ -24,8 +23,6 @@ interface Index {
 const cacheByBranch = new Map<string, Promise<Index>>();
 
 async function loadIndex(branch: string | undefined): Promise<Index> {
-  // A snapshot holds one board, so a jump to another EventModel has nowhere to land.
-  if (activeSnapshot()) return { homes: new Map() };
   const cacheKey = branch ?? '';
   const existing = cacheByBranch.get(cacheKey);
   if (existing) return existing;

@@ -1,6 +1,6 @@
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
-import { activeSnapshot, snapshotResponse } from '@/lib/snapshot';
+import { activeSnapshot, notInSnapshot, snapshotResponse } from '@/lib/snapshot';
 
 // Hard ceiling on every browser → gateway request. Long-running RPCs are
 // expected to stream (SSE / NATS WS); a 30 s wall clock for a single JSON
@@ -136,7 +136,7 @@ async function getJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
 }
 
 async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}): Promise<T> {
-  if (activeSnapshot()) throw new Error(`not in this snapshot: ${url}`);
+  if (activeSnapshot()) throw notInSnapshot(url);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const timeoutCtrl = new AbortController();
   const timer =

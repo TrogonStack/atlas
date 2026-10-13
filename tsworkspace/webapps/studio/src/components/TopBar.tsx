@@ -4,7 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import type { ServerInfo } from '@/lib/api';
 import type { RealtimeStatus } from '@/lib/realtime';
-import type { StudioSnapshot } from '@/lib/snapshot';
+import type { SnapshotStamp } from '@/lib/snapshot';
 import { cn } from '@/lib/utils';
 
 export function TopBar({
@@ -27,7 +27,7 @@ export function TopBar({
   scopedTitle?: string;
   backHref?: string;
   /** Set when the page is a saved snapshot: live controls give way to when and where it was taken. */
-  snapshot?: Pick<StudioSnapshot, 'capturedAt' | 'branch'>;
+  snapshot?: SnapshotStamp;
   /** Active branch, if any (Phase 3: Studio). Omit to hide the branch UI entirely. */
   branch?: string;
   onSelectBranch?: (name: string | undefined) => void;
@@ -103,13 +103,7 @@ export function TopBar({
   );
 }
 
-function SnapshotBadge({
-  snapshot,
-  serverVersion,
-}: {
-  snapshot: Pick<StudioSnapshot, 'capturedAt' | 'branch'>;
-  serverVersion?: string;
-}) {
+function SnapshotBadge({ snapshot, serverVersion }: { snapshot: SnapshotStamp; serverVersion?: string }) {
   const at = new Date(snapshot.capturedAt);
   const when = Number.isNaN(at.getTime())
     ? snapshot.capturedAt

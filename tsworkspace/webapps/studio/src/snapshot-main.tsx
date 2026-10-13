@@ -11,13 +11,16 @@ import './index.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('missing #root element');
-const snapshot = parseSnapshot(document.getElementById('atlas-snapshot')?.textContent ?? '');
+const data = document.getElementById('atlas-snapshot');
+const snapshot = parseSnapshot(data?.textContent ?? '');
+// The parsed copy is the one in use; the text would only double the memory.
+data?.remove();
 installSnapshot(snapshot);
 createRoot(root).render(
   <StrictMode>
     <ErrorBoundary>
       <NuqsAdapter>
-        <EventModelPage namespace={snapshot.namespace} slug={snapshot.slug} />
+        <EventModelPage namespace={snapshot.namespace} slug={snapshot.slug} snapshot={snapshot} />
       </NuqsAdapter>
     </ErrorBoundary>
   </StrictMode>,

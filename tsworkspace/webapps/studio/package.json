@@ -8,7 +8,7 @@
     "dev": "concurrently -k \"node server/index.mjs\" \"vite\"",
     "dev:web": "vite",
     "dev:api": "node server/index.mjs",
-    "build": "tsc --noEmit -p tsconfig.json && vite build -c vite.snapshot.config.ts && vite build",
+    "build": "tsc --noEmit -p tsconfig.json && pnpm run build:snapshot && vite build",
     "build:snapshot": "vite build -c vite.snapshot.config.ts",
     "serve": "vite preview",
     "lint": "oxlint -c ../../.oxlintrc.json . && oxfmt -c ../../.oxfmtrc.json --check .",

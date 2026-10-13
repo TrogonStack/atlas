@@ -9,9 +9,18 @@ import { api } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
 import { buildIssueIndex, EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import { buildModel, type Model } from '@/lib/model';
-import { activeSnapshot } from '@/lib/snapshot';
+import type { SnapshotStamp } from '@/lib/snapshot';
 
-export function EventModelPage({ namespace, slug }: { namespace: string; slug: string }) {
+export function EventModelPage({
+  namespace,
+  slug,
+  snapshot,
+}: {
+  namespace: string;
+  slug: string;
+  /** Set when the page renders a saved snapshot instead of the live store. */
+  snapshot?: SnapshotStamp;
+}) {
   const [model, setModel] = useState<Model>();
   const [issues, setIssues] = useState<IssueIndex>(EMPTY_ISSUE_INDEX);
   const [error, setError] = useState<string>();
@@ -102,7 +111,8 @@ export function EventModelPage({ namespace, slug }: { namespace: string; slug: s
       backHref={withBranchQuery('/', branch)}
       issues={issues}
       // A snapshot cannot change, so it gets no refetch and therefore no live feed.
-      onRefetch={activeSnapshot() ? undefined : load}
+      snapshot={snapshot}
+      onRefetch={snapshot ? undefined : load}
     />
   );
 }
