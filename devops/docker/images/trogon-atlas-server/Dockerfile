@@ -2,7 +2,7 @@
 # trogon-atlas-store uses Duration::from_mins, stable since Rust 1.91.
 # Compile on the build platform and cross-link for the target: rustc and
 # cargo under QEMU arm64 emulation hang the image job for hours.
-FROM --platform=$BUILDPLATFORM rust:1.99-bookworm AS builder
+FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS builder
 ARG TARGETARCH
 ARG BUILDARCH
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
