@@ -8,7 +8,7 @@ guarantees. Naively mapping "what the code does" onto "what the EM board
 declares" produces models that look right but lie about what's actually
 happening.
 
-This directory captures the translation rules for specific runtime tools:
+These guides capture the translation rules for specific runtime tools:
 what each layer's primitives ARE in EM terms, and what they are NOT.
 
 ## Why these matter
