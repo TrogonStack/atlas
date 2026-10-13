@@ -1,0 +1,31 @@
+file_format: definition/2
+metrics:
+  - name: trogon_atlas.change_stream.message.count
+    requirement_level: recommended
+    instrument: gauge
+    unit: "{message}"
+    stability: stable
+    brief: Current message count of the durable change stream.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.change_stream.size
+    requirement_level: recommended
+    instrument: gauge
+    unit: By
+    stability: stable
+    brief: Current byte size of the durable change stream.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.change_stream.oldest_message.age
+    requirement_level: recommended
+    instrument: gauge
+    unit: s
+    stability: stable
+    brief: >
+      Age of the oldest retained message in the durable change stream; zero
+      when the stream is empty.
+    annotations:
+      code_generation:
+        metric_value_type: int

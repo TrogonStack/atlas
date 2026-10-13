@@ -7,6 +7,7 @@ members = [
   "crates/trogon-atlas-core",
   "crates/trogon-atlas-mcp",
   "crates/trogon-atlas-proto",
+  "crates/trogon-atlas-semconv",
   "crates/trogon-atlas-server",
   "crates/trogon-atlas-store",
   "crates/trogon-atlas-testsupport",
@@ -26,6 +27,7 @@ trogon-atlas-types = { path = "crates/trogon-atlas-types" }
 trogon-atlas-authzed = { path = "crates/trogon-atlas-authzed" }
 trogon-atlas-client = { path = "crates/trogon-atlas-client" }
 trogon-atlas-mcp = { path = "crates/trogon-atlas-mcp" }
+trogon-atlas-semconv = { path = "crates/trogon-atlas-semconv" }
 trogon-atlas-server = { path = "crates/trogon-atlas-server" }
 trogon-atlas-store = { path = "crates/trogon-atlas-store" }
 trogon-atlas-testsupport = { path = "crates/trogon-atlas-testsupport" }
@@ -38,6 +40,8 @@ tonic-types = "0.14"
 tonic-health = "0.14"
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1"
+
+opentelemetry = "0.33"
 
 async-nats = "0.50"
 futures = "0.3"

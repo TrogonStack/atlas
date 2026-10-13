@@ -13,7 +13,7 @@ pub mod llm;
 pub mod llm_analysis;
 pub mod mcp;
 pub mod merge3;
-pub mod metrics_export;
+pub mod metrics;
 pub mod operation_receipts;
 pub mod ownership;
 pub mod scope;

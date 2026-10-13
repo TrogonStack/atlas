@@ -1,0 +1,51 @@
+file_format: definition/2
+imports:
+  metrics:
+    - rpc.server.call.duration
+attributes:
+  - key: trogon_atlas.stream.outcome
+    type:
+      members:
+        - id: source_closed
+          value: source_closed
+          stability: stable
+          brief: The upstream change source closed normally.
+        - id: backlog_error
+          value: backlog_error
+          stability: stable
+          brief: Replaying the backlog to catch the subscriber up failed.
+        - id: gap_error
+          value: gap_error
+          stability: stable
+          brief: Reconciling a sequence gap in the stream failed.
+        - id: client_disconnected
+          value: client_disconnected
+          stability: stable
+          brief: The client disconnected with no other outcome recorded.
+        - id: client_disconnected_backlog
+          value: client_disconnected_backlog
+          stability: stable
+          brief: The client disconnected while the backlog was replaying.
+        - id: client_disconnected_gap
+          value: client_disconnected_gap
+          stability: stable
+          brief: The client disconnected while a sequence gap was being reconciled.
+    stability: stable
+    brief: How a server-streaming RPC's stream ended.
+metrics:
+  - name: trogon_atlas.rpc.server.stream.terminations
+    requirement_level: recommended
+    instrument: counter
+    unit: "{stream}"
+    stability: stable
+    brief: >
+      Terminal outcomes of server-streaming RPCs, which end past the point a
+      Tower layer can observe the response head.
+    annotations:
+      code_generation:
+        metric_value_type: int
+    attributes:
+      - ref: rpc.method
+        requirement_level: required
+      - ref: trogon_atlas.stream.outcome
+        requirement_level: required

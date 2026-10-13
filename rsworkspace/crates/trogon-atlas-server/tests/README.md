@@ -14,7 +14,7 @@ exceptions are noted below.
 | `scenario_validation.rs`          | Scenario validation rejection paths         | none          |
 | `stream_changes.rs`               | Streaming change-feed RPC                   | none          |
 | `llm_http.rs`                     | Anthropic HTTP client (success / 429 / 5xx) | `wiremock` (dev-dep) |
-| `metrics_export.rs`               | OTLP push and the `/-/metrics` scrape       | none          |
+| `otlp_metrics.rs`                 | RPC and cache metrics, in-memory exporter   | none          |
 
 ## NATS-backed tests
 

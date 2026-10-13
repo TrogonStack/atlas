@@ -21,8 +21,8 @@ async-nats = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 parking_lot = { workspace = true }
-metrics = "0.24"
 uuid = { workspace = true, features = ["v7"] }
+trogon-atlas-semconv = { workspace = true }
 
 [dev-dependencies]
 trogon-atlas-testsupport = { path = "../trogon-atlas-testsupport" }

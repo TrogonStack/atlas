@@ -488,7 +488,7 @@ pub fn closure(all: &[StoredEntity], roots: &[pb::EntityRef], max_entities: usiz
     }
     if truncated {
         tracing::warn!(cap = max_entities, "graph closure truncated");
-        metrics::counter!("trogon_atlas_closure_truncations_total").increment(1);
+        crate::metrics::GRAPH_CLOSURE_TRUNCATIONS.add(1);
     }
     Closure {
         entities: out,

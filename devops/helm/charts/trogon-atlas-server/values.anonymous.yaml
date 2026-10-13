@@ -1,5 +1,2 @@
 auth:
   insecureAllowAnonymous: true
-metrics:
-  prometheus:
-    enabled: true

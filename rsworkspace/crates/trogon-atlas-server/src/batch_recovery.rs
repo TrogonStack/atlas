@@ -58,7 +58,7 @@ pub async fn recover_at_startup(store: &dyn Store) -> BatchRecoveryReport {
             report
         }
         Err(error) => {
-            metrics::counter!("trogon_atlas_batch_recovery_failures_total").increment(1);
+            crate::metrics::BATCH_RECOVERY_FAILURES.add(1);
             tracing::error!(%error, "startup batch recovery could not list the journal");
             BatchRecoveryReport::default()
         }
@@ -82,7 +82,7 @@ pub fn spawn_sweep(store: Arc<dyn Store>) -> tokio::task::JoinHandle<()> {
             match store.recover_batches(RecoveryPolicy::automatic()).await {
                 Ok(report) => log_report("sweep", &report),
                 Err(error) => {
-                    metrics::counter!("trogon_atlas_batch_recovery_failures_total").increment(1);
+                    crate::metrics::BATCH_RECOVERY_FAILURES.add(1);
                     tracing::warn!(%error, "batch recovery sweep could not list the journal");
                 }
             }
@@ -95,8 +95,7 @@ fn log_report(pass: &'static str, report: &BatchRecoveryReport) {
         return;
     }
     let unresolved = report.unresolved().count();
-    metrics::counter!("trogon_atlas_batch_recovery_unresolved_total")
-        .increment(u64::try_from(unresolved).unwrap_or(u64::MAX));
+    crate::metrics::BATCH_RECOVERY_UNRESOLVED.add(u64::try_from(unresolved).unwrap_or(u64::MAX));
     if unresolved == 0 {
         tracing::warn!(
             pass,

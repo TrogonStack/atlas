@@ -1,0 +1,96 @@
+file_format: definition/2
+metrics:
+  - name: trogon_atlas.auth_registry.reloads
+    requirement_level: recommended
+    instrument: counter
+    unit: "{reload}"
+    stability: stable
+    brief: Token registry files successfully reloaded from disk.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.auth_registry.reload_failures
+    requirement_level: recommended
+    instrument: counter
+    unit: "{failure}"
+    stability: stable
+    brief: >
+      Token registry reloads rejected by validation; the previous registry
+      stays in force.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.auth_registry.membership_publish_failures
+    requirement_level: recommended
+    instrument: counter
+    unit: "{failure}"
+    stability: stable
+    brief: Failures publishing principal memberships after a token registry reload.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.graph.closure_truncations
+    requirement_level: recommended
+    instrument: counter
+    unit: "{truncation}"
+    stability: stable
+    brief: Graph closures that hit their entity cap and were truncated.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.batch_recovery.failures
+    requirement_level: recommended
+    instrument: counter
+    unit: "{failure}"
+    stability: stable
+    brief: Batch recovery passes that could not list the journal.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.batch_recovery.unresolved
+    requirement_level: recommended
+    instrument: counter
+    unit: "{batch}"
+    stability: stable
+    brief: Interrupted batches a recovery pass found still unresolved.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.git_mirror.failures
+    requirement_level: recommended
+    instrument: counter
+    unit: "{failure}"
+    stability: stable
+    brief: Git mirror apply calls that failed.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.search_index.errors
+    requirement_level: recommended
+    instrument: counter
+    unit: "{error}"
+    stability: stable
+    brief: Search index put/delete calls that failed; the index will rebuild.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.changesets.lost
+    requirement_level: recommended
+    instrument: counter
+    unit: "{changeset}"
+    stability: stable
+    brief: Changesets that could not be appended after their entity writes committed.
+    annotations:
+      code_generation:
+        metric_value_type: int
+  - name: trogon_atlas.broadcast.lag_events
+    requirement_level: recommended
+    instrument: counter
+    unit: "{event}"
+    stability: stable
+    brief: >
+      In-process change events a StreamChanges subscriber missed because it
+      fell behind the broadcast channel.
+    annotations:
+      code_generation:
+        metric_value_type: int

@@ -118,7 +118,7 @@ fn render_user_prompt(links: &[FlowLink], budget: usize) -> Result<String> {
         budget,
         "llm prompt over budget; doc strings dropped from analysis prompt"
     );
-    metrics::counter!("llm_prompt_truncations_total").increment(1);
+    crate::metrics::LLM_PROMPT_TRUNCATIONS.add(1);
     if compact.len() <= budget {
         return Ok(wrap_user_prompt(&compact));
     }
@@ -133,7 +133,7 @@ fn render_user_prompt(links: &[FlowLink], budget: usize) -> Result<String> {
         budget,
         "llm prompt compact form over budget; refusing partial slice drop"
     );
-    metrics::counter!("llm_prompt_truncations_total").increment(1);
+    crate::metrics::LLM_PROMPT_TRUNCATIONS.add(1);
     Err(anyhow!(
         "llm prompt budget cannot fit compact subgraph without dropping slices \
          (budget={budget}, compact_chars={}, slices={})",
