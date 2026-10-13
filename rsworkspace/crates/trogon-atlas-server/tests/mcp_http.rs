@@ -28,8 +28,9 @@ use trogon_atlas_server::{
     auth::{BearerAuth, RegistryFile, TokenRegistry},
     health::{Health, StoreStatus},
     mcp::{data_plane, mcp_router, AllowedHosts, MCP_PATH},
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
-    telemetry::InflightLayer,
+    telemetry::{InflightLayer, RpcMetricsLayer},
 };
 
 const READER_TOKEN: &str = "role-filter-reader-aaaa";
@@ -87,6 +88,7 @@ impl McpHttp {
         let mut routes = routes.routes();
         let mcp = mcp_router(
             data_plane,
+            RpcMetricsLayer::new(ServerMetrics::default()),
             inflight,
             Some(Duration::from_secs(30)),
             4 * 1024 * 1024,

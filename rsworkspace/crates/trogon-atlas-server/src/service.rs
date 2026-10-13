@@ -31,6 +31,7 @@ use crate::{
     git_mirror::{self, GitMirror, MirrorAuthor, MirrorBatch, MirrorChange},
     graph,
     llm_analysis::LlmAnalyzer,
+    metrics::ServerMetrics,
     operation_receipts,
     ownership::{
         Lens, NamespaceAuthorizer, NamespaceDirectory, RegistryAuthorizer, Visibility,
@@ -324,7 +325,7 @@ pub struct EventModelServiceImpl {
     /// Counts RPCs currently executing. Drives the graceful-shutdown
     /// drain in `main.rs` -- drop on `Drop` of `RequestGuard`. Snapshot
     /// cache hit/miss counts go through the metrics recorder
-    /// (`record_snapshot_cache_hit/miss`); we deliberately do not keep
+    /// (`ServerMetrics::record_snapshot_cache_hit/miss`); we deliberately do not keep
     /// a duplicate atomic here.
     pub inflight_requests: Arc<std::sync::atomic::AtomicI64>,
     /// Counts active `StreamChanges` subscribers. Capped at
@@ -390,6 +391,7 @@ pub struct EventModelServiceImpl {
     /// and lens-keyed for the same reason.
     owner_reverse_index_cache:
         tokio::sync::RwLock<HashMap<OwnerId, (Lens, Arc<graph::ReverseIndex>)>>,
+    metrics: ServerMetrics,
 }
 
 fn namespace_record_to_proto(record: &trogon_atlas_store::NamespaceRecord) -> pb::NamespaceRecord {
@@ -517,6 +519,7 @@ impl EventModelServiceImpl {
             type_libraries: crate::type_libraries::TypeLibraryGate::default(),
             owner_snapshot_cache: tokio::sync::RwLock::new(HashMap::new()),
             owner_reverse_index_cache: tokio::sync::RwLock::new(HashMap::new()),
+            metrics: ServerMetrics::default(),
         })
     }
 
@@ -533,10 +536,10 @@ impl EventModelServiceImpl {
     /// allocation cost on the read path.
     async fn baseline_snapshot(&self) -> Result<Arc<Vec<StoredEntity>>, Status> {
         if let Some(snap) = self.snapshot_cache.read().await.clone() {
-            crate::telemetry::record_snapshot_cache_hit();
+            self.metrics.record_snapshot_cache_hit();
             return Ok(snap);
         }
-        crate::telemetry::record_snapshot_cache_miss();
+        self.metrics.record_snapshot_cache_miss();
         // Single-flight: only one task issues the load; the rest wait on
         // the mutex and re-check the cache when they acquire it.
         let _load_guard = self.snapshot_load_lock.lock().await;
@@ -676,7 +679,7 @@ impl EventModelServiceImpl {
     async fn lock_mutations(&self) -> tokio::sync::MutexGuard<'_, ()> {
         let started = std::time::Instant::now();
         let guard = self.mutation_lock.lock().await;
-        crate::telemetry::record_mutation_lock_wait(started.elapsed().as_secs_f64());
+        self.metrics.record_mutation_lock_wait(started.elapsed());
         guard
     }
 
@@ -803,6 +806,11 @@ impl EventModelServiceImpl {
 
     pub fn with_git_mirror(mut self, mirror: Arc<GitMirror>) -> Self {
         self.git_mirror = Some(mirror);
+        self
+    }
+
+    pub fn with_metrics(mut self, metrics: ServerMetrics) -> Self {
+        self.metrics = metrics;
         self
     }
 
@@ -1616,7 +1624,7 @@ impl EventModelServiceImpl {
             let fut = async {
                 if let Err(err) = mirror.apply(batch).await {
                     tracing::warn!(error = %err, "git mirror apply failed");
-                    crate::metrics::GIT_MIRROR_FAILURES.add(1);
+                    self.metrics.record_git_mirror_failure();
                 }
             };
             fut.instrument(tracing::info_span!("mirror_apply")).await;
@@ -1683,12 +1691,13 @@ impl EventModelServiceImpl {
         }
         let index = self.search_index.clone();
         let ready = self.search_ready.clone();
+        let metrics = self.metrics.clone();
         let entity = entity.clone();
         tokio::task::spawn_blocking(move || {
             if let Err(err) = index.apply_put(&entity) {
                 tracing::warn!(error = %err, "search index put failed; index will rebuild");
                 ready.store(false, Ordering::Release);
-                crate::metrics::SEARCH_INDEX_ERRORS.add(1);
+                metrics.record_search_index_error();
             }
         });
     }
@@ -1699,12 +1708,13 @@ impl EventModelServiceImpl {
         }
         let index = self.search_index.clone();
         let ready = self.search_ready.clone();
+        let metrics = self.metrics.clone();
         let id = id.clone();
         tokio::task::spawn_blocking(move || {
             if let Err(err) = index.apply_delete(kind, &id) {
                 tracing::warn!(error = %err, "search index delete failed; index will rebuild");
                 ready.store(false, Ordering::Release);
-                crate::metrics::SEARCH_INDEX_ERRORS.add(1);
+                metrics.record_search_index_error();
             }
         });
     }
@@ -1771,7 +1781,7 @@ impl EventModelServiceImpl {
         }
         let record = changeset.into_record(message);
         if let Err(err) = self.store.append_changeset(&record).await {
-            crate::metrics::CHANGESETS_LOST.add(1);
+            self.metrics.record_changeset_lost();
             tracing::error!(
                 changeset_id = %record.id,
                 rpc = %record.rpc,
@@ -2781,14 +2791,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let kind_labels = kind_labels.clone();
             let namespaces = namespaces.clone();
             let cache = self.branch_search_cache.clone();
+            let metrics = self.metrics.clone();
             tokio::task::spawn_blocking(move || -> Result<Vec<_>, Status> {
                 let _span = tracing::info_span!("search_query_branch").entered();
                 let version = crate::search::ViewVersion::of(all.as_ref());
                 let index = if let Some(cached) = cache.get(&branch_name, &version) {
-                    crate::telemetry::record_branch_search_index_hit();
+                    metrics.record_branch_search_index_hit();
                     cached
                 } else {
-                    crate::telemetry::record_branch_search_index_miss();
+                    metrics.record_branch_search_index_miss();
                     let built = Arc::new(crate::search::SearchIndex::new().map_err(|e| {
                         Status::internal(format!("branch search index init failed: {e}"))
                     })?);
@@ -3424,7 +3435,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             mut entities,
             truncated,
-        } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES);
+        } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics);
         // The closure includes the slice itself; the projection ships the
         // slice separately on `slice`.
         entities.remove(&trogon_atlas_proto::canonical::id_string(kind, id));
@@ -3488,7 +3499,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             mut entities,
             truncated,
-        } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES);
+        } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics);
         entities.remove(&trogon_atlas_proto::canonical::id_string(
             pb::EntityKind::Storyboard,
             id,
@@ -3528,7 +3539,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             mut entities,
             truncated,
-        } = graph::closure(&all, &root_refs, MAX_PROJECTION_ENTITIES);
+        } = graph::closure(&all, &root_refs, MAX_PROJECTION_ENTITIES, &self.metrics);
         if !req.include_cross_model {
             let own_ns = id.namespace.clone();
             entities.retain(|_, e| {
@@ -3573,6 +3584,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             &all,
             std::slice::from_ref(&root_ref),
             MAX_PROJECTION_ENTITIES,
+            &self.metrics,
         );
         let own_ns = root_ref
             .id
@@ -4875,7 +4887,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // as ExtractSubgraph). Done once per RPC call; per-poll staleness is
         // acceptable for long-polling consumers.
         let all = self.snapshot(&vis).await?;
-        let closure_keys = resolve_scope_closure(&req.scopes, &all)?;
+        let closure_keys = resolve_scope_closure(&req.scopes, &all, &self.metrics)?;
 
         // Fetch up to LIST_CHANGES_MAX_LOOKAHEAD store pages to reduce the
         // probability of returning an empty page when all records in a batch
@@ -5431,10 +5443,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let (tx, rx) = tokio::sync::mpsc::channel::<Result<pb::ChangeEvent, Status>>(64);
         let store_for_backlog = self.store.clone();
+        let metrics = self.metrics.clone();
         let tx_panic = tx.clone();
         let inner = tokio::spawn(async move {
             let _guard = stream_counter;
             let mut termination = crate::telemetry::StreamTerminationGuard::new(
+                metrics.clone(),
                 pb::event_model_service_server::SERVICE_NAME,
                 "StreamChanges",
             );
@@ -5572,7 +5586,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         // `read_changes`. Terminating with DataLoss forced
                         // every slow subscriber to reconnect and re-list
                         // even though the store still held the records.
-                        crate::metrics::BROADCAST_LAG_EVENTS.add(missed);
+                        metrics.record_broadcast_lag(missed);
                         tracing::warn!(
                             missed,
                             last_sent,
@@ -7678,6 +7692,7 @@ pub fn record_in_scope_closure<S: std::hash::BuildHasher>(
 pub fn resolve_scope_closure(
     scopes: &[pb::AnalysisScope],
     all: &[StoredEntity],
+    metrics: &ServerMetrics,
 ) -> Result<std::collections::HashSet<String>, Status> {
     let mut roots: Vec<pb::EntityRef> = Vec::with_capacity(scopes.len());
     for (i, scope) in scopes.iter().enumerate() {
@@ -7696,7 +7711,8 @@ pub fn resolve_scope_closure(
         let _ = require_id(root_ref.id.as_ref(), &field)?;
         roots.push(root_ref.clone());
     }
-    let graph::Closure { entities, .. } = graph::closure(all, &roots, MAX_PROJECTION_ENTITIES);
+    let graph::Closure { entities, .. } =
+        graph::closure(all, &roots, MAX_PROJECTION_ENTITIES, metrics);
     Ok(entities.into_keys().collect())
 }
 
@@ -8153,6 +8169,7 @@ mod scope_filter_tests {
     use trogon_atlas_store::{store::ChangeRecord, ChangeKind, StoredEntity};
 
     use super::{record_in_scope_closure, resolve_scope_closure};
+    use crate::metrics::ServerMetrics;
 
     fn make_id(ns: &str, slug: &str) -> pb::Id {
         pb::Id {
@@ -8257,7 +8274,7 @@ mod scope_filter_tests {
         let scope = pb::AnalysisScope {
             scope: Some(pb::analysis_scope::Scope::Slice(root)),
         };
-        let keys = resolve_scope_closure(&[scope], &all).unwrap();
+        let keys = resolve_scope_closure(&[scope], &all, &ServerMetrics::default()).unwrap();
         let expected_key = trogon_atlas_proto::canonical::id_string(
             pb::EntityKind::Event,
             &make_id("orders", "placed"),
@@ -8271,7 +8288,7 @@ mod scope_filter_tests {
     #[test]
     fn resolve_scope_closure_rejects_unset_scope_oneof() {
         let scope = pb::AnalysisScope { scope: None };
-        let result = resolve_scope_closure(&[scope], &[]);
+        let result = resolve_scope_closure(&[scope], &[], &ServerMetrics::default());
         assert!(
             result.is_err(),
             "unset scope oneof must be INVALID_ARGUMENT"
@@ -8282,7 +8299,7 @@ mod scope_filter_tests {
 
     #[test]
     fn empty_scopes_list_produces_empty_closure_keys() {
-        let keys = resolve_scope_closure(&[], &[]).unwrap();
+        let keys = resolve_scope_closure(&[], &[], &ServerMetrics::default()).unwrap();
         assert!(keys.is_empty());
     }
 }

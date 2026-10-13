@@ -39,12 +39,13 @@ pub fn data_plane(
 /// the same RPC metrics, shutdown drain and RPC timeout as the gRPC listener.
 pub fn mcp_server(
     data_plane: DataPlane,
+    rpc_metrics: RpcMetricsLayer,
     inflight: InflightLayer,
     rpc_timeout: Option<Duration>,
     max_message_bytes: usize,
 ) -> anyhow::Result<McpServer> {
     let stack = ServiceBuilder::new()
-        .layer(RpcMetricsLayer::new())
+        .layer(rpc_metrics)
         .layer(inflight)
         .map_err(deadline_exceeded)
         .option_layer(rpc_timeout.map(tower::timeout::TimeoutLayer::new))
@@ -64,12 +65,19 @@ pub fn mcp_server(
 /// listener serves.
 pub fn mcp_router(
     data_plane: DataPlane,
+    rpc_metrics: RpcMetricsLayer,
     inflight: InflightLayer,
     rpc_timeout: Option<Duration>,
     max_message_bytes: usize,
     allowed_hosts: AllowedHosts,
 ) -> anyhow::Result<axum::Router> {
-    let server = mcp_server(data_plane, inflight, rpc_timeout, max_message_bytes)?;
+    let server = mcp_server(
+        data_plane,
+        rpc_metrics,
+        inflight,
+        rpc_timeout,
+        max_message_bytes,
+    )?;
     Ok(trogon_atlas_mcp::router(server, allowed_hosts))
 }
 

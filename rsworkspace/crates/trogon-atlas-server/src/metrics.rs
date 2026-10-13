@@ -1,73 +1,220 @@
-//! Process-wide metric instruments, generated from `otel/registry` into
-//! `trogon-atlas-semconv`.
-//!
-//! Each instrument binds to the global `MeterProvider` the first time it is
-//! touched, and OpenTelemetry never rebinds it, so
-//! [`crate::telemetry::init_telemetry`] must run before anything records.
+//! Metric instruments the server records, generated from `otel/registry`
+//! into `trogon-atlas-semconv`.
 
-use std::sync::LazyLock;
+use std::{fmt, sync::Arc, time::Duration};
 
-use trogon_atlas_semconv::{
-    semconv::{meter::Meter, metric, options::InstrumentationOptions},
-    GlobalMeterProvider,
-};
+use trogon_atlas_semconv::semconv::{attribute, meter::Meter, metric};
+use trogon_atlas_store::ChangeStreamStats;
 
 /// `error.type` when no lower-cardinality classification of the failure
 /// exists, per the OpenTelemetry error semantic conventions.
-pub const ERROR_TYPE_OTHER: &str = "_OTHER";
+const ERROR_TYPE_OTHER: &str = "_OTHER";
 
-static METER: LazyLock<Meter> =
-    LazyLock::new(|| Meter::new(&GlobalMeterProvider, InstrumentationOptions::default()));
+/// The server's instruments, bound to the [`Meter`] they were built from.
+/// Cloning shares the instruments. [`Default`] records nothing.
+#[derive(Clone)]
+pub struct ServerMetrics(Arc<Instruments>);
 
-pub static RPC_SERVER_CALL_DURATION: LazyLock<metric::RpcServerCallDuration> =
-    LazyLock::new(|| metric::RpcServerCallDuration::new(&METER));
-pub static RPC_SERVER_STREAM_TERMINATIONS: LazyLock<metric::RpcServerStreamTerminations> =
-    LazyLock::new(|| metric::RpcServerStreamTerminations::new(&METER));
+struct Instruments {
+    rpc_server_call_duration: metric::RpcServerCallDuration,
+    rpc_server_stream_terminations: metric::RpcServerStreamTerminations,
+    mutation_lock_wait_duration: metric::MutationLockWaitDuration,
+    cache_lookups: metric::CacheLookups,
+    change_stream_message_count: metric::ChangeStreamMessageCount,
+    change_stream_size: metric::ChangeStreamSize,
+    change_stream_oldest_message_age: metric::ChangeStreamOldestMessageAge,
+    auth_registry_membership_publish_failures: metric::AuthRegistryMembershipPublishFailures,
+    auth_registry_reload_failures: metric::AuthRegistryReloadFailures,
+    auth_registry_reloads: metric::AuthRegistryReloads,
+    batch_recovery_failures: metric::BatchRecoveryFailures,
+    batch_recovery_unresolved: metric::BatchRecoveryUnresolved,
+    broadcast_lag_events: metric::BroadcastLagEvents,
+    changesets_lost: metric::ChangesetsLost,
+    git_mirror_failures: metric::GitMirrorFailures,
+    graph_closure_truncations: metric::GraphClosureTruncations,
+    search_index_errors: metric::SearchIndexErrors,
+    llm_prompt_truncations: metric::LlmPromptTruncations,
+    llm_request_duration: metric::LlmRequestDuration,
+    llm_tokens: metric::LlmTokens,
+}
 
-pub static MUTATION_LOCK_WAIT_DURATION: LazyLock<metric::MutationLockWaitDuration> =
-    LazyLock::new(|| metric::MutationLockWaitDuration::new(&METER));
+impl ServerMetrics {
+    pub fn new(meter: &Meter) -> Self {
+        Self(Arc::new(Instruments {
+            rpc_server_call_duration: metric::RpcServerCallDuration::new(meter),
+            rpc_server_stream_terminations: metric::RpcServerStreamTerminations::new(meter),
+            mutation_lock_wait_duration: metric::MutationLockWaitDuration::new(meter),
+            cache_lookups: metric::CacheLookups::new(meter),
+            change_stream_message_count: metric::ChangeStreamMessageCount::new(meter),
+            change_stream_size: metric::ChangeStreamSize::new(meter),
+            change_stream_oldest_message_age: metric::ChangeStreamOldestMessageAge::new(meter),
+            auth_registry_membership_publish_failures:
+                metric::AuthRegistryMembershipPublishFailures::new(meter),
+            auth_registry_reload_failures: metric::AuthRegistryReloadFailures::new(meter),
+            auth_registry_reloads: metric::AuthRegistryReloads::new(meter),
+            batch_recovery_failures: metric::BatchRecoveryFailures::new(meter),
+            batch_recovery_unresolved: metric::BatchRecoveryUnresolved::new(meter),
+            broadcast_lag_events: metric::BroadcastLagEvents::new(meter),
+            changesets_lost: metric::ChangesetsLost::new(meter),
+            git_mirror_failures: metric::GitMirrorFailures::new(meter),
+            graph_closure_truncations: metric::GraphClosureTruncations::new(meter),
+            search_index_errors: metric::SearchIndexErrors::new(meter),
+            llm_prompt_truncations: metric::LlmPromptTruncations::new(meter),
+            llm_request_duration: metric::LlmRequestDuration::new(meter),
+            llm_tokens: metric::LlmTokens::new(meter),
+        }))
+    }
 
-pub static CACHE_LOOKUPS: LazyLock<metric::CacheLookups> =
-    LazyLock::new(|| metric::CacheLookups::new(&METER));
+    pub fn record_rpc_call(
+        &self,
+        elapsed: Duration,
+        attributes: impl IntoIterator<Item = metric::RpcServerCallDurationAttr>,
+    ) {
+        self.0.rpc_server_call_duration.record(
+            elapsed.as_secs_f64(),
+            crate::telemetry::GRPC_SYSTEM.into(),
+            attributes,
+        );
+    }
 
-pub static CHANGE_STREAM_MESSAGE_COUNT: LazyLock<metric::ChangeStreamMessageCount> =
-    LazyLock::new(|| metric::ChangeStreamMessageCount::new(&METER));
-pub static CHANGE_STREAM_SIZE: LazyLock<metric::ChangeStreamSize> =
-    LazyLock::new(|| metric::ChangeStreamSize::new(&METER));
-pub static CHANGE_STREAM_OLDEST_MESSAGE_AGE: LazyLock<metric::ChangeStreamOldestMessageAge> =
-    LazyLock::new(|| metric::ChangeStreamOldestMessageAge::new(&METER));
+    pub fn record_stream_termination(&self, rpc_method: String, outcome: attribute::StreamOutcome) {
+        self.0
+            .rpc_server_stream_terminations
+            .add(1, rpc_method.into(), outcome);
+    }
 
-pub static AUTH_REGISTRY_MEMBERSHIP_PUBLISH_FAILURES: LazyLock<
-    metric::AuthRegistryMembershipPublishFailures,
-> = LazyLock::new(|| metric::AuthRegistryMembershipPublishFailures::new(&METER));
-pub static AUTH_REGISTRY_RELOAD_FAILURES: LazyLock<metric::AuthRegistryReloadFailures> =
-    LazyLock::new(|| metric::AuthRegistryReloadFailures::new(&METER));
-pub static AUTH_REGISTRY_RELOADS: LazyLock<metric::AuthRegistryReloads> =
-    LazyLock::new(|| metric::AuthRegistryReloads::new(&METER));
+    /// Time a caller spent blocked acquiring the global mutation lock.
+    pub fn record_mutation_lock_wait(&self, waited: Duration) {
+        self.0
+            .mutation_lock_wait_duration
+            .record(waited.as_secs_f64());
+    }
 
-pub static BATCH_RECOVERY_FAILURES: LazyLock<metric::BatchRecoveryFailures> =
-    LazyLock::new(|| metric::BatchRecoveryFailures::new(&METER));
-pub static BATCH_RECOVERY_UNRESOLVED: LazyLock<metric::BatchRecoveryUnresolved> =
-    LazyLock::new(|| metric::BatchRecoveryUnresolved::new(&METER));
+    pub fn record_snapshot_cache_hit(&self) {
+        self.record_cache_lookup(attribute::CacheName::Snapshot, attribute::CacheResult::Hit);
+    }
 
-pub static BROADCAST_LAG_EVENTS: LazyLock<metric::BroadcastLagEvents> =
-    LazyLock::new(|| metric::BroadcastLagEvents::new(&METER));
+    pub fn record_snapshot_cache_miss(&self) {
+        self.record_cache_lookup(attribute::CacheName::Snapshot, attribute::CacheResult::Miss);
+    }
 
-pub static CHANGESETS_LOST: LazyLock<metric::ChangesetsLost> =
-    LazyLock::new(|| metric::ChangesetsLost::new(&METER));
+    /// A miss means one branch query rebuilt a whole index, which is the
+    /// cost the branch search cache exists to avoid; a sustained miss rate
+    /// means branches are being written between every search, or the cache
+    /// is too small for the number of branches under review.
+    pub fn record_branch_search_index_hit(&self) {
+        self.record_cache_lookup(
+            attribute::CacheName::BranchSearchIndex,
+            attribute::CacheResult::Hit,
+        );
+    }
 
-pub static GIT_MIRROR_FAILURES: LazyLock<metric::GitMirrorFailures> =
-    LazyLock::new(|| metric::GitMirrorFailures::new(&METER));
+    pub fn record_branch_search_index_miss(&self) {
+        self.record_cache_lookup(
+            attribute::CacheName::BranchSearchIndex,
+            attribute::CacheResult::Miss,
+        );
+    }
 
-pub static GRAPH_CLOSURE_TRUNCATIONS: LazyLock<metric::GraphClosureTruncations> =
-    LazyLock::new(|| metric::GraphClosureTruncations::new(&METER));
+    fn record_cache_lookup(&self, name: attribute::CacheName, result: attribute::CacheResult) {
+        self.0.cache_lookups.add(1, name, result);
+    }
 
-pub static SEARCH_INDEX_ERRORS: LazyLock<metric::SearchIndexErrors> =
-    LazyLock::new(|| metric::SearchIndexErrors::new(&METER));
+    pub fn record_change_stream_stats(&self, stats: &ChangeStreamStats) {
+        self.0
+            .change_stream_message_count
+            .record(i64::try_from(stats.messages).unwrap_or(i64::MAX));
+        self.0
+            .change_stream_size
+            .record(i64::try_from(stats.bytes).unwrap_or(i64::MAX));
+        let age = match stats.oldest_message_unix_seconds {
+            Some(secs) => (chrono::Utc::now().timestamp() - secs).max(0),
+            None => 0,
+        };
+        self.0.change_stream_oldest_message_age.record(age);
+    }
 
-pub static LLM_PROMPT_TRUNCATIONS: LazyLock<metric::LlmPromptTruncations> =
-    LazyLock::new(|| metric::LlmPromptTruncations::new(&METER));
-pub static LLM_REQUEST_DURATION: LazyLock<metric::LlmRequestDuration> =
-    LazyLock::new(|| metric::LlmRequestDuration::new(&METER));
-pub static LLM_TOKENS: LazyLock<metric::LlmTokens> =
-    LazyLock::new(|| metric::LlmTokens::new(&METER));
+    pub fn record_auth_registry_reload(&self) {
+        self.0.auth_registry_reloads.add(1);
+    }
+
+    pub fn record_auth_registry_reload_failure(&self) {
+        self.0.auth_registry_reload_failures.add(1);
+    }
+
+    pub fn record_auth_registry_membership_publish_failure(&self) {
+        self.0.auth_registry_membership_publish_failures.add(1);
+    }
+
+    pub fn record_batch_recovery_failure(&self) {
+        self.0.batch_recovery_failures.add(1);
+    }
+
+    pub fn record_batch_recovery_unresolved(&self, unresolved: usize) {
+        self.0
+            .batch_recovery_unresolved
+            .add(u64::try_from(unresolved).unwrap_or(u64::MAX));
+    }
+
+    pub fn record_broadcast_lag(&self, missed: u64) {
+        self.0.broadcast_lag_events.add(missed);
+    }
+
+    pub fn record_changeset_lost(&self) {
+        self.0.changesets_lost.add(1);
+    }
+
+    pub fn record_git_mirror_failure(&self) {
+        self.0.git_mirror_failures.add(1);
+    }
+
+    pub fn record_graph_closure_truncation(&self) {
+        self.0.graph_closure_truncations.add(1);
+    }
+
+    pub fn record_search_index_error(&self) {
+        self.0.search_index_errors.add(1);
+    }
+
+    pub fn record_llm_prompt_truncation(&self) {
+        self.0.llm_prompt_truncations.add(1);
+    }
+
+    pub fn record_llm_request<T, E>(
+        &self,
+        elapsed: Duration,
+        model: attribute::LlmModel,
+        provider: attribute::LlmProvider,
+        result: &Result<T, E>,
+    ) {
+        self.0.llm_request_duration.record(
+            elapsed.as_secs_f64(),
+            model,
+            provider,
+            result
+                .is_err()
+                .then(|| metric::LlmRequestDurationAttr::ErrorType(ERROR_TYPE_OTHER.into())),
+        );
+    }
+
+    pub fn record_llm_tokens(
+        &self,
+        model: attribute::LlmModel,
+        token_type: attribute::LlmTokenType,
+        tokens: u64,
+    ) {
+        self.0.llm_tokens.add(tokens, model, token_type);
+    }
+}
+
+impl Default for ServerMetrics {
+    fn default() -> Self {
+        Self::new(&Meter::default())
+    }
+}
+
+impl fmt::Debug for ServerMetrics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServerMetrics").finish_non_exhaustive()
+    }
+}

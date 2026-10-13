@@ -11,7 +11,11 @@ use std::{
 
 use tower::{Layer, Service};
 use tracing::Span;
-use trogon_atlas_semconv::semconv::{attribute, metric::RpcServerCallDurationAttr};
+use trogon_atlas_semconv::semconv::{
+    attribute, meter::Meter, metric::RpcServerCallDurationAttr, options::InstrumentationOptions,
+};
+
+use crate::metrics::ServerMetrics;
 
 pub const GRPC_SYSTEM: &str = "grpc";
 pub const SERVICE_NAME: &str = "trogon-atlas-server";
@@ -80,6 +84,15 @@ impl TelemetryGuard {
         self.meter_provider.is_some()
     }
 
+    /// The meter every instrument should be built from: bound to the OTLP
+    /// meter provider when one is configured, recording nothing otherwise.
+    pub fn meter(&self) -> Meter {
+        match &self.meter_provider {
+            Some(provider) => Meter::new(provider, InstrumentationOptions::default()),
+            None => Meter::default(),
+        }
+    }
+
     /// Flush any spans and metrics buffered by the batch/periodic exporters
     /// and tear down both providers. Safe to call multiple times; subsequent
     /// calls are no-ops.
@@ -107,10 +120,6 @@ impl TelemetryGuard {
 /// OTLP span and metric exporters. Returns a `TelemetryGuard` whose
 /// `shutdown` method MUST be called on graceful shutdown so the batch and
 /// periodic exporters flush their in-memory queues.
-///
-/// Call this before anything records a metric: instruments in
-/// `crate::metrics` and `trogon_atlas_store::metrics` bind to whichever
-/// global `MeterProvider` is installed when they are first touched.
 pub fn init_telemetry() -> anyhow::Result<TelemetryGuard> {
     use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
@@ -170,7 +179,6 @@ pub fn init_telemetry() -> anyhow::Result<TelemetryGuard> {
                 .with_periodic_exporter(metric_exporter)
                 .with_resource(resource)
                 .build();
-            opentelemetry::global::set_meter_provider(meter_provider.clone());
 
             registry
                 .with(tracing_opentelemetry::layer().with_tracer(tracer))
@@ -331,51 +339,6 @@ impl Drop for InflightGuard {
     }
 }
 
-/// Record the time a caller spent blocked acquiring the global mutation
-/// lock. Exposes contention as a histogram alongside the other RPC metrics.
-pub fn record_mutation_lock_wait(seconds: f64) {
-    crate::metrics::MUTATION_LOCK_WAIT_DURATION.record(seconds);
-}
-
-/// Snapshot-cache hit/miss counters. Both are emitted as counters (not
-/// gauges) so the rate of misses is alertable.
-pub fn record_snapshot_cache_hit() {
-    crate::metrics::CACHE_LOOKUPS.add(
-        1,
-        attribute::CacheName::Snapshot,
-        attribute::CacheResult::Hit,
-    );
-}
-
-pub fn record_snapshot_cache_miss() {
-    crate::metrics::CACHE_LOOKUPS.add(
-        1,
-        attribute::CacheName::Snapshot,
-        attribute::CacheResult::Miss,
-    );
-}
-
-/// Branch-search index cache hit/miss counters. A miss means one branch
-/// query rebuilt a whole index, which is the cost this cache exists to
-/// avoid; a sustained miss rate means branches are being written between
-/// every search, or the cache is too small for the number of branches under
-/// review.
-pub fn record_branch_search_index_hit() {
-    crate::metrics::CACHE_LOOKUPS.add(
-        1,
-        attribute::CacheName::BranchSearchIndex,
-        attribute::CacheResult::Hit,
-    );
-}
-
-pub fn record_branch_search_index_miss() {
-    crate::metrics::CACHE_LOOKUPS.add(
-        1,
-        attribute::CacheName::BranchSearchIndex,
-        attribute::CacheResult::Miss,
-    );
-}
-
 fn split_grpc_path(path: &str) -> (&str, &str) {
     let trimmed = path.strip_prefix('/').unwrap_or(path);
     match trimmed.rsplit_once('/') {
@@ -399,6 +362,7 @@ fn split_grpc_path(path: &str) -> (&str, &str) {
 pub fn spawn_change_stream_stats_publisher(
     store: std::sync::Arc<dyn trogon_atlas_store::Store>,
     interval: std::time::Duration,
+    metrics: ServerMetrics,
 ) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
@@ -409,18 +373,7 @@ pub fn spawn_change_stream_stats_publisher(
             match store.change_stream_stats().await {
                 Ok(Some(stats)) => {
                     consecutive_failures = 0;
-                    crate::metrics::CHANGE_STREAM_MESSAGE_COUNT
-                        .record(i64::try_from(stats.messages).unwrap_or(i64::MAX));
-                    crate::metrics::CHANGE_STREAM_SIZE
-                        .record(i64::try_from(stats.bytes).unwrap_or(i64::MAX));
-                    let age = match stats.oldest_message_unix_seconds {
-                        Some(secs) => {
-                            let now = chrono::Utc::now().timestamp();
-                            (now - secs).max(0)
-                        }
-                        None => 0,
-                    };
-                    crate::metrics::CHANGE_STREAM_OLDEST_MESSAGE_AGE.record(age);
+                    metrics.record_change_stream_stats(&stats);
                 }
                 Ok(None) => {
                     consecutive_failures = 0;
@@ -446,22 +399,26 @@ pub fn spawn_change_stream_stats_publisher(
 /// for every incoming gRPC call. Server-streaming RPCs end past the response
 /// head this layer observes, so they also record their terminal outcome via
 /// [`StreamTerminationGuard`].
-#[derive(Clone, Default)]
-pub struct RpcMetricsLayer;
+#[derive(Clone)]
+pub struct RpcMetricsLayer {
+    metrics: ServerMetrics,
+}
 
 /// Records the terminal outcome of a server-streaming RPC, which Tower
 /// layers cannot observe past the response head. Handlers create one per
 /// stream and `mark` the outcome; dropping it unmarked means the client
 /// went away first.
 pub struct StreamTerminationGuard {
+    metrics: ServerMetrics,
     rpc_method: String,
     outcome: Option<attribute::StreamOutcome>,
 }
 
 impl StreamTerminationGuard {
     #[must_use]
-    pub fn new(service: &str, method: &str) -> Self {
+    pub fn new(metrics: ServerMetrics, service: &str, method: &str) -> Self {
         Self {
+            metrics,
             rpc_method: format!("{service}/{method}"),
             outcome: None,
         }
@@ -474,9 +431,8 @@ impl StreamTerminationGuard {
 
 impl Drop for StreamTerminationGuard {
     fn drop(&mut self) {
-        crate::metrics::RPC_SERVER_STREAM_TERMINATIONS.add(
-            1,
-            std::mem::take(&mut self.rpc_method).into(),
+        self.metrics.record_stream_termination(
+            std::mem::take(&mut self.rpc_method),
             self.outcome
                 .unwrap_or(attribute::StreamOutcome::ClientDisconnected),
         );
@@ -485,21 +441,25 @@ impl Drop for StreamTerminationGuard {
 
 impl RpcMetricsLayer {
     #[must_use]
-    pub fn new() -> Self {
-        Self
+    pub fn new(metrics: ServerMetrics) -> Self {
+        Self { metrics }
     }
 }
 
 impl<S> Layer<S> for RpcMetricsLayer {
     type Service = RpcMetricsService<S>;
     fn layer(&self, inner: S) -> Self::Service {
-        RpcMetricsService { inner }
+        RpcMetricsService {
+            inner,
+            metrics: self.metrics.clone(),
+        }
     }
 }
 
 #[derive(Clone)]
 pub struct RpcMetricsService<S> {
     inner: S,
+    metrics: ServerMetrics,
 }
 
 impl<S, ReqBody, ResBody> Service<http::Request<ReqBody>> for RpcMetricsService<S>
@@ -521,6 +481,7 @@ where
     fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
         let rpc_method = is_grpc_request(&req).then(|| rpc_method_from_path(req.uri().path()));
         let started = Instant::now();
+        let metrics = self.metrics.clone();
 
         let clone = self.inner.clone();
         let mut inner = std::mem::replace(&mut self.inner, clone);
@@ -534,7 +495,7 @@ where
             let Some(rpc_method) = rpc_method else {
                 return result;
             };
-            let elapsed = started.elapsed().as_secs_f64();
+            let elapsed = started.elapsed();
             let mut attributes = vec![RpcServerCallDurationAttr::RpcMethod(rpc_method.into())];
             match &result {
                 Ok(resp) => {
@@ -553,11 +514,7 @@ where
                     ));
                 }
             }
-            crate::metrics::RPC_SERVER_CALL_DURATION.record(
-                elapsed,
-                GRPC_SYSTEM.into(),
-                attributes,
-            );
+            metrics.record_rpc_call(elapsed, attributes);
             result
         })
     }

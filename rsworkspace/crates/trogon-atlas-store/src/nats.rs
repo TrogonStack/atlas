@@ -67,6 +67,7 @@ use crate::{
         namespace_name_key, namespace_prefix, namespace_record_key, namespace_record_prefix,
         parse_entity_key, parse_namespace_record_key, revision_key, revision_prefix,
     },
+    metrics::StoreMetrics,
     store::{
         BranchDeltaEntry, BranchInfo, BranchLandOp, ChangeKind, ChangeRecord, ChangesetOp,
         ChangesetPage, ChangesetRecord, ChangesetRef, ClaimOutcome, EntityRevisionRecord,
@@ -305,6 +306,8 @@ pub struct NatsStoreConfig {
     /// Cap the change log at this many bytes. `None` means unlimited.
     pub changes_max_bytes: Option<i64>,
     pub open_mode: StoreOpenMode,
+    /// Where the store records its metrics. Defaults to recording nothing.
+    pub metrics: StoreMetrics,
 }
 
 impl NatsStoreConfig {
@@ -331,6 +334,7 @@ impl NatsStoreConfig {
             changes_max_msgs: Some(1_000_000),
             changes_max_bytes: None,
             open_mode: StoreOpenMode::Serve,
+            metrics: StoreMetrics::default(),
         }
     }
 
@@ -569,20 +573,24 @@ impl NatsStore {
     async fn connect_with_unboxed(mut config: NatsStoreConfig) -> StoreResult<Self> {
         config.take_url_credentials();
         config.validate()?;
+        let metrics = config.metrics.clone();
         let connect_options = async_nats::ConnectOptions::new()
             .connection_timeout(Duration::from_secs(10))
             .retry_on_initial_connect()
-            .event_callback(|event| async move {
-                match event {
-                    async_nats::Event::Disconnected => {
-                        crate::metrics::NATS_DISCONNECTS.add(1);
-                        tracing::warn!("nats: disconnected from server");
+            .event_callback(move |event| {
+                let metrics = metrics.clone();
+                async move {
+                    match event {
+                        async_nats::Event::Disconnected => {
+                            metrics.record_nats_disconnect();
+                            tracing::warn!("nats: disconnected from server");
+                        }
+                        async_nats::Event::Connected => {
+                            metrics.record_nats_reconnect();
+                            tracing::info!("nats: reconnected to server");
+                        }
+                        _ => {}
                     }
-                    async_nats::Event::Connected => {
-                        crate::metrics::NATS_RECONNECTS.add(1);
-                        tracing::info!("nats: reconnected to server");
-                    }
-                    _ => {}
                 }
             });
         let connect_options = match &config.credentials {
@@ -1448,7 +1456,7 @@ impl NatsStore {
     /// a failed write -- the same posture `record_change` takes.
     async fn record_revision(&self, ctx: WriteContext<'_>, revision: &Revision) {
         if let Err(error) = self.try_record_revision(ctx, revision).await {
-            crate::metrics::REVISIONS_LOST.add(1);
+            self.config.metrics.record_revision_lost();
             tracing::error!(
                 error = %error,
                 "record_revision failed; entity write committed but its revision was not recorded"
@@ -1924,7 +1932,7 @@ async fn run_change_tail(
             }
             Err(err) => {
                 reconnect_counter.fetch_add(1, Ordering::Relaxed);
-                crate::metrics::CHANGE_TAIL_RECONNECTS.add(1);
+                config.metrics.record_change_tail_reconnect();
                 tracing::warn!(
                     stream = %config.stream,
                     error = %err,
@@ -2814,7 +2822,7 @@ impl Store for NatsStore {
             .await
         {
             self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            crate::metrics::CHANGE_EVENTS_LOST.add(1);
+            self.config.metrics.record_change_event_lost();
             tracing::error!(
                 entity_ref = ?entity_ref,
                 "create: change event lost after successful KV write"
@@ -2900,7 +2908,7 @@ impl Store for NatsStore {
             .await
         {
             self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            crate::metrics::CHANGE_EVENTS_LOST.add(1);
+            self.config.metrics.record_change_event_lost();
             tracing::error!(
                 entity_ref = ?entity_ref,
                 "put: change event lost after successful KV write"
@@ -3048,7 +3056,7 @@ impl Store for NatsStore {
             .await
         {
             self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            crate::metrics::CHANGE_EVENTS_LOST.add(1);
+            self.config.metrics.record_change_event_lost();
             tracing::error!(
                 entity_ref = ?entity_ref,
                 "update: change event lost after successful KV write"
@@ -3237,7 +3245,7 @@ impl Store for NatsStore {
                     .await
                 {
                     self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-                    crate::metrics::CHANGE_EVENTS_LOST.add(1);
+                    self.config.metrics.record_change_event_lost();
                     tracing::error!(
                         entity_ref = ?entity_ref,
                         "delete: change event lost after successful KV write"
@@ -3509,7 +3517,7 @@ impl Store for NatsStore {
             // To bound accumulation from rapid polling, inactive_threshold is set
             // to 5s (down from the NATS default of 30s) so abandoned ephemeral
             // consumers are reaped quickly by the server.
-            crate::metrics::READ_CHANGES_CONSUMERS.add(1);
+            self.config.metrics.record_read_changes_consumer();
             let consumer = tokio::time::timeout(
                 JS_OP_TIMEOUT,
                 stream.create_consumer(PullConfig {
@@ -4119,7 +4127,7 @@ impl Store for NatsStore {
                     complete = false;
                     if matches!(error, StoreError::ChangeEventLost) {
                         self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-                        crate::metrics::CHANGE_EVENTS_LOST.add(1);
+                        self.config.metrics.record_change_event_lost();
                     }
                     tracing::error!(
                         %error,
@@ -4131,7 +4139,7 @@ impl Store for NatsStore {
             }
             if let Err(error) = self.try_record_revision(ctx, revision).await {
                 complete = false;
-                crate::metrics::REVISIONS_LOST.add(1);
+                self.config.metrics.record_revision_lost();
                 tracing::error!(
                     %error,
                     journal = %batch_journal.id(),
@@ -4145,7 +4153,7 @@ impl Store for NatsStore {
                 tracing::warn!(journal = %id, %error, "batch_apply: journal not advanced");
             }
         } else {
-            crate::metrics::BATCHES_PENDING_RECOVERY.add(1);
+            self.config.metrics.record_batch_pending_recovery();
         }
 
         Ok(outcomes)
@@ -4838,7 +4846,7 @@ impl Store for NatsStore {
                 Ok(_) => {}
                 Err(StoreError::ChangeEventLost) => {
                     self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-                    crate::metrics::CHANGE_EVENTS_LOST.add(1);
+                    self.config.metrics.record_change_event_lost();
                     tracing::error!(
                         entity_ref = ?eref,
                         "land_branch_merge: change event lost after successful KV write"

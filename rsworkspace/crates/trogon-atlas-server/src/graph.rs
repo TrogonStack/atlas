@@ -11,7 +11,7 @@ use trogon_atlas_store::{
     Store, StoredEntity,
 };
 
-use crate::conv::store_err;
+use crate::{conv::store_err, metrics::ServerMetrics};
 
 #[derive(Debug, Clone)]
 pub struct ReverseIndex {
@@ -437,7 +437,12 @@ pub struct Closure {
     pub truncated: bool,
 }
 
-pub fn closure(all: &[StoredEntity], roots: &[pb::EntityRef], max_entities: usize) -> Closure {
+pub fn closure(
+    all: &[StoredEntity],
+    roots: &[pb::EntityRef],
+    max_entities: usize,
+    metrics: &ServerMetrics,
+) -> Closure {
     let by_key = entity_lookup(all);
     let mut out: HashMap<String, pb::Entity> = HashMap::new();
     let mut truncated = false;
@@ -488,7 +493,7 @@ pub fn closure(all: &[StoredEntity], roots: &[pb::EntityRef], max_entities: usiz
     }
     if truncated {
         tracing::warn!(cap = max_entities, "graph closure truncated");
-        crate::metrics::GRAPH_CLOSURE_TRUNCATIONS.add(1);
+        metrics.record_graph_closure_truncation();
     }
     Closure {
         entities: out,
@@ -932,7 +937,7 @@ mod impact_tests {
             kind: pb::EntityKind::Ui as i32,
             id: Some(id("checkout", "order-panel")),
         };
-        let c = closure(&all, &[root], 100);
+        let c = closure(&all, &[root], 100, &ServerMetrics::default());
         let has_screen = c
             .entities
             .values()
@@ -1006,7 +1011,7 @@ mod impact_tests {
             kind: pb::EntityKind::Ambiguity as i32,
             id: Some(id("marketplace", "review-collision")),
         };
-        let c = closure(&all, &[root], 100);
+        let c = closure(&all, &[root], 100, &ServerMetrics::default());
         assert_eq!(
             c.entities.len(),
             3,

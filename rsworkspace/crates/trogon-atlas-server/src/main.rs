@@ -10,12 +10,13 @@ use trogon_atlas_server::{
     auth::{BearerAuth, TokenRegistry},
     git_mirror::{GitMirror, MirrorAuthor},
     health::StoreStatus,
+    metrics::ServerMetrics,
     telemetry::TelemetryGuard,
 };
 use trogon_atlas_store::{
     nats::{NatsStore, NatsStoreConfig},
     refs::{entity_id, entity_kind},
-    ConflictResolution, LegacyFieldsShape, MigrationMode, Store, StoreOpenMode,
+    ConflictResolution, LegacyFieldsShape, MigrationMode, Store, StoreMetrics, StoreOpenMode,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -432,13 +433,17 @@ enum Cmd {
     },
 }
 
-async fn build_store(args: &Args) -> Result<Arc<dyn Store>> {
+async fn build_store(args: &Args, metrics: StoreMetrics) -> Result<Arc<dyn Store>> {
     Ok(Arc::new(
-        build_nats_store(args, StoreOpenMode::Serve).await?,
+        build_nats_store(args, StoreOpenMode::Serve, metrics).await?,
     ))
 }
 
-async fn build_nats_store(args: &Args, open_mode: StoreOpenMode) -> Result<NatsStore> {
+async fn build_nats_store(
+    args: &Args,
+    open_mode: StoreOpenMode,
+    metrics: StoreMetrics,
+) -> Result<NatsStore> {
     match args.store.as_str() {
         "nats" => {
             let mut config = NatsStoreConfig::new(&args.nats_url);
@@ -460,6 +465,7 @@ async fn build_nats_store(args: &Args, open_mode: StoreOpenMode) -> Result<NatsS
             config.operations_retention = Duration::from_secs(args.operations_retention_secs);
             config.role = args.role;
             config.open_mode = open_mode;
+            config.metrics = metrics;
             NatsStore::connect_with(config)
                 .await
                 .map_err(|e| anyhow::anyhow!("nats connect {}: {e}", args.nats_url))
@@ -553,7 +559,16 @@ async fn await_inflight_drain(
 #[tokio::main]
 async fn main() -> Result<()> {
     let telemetry = trogon_atlas_server::telemetry::init_telemetry()?;
-    let result = Box::pin(run(Args::parse(), &telemetry)).await;
+    let meter = telemetry.meter();
+    let store_metrics = StoreMetrics::new(&meter);
+    let server_metrics = ServerMetrics::new(&meter);
+    let result = Box::pin(run(
+        Args::parse(),
+        &telemetry,
+        store_metrics,
+        server_metrics,
+    ))
+    .await;
 
     // Flush any spans and metrics the OTLP exporters still have queued. Must
     // run before the process exits, on every path, or the last few seconds of
@@ -563,47 +578,53 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
+async fn run(
+    args: Args,
+    telemetry: &TelemetryGuard,
+    store_metrics: StoreMetrics,
+    server_metrics: ServerMetrics,
+) -> Result<()> {
     match args.cmd.clone() {
         Some(Cmd::ExportGit { path }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_export(&args, path, store).await;
         }
         Some(Cmd::ImportGit {
             path,
             restore_namespaces,
         }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_import(path, restore_namespaces, store).await;
         }
         Some(Cmd::Seed { fixture }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_seed(fixture, store).await;
         }
         Some(Cmd::Reconcile { mirror }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_reconcile(mirror, store).await;
         }
         Some(Cmd::BackfillNamespaces { parent, dry_run }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_backfill_namespaces(&parent, dry_run, store).await;
         }
         Some(Cmd::SyncSpicedb { dry_run }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_sync_spicedb(&args, dry_run, store).await;
         }
         Some(Cmd::RecoverBatches {
             report_only,
             min_age_secs,
         }) => {
-            let store = build_store(&args).await?;
+            let store = build_store(&args, store_metrics).await?;
             return run_recover_batches(report_only, min_age_secs, store.as_ref()).await;
         }
         Some(Cmd::MigrateLegacyFields {
             apply,
             keep_schema_on_conflict,
         }) => {
-            let store = build_nats_store(&args, StoreOpenMode::MigrateLegacyFields).await?;
+            let store =
+                build_nats_store(&args, StoreOpenMode::MigrateLegacyFields, store_metrics).await?;
             let mode = if apply {
                 MigrationMode::Apply
             } else {
@@ -619,9 +640,10 @@ async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
         None => {}
     }
 
-    let store = build_store(&args).await?;
-    trogon_atlas_server::batch_recovery::recover_at_startup(store.as_ref()).await;
-    let _batch_recovery_sweep = trogon_atlas_server::batch_recovery::spawn_sweep(store.clone());
+    let store = build_store(&args, store_metrics).await?;
+    trogon_atlas_server::batch_recovery::recover_at_startup(store.as_ref(), &server_metrics).await;
+    let _batch_recovery_sweep =
+        trogon_atlas_server::batch_recovery::spawn_sweep(store.clone(), server_metrics.clone());
 
     let mirror = match args.git_mirror.as_ref() {
         Some(path) => Some(GitMirror::open(
@@ -649,6 +671,7 @@ async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
         directory,
     )
     .context("constructing event modeling service")?
+    .with_metrics(server_metrics.clone())
     .with_baseline_protection(baseline_protection.clone());
     match args.change_cursor_key.as_deref() {
         Some(encoded) => {
@@ -713,12 +736,15 @@ async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
     });
     let llm_client = trogon_atlas_server::llm::build(
         llm_provider,
-        llm_api_key,
-        args.llm_model.clone(),
-        llm_base_url,
-        Some(args.llm_max_tokens),
-        Some(args.llm_request_timeout_secs),
-        Some(args.llm_concurrency),
+        trogon_atlas_server::llm::LlmSettings {
+            api_key: llm_api_key,
+            model: args.llm_model.clone(),
+            base_url: llm_base_url,
+            max_tokens: Some(args.llm_max_tokens),
+            request_timeout_secs: Some(args.llm_request_timeout_secs),
+            concurrency: Some(args.llm_concurrency),
+        },
+        server_metrics.clone(),
     )?;
     if let Some(client) = llm_client.as_ref() {
         tracing::info!(
@@ -738,7 +764,8 @@ async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
         );
         let analyzer = Arc::new(
             trogon_atlas_server::llm_analysis::LlmAnalyzer::new(client.clone())
-                .with_prompt_budget(args.llm_prompt_budget),
+                .with_prompt_budget(args.llm_prompt_budget)
+                .with_metrics(server_metrics.clone()),
         );
         svc = svc.with_llm_analyzer(analyzer);
     }
@@ -772,6 +799,7 @@ async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
         trogon_atlas_server::telemetry::spawn_change_stream_stats_publisher(
             store.clone(),
             Duration::from_secs(30),
+            server_metrics.clone(),
         );
     }
 
@@ -859,11 +887,13 @@ async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
                 .then_some(authorizer)
                 .flatten();
             let live = auth.live();
+            let metrics = server_metrics.clone();
             tokio::spawn(async move {
                 trogon_atlas_server::token_reload::watch(
                     path,
                     live,
                     interval,
+                    metrics,
                     move |memberships| {
                         let authorizer = authorizer.clone();
                         async move {
@@ -1045,6 +1075,7 @@ async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
     if args.mcp {
         let mcp_router = trogon_atlas_server::mcp::mcp_router(
             data_plane,
+            trogon_atlas_server::telemetry::RpcMetricsLayer::new(server_metrics.clone()),
             inflight.clone(),
             rpc_timeout,
             args.max_message_bytes,
@@ -1069,7 +1100,9 @@ async fn run(args: Args, telemetry: &TelemetryGuard) -> Result<()> {
         .with_nodelay(Some(true));
     health.mark_live().await;
     let router = builder
-        .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new())
+        .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new(
+            server_metrics,
+        ))
         .layer(inflight)
         .trace_fn(trogon_atlas_server::telemetry::rpc_span_from_request)
         .add_routes(routes);

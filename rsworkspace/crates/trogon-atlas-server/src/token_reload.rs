@@ -17,7 +17,10 @@
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use crate::auth::{LiveRegistry, TokenRegistry};
+use crate::{
+    auth::{LiveRegistry, TokenRegistry},
+    metrics::ServerMetrics,
+};
 
 /// How often the server re-reads a source of authorization truth it does not
 /// own: the token registry file here, and the namespace registry in
@@ -118,6 +121,7 @@ pub async fn watch<P, Fut>(
     path: PathBuf,
     live: LiveRegistry,
     interval: Duration,
+    metrics: ServerMetrics,
     publish_memberships: P,
 ) where
     P: Fn(Vec<(Arc<str>, trogon_atlas_core::OwnerId)>) -> Fut,
@@ -136,7 +140,7 @@ pub async fn watch<P, Fut>(
         match reload_once(&path, &live) {
             Reload::Unchanged => {}
             Reload::Installed(registry) => {
-                crate::metrics::AUTH_REGISTRY_RELOADS.add(1);
+                metrics.record_auth_registry_reload();
                 tracing::info!(
                     path = %path.display(),
                     memberships = registry.memberships().len(),
@@ -145,7 +149,7 @@ pub async fn watch<P, Fut>(
                 publish_pending = true;
             }
             Reload::Rejected(e) => {
-                crate::metrics::AUTH_REGISTRY_RELOAD_FAILURES.add(1);
+                metrics.record_auth_registry_reload_failure();
                 tracing::error!(
                     path = %path.display(),
                     error = %e,
@@ -158,7 +162,7 @@ pub async fn watch<P, Fut>(
             match publish_memberships(live.current().memberships()).await {
                 Ok(()) => publish_pending = false,
                 Err(e) => {
-                    crate::metrics::AUTH_REGISTRY_MEMBERSHIP_PUBLISH_FAILURES.add(1);
+                    metrics.record_auth_registry_membership_publish_failure();
                     tracing::error!(
                         error = %e,
                         "publishing principal memberships failed; retrying on the next reload tick"
@@ -178,7 +182,10 @@ mod tests {
     };
 
     use super::{reload_once, watch, Reload, ReloadInterval};
-    use crate::auth::{LiveRegistry, Role, TokenRegistry};
+    use crate::{
+        auth::{LiveRegistry, Role, TokenRegistry},
+        metrics::ServerMetrics,
+    };
 
     fn write(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
         let path = dir.join(name);
@@ -353,19 +360,25 @@ tokens = ["revoke-me"]
             let published = published.clone();
             let attempts = attempts.clone();
             async move {
-                watch(path, live, std::time::Duration::from_secs(1), move |m| {
-                    let published = published.clone();
-                    let attempts = attempts.clone();
-                    async move {
-                        // Fail once, to prove the publish is retried rather
-                        // than dropped when the authorizer is unreachable.
-                        if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                            return Err("spicedb unreachable".to_owned());
+                watch(
+                    path,
+                    live,
+                    std::time::Duration::from_secs(1),
+                    ServerMetrics::default(),
+                    move |m| {
+                        let published = published.clone();
+                        let attempts = attempts.clone();
+                        async move {
+                            // Fail once, to prove the publish is retried rather
+                            // than dropped when the authorizer is unreachable.
+                            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                                return Err("spicedb unreachable".to_owned());
+                            }
+                            published.store(m.len(), Ordering::SeqCst);
+                            Ok(())
                         }
-                        published.store(m.len(), Ordering::SeqCst);
-                        Ok(())
-                    }
-                })
+                    },
+                )
                 .await;
             }
         });

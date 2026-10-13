@@ -8,7 +8,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tracing::Instrument as _;
-use trogon_atlas_semconv::semconv::{attribute, metric};
+use trogon_atlas_semconv::semconv::attribute;
+
+use crate::metrics::ServerMetrics;
 
 /// Sonnet is the deliberate default: the analysis prompts are structured
 /// JSON inference where it matches Opus-class quality at a fraction of the
@@ -87,6 +89,7 @@ pub struct AnthropicClient {
     /// for the duration of the call (including retries) so burst load can't
     /// fan out unbounded to the provider.
     concurrency: Arc<Semaphore>,
+    metrics: ServerMetrics,
 }
 
 impl AnthropicClient {
@@ -103,7 +106,13 @@ impl AnthropicClient {
             config,
             http,
             concurrency: Arc::new(Semaphore::new(max_in_flight.max(1))),
+            metrics: ServerMetrics::default(),
         })
+    }
+
+    pub fn with_metrics(mut self, metrics: ServerMetrics) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     fn build_request_body(&self, system: &str, user: &str) -> MessagesRequest {
@@ -214,15 +223,15 @@ impl AnthropicClient {
             )
         })?;
         if let Some(usage) = parsed.usage.as_ref() {
-            crate::metrics::LLM_TOKENS.add(
-                usage.input_tokens,
+            self.metrics.record_llm_tokens(
                 self.config.model.clone().into(),
                 attribute::LlmTokenType::Input,
+                usage.input_tokens,
             );
-            crate::metrics::LLM_TOKENS.add(
-                usage.output_tokens,
+            self.metrics.record_llm_tokens(
                 self.config.model.clone().into(),
                 attribute::LlmTokenType::Output,
+                usage.output_tokens,
             );
         }
         extract_text(&parsed).map_err(RequestError::Fatal)
@@ -322,15 +331,11 @@ impl LlmClient for AnthropicClient {
                 .map_err(|e| anyhow::anyhow!("llm concurrency semaphore closed: {e}"))?;
             let started = Instant::now();
             let result = self.complete_with_retry(system, user).await;
-            crate::metrics::LLM_REQUEST_DURATION.record(
-                started.elapsed().as_secs_f64(),
+            self.metrics.record_llm_request(
+                started.elapsed(),
                 self.config.model.clone().into(),
                 self.provider().into(),
-                result.is_err().then(|| {
-                    metric::LlmRequestDurationAttr::ErrorType(
-                        crate::metrics::ERROR_TYPE_OTHER.into(),
-                    )
-                }),
+                &result,
             );
             result
         }
@@ -435,15 +440,29 @@ fn validate_base_url(url: &str) -> Result<()> {
 /// Build an LLM client from CLI/env-derived inputs. Returns `Ok(None)` when
 /// the provider is disabled; bails when configuration is incoherent
 /// (e.g. provider=anthropic but no API key).
+#[derive(Debug, Default)]
+pub struct LlmSettings {
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub base_url: Option<String>,
+    pub max_tokens: Option<u32>,
+    pub request_timeout_secs: Option<u64>,
+    pub concurrency: Option<usize>,
+}
+
 pub fn build(
     provider: LlmProvider,
-    api_key: Option<String>,
-    model: Option<String>,
-    base_url: Option<String>,
-    max_tokens: Option<u32>,
-    request_timeout_secs: Option<u64>,
-    concurrency: Option<usize>,
+    settings: LlmSettings,
+    metrics: ServerMetrics,
 ) -> Result<Option<Arc<dyn LlmClient>>> {
+    let LlmSettings {
+        api_key,
+        model,
+        base_url,
+        max_tokens,
+        request_timeout_secs,
+        concurrency,
+    } = settings;
     match provider {
         LlmProvider::Disabled => Ok(None),
         LlmProvider::Anthropic => {
@@ -464,7 +483,8 @@ pub fn build(
                 config.request_timeout = Duration::from_secs(secs);
             }
             let max_in_flight = concurrency.unwrap_or(DEFAULT_CONCURRENCY_LIMIT);
-            let client = AnthropicClient::with_concurrency(config, max_in_flight)?;
+            let client =
+                AnthropicClient::with_concurrency(config, max_in_flight)?.with_metrics(metrics);
             Ok(Some(Arc::new(client)))
         }
     }
@@ -534,7 +554,13 @@ mod tests {
 
     #[test]
     fn build_disabled_returns_none() {
-        match build(LlmProvider::Disabled, None, None, None, None, None, None) {
+        match build(
+            LlmProvider::Disabled,
+            LlmSettings {
+                ..LlmSettings::default()
+            },
+            ServerMetrics::default(),
+        ) {
             Ok(opt) => assert!(opt.is_none()),
             Err(e) => panic!("disabled should not error: {e}"),
         }
@@ -542,7 +568,13 @@ mod tests {
 
     #[test]
     fn build_anthropic_without_key_errors() {
-        match build(LlmProvider::Anthropic, None, None, None, None, None, None) {
+        match build(
+            LlmProvider::Anthropic,
+            LlmSettings {
+                ..LlmSettings::default()
+            },
+            ServerMetrics::default(),
+        ) {
             Ok(_) => panic!("expected error when api key is missing"),
             Err(e) => assert!(e.to_string().contains("api-key")),
         }
@@ -552,12 +584,11 @@ mod tests {
     fn build_anthropic_with_key_succeeds() {
         let client = match build(
             LlmProvider::Anthropic,
-            Some("k".into()),
-            None,
-            None,
-            None,
-            None,
-            None,
+            LlmSettings {
+                api_key: Some("k".into()),
+                ..LlmSettings::default()
+            },
+            ServerMetrics::default(),
         ) {
             Ok(Some(c)) => c,
             other => panic!("expected Ok(Some(_)), got {:?}", other.is_ok()),
@@ -570,12 +601,12 @@ mod tests {
     fn build_anthropic_with_custom_model() {
         let Ok(Some(client)) = build(
             LlmProvider::Anthropic,
-            Some("k".into()),
-            Some("claude-opus-4-7".into()),
-            None,
-            None,
-            None,
-            None,
+            LlmSettings {
+                api_key: Some("k".into()),
+                model: Some("claude-opus-4-7".into()),
+                ..LlmSettings::default()
+            },
+            ServerMetrics::default(),
         ) else {
             panic!("expected Ok(Some(_))");
         };
@@ -586,12 +617,12 @@ mod tests {
     fn build_anthropic_with_custom_base_url() {
         let Ok(Some(client)) = build(
             LlmProvider::Anthropic,
-            Some("k".into()),
-            None,
-            Some("https://proxy.example.com".into()),
-            None,
-            None,
-            None,
+            LlmSettings {
+                api_key: Some("k".into()),
+                base_url: Some("https://proxy.example.com".into()),
+                ..LlmSettings::default()
+            },
+            ServerMetrics::default(),
         ) else {
             panic!("expected Ok(Some(_))");
         };
@@ -602,12 +633,12 @@ mod tests {
     fn build_anthropic_rejects_malformed_base_url() {
         match build(
             LlmProvider::Anthropic,
-            Some("k".into()),
-            None,
-            Some("not a url at all :::".into()),
-            None,
-            None,
-            None,
+            LlmSettings {
+                api_key: Some("k".into()),
+                base_url: Some("not a url at all :::".into()),
+                ..LlmSettings::default()
+            },
+            ServerMetrics::default(),
         ) {
             Ok(_) => panic!("expected error for malformed base url"),
             Err(e) => {
@@ -624,12 +655,12 @@ mod tests {
     fn build_anthropic_rejects_non_http_base_url() {
         match build(
             LlmProvider::Anthropic,
-            Some("k".into()),
-            None,
-            Some("ftp://files.example.com".into()),
-            None,
-            None,
-            None,
+            LlmSettings {
+                api_key: Some("k".into()),
+                base_url: Some("ftp://files.example.com".into()),
+                ..LlmSettings::default()
+            },
+            ServerMetrics::default(),
         ) {
             Ok(_) => panic!("expected error for non-http scheme"),
             Err(e) => {

@@ -28,6 +28,7 @@ trogon-atlas-semconv = { workspace = true }
 trogon-atlas-testsupport = { path = "../trogon-atlas-testsupport" }
 async-nats = { workspace = true }
 proptest = "1"
+opentelemetry_sdk = { version = "0.33", features = ["testing"] }
 
 [lints]
 workspace = true

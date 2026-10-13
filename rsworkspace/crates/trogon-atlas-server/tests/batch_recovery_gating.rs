@@ -14,7 +14,10 @@ use std::sync::{
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 use trogon_atlas_proto as pb;
-use trogon_atlas_server::batch_recovery::{recover_at_startup, spawn_sweep, SWEEP_INTERVAL};
+use trogon_atlas_server::{
+    batch_recovery::{recover_at_startup, spawn_sweep, SWEEP_INTERVAL},
+    metrics::ServerMetrics,
+};
 use trogon_atlas_store::{
     store::{
         BranchInfo, ChangeRecord, ChangeStreamStats, ListFilter, MutationOp, MutationOutcome,
@@ -344,7 +347,7 @@ impl Store for GatedRecoveryStore {
 #[tokio::test(flavor = "multi_thread")]
 async fn recover_at_startup_skips_a_non_writer() {
     let store = GatedRecoveryStore::new(false).await;
-    let report = recover_at_startup(&store).await;
+    let report = recover_at_startup(&store, &ServerMetrics::default()).await;
     assert_eq!(store.recover_calls.load(Ordering::Acquire), 0);
     assert_eq!(report, BatchRecoveryReport::default());
 }
@@ -352,7 +355,7 @@ async fn recover_at_startup_skips_a_non_writer() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recover_at_startup_runs_on_the_writer() {
     let store = GatedRecoveryStore::new(true).await;
-    recover_at_startup(&store).await;
+    recover_at_startup(&store, &ServerMetrics::default()).await;
     assert_eq!(store.recover_calls.load(Ordering::Acquire), 1);
 }
 
@@ -374,7 +377,7 @@ async fn sweep_skips_ticks_while_not_the_writer_and_resumes_once_it_is() {
     let store = Arc::new(GatedRecoveryStore::new(false).await);
     tokio::time::pause();
     let recover_calls = store.recover_calls.clone();
-    let _sweep = spawn_sweep(store.clone());
+    let _sweep = spawn_sweep(store.clone(), ServerMetrics::default());
     // Let the sweep task run its first (immediate) tick and register its
     // real next-tick timer before the clock jumps, or that registration
     // happens post-jump and the interval silently re-anchors to "now".
