@@ -136,7 +136,7 @@ pub async fn watch<P, Fut>(
         match reload_once(&path, &live) {
             Reload::Unchanged => {}
             Reload::Installed(registry) => {
-                metrics::counter!("auth_registry_reloads_total").increment(1);
+                crate::metrics::AUTH_REGISTRY_RELOADS.add(1);
                 tracing::info!(
                     path = %path.display(),
                     memberships = registry.memberships().len(),
@@ -145,7 +145,7 @@ pub async fn watch<P, Fut>(
                 publish_pending = true;
             }
             Reload::Rejected(e) => {
-                metrics::counter!("auth_registry_reload_failures_total").increment(1);
+                crate::metrics::AUTH_REGISTRY_RELOAD_FAILURES.add(1);
                 tracing::error!(
                     path = %path.display(),
                     error = %e,
@@ -158,8 +158,7 @@ pub async fn watch<P, Fut>(
             match publish_memberships(live.current().memberships()).await {
                 Ok(()) => publish_pending = false,
                 Err(e) => {
-                    metrics::counter!("auth_registry_membership_publish_failures_total")
-                        .increment(1);
+                    crate::metrics::AUTH_REGISTRY_MEMBERSHIP_PUBLISH_FAILURES.add(1);
                     tracing::error!(
                         error = %e,
                         "publishing principal memberships failed; retrying on the next reload tick"

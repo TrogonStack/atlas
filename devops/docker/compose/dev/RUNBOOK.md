@@ -246,7 +246,8 @@ The `.env` file is gitignored and never committed.
   OrbStack resolves every container by DNS regardless.
 - trogon-atlas-server readiness: <http://127.0.0.1:50069/-/readiness?verbose>
   (`/-/liveness` for liveness)
-- trogon-atlas-server metrics: <http://127.0.0.1:50069/-/metrics>
+- trogon-atlas-server metrics: pushed over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`
+  when set; there is no scrape endpoint.
 - trogon-atlas-studio readiness: `docker compose exec trogon-atlas-studio wget -qO- 'http://127.0.0.1:8787/-/readiness?verbose'`
   (`/-/liveness` for liveness). The bridge serves them on its own port, which
   is not published; the published port is Vite, which proxies only `/api`.

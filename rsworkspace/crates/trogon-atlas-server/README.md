@@ -7,10 +7,9 @@ The gRPC server. Implements every RPC on the
 ## Binary
 
 `trogon-atlas-server` is both a library and a binary. The binary wires
-up tracing, OTLP trace and metric export, the opt-in Prometheus scrape
-at `/-/metrics`, the configured store, the optional LLM analyzer, and an
-optional git mirror; then serves tonic over the configured listen
-address.
+up tracing, OTLP trace and metric export, the configured store, the
+optional LLM analyzer, and an optional git mirror; then serves tonic over
+the configured listen address.
 
 Configuration is CLI-flags + env-vars; run `trogon-atlas-server --help`
 for the full list. The key ones:
@@ -37,7 +36,6 @@ for the full list. The key ones:
 | `--insecure-allow-anonymous`      | `TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS`| `false`                |
 | `--protect-baseline`              | `TROGON_ATLAS_PROTECT_BASELINE`        | `false`                |
 | `--protect-baseline-namespaces`   | `TROGON_ATLAS_PROTECT_BASELINE_NAMESPACES` | (unset)            |
-| `--prometheus-metrics`            | `TROGON_ATLAS_PROMETHEUS_METRICS`      | `false`                |
 | `--mcp`                           | `TROGON_ATLAS_MCP`                     | `false`                |
 | `--mcp-allowed-hosts`             | `TROGON_ATLAS_MCP_ALLOWED_HOSTS`       | `localhost,127.0.0.1,::1` |
 | `--git-mirror`                    | `TROGON_ATLAS_GIT_MIRROR`              | (off)                  |
@@ -249,7 +247,7 @@ trigger side effects; those hooks will never run for mirror commits.
 ### Reconciling the mirror
 
 **A mirror write can fail while the store commit succeeds.** `mirror_apply`
-logs a warning, increments `git_mirror_failures_total`, and lets the RPC
+logs a warning, increments `trogon_atlas.git_mirror.failures`, and lets the RPC
 succeed, which is the right call (the mirror must never fail a write) but
 means the two can diverge silently.
 
@@ -270,9 +268,9 @@ Alert on these counters. Without them, divergence is discovered on restore day:
 
 | Metric | Meaning | Suggested rule |
 |--------|---------|----------------|
-| `git_mirror_failures_total` | A store commit succeeded but its mirror write did not. The mirror is now behind. | `increase(...[1h]) > 0` |
-| `trogon_atlas_store_change_events_lost_total` | A KV write is durable but its change event was never published. Every change-feed consumer now has a hole. | `increase(...[1h]) > 0` |
-| `trogon_atlas_changesets_lost_total` | Writes committed but their changeset never landed. Those changes have no durable attribution: history has a hole. See [`docs/explanation/changesets.md`](../../../docs/explanation/changesets.md). | `increase(...[1h]) > 0` |
+| `trogon_atlas.git_mirror.failures` | A store commit succeeded but its mirror write did not. The mirror is now behind. | `increase(...[1h]) > 0` |
+| `trogon_atlas.store.change_events.lost` | A KV write is durable but its change event was never published. Every change-feed consumer now has a hole. | `increase(...[1h]) > 0` |
+| `trogon_atlas.changesets.lost` | Writes committed but their changeset never landed. Those changes have no durable attribution: history has a hole. See [`docs/explanation/changesets.md`](../../../docs/explanation/changesets.md). | `increase(...[1h]) > 0` |
 
 The last two are not mirror-specific and matter even with the mirror off: they
 are the only signals that a consumer's view of the change feed, or the record
@@ -360,9 +358,9 @@ from the durable change log, with these caveats:
   republishes the batch's events (see "Batch mutation atomicity"). For a
   single-entity write it is not: the write is durable without a change
   event. Both are logged at error level and counted by
-  `trogon_atlas_store_change_events_lost_total`. Alert on it, and on
-  `trogon_atlas_store_batches_pending_recovery_total` and
-  `trogon_atlas_batch_recovery_unresolved_total`.
+  `trogon_atlas.store.change_events.lost`. Alert on it, and on
+  `trogon_atlas.store.batches.pending_recovery` and
+  `trogon_atlas.batch_recovery.unresolved`.
 - Recovery republishes every event of a batch it rolls forward, using the
   same `Nats-Msg-Id` the original publish used. JetStream drops the
   duplicates it sees inside its duplicate window (two minutes by
@@ -434,8 +432,9 @@ crash window between a write committing and its changeset landing.
 - `git_mirror`: optional write-through to a git working tree, useful
   for auditing changes by commit.
 - `search`: in-RAM tantivy index for `Search`.
-- `telemetry`: tracing and OTLP trace export.
-- `metrics_export`: OTLP metric export and the Prometheus scrape.
+- `telemetry`: OTLP trace and metric export, and the per-RPC metrics layer.
+- `metrics`: the metric instruments, generated from `otel/registry` into
+  `trogon-atlas-semconv`.
 
 ## Tests
 

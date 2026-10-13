@@ -1,5 +1,6 @@
 pub mod error;
 pub mod key;
+pub mod metrics;
 pub mod nats;
 pub mod recovery;
 pub mod store;

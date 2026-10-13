@@ -46,9 +46,6 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
 parking_lot = "0.12"
-metrics = "0.24"
-metrics-exporter-prometheus = { version = "0.18", default-features = false }
-metrics-util = { version = "0.20", default-features = false }
 toml = "1.1"
 tower = { version = "0.5", features = ["timeout", "util"] }
 http = "1"
@@ -56,7 +53,8 @@ http-body = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tantivy = "0.26"
 prost-reflect = { version = "0.16", features = ["text-format"] }
-opentelemetry = "0.33"
+trogon-atlas-semconv = { workspace = true }
+opentelemetry = { workspace = true }
 opentelemetry_sdk = { version = "0.33", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.33", features = ["grpc-tonic", "tls-ring", "tls-roots"] }
 tracing-opentelemetry = "0.34"
@@ -72,7 +70,6 @@ async-trait = { workspace = true }
 tempfile = { workspace = true }
 rmcp = { version = "3", features = ["client", "transport-streamable-http-client-reqwest"] }
 opentelemetry_sdk = { version = "0.33", features = ["testing"] }
-opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic", "metrics"] }
 
 [lints]
 workspace = true

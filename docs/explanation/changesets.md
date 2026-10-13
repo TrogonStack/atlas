@@ -96,7 +96,7 @@ worse than admitting there isn't one.
 `append_changeset` runs *after* the entity writes land. When the append
 fails outright the RPC still succeeds (the data is already durable and
 reporting failure would misrepresent that), the failure is logged at ERROR
-with the changeset id and op count, and `trogon_atlas_changesets_lost_total`
+with the changeset id and op count, and `trogon_atlas.changesets.lost`
 increments.
 
 What happens next depends on how many entities the mutation wrote.
@@ -132,9 +132,9 @@ partial to undo, and the residual window stays: a crash between the write
 and the append loses **the attribution for one mutation, never the write
 itself**. The same holds for `MergeBranch` and for branch batches.
 
-Watch `trogon_atlas_changesets_lost_total` alongside
-`trogon_atlas_store_change_events_lost_total` and
-`trogon_atlas_batch_recovery_unresolved_total`. A nonzero value means
+Watch `trogon_atlas.changesets.lost` alongside
+`trogon_atlas.store.change_events.lost` and
+`trogon_atlas.batch_recovery.unresolved`. A nonzero value means
 history has a hole, or for a batch, that recovery has not closed it yet;
 it never means a write was lost. `trogon-atlas-server recover-batches
 --report-only` lists what is outstanding.
@@ -207,7 +207,7 @@ pair and its inverse is always one op.
 
 Recording is best-effort with the same posture as the changeset append:
 the entity write is already durable, so a failure logs at ERROR and
-increments `trogon_atlas_store_revisions_lost_total` rather than failing the
+increments `trogon_atlas.store.revisions.lost` rather than failing the
 RPC. For a baseline batch the journal keeps the pre-image, so recovery
 rewrites the row from it and the entity's current value. If another write
 replaced that value first, the after-image is gone; recovery reports the

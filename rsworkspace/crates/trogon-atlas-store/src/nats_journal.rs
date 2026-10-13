@@ -479,7 +479,7 @@ impl NatsStore {
             }
             return None;
         }
-        metrics::counter!("trogon_atlas_store_batches_pending_recovery_total").increment(1);
+        crate::metrics::BATCHES_PENDING_RECOVERY.add(1);
         tracing::error!(
             journal = %journal.id,
             keys = ?failed,

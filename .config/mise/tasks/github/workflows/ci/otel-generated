@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="CI entrypoint for the generated semantic convention code drift check"
+set -euo pipefail
+
+exec mise run otel:check-generated
