@@ -1043,6 +1043,15 @@ async fn main() -> Result<()> {
     routes.add_service(health_service);
     routes.add_service(data_plane.clone());
     let mut routes = routes.routes();
+    // Must run before `/mcp` is merged: a single-RPC deadline would cut off
+    // MCP tool calls that issue several RPCs, each already timed out on its own.
+    if let Some(rpc_timeout) = rpc_timeout {
+        let timed_out = trogon_atlas_server::mcp::with_grpc_timeout(
+            routes.axum_router_mut().clone(),
+            rpc_timeout,
+        );
+        *routes.axum_router_mut() = timed_out;
+    }
     if args.mcp {
         let mcp_router = trogon_atlas_server::mcp::mcp_router(
             data_plane,
@@ -1062,9 +1071,6 @@ async fn main() -> Result<()> {
     tracing::info!(%addr, "trogon-atlas-server starting");
 
     let mut builder = builder.concurrency_limit_per_connection(args.concurrency_limit);
-    if let Some(rpc_timeout) = rpc_timeout {
-        builder = builder.timeout(rpc_timeout);
-    }
     if args.mcp {
         // MCP clients speak HTTP/1.1; the gRPC listener is HTTP/2 only by
         // default.
