@@ -274,7 +274,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "When an AutomationSlice's processor fires a command, every field on that command must be sourceable from one of the source_read_models the processor observes (the RM is the data carrier), or carry a `DerivedFieldAnnotation` marking it system-generated. A field that lives nowhere upstream is information-incomplete: the model says the automation produces this command but never says where the value comes from.",
           AutomationSlice, "emitted_command", "model"),
         r("READ_MODEL_FIELD_UNSOURCED", Error, "Read model field has no source event",
-          "A ReadModel's `fields` list every value the model claims to project. Every field name must be supplied by at least one of the RM's `source_events` (the event has a FieldSpec with that name) OR by the swimlane state of one of those source events' lanes (`Swimlane.state`). Otherwise the RM is lying: the projection cannot populate the field, and any AutomationSlice that consumes the RM is reading a value that doesn't exist. Add the field to a source event, switch source events, declare the field on the source event's lane via swimlane state, or drop it from the RM.",
+          "A ReadModel's `fields` list every value the model claims to project. Every field name must be supplied by at least one of the RM's `source_events` (the event has a FieldSpec with that name) OR by the swimlane state of one of those source events' lanes (`Swimlane.state`). A ReadModel with an `external_source` system is exempt: the external payload supplies its fields. Otherwise the RM is lying: the projection cannot populate the field, and any AutomationSlice that consumes the RM is reading a value that doesn't exist. Add the field to a source event, switch source events, declare the field on the source event's lane via swimlane state, or drop it from the RM.",
           ReadModel, "fields", "model"),
         r("COMMAND_FIELD_NEVER_RECORDED", Warning, "Command field never appears in an emitted event",
           "Every field a command carries is data the runtime accepts. If that field does not appear on any of the slice's emitted_events AND does not appear in the command's swimlane.state, the model is silent about what happened to the value: the command took it in, the events do not record it, and the aggregate does not claim it as state. Either add the field to one of the emitted events, declare it on the lane's swimlane.state, or drop it from the command.",
@@ -3899,6 +3899,15 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         let Some(rm) = rms_by_id.get(&pb::IdKey::new(rm_id)) else {
             continue;
         };
+        // An external feed's payload is the source of its fields; no
+        // event inside the model can carry them.
+        if rm
+            .external_source
+            .as_ref()
+            .is_some_and(|src| src.system.is_some())
+        {
+            continue;
+        }
         // Union of (source event field names) + (each source event's
         // lane's state field names).
         let mut available: HashSet<String> = HashSet::new();
@@ -8211,6 +8220,80 @@ mod information_completeness_tests {
             )),
         ];
         let issues = validate_model(&model_member(pb::EntityKind::ReadModel, "orders"), &all);
+        assert_eq!(
+            count(&issues, "READ_MODEL_FIELD_UNSOURCED"),
+            1,
+            "{issues:?}"
+        );
+    }
+
+    fn external_read_model(
+        slug: &str,
+        fields: Vec<pb::FieldSpec>,
+        system: Option<&str>,
+    ) -> pb::Entity {
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id(slug)),
+                schema: Some(trogon_atlas_core::schema::pack_fields(fields)),
+                external_source: Some(pb::read_model::ExternalSource {
+                    system: system.map(|s| pb::ExternalSystemRef { id: Some(id(s)) }),
+                    descriptor: "payment.failed webhook".into(),
+                }),
+                ..Default::default()
+            })),
+        }
+    }
+
+    #[test]
+    fn external_source_read_model_fields_come_from_the_payload() {
+        let all = vec![
+            stored(external_read_model(
+                "payment-webhooks",
+                vec![field("order_id", string_kind())],
+                Some("acme-payments"),
+            )),
+            stored(command(
+                "cancel-order",
+                "order",
+                vec![field("order_id", string_kind())],
+            )),
+            stored(processor("webhook-handler")),
+            stored(automation_slice(
+                "cancel-order-auto",
+                vec!["payment-webhooks"],
+                "webhook-handler",
+                "cancel-order",
+            )),
+        ];
+        let issues = validate_model(
+            &model_member(pb::EntityKind::AutomationSlice, "cancel-order-auto"),
+            &all,
+        );
+        assert_eq!(
+            count(&issues, "READ_MODEL_FIELD_UNSOURCED"),
+            0,
+            "{issues:?}"
+        );
+        assert_eq!(
+            count(&issues, "AUTOMATION_COMMAND_FIELD_UNSOURCED"),
+            0,
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn external_source_without_a_system_still_needs_sourced_fields() {
+        let all = vec![stored(external_read_model(
+            "payment-webhooks",
+            vec![field("order_id", string_kind())],
+            None,
+        ))];
+        let issues = validate_model(
+            &model_member(pb::EntityKind::ReadModel, "payment-webhooks"),
+            &all,
+        );
         assert_eq!(
             count(&issues, "READ_MODEL_FIELD_UNSOURCED"),
             1,
