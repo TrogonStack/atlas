@@ -1,0 +1,32 @@
+[package]
+name = "trogon-atlas-server-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+axum = { version = "0.8", default-features = false }
+toml = "1.1"
+
+[dependencies.trogon-atlas-server]
+path = ".."
+
+[[bin]]
+name = "grpc_timeout_header"
+path = "fuzz_targets/grpc_timeout_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token_registry_toml"
+path = "fuzz_targets/token_registry_toml.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

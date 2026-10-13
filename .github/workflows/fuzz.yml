@@ -1,0 +1,48 @@
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "30 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  runs-on:
+    uses: ./.github/workflows/runs-on.yml
+
+  fuzz:
+    name: Fuzz
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            rsworkspace/crates/trogon-atlas-store/fuzz
+            rsworkspace/crates/trogon-atlas-server/fuzz
+
+      - name: run fuzz targets briefly
+        env:
+          TROGON_ATLAS_FUZZ_SECONDS: "20"
+        run: mise run rust:fuzz
+
+      - name: upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts
+          path: rsworkspace/crates/*/fuzz/artifacts/
+          retention-days: 7
