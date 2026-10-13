@@ -3,7 +3,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use prost::Message;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock, ServerCapabilities, ServerInfo},
+    model::{CallToolResponse, CallToolResult, ContentBlock, ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router, ServerHandler,
 };
 use trogon_atlas_client::{
@@ -2869,8 +2869,8 @@ impl McpServer {
 #[allow(clippy::unused_async_trait_impl)]
 #[tool_handler]
 impl ServerHandler for McpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(SERVER_INSTRUCTIONS)
     }
 
@@ -2880,7 +2880,7 @@ impl ServerHandler for McpServer {
         &self,
         request: rmcp::model::CallToolRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
+    ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let caller = self.for_request(&context)?;
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(&caller, request, context);
         self.tool_router.call(tcc).await
