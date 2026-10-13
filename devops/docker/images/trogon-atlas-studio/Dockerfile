@@ -21,7 +21,8 @@ RUN pnpm --filter trogon-atlas-studio run build \
 
 FROM node:26-alpine
 WORKDIR /app
-RUN addgroup -g 101 -S studio && adduser -S -u 100 -G studio studio \
+RUN apk upgrade --no-cache \
+ && addgroup -g 101 -S studio && adduser -S -u 100 -G studio studio \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
