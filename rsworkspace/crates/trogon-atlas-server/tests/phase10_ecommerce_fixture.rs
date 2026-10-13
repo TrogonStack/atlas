@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tonic::Request;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     pb::Id {
@@ -801,7 +801,7 @@ fn ecommerce_ops() -> Vec<pb::BatchMutateOp> {
 async fn seed_service() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let resp = svc
         .batch_mutate(Request::new(pb::BatchMutateRequest {
             operation_id: String::new(),

@@ -7,6 +7,7 @@ use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{
     git_mirror::{walk_repo, GitMirror, MirrorAuthor, MirrorBatch, MirrorChange},
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
 
@@ -83,7 +84,7 @@ async fn put_entity_writes_commit() {
         },
     )
     .unwrap();
-    let svc = EventModelServiceImpl::try_new(make_store().await)
+    let svc = EventModelServiceImpl::try_new(make_store().await, ServerMetrics::default())
         .unwrap()
         .with_git_mirror(mirror);
 
@@ -125,7 +126,7 @@ async fn batch_mutate_one_commit() {
         },
     )
     .unwrap();
-    let svc = EventModelServiceImpl::try_new(make_store().await)
+    let svc = EventModelServiceImpl::try_new(make_store().await, ServerMetrics::default())
         .unwrap()
         .with_git_mirror(mirror);
 
@@ -183,7 +184,7 @@ async fn delete_entity_removes_file_and_commits() {
         },
     )
     .unwrap();
-    let svc = EventModelServiceImpl::try_new(make_store().await)
+    let svc = EventModelServiceImpl::try_new(make_store().await, ServerMetrics::default())
         .unwrap()
         .with_git_mirror(mirror);
 
@@ -287,7 +288,7 @@ async fn walk_repo_imports_entities() {
         },
     )
     .unwrap();
-    let svc = EventModelServiceImpl::try_new(make_store().await)
+    let svc = EventModelServiceImpl::try_new(make_store().await, ServerMetrics::default())
         .unwrap()
         .with_git_mirror(mirror);
 
@@ -323,7 +324,7 @@ async fn batch_mutate_mixed_put_and_delete_one_commit() {
         },
     )
     .unwrap();
-    let svc = EventModelServiceImpl::try_new(make_store().await)
+    let svc = EventModelServiceImpl::try_new(make_store().await, ServerMetrics::default())
         .unwrap()
         .with_git_mirror(mirror);
 
@@ -408,7 +409,7 @@ async fn put_entity_caps_oversized_author_headers() {
         },
     )
     .unwrap();
-    let svc = EventModelServiceImpl::try_new(make_store().await)
+    let svc = EventModelServiceImpl::try_new(make_store().await, ServerMetrics::default())
         .unwrap()
         .with_git_mirror(mirror);
 

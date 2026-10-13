@@ -13,13 +13,13 @@ use tokio::net::TcpListener;
 use trogon_atlas_client::{client, export, manifest};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()

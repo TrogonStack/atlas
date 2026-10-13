@@ -8,6 +8,8 @@ use trogon_atlas_store::{
     store::Store, BatchRecovery, BatchRecoveryReport, RecoveryPolicy, RecoveryResult,
 };
 
+use crate::metrics::ServerMetrics;
+
 pub const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Machine-readable report for `trogon-atlas-server recover-batches`.
@@ -47,18 +49,18 @@ fn batch_json(batch: &BatchRecovery) -> serde_json::Value {
 /// journal, and only the lease holder may repair a batch it might still be
 /// mid-write on. Manual recovery (`trogon-atlas-server recover-batches`) is
 /// not gated this way; see its own doc comment.
-pub async fn recover_at_startup(store: &dyn Store) -> BatchRecoveryReport {
+pub async fn recover_at_startup(store: &dyn Store, metrics: &ServerMetrics) -> BatchRecoveryReport {
     if !store.is_writer() {
         tracing::info!("skipping startup batch recovery; this process is not the writer");
         return BatchRecoveryReport::default();
     }
     match store.recover_batches(RecoveryPolicy::automatic()).await {
         Ok(report) => {
-            log_report("startup", &report);
+            log_report("startup", &report, metrics);
             report
         }
         Err(error) => {
-            crate::metrics::BATCH_RECOVERY_FAILURES.add(1);
+            metrics.record_batch_recovery_failure();
             tracing::error!(%error, "startup batch recovery could not list the journal");
             BatchRecoveryReport::default()
         }
@@ -69,7 +71,7 @@ pub async fn recover_at_startup(store: &dyn Store) -> BatchRecoveryReport {
 /// changeset could not be written when they ran. Each tick skips the pass
 /// when this process does not currently hold the writer lease; see
 /// [`recover_at_startup`] for why.
-pub fn spawn_sweep(store: Arc<dyn Store>) -> tokio::task::JoinHandle<()> {
+pub fn spawn_sweep(store: Arc<dyn Store>, metrics: ServerMetrics) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(SWEEP_INTERVAL);
         ticker.tick().await;
@@ -80,9 +82,9 @@ pub fn spawn_sweep(store: Arc<dyn Store>) -> tokio::task::JoinHandle<()> {
                 continue;
             }
             match store.recover_batches(RecoveryPolicy::automatic()).await {
-                Ok(report) => log_report("sweep", &report),
+                Ok(report) => log_report("sweep", &report, &metrics),
                 Err(error) => {
-                    crate::metrics::BATCH_RECOVERY_FAILURES.add(1);
+                    metrics.record_batch_recovery_failure();
                     tracing::warn!(%error, "batch recovery sweep could not list the journal");
                 }
             }
@@ -90,12 +92,12 @@ pub fn spawn_sweep(store: Arc<dyn Store>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-fn log_report(pass: &'static str, report: &BatchRecoveryReport) {
+fn log_report(pass: &'static str, report: &BatchRecoveryReport, metrics: &ServerMetrics) {
     if report.batches.is_empty() {
         return;
     }
     let unresolved = report.unresolved().count();
-    crate::metrics::BATCH_RECOVERY_UNRESOLVED.add(u64::try_from(unresolved).unwrap_or(u64::MAX));
+    metrics.record_batch_recovery_unresolved(unresolved);
     if unresolved == 0 {
         tracing::warn!(
             pass,

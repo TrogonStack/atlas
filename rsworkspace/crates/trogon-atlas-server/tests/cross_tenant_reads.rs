@@ -28,6 +28,7 @@ use trogon_atlas_proto::{
 };
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
 
@@ -61,7 +62,7 @@ async fn client() -> EventModelServiceClient<Channel> {
     let addr = listener.local_addr().unwrap();
 
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let grpc = EventModelServiceServer::new(svc);
 
     let auth = BearerAuth::new(Arc::new(make_registry()));

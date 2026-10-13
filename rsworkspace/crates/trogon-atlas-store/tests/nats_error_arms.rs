@@ -39,7 +39,7 @@ use async_nats::jetstream;
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
     store::{ListFilter, MutationOp},
-    NatsStoreConfig, Store, StoreError, WriteContext,
+    NatsStoreConfig, Store, StoreError, StoreMetrics, WriteContext,
 };
 
 fn event(ns: &str, slug: &str, version: u64, title: &str) -> pb::Entity {
@@ -145,7 +145,7 @@ async fn store_ops_map_to_backend_error_after_container_is_stopped() {
     // binary. This is the only test in the workspace allowed to stop a
     // NATS container.
     let dedicated = trogon_atlas_testsupport::TestNats::start().await;
-    let mut config = NatsStoreConfig::new(&dedicated.url);
+    let mut config = NatsStoreConfig::new(&dedicated.url, StoreMetrics::default());
     config.bucket = "test-stop-bucket".into();
     config.branches_bucket = "test-stop-branches".into();
     config.stream = "TEST_STOP_STREAM".into();
@@ -491,7 +491,7 @@ async fn batch_apply_branch_rolls_back_on_failure() {
 async fn list_and_put_tolerate_a_corrupt_kv_entry_via_raw_byte_surgery() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("test-corrupt-{suffix}");
     config.branches_bucket = format!("test-corrupt-branches-{suffix}");
     config.stream = format!("TEST_CORRUPT_{}", suffix.replace('-', "_").to_uppercase());
@@ -627,7 +627,7 @@ async fn create_rejects_empty_slug() {
 async fn change_diagnostics_counters_start_at_zero_on_a_healthy_store() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("diag-bucket-{suffix}");
     config.branches_bucket = format!("diag-branches-{suffix}");
     config.stream = format!("DIAG_STREAM_{}", suffix.replace('-', "_").to_uppercase());
@@ -646,7 +646,7 @@ async fn change_diagnostics_counters_start_at_zero_on_a_healthy_store() {
 /// connect.
 #[tokio::test(flavor = "multi_thread")]
 async fn connect_with_rejects_empty_bucket_name() {
-    let mut config = NatsStoreConfig::new("nats://unused.invalid:4222");
+    let mut config = NatsStoreConfig::new("nats://unused.invalid:4222", StoreMetrics::default());
     config.bucket = String::new();
     let result = trogon_atlas_store::NatsStore::connect_with(config).await;
     assert!(
@@ -664,7 +664,7 @@ async fn connect_with_rejects_empty_bucket_name() {
 /// character outside `[A-Za-z0-9_-]` with `InvalidArgument`.
 #[tokio::test(flavor = "multi_thread")]
 async fn connect_with_rejects_bucket_name_with_invalid_character() {
-    let mut config = NatsStoreConfig::new("nats://unused.invalid:4222");
+    let mut config = NatsStoreConfig::new("nats://unused.invalid:4222", StoreMetrics::default());
     config.bucket = "bad bucket name".into();
     let result = trogon_atlas_store::NatsStore::connect_with(config).await;
     assert!(
@@ -684,7 +684,7 @@ async fn connect_with_rejects_bucket_name_with_invalid_character() {
 /// exercises the dedicated `validate_nats_subject_root` character set.
 #[tokio::test(flavor = "multi_thread")]
 async fn connect_with_rejects_subject_root_with_invalid_character() {
-    let mut config = NatsStoreConfig::new("nats://unused.invalid:4222");
+    let mut config = NatsStoreConfig::new("nats://unused.invalid:4222", StoreMetrics::default());
     config.subject_root = "bad/subject".into();
     let result = trogon_atlas_store::NatsStore::connect_with(config).await;
     assert!(
@@ -757,7 +757,7 @@ async fn list_branch_merged_latest_versions_only_keeps_highest_version() {
 async fn connect_with_rejects_unbounded_changes_stream_retention() {
     let nats = trogon_atlas_testsupport::shared().await;
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
-    let mut config = NatsStoreConfig::new(&nats.url);
+    let mut config = NatsStoreConfig::new(&nats.url, StoreMetrics::default());
     config.bucket = format!("unbounded-bucket-{suffix}");
     config.branches_bucket = format!("unbounded-branches-{suffix}");
     config.stream = format!(

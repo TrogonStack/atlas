@@ -11,6 +11,7 @@ pub mod store;
 // reach for `trogon_atlas_store::refs` keep compiling -- new code should
 // depend on `trogon-atlas-core` directly.
 pub use error::{StoreError, StoreResult};
+pub use metrics::StoreMetrics;
 pub use nats::{
     ConflictResolution, LegacyFieldsFinding, LegacyFieldsLocation, LegacyFieldsReport,
     LegacyFieldsShape, MigrationMode, NatsCredentials, NatsStore, NatsStoreConfig, StoreOpenMode,

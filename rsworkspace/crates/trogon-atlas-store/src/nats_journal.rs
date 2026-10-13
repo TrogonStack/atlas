@@ -479,7 +479,7 @@ impl NatsStore {
             }
             return None;
         }
-        crate::metrics::BATCHES_PENDING_RECOVERY.add(1);
+        self.config.metrics.record_batch_pending_recovery();
         tracing::error!(
             journal = %journal.id,
             keys = ?failed,

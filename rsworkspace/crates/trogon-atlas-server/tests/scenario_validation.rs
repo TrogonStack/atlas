@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tonic::{Code, Request};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 const NS: &str = "scenario-validation";
 
@@ -138,7 +138,7 @@ fn make_ui(slug: &str) -> pb::Entity {
 async fn seed_basics() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     let basics = vec![
         make_event("order.placed"),
         make_event("order.paid"),

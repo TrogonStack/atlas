@@ -8,6 +8,7 @@ use trogon_atlas_store::StoredEntity;
 use crate::{
     analysis::{is_derived_field, resolve_scope, FlowEndpoint, FlowLink},
     llm::LlmClient,
+    metrics::ServerMetrics,
 };
 
 const PROMPT_VERSION: &str = "v1";
@@ -21,13 +22,15 @@ const DEFAULT_USER_PROMPT_BUDGET: usize = 24_000;
 pub struct LlmAnalyzer {
     client: Arc<dyn LlmClient>,
     user_prompt_char_budget: usize,
+    metrics: ServerMetrics,
 }
 
 impl LlmAnalyzer {
-    pub fn new(client: Arc<dyn LlmClient>) -> Self {
+    pub fn new(client: Arc<dyn LlmClient>, metrics: ServerMetrics) -> Self {
         Self {
             client,
             user_prompt_char_budget: DEFAULT_USER_PROMPT_BUDGET,
+            metrics,
         }
     }
 
@@ -49,7 +52,7 @@ impl LlmAnalyzer {
             // an Ok that never called the model.
             return Err(anyhow!("no flow links resolved for analysis scope"));
         }
-        let user_prompt = render_user_prompt(&links, self.user_prompt_char_budget)?;
+        let user_prompt = render_user_prompt(&links, self.user_prompt_char_budget, &self.metrics)?;
         let raw = self
             .client
             .complete(INFER_SYSTEM_PROMPT, &user_prompt)
@@ -81,7 +84,7 @@ impl LlmAnalyzer {
         if links.is_empty() {
             return Err(anyhow!("no flow links resolved for analysis scope"));
         }
-        let user_prompt = render_user_prompt(&links, self.user_prompt_char_budget)?;
+        let user_prompt = render_user_prompt(&links, self.user_prompt_char_budget, &self.metrics)?;
         let raw = self
             .client
             .complete(COMPLETENESS_SYSTEM_PROMPT, &user_prompt)
@@ -106,7 +109,11 @@ impl LlmAnalyzer {
     }
 }
 
-fn render_user_prompt(links: &[FlowLink], budget: usize) -> Result<String> {
+fn render_user_prompt(
+    links: &[FlowLink],
+    budget: usize,
+    metrics: &ServerMetrics,
+) -> Result<String> {
     let full = render_links(links, true);
     if full.len() <= budget {
         return Ok(wrap_user_prompt(&full));
@@ -118,7 +125,7 @@ fn render_user_prompt(links: &[FlowLink], budget: usize) -> Result<String> {
         budget,
         "llm prompt over budget; doc strings dropped from analysis prompt"
     );
-    crate::metrics::LLM_PROMPT_TRUNCATIONS.add(1);
+    metrics.record_llm_prompt_truncation();
     if compact.len() <= budget {
         return Ok(wrap_user_prompt(&compact));
     }
@@ -133,7 +140,7 @@ fn render_user_prompt(links: &[FlowLink], budget: usize) -> Result<String> {
         budget,
         "llm prompt compact form over budget; refusing partial slice drop"
     );
-    crate::metrics::LLM_PROMPT_TRUNCATIONS.add(1);
+    metrics.record_llm_prompt_truncation();
     Err(anyhow!(
         "llm prompt budget cannot fit compact subgraph without dropping slices \
          (budget={budget}, compact_chars={}, slices={})",
@@ -672,7 +679,10 @@ mod tests {
   ]
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -708,7 +718,10 @@ mod tests {
   }]
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("created_at", "timestamp")]),
@@ -731,7 +744,10 @@ mod tests {
     async fn infer_ignores_prose_around_json() {
         let response = "Sure, here is the answer:\n```json\n{\"mappings\":[]}\n```\nThanks!";
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -747,7 +763,10 @@ mod tests {
     #[tokio::test]
     async fn infer_surfaces_parse_error_for_malformed_json() {
         let client = FixedClient::new("not json at all");
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -774,7 +793,10 @@ mod tests {
   "overall_score": 0.5
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("buyer_id", "string")]),
@@ -796,7 +818,10 @@ mod tests {
     #[tokio::test]
     async fn empty_scope_errors_without_calling_llm_so_handler_can_fall_back() {
         let client = FixedClient::new("should-not-be-used");
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        );
         let scope = pb::AnalysisScope {
             scope: Some(pb::analysis_scope::Scope::Slice(pb::EntityRef {
                 kind: pb::EntityKind::CommandSlice as i32,
@@ -954,9 +979,11 @@ mod tests {
         ];
         let links = resolve_scope(&slice_scope("shop", "place-order-slice"), &all);
         // Mid budget: full form (with 2k-char doc) overflows; compact (no docs) fits.
-        let small = render_user_prompt(&links, 500).expect("budget 500 should fit compact form");
+        let small = render_user_prompt(&links, 500, &ServerMetrics::default())
+            .expect("budget 500 should fit compact form");
         assert!(!small.contains(&big_doc));
-        let big = render_user_prompt(&links, 10_000).expect("budget 10k should fit full form");
+        let big = render_user_prompt(&links, 10_000, &ServerMetrics::default())
+            .expect("budget 10k should fit full form");
         assert!(big.contains(&big_doc));
     }
 
@@ -969,7 +996,11 @@ mod tests {
     #[tokio::test]
     async fn prompt_budget_wipeout_must_error_so_handler_can_fall_back() {
         let client = FixedClient::new(r#"{"mappings":[]}"#);
-        let analyzer = LlmAnalyzer::new(client.clone() as Arc<dyn LlmClient>).with_prompt_budget(1);
+        let analyzer = LlmAnalyzer::new(
+            client.clone() as Arc<dyn LlmClient>,
+            ServerMetrics::default(),
+        )
+        .with_prompt_budget(1);
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -1021,7 +1052,7 @@ mod tests {
   }]
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(client as Arc<dyn LlmClient>, ServerMetrics::default());
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -1060,7 +1091,7 @@ mod tests {
   "overall_score": 1.0
 }"#;
         let client = FixedClient::new(response);
-        let analyzer = LlmAnalyzer::new(client as Arc<dyn LlmClient>);
+        let analyzer = LlmAnalyzer::new(client as Arc<dyn LlmClient>, ServerMetrics::default());
         let all = vec![
             stored_command("shop", "place-order", &[("order_id", "string")]),
             stored_event("shop", "order-placed", &[("order_id", "string")]),
@@ -1138,7 +1169,7 @@ mod tests {
             "fixture requires at least one slice to fit"
         );
 
-        let result = render_user_prompt(&links, budget);
+        let result = render_user_prompt(&links, budget, &ServerMetrics::default());
         assert!(
             result.is_err(),
             "partial slice drop must return Err so analysis falls back to deterministic \

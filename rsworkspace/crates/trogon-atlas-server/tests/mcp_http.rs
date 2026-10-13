@@ -28,8 +28,9 @@ use trogon_atlas_server::{
     auth::{BearerAuth, RegistryFile, TokenRegistry},
     health::{Health, StoreStatus},
     mcp::{data_plane, mcp_router, AllowedHosts, MCP_PATH},
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
-    telemetry::InflightLayer,
+    telemetry::{InflightLayer, RpcMetricsLayer},
 };
 
 const READER_TOKEN: &str = "role-filter-reader-aaaa";
@@ -73,8 +74,9 @@ impl McpHttp {
 
     async fn start_with_hosts(registry: TokenRegistry, allowed_hosts: AllowedHosts) -> Self {
         let store = trogon_atlas_testsupport::shared().await.store().await;
-        let service =
-            EventModelServiceServer::new(EventModelServiceImpl::try_new(Arc::new(store)).unwrap());
+        let service = EventModelServiceServer::new(
+            EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap(),
+        );
         let data_plane = data_plane(service, BearerAuth::new(registry));
         let health = Health::new().await;
         health.set_store(StoreStatus::Reachable).await;
@@ -87,6 +89,7 @@ impl McpHttp {
         let mut routes = routes.routes();
         let mcp = mcp_router(
             data_plane,
+            RpcMetricsLayer::new(ServerMetrics::default()),
             inflight,
             Some(Duration::from_secs(30)),
             4 * 1024 * 1024,

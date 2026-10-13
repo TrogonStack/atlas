@@ -16,7 +16,8 @@ use tonic::Request;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{
-    llm::LlmClient, llm_analysis::LlmAnalyzer, service::EventModelServiceImpl,
+    llm::LlmClient, llm_analysis::LlmAnalyzer, metrics::ServerMetrics,
+    service::EventModelServiceImpl,
 };
 
 // ---------------------------------------------------------------------------
@@ -66,8 +67,8 @@ impl LlmClient for MockLlmClient {
 async fn svc_with_llm(client: Arc<dyn LlmClient>) -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    let analyzer = Arc::new(LlmAnalyzer::new(client));
-    EventModelServiceImpl::try_new(Arc::new(store))
+    let analyzer = Arc::new(LlmAnalyzer::new(client, ServerMetrics::default()));
+    EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
         .unwrap()
         .with_llm_analyzer(analyzer)
 }

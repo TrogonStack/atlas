@@ -6,7 +6,7 @@ use tonic::{metadata::MetadataValue, Code, Request, Status};
 use tonic_types::StatusExt;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::service::EventModelServiceImpl;
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     pb::Id {
@@ -19,7 +19,7 @@ fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
 async fn svc() -> EventModelServiceImpl {
     let nats = trogon_atlas_testsupport::shared().await;
     let store = nats.store().await;
-    EventModelServiceImpl::try_new(Arc::new(store)).unwrap()
+    EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap()
 }
 
 fn library(ns: &str, slug: &str) -> pb::TypeLibrary {
@@ -1002,7 +1002,7 @@ async fn a_batch_may_write_a_library_together_with_the_events_using_it() {
 async fn a_schema_check_goes_stale_when_the_libraries_it_saw_move() {
     let nats = trogon_atlas_testsupport::shared().await;
     let store: Arc<dyn trogon_atlas_store::Store> = Arc::new(nats.store().await);
-    let svc = EventModelServiceImpl::try_new(Arc::clone(&store)).unwrap();
+    let svc = EventModelServiceImpl::try_new(Arc::clone(&store), ServerMetrics::default()).unwrap();
     let gate = trogon_atlas_server::type_libraries::TypeLibraryGate::default();
     let ns = "typelib-schema-race";
     put(&svc, money(ns)).await;

@@ -27,6 +27,7 @@ use trogon_atlas_proto::{
 };
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
 use trogon_atlas_store::{NamespaceTenure, NatsStore, Store};
@@ -61,7 +62,7 @@ impl World {
         let addr = listener.local_addr().unwrap();
 
         let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
-        let svc = EventModelServiceImpl::try_new(store.clone()).unwrap();
+        let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
         let grpc = EventModelServiceServer::new(svc);
 
         let auth = BearerAuth::new(Arc::new(make_registry()));
