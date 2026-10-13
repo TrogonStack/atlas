@@ -6,7 +6,7 @@
 # pnpm workspace at /mnt/tsworkspace, so the install resolves against the
 # workspace lockfile. `pnpm deploy` then produces a self-contained studio
 # tree with production deps only.
-FROM --platform=$BUILDPLATFORM node:25-alpine AS build
+FROM --platform=$BUILDPLATFORM node:26-alpine AS build
 WORKDIR /src
 RUN npm install -g pnpm@10.3.0
 RUN --mount=type=bind,source=tsworkspace,target=/mnt/tsworkspace \
@@ -19,7 +19,7 @@ RUN --mount=type=bind,source=tsworkspace,target=/mnt/tsworkspace \
 RUN pnpm --filter trogon-atlas-studio run build \
  && pnpm --filter trogon-atlas-studio deploy --legacy --prod /app
 
-FROM node:25-alpine
+FROM node:26-alpine
 WORKDIR /app
 RUN addgroup -g 101 -S studio && adduser -S -u 100 -G studio studio \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
