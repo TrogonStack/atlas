@@ -1,0 +1,23 @@
+[package]
+name = "trogon-atlas-store-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.trogon-atlas-store]
+path = ".."
+
+[[bin]]
+name = "nats_url_credentials"
+path = "fuzz_targets/nats_url_credentials.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

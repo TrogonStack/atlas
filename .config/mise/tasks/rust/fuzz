@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+#MISE description="Run every cargo-fuzz target briefly (TROGON_ATLAS_FUZZ_SECONDS, default 30, seconds each)"
+set -euo pipefail
+
+seconds="${TROGON_ATLAS_FUZZ_SECONDS:-30}"
+
+for fuzz_dir in "$MISE_PROJECT_ROOT"/rsworkspace/crates/*/fuzz; do
+	crate_dir="$(dirname "$fuzz_dir")"
+	echo "== $(basename "$crate_dir") =="
+	for target_path in "$fuzz_dir"/fuzz_targets/*.rs; do
+		target="$(basename "${target_path%.rs}")"
+		echo "-- $target (${seconds}s) --"
+		(cd "$crate_dir" && cargo fuzz run "$target" -- "-max_total_time=${seconds}")
+	done
+done
