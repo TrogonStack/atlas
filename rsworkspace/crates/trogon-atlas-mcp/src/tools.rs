@@ -17,7 +17,7 @@ struct EntitySpecDe {
 #[serde(deny_unknown_fields)]
 pub struct EntitySpec {
     #[schemars(
-        description = "Entity kind: event, command, read_model, processor, ui, persona, swimlane, command_slice, read_model_slice, automation_slice, ui_slice, storyboard, event_model"
+        description = "Entity kind in snake_case, e.g. event, read_model or event_model. Call list_entity_kinds for every kind."
     )]
     pub kind: String,
     pub namespace: String,

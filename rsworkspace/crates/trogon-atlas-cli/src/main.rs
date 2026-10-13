@@ -115,13 +115,15 @@ enum Cmd {
     /// Print one entity as the manifest YAML document `export` writes.
     /// Omit `@version` to read the latest version.
     Get {
-        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `event/shop/order.placed`.
+        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `event/shop/order.placed`,
+        /// or an id that `describe` prints.
         entity: String,
     },
     /// Print one entity as readable text: title, doc, schema fields, and
     /// the references it holds and receives.
     Describe {
-        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `command_slice/shop/place-order-slice`.
+        /// `<kind>/<namespace>/<slug>[@version]`, e.g. `command_slice/shop/place-order-slice`,
+        /// or an id that `describe` prints.
         entity: String,
     },
     /// Print a namespace's structure: domains with their subdomains, then
@@ -704,7 +706,8 @@ async fn run(
             let mut client =
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
             let entity = view::fetch_entity(&mut client, &address).await?;
-            let (manifest, yaml) = view::entity_manifest(&mut client, &entity).await?;
+            let types = view::entity_types(&mut client, &entity).await?;
+            let (manifest, yaml) = view::entity_manifest(&entity, &types)?;
             if text {
                 print!("{yaml}");
             }
@@ -719,7 +722,8 @@ async fn run(
                 view::fetch_references(&mut client, &entity, view::Direction::Outgoing).await?;
             let incoming =
                 view::fetch_references(&mut client, &entity, view::Direction::Incoming).await?;
-            let description = view::describe(&entity, &outgoing, &incoming);
+            let types = view::entity_types(&mut client, &entity).await?;
+            let description = view::describe(&entity, &types, &outgoing, &incoming);
             if text {
                 print!("{}", view::render_description(&description));
             }

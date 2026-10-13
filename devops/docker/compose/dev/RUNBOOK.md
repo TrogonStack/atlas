@@ -244,7 +244,12 @@ The `.env` file is gitignored and never committed.
   the whole deployment to whoever reaches it, so the listener binds the
   container's loopback; a published port would not have confined it, because
   OrbStack resolves every container by DNS regardless.
-- trogon-atlas-server metrics: <http://127.0.0.1:9100/metrics>
+- trogon-atlas-server readiness: <http://127.0.0.1:50069/-/readiness?verbose>
+  (`/-/liveness` for liveness)
+- trogon-atlas-server metrics: <http://127.0.0.1:50069/-/metrics>
+- trogon-atlas-studio readiness: `docker compose exec trogon-atlas-studio wget -qO- 'http://127.0.0.1:8787/-/readiness?verbose'`
+  (`/-/liveness` for liveness). The bridge serves them on its own port, which
+  is not published; the published port is Vite, which proxies only `/api`.
 
 ## Rolling deploys and batch recovery
 
@@ -276,8 +281,9 @@ JetStream via testcontainers.
 ## Authentication
 
 The gRPC service uses a single shared bearer token configured via
-`--auth-token` / `TROGON_ATLAS_AUTH_TOKEN`. The MCP adapter and the studio
-bridge present the same token. Operating points:
+`--auth-token` / `TROGON_ATLAS_AUTH_TOKEN`. The studio bridge presents
+the same token; the server's `/mcp` endpoint holds none and acts as each
+MCP client's own bearer token. Operating points:
 
 - The server refuses to start with `--auth-token` unset unless
   `--insecure-allow-anonymous` (or
@@ -286,7 +292,7 @@ bridge present the same token. Operating points:
   127.0.0.1 inside the orb network; remove it for any deployment that
   exposes the listener beyond a trusted boundary.
 - Rotate the token by writing a new value into `.env`, restarting the
-  server, and updating the studio + MCP environments in the same
+  server, and updating the studio environment and MCP clients in the same
   window. Clients see a single transient `UNAUTHENTICATED` and recover.
 - For multi-tenant or per-client tokens, front the server with a
   reverse proxy that rewrites the `authorization` header per client;
@@ -297,8 +303,7 @@ bridge present the same token. Operating points:
 The server can serve TLS directly via `--tls-cert` / `--tls-key`. The
 reference compose stack ships plaintext on `127.0.0.1:50069` and
 expects the operator to terminate TLS in front of it (Envoy, Caddy, or
-the cloud LB); that path is simpler to operate and gives you HTTP/2
-ALPN negotiation for free. Two supported postures:
+the cloud LB); that path is simpler to operate. Two supported postures:
 
 ### Posture A: terminate at a reverse proxy (recommended)
 
@@ -309,15 +314,18 @@ ALPN negotiation for free. Two supported postures:
    rewrites into `authorization` so the server never sees external
    credentials.
 
-### Posture B: direct tonic-rustls
+### Posture B: direct rustls
 
 1. Provision a PEM certificate chain and private key for the listen
    host.
 2. Set `TROGON_ATLAS_TLS_CERT=/path/cert.pem` and
    `TROGON_ATLAS_TLS_KEY=/path/key.pem`.
 3. Point clients at `https://...:50069`. The studio bridge accepts
-   `https://` URLs for `TROGON_ATLAS_GRPC` without configuration; the
-   MCP adapter accepts the same.
+   `https://` URLs for `TROGON_ATLAS_GRPC` without configuration.
+
+The port offers both `h2` and `http/1.1` over ALPN, so gRPC clients,
+HTTP/1.1-only clients such as `curl --http1.1` and MCP clients, and
+clients that send no ALPN at all share the one TLS listener.
 
 Either posture: never serve plaintext gRPC across an untrusted network.
 The server still emits a startup warning when TLS is not configured.

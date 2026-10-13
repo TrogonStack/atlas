@@ -1,5 +1,16 @@
 trogon-atlas-server (gRPC):
-  {{ include "trogon-atlas-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.grpcPort }}
+  {{ include "trogon-atlas-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+{{- if .Values.mcp.enabled }}
+
+trogon-atlas-server (MCP, Streamable HTTP, same port as gRPC):
+  http://{{ include "trogon-atlas-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/mcp
+  Each request acts as its own Authorization bearer token.
+{{- end }}
+{{- if .Values.metrics.prometheus.enabled }}
+
+trogon-atlas-server (Prometheus scrape, same port as gRPC, no auth):
+  {{ include "trogon-atlas-server.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/-/metrics
+{{- end }}
 {{- if .Values.auth.insecureAllowAnonymous }}
 
   WARNING: the server is running WITHOUT authentication

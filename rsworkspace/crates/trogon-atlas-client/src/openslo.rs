@@ -60,7 +60,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Context as _, Result};
-use serde_yaml::{Mapping, Value};
+use serde_norway::{Mapping, Value};
 use trogon_atlas_core::transcode;
 use trogon_atlas_proto as pb;
 
@@ -200,7 +200,7 @@ fn render_docs<'a>(docs: impl IntoIterator<Item = &'a Mapping>) -> Result<String
         if i > 0 {
             out.push_str("---\n");
         }
-        out.push_str(&serde_yaml::to_string(doc).context("rendering YAML")?);
+        out.push_str(&serde_norway::to_string(doc).context("rendering YAML")?);
     }
     Ok(out)
 }
@@ -574,7 +574,7 @@ fn alert_condition_inline(
     );
     condition.insert(
         key("threshold"),
-        Value::Number(serde_yaml::Number::from(burn_rate.threshold)),
+        Value::Number(serde_norway::Number::from(burn_rate.threshold)),
     );
     let lookback = burn_rate
         .lookback_window
@@ -628,19 +628,19 @@ fn objective_doc(o: &pb::service_level_objective::Objective) -> Result<Value> {
         let seconds = duration_to_fractional_seconds(value);
         m.insert(
             key("value"),
-            Value::Number(serde_yaml::Number::from(seconds)),
+            Value::Number(serde_norway::Number::from(seconds)),
         );
     }
     if let Some(target) = &o.target {
         m.insert(
             key("target"),
-            Value::Number(serde_yaml::Number::from(target.ratio)),
+            Value::Number(serde_norway::Number::from(target.ratio)),
         );
     }
     if let Some(time_slice_target) = &o.time_slice_target {
         m.insert(
             key("timeSliceTarget"),
-            Value::Number(serde_yaml::Number::from(time_slice_target.ratio)),
+            Value::Number(serde_norway::Number::from(time_slice_target.ratio)),
         );
     }
     if let Some(window) = &o.time_slice_window {

@@ -1,6 +1,5 @@
 use std::{
     future::Future,
-    net::SocketAddr,
     pin::Pin,
     sync::{
         atomic::{AtomicI64, Ordering},
@@ -14,6 +13,13 @@ use tower::{Layer, Service};
 use tracing::Span;
 
 pub const GRPC_SYSTEM: &str = "grpc";
+pub const SERVICE_NAME: &str = "trogon-atlas-server";
+
+pub(crate) fn resource() -> opentelemetry_sdk::Resource {
+    opentelemetry_sdk::Resource::builder()
+        .with_service_name(SERVICE_NAME)
+        .build()
+}
 
 /// Shutdown handle returned by `init_tracing`. When OTLP is enabled, this
 /// wraps the batch `TracerProvider` so the graceful-shutdown path can
@@ -70,21 +76,18 @@ pub fn init_tracing() -> anyhow::Result<TracingGuard> {
     match std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT") {
         Ok(endpoint) if !endpoint.is_empty() => {
             use opentelemetry::trace::TracerProvider as _;
-            use opentelemetry_otlp::WithExportConfig as _;
+            use opentelemetry_otlp::{WithExportConfig as _, WithTonicConfig as _};
             let exporter = opentelemetry_otlp::SpanExporter::builder()
                 .with_tonic()
                 .with_endpoint(endpoint.clone())
+                .with_tls_config(otlp_tls_config())
                 .build()
                 .map_err(|e| anyhow::anyhow!("building OTLP exporter for {endpoint}: {e}"))?;
             let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                 .with_batch_exporter(exporter)
-                .with_resource(
-                    opentelemetry_sdk::Resource::builder()
-                        .with_service_name("trogon-atlas-server")
-                        .build(),
-                )
+                .with_resource(resource())
                 .build();
-            let tracer = provider.tracer("trogon-atlas-server");
+            let tracer = provider.tracer(SERVICE_NAME);
             // Set the global provider so opentelemetry::global::tracer works,
             // and keep a clone for explicit shutdown so the batch exporter
             // flushes queued spans before the process exits.
@@ -104,6 +107,12 @@ pub fn init_tracing() -> anyhow::Result<TracingGuard> {
     }
 }
 
+/// Trusts the system roots for an `https://` collector; the exporter only
+/// applies it when the endpoint scheme is `https`.
+pub fn otlp_tls_config() -> opentelemetry_otlp::tonic_types::transport::ClientTlsConfig {
+    opentelemetry_otlp::tonic_types::transport::ClientTlsConfig::new().with_native_roots()
+}
+
 fn rpc_span_from_path(path: &str) -> Span {
     let (service, method) = split_grpc_path(path);
     tracing::info_span!(
@@ -117,17 +126,75 @@ fn rpc_span_from_path(path: &str) -> Span {
     )
 }
 
-/// Build an RPC span seeded with the caller-supplied `x-request-id` (or a
+/// `http.route` for a request that is not gRPC, when the path names a route
+/// this listener knows about outside the gRPC services it serves.
+fn http_route_for_path(path: &str) -> Option<&'static str> {
+    (path == trogon_atlas_mcp::MCP_PATH).then_some(trogon_atlas_mcp::MCP_PATH)
+}
+
+/// Build an HTTP server span following OTel's HTTP semantic conventions, for
+/// a request on the gRPC listener that is not itself gRPC (currently, MCP's
+/// `/mcp`).
+fn http_span_from_request<B>(req: &http::Request<B>) -> Span {
+    let method = req.method().clone();
+    let path = req.uri().path().to_owned();
+    let route = http_route_for_path(&path);
+    let otel_name = match route {
+        Some(route) => format!("{method} {route}"),
+        None => method.to_string(),
+    };
+    let span = tracing::info_span!(
+        "http",
+        otel.name = %otel_name,
+        otel.kind = "server",
+        http.request.method = %method,
+        url.path = %path,
+        http.route = tracing::field::Empty,
+        request_id = tracing::field::Empty,
+    );
+    if let Some(route) = route {
+        span.record("http.route", route);
+    }
+    span
+}
+
+/// Build a trace span seeded with the caller-supplied `x-request-id` (or a
 /// generated one when the caller did not propagate one). Use this from
 /// `Server::trace_fn` so every span carries a correlation id readable by
-/// log/trace consumers downstream.
+/// log/trace consumers downstream. A gRPC request gets the `rpc` span; any
+/// other request on the same listener (MCP's `/mcp`) gets an HTTP server
+/// span instead, so it is never mislabeled as an RPC with no real service or
+/// method.
 pub fn rpc_span_from_request<B>(req: &http::Request<B>) -> Span {
-    let path = req.uri().path();
-    let span = rpc_span_from_path(path);
+    if is_operational_path(req.uri().path()) {
+        return Span::none();
+    }
+    let span = if is_grpc_request(req) {
+        rpc_span_from_path(req.uri().path())
+    } else {
+        http_span_from_request(req)
+    };
     let request_id =
         request_id_from_headers(req.headers()).unwrap_or_else(|| short_request_id(req));
     span.record("request_id", tracing::field::display(&request_id));
     span
+}
+
+/// Probes and health checks hit these paths every few seconds; tracing them
+/// would spend sampling budget and export bandwidth on requests nobody reads.
+fn is_operational_path(path: &str) -> bool {
+    path.starts_with("/-/") || path.starts_with("/grpc.health.v1.Health/")
+}
+
+/// Whether a request on the gRPC listener is actually gRPC, as opposed to a
+/// merged HTTP route such as MCP's `/mcp`. gRPC clients (and tonic's own
+/// generated clients, including the in-process one MCP tool calls build)
+/// always send `content-type: application/grpc[+proto|+json]`.
+fn is_grpc_request<B>(req: &http::Request<B>) -> bool {
+    req.headers()
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.starts_with("application/grpc"))
 }
 
 fn request_id_from_headers(headers: &http::HeaderMap) -> Option<String> {
@@ -217,35 +284,8 @@ fn split_grpc_path(path: &str) -> (&str, &str) {
     }
 }
 
-/// Install the global Prometheus metrics recorder and spawn an HTTP exporter.
-///
-/// The exporter serves `/metrics` (and reports its own healthcheck on `/`).
-/// Returns an error if a recorder is already installed or the listener cannot bind.
-///
-/// When `addr` binds a non-loopback interface the caller must also pass
-/// `allow_external = true`; otherwise startup is refused with a clear error.
-/// Loopback addresses (127.x.x.x / `::1`) are always permitted. Set
-/// `TROGON_ATLAS_METRICS_ALLOW_EXTERNAL=true` to opt in to external binding.
-pub fn install_prometheus_exporter(addr: SocketAddr, allow_external: bool) -> anyhow::Result<()> {
-    let is_loopback = addr.ip().is_loopback();
-    if !is_loopback && !allow_external {
-        anyhow::bail!(
-            "metrics listen address {addr} is non-loopback but \
-             TROGON_ATLAS_METRICS_ALLOW_EXTERNAL is not set. Set it to `true` to \
-             explicitly opt in to exposing /metrics on a non-loopback interface, \
-             or change --metrics-listen to a loopback address (e.g. 127.0.0.1:9090)."
-        );
-    }
-    use metrics_exporter_prometheus::PrometheusBuilder;
-    PrometheusBuilder::new()
-        .with_http_listener(addr)
-        .install()
-        .map_err(|e| anyhow::anyhow!("install prometheus exporter on {addr}: {e}"))?;
-    Ok(())
-}
-
 /// Periodically poll the store for change-stream retention stats and
-/// publish them as Prometheus gauges. SREs alert on these to detect
+/// publish them as gauges. SREs alert on these to detect
 /// imminent `JetStream` retention pressure before the stream evicts data.
 ///
 /// Emitted gauges (no labels, the stream is a singleton per server):
@@ -396,9 +436,12 @@ where
     }
 
     fn call(&mut self, req: http::Request<ReqBody>) -> Self::Future {
-        let (service, method) = {
+        let grpc = is_grpc_request(&req);
+        let (service, method) = if grpc {
             let (s, m) = split_grpc_path(req.uri().path());
             (s.to_owned(), m.to_owned())
+        } else {
+            (String::new(), String::new())
         };
         let started = Instant::now();
 
@@ -407,6 +450,13 @@ where
 
         Box::pin(async move {
             let result = inner.call(req).await;
+            if !grpc {
+                // A merged non-gRPC route (MCP's `/mcp`): its own tool calls
+                // already record RPC metrics through the inner `data_plane`
+                // stack, so this outer layer would otherwise double-count
+                // every MCP request under a fake method label.
+                return result;
+            }
             let elapsed = started.elapsed().as_secs_f64();
             let code = match &result {
                 Ok(resp) => header_grpc_status(resp).unwrap_or_else(|| "ok".to_string()),
@@ -528,7 +578,13 @@ fn header_grpc_status<B>(resp: &http::Response<B>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_grpc_path;
+    #![allow(clippy::unwrap_used)]
+
+    use std::sync::{atomic::AtomicU64, Arc};
+
+    use tower::{Layer, Service};
+
+    use super::{is_grpc_request, is_operational_path, split_grpc_path, RpcMetricsLayer};
 
     #[test]
     fn parses_canonical_grpc_path() {
@@ -550,5 +606,129 @@ mod tests {
         let (svc, method) = split_grpc_path("/M");
         assert_eq!(svc, "");
         assert_eq!(method, "M");
+    }
+
+    #[test]
+    fn probes_and_health_checks_are_operational_paths() {
+        assert!(is_operational_path("/-/readiness"));
+        assert!(is_operational_path("/-/liveness"));
+        assert!(is_operational_path("/grpc.health.v1.Health/Check"));
+        assert!(is_operational_path("/grpc.health.v1.Health/Watch"));
+        assert!(!is_operational_path("/mcp"));
+        assert!(!is_operational_path(
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/PutEntity"
+        ));
+    }
+
+    #[test]
+    fn is_grpc_request_matches_the_grpc_content_type_only() {
+        let grpc = http::Request::builder()
+            .header(http::header::CONTENT_TYPE, "application/grpc+proto")
+            .body(())
+            .unwrap();
+        assert!(is_grpc_request(&grpc));
+
+        let mcp = http::Request::builder()
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(())
+            .unwrap();
+        assert!(!is_grpc_request(&mcp));
+
+        let no_content_type = http::Request::builder().body(()).unwrap();
+        assert!(!is_grpc_request(&no_content_type));
+    }
+
+    async fn ok_service(
+        _req: http::Request<()>,
+    ) -> Result<http::Response<()>, std::convert::Infallible> {
+        Ok(http::Response::new(()))
+    }
+
+    /// Recorder that funnels every counter increment into one shared total,
+    /// regardless of key, so a test can ask "was anything counted at all".
+    struct CountingRecorder {
+        total: Arc<AtomicU64>,
+    }
+
+    impl metrics::Recorder for CountingRecorder {
+        fn describe_counter(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn describe_gauge(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn describe_histogram(
+            &self,
+            _key: metrics::KeyName,
+            _unit: Option<metrics::Unit>,
+            _description: metrics::SharedString,
+        ) {
+        }
+
+        fn register_counter(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Counter {
+            metrics::Counter::from_arc(self.total.clone())
+        }
+
+        fn register_gauge(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Gauge {
+            metrics::Gauge::noop()
+        }
+
+        fn register_histogram(
+            &self,
+            _key: &metrics::Key,
+            _metadata: &metrics::Metadata<'_>,
+        ) -> metrics::Histogram {
+            metrics::Histogram::noop()
+        }
+    }
+
+    /// Drives one request through `RpcMetricsLayer` and returns how many
+    /// counter increments its recorder observed.
+    fn counted_increments(content_type: Option<&str>) -> u64 {
+        let total = Arc::new(AtomicU64::new(0));
+        let recorder = CountingRecorder {
+            total: total.clone(),
+        };
+        let mut service = RpcMetricsLayer::new().layer(tower::service_fn(ok_service));
+        let mut req = http::Request::builder()
+            .uri("/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListNamespaces");
+        if let Some(content_type) = content_type {
+            req = req.header(http::header::CONTENT_TYPE, content_type);
+        }
+        let req = req.body(()).unwrap();
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        metrics::with_local_recorder(&recorder, || rt.block_on(service.call(req))).unwrap();
+        total.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn a_grpc_request_is_counted() {
+        assert_eq!(counted_increments(Some("application/grpc+proto")), 1);
+    }
+
+    #[test]
+    fn a_non_grpc_request_is_not_counted() {
+        assert_eq!(counted_increments(Some("application/json")), 0);
     }
 }

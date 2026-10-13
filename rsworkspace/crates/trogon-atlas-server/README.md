@@ -7,8 +7,8 @@ The gRPC server. Implements every RPC on the
 ## Binary
 
 `trogon-atlas-server` is both a library and a binary. The binary wires
-up tracing, the OpenTelemetry exporter, the Prometheus metrics
-endpoint, the configured store, the optional LLM analyzer, and an
+up tracing, OTLP trace and metric export, the opt-in Prometheus scrape
+at `/-/metrics`, the configured store, the optional LLM analyzer, and an
 optional git mirror; then serves tonic over the configured listen
 address.
 
@@ -37,7 +37,9 @@ for the full list. The key ones:
 | `--insecure-allow-anonymous`      | `TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS`| `false`                |
 | `--protect-baseline`              | `TROGON_ATLAS_PROTECT_BASELINE`        | `false`                |
 | `--protect-baseline-namespaces`   | `TROGON_ATLAS_PROTECT_BASELINE_NAMESPACES` | (unset)            |
-| `--metrics-listen`                | `TROGON_ATLAS_METRICS_LISTEN`          | (off)                  |
+| `--prometheus-metrics`            | `TROGON_ATLAS_PROMETHEUS_METRICS`      | `false`                |
+| `--mcp`                           | `TROGON_ATLAS_MCP`                     | `false`                |
+| `--mcp-allowed-hosts`             | `TROGON_ATLAS_MCP_ALLOWED_HOSTS`       | `localhost,127.0.0.1,::1` |
 | `--git-mirror`                    | `TROGON_ATLAS_GIT_MIRROR`              | (off)                  |
 
 `--nats-url` accepts credentials as userinfo
@@ -52,6 +54,19 @@ the debug files double mirror size and clutter git diffs.
 When `--git-mirror` is on, schedule the `reconcile` subcommand (see
 "Reconciling the mirror" below). A mirror write can fail while the store
 commit succeeds, and nothing else detects that divergence.
+
+## Serve MCP
+
+Set `TROGON_ATLAS_MCP` to serve the
+[MCP tools](../trogon-atlas-mcp/README.md) at `/mcp`, on the same listener
+as gRPC. Every tool call runs through the same bearer authentication and
+role checks as a gRPC call, made as the MCP request's own `Authorization`
+header.
+
+`TROGON_ATLAS_MCP_ALLOWED_HOSTS` lists the `Host` header values `/mcp`
+accepts, guarding against DNS rebinding; it has no effect on gRPC. Add
+every name clients use to reach the listener. Entries without a port match
+any port; `*` disables the check.
 
 ## Run Jev field inference
 
@@ -419,7 +434,8 @@ crash window between a write committing and its changeset landing.
 - `git_mirror`: optional write-through to a git working tree, useful
   for auditing changes by commit.
 - `search`: in-RAM tantivy index for `Search`.
-- `telemetry`: OTLP + Prometheus wiring.
+- `telemetry`: tracing and OTLP trace export.
+- `metrics_export`: OTLP metric export and the Prometheus scrape.
 
 ## Tests
 

@@ -191,13 +191,19 @@ protected by not publishing a port: OrbStack answers on container DNS
 regardless, so the secret is the whole of the control. The overlay refuses to
 start when any of them is unset, and prints which.
 
-The overlay gives the MCP adapter `api.key` and the studio bridge
-`studio.key`, because those two are clients of the server rather than peers
-of it. Without a key they start returning 401 on every route, and from the
-operator's side that shows up as failing health checks rather than as an auth
-error, which is the failure mode that costs an afternoon.
+The overlay gives the studio bridge `studio.key`, because it is a client of
+the server rather than a peer of it. Without a key it starts returning 401 on
+every route, and from the operator's side that shows up as failing health
+checks rather than as an auth error, which is the failure mode that costs an
+afternoon.
 
-They get different keys because agents edit and people observe. The studio
+The server's MCP endpoint holds no key. Configure your MCP client to send
+`api.key` as `Authorization: Bearer <key>` to `http://127.0.0.1:50069/mcp`;
+each tool call acts as that key, so the server sees the client's own
+identity.
+
+Agents and the studio get different keys because agents edit and people
+observe. The studio
 bridge refuses every write itself, and the `reader` role makes the server
 refuse them too, so a key copied out of a browser and sent straight to the
 server cannot change anything either.
@@ -241,10 +247,11 @@ Two consequences worth knowing before you turn it on:
   is never the identity a caller is authorized as, and the bridge no longer
   falls back to it if a caller's token goes missing partway through a
   request: that is a bug, not a caller to quietly wave through as itself.
-  The one exception is `/api/info`, the single route that answers before the
-  auth guard runs and so never has a caller token to forward; GA deployments
-  that turn passthrough on still need `TROGON_ATLAS_AUTH_TOKEN` set to a
-  `reader` key for that route alone.
+  The exceptions are `/api/info`, the single route that answers before the
+  auth guard runs and so never has a caller token to forward, and the
+  background upstream check behind the bridge's `/-/readiness`; GA
+  deployments that turn passthrough on still need `TROGON_ATLAS_AUTH_TOKEN`
+  set to a `reader` key for those.
 - The browser needs somewhere to put a key. It prompts on the first refusal
   and keeps what you give it for that tab only. Closing the tab forgets it.
 

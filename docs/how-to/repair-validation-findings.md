@@ -15,22 +15,14 @@ Record the endpoint, branch, EventModel identity including version, Studio
 scope path, finding code, subject identity, and subject field. Keep tokens in
 the process environment, never in the record or command arguments.
 
-The MCP process scopes its calls through `--branch` or `TROGON_ATLAS_BRANCH`.
-For baseline, omit `--branch` and explicitly unset an inherited
-`TROGON_ATLAS_BRANCH`. For a named branch, pass that name explicitly. Do not
-change branches halfway through a repair.
+Point the MCP host at the server's `/mcp` endpoint, for example
+`http://127.0.0.1:50069/mcp` on the development stack, and have it send your
+key as `Authorization: Bearer <token>`.
 
-For example, from the `atlas/` directory, after building the adapter:
-
-```sh
-mise exec -- cargo build -p trogon-atlas-mcp
-mise exec -- env -u TROGON_ATLAS_BRANCH target/debug/trogon-atlas-mcp \
-  --grpc http://127.0.0.1:50069
-```
-
-An MCP host launches this process and calls its tools over stdio. The shell
-command itself does not perform a repair. A configured remote endpoint can
-replace the development endpoint above.
+The endpoint scopes each request's tool calls through the
+`x-trogon-atlas-branch` header. For baseline, omit the header. For a named
+branch, have the MCP host send that name on every request. Do not change
+branches halfway through a repair.
 
 Fetch the EventModel with `get_entity_json`, then run `validate_event_model`.
 Both use explicit `namespace`, `slug`, and numeric `version` arguments;

@@ -432,6 +432,42 @@ describe('helm server chart NOTES redact NATS credentials', () => {
   });
 });
 
+describe('helm server chart private port', { timeout: HELM_TIMEOUT_MS }, () => {
+  function servicePort(extra) {
+    const rendered = execFileSync(
+      'helm',
+      ['template', 'test', serverChartDir, '--set', 'auth.insecureAllowAnonymous=true', ...extra],
+      { encoding: 'utf8' },
+    );
+    return JSON.parse(
+      execFileSync(
+        'python3',
+        [
+          '-c',
+          `import sys,yaml,json
+docs=list(yaml.safe_load_all(sys.stdin))
+svc=next(x for x in docs if x and x.get("kind")=="Service")
+print(json.dumps(svc["spec"]["ports"]))
+`,
+        ],
+        { encoding: 'utf8', input: rendered },
+      ),
+    );
+  }
+
+  it('names the port private and declares h2c without TLS', () => {
+    expect(servicePort([])).toEqual([
+      { name: 'private', port: 50069, targetPort: 'private', protocol: 'TCP', appProtocol: 'kubernetes.io/h2c' },
+    ]);
+  });
+
+  it('declares no appProtocol with TLS', () => {
+    expect(servicePort(['--set', 'tls.existingSecret=s', '--set', 'service.port=443'])).toEqual([
+      { name: 'private', port: 443, targetPort: 'private', protocol: 'TCP' },
+    ]);
+  });
+});
+
 describe('helm studio chart readiness and token mount', () => {
   function render(extra) {
     return execFileSync('helm', ['template', 'test', studioChartDir, ...extra], { encoding: 'utf8' });
@@ -458,22 +494,29 @@ print(${pythonExpr})
     expect(out).toBe('False');
   });
 
-  it('falls back to a tcpSocket readiness probe when passthrough has no bridge credential', () => {
-    const rendered = render(['--set', 'auth.passthrough=true']);
+  it.each([
+    ['without a bridge credential', []],
+    ['with passthrough and no bridge credential', ['--set', 'auth.passthrough=true']],
+    ['with a bridge credential', ['--set', 'auth.passthrough=true', '--set', 'auth.token.value=srv-secret']],
+  ])('probes /-/readiness and /-/liveness on the public port %s', (_label, extra) => {
+    const rendered = render(extra);
     const out = studioDeploymentField(
       rendered,
-      '"tcpSocket" if "tcpSocket" in d["spec"]["template"]["spec"]["containers"][0]["readinessProbe"] else "httpGet"',
+      '"|".join(f\'{p}={c[p]["httpGet"]["path"]}@{c[p]["httpGet"]["port"]}\' for c in [d["spec"]["template"]["spec"]["containers"][0]] for p in ("startupProbe","readinessProbe","livenessProbe"))',
     );
-    expect(out).toBe('tcpSocket');
+    expect(out).toBe(
+      'startupProbe=/-/liveness@public|readinessProbe=/-/readiness@public|livenessProbe=/-/liveness@public',
+    );
   });
 
-  it('keeps the /api/info readiness probe when a bridge credential is configured', () => {
-    const rendered = render(['--set', 'auth.passthrough=true', '--set', 'auth.token.value=srv-secret']);
+  it('gives liveness a higher failure threshold than readiness', () => {
+    const rendered = render([]);
     const out = studioDeploymentField(
       rendered,
-      '"tcpSocket" if "tcpSocket" in d["spec"]["template"]["spec"]["containers"][0]["readinessProbe"] else "httpGet"',
+      '"%s>%s" % (d["spec"]["template"]["spec"]["containers"][0]["livenessProbe"].get("failureThreshold", 3), d["spec"]["template"]["spec"]["containers"][0]["readinessProbe"].get("failureThreshold", 3))',
     );
-    expect(out).toBe('httpGet');
+    const [liveness, readiness] = out.split('>').map(Number);
+    expect(liveness).toBeGreaterThan(readiness);
   });
 });
 
@@ -519,7 +562,7 @@ describe('studio CI lockfile contract', () => {
     expect(miseVersion).toBe('10.3.0');
 
     const dockerfile = fs.readFileSync(studioDockerfile, 'utf8');
-    const dockerfileVersion = dockerfile.match(/npm install -g pnpm@([\d.]+)/)?.[1];
+    const dockerfileVersion = dockerfile.match(/^ARG PNPM_VERSION=([\d.]+)$/m)?.[1];
     expect(dockerfileVersion, 'studio Dockerfile must pin a pnpm version').toBeTruthy();
     expect(dockerfileVersion, 'CI pnpm version (mise.toml) must match the studio Dockerfile pnpm pin').toBe(
       miseVersion,

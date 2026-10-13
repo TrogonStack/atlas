@@ -2,7 +2,7 @@
 # trogon-atlas-store uses Duration::from_mins, stable since Rust 1.91.
 # Compile on the build platform and cross-link for the target: rustc and
 # cargo under QEMU arm64 emulation hang the image job for hours.
-FROM --platform=$BUILDPLATFORM rust:1.99-bookworm AS builder
+FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:114c7a4425406451c2866b6aafe69fe29b1b298832db1277d411ac73c82d04d6 AS builder
 ARG TARGETARCH
 ARG BUILDARCH
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -35,8 +35,9 @@ RUN --mount=type=bind,source=rsworkspace,target=/src \
  && mkdir -p /out \
  && cp "/target/$(cat /target.txt)/release/trogon-atlas-server" /out/trogon-atlas-server
 
-FROM alpine:3.24 AS runtime
-RUN apk add --no-cache git ca-certificates tini wget \
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime
+RUN apk upgrade --no-cache \
+ && apk add --no-cache git ca-certificates tini wget \
  && addgroup -g 101 -S trogon-atlas \
  && adduser -S -u 100 -G trogon-atlas trogon-atlas \
  && mkdir -p /var/lib/trogon-atlas/mirror \
@@ -44,9 +45,8 @@ RUN apk add --no-cache git ca-certificates tini wget \
 COPY --from=builder /out/trogon-atlas-server /usr/local/bin/trogon-atlas-server
 USER 100:101
 ENV TROGON_ATLAS_LISTEN=0.0.0.0:50069 \
-    TROGON_ATLAS_STORE=nats \
-    TROGON_ATLAS_METRICS_LISTEN=0.0.0.0:9100
-EXPOSE 50069 9100
+    TROGON_ATLAS_STORE=nats
+EXPOSE 50069
 HEALTHCHECK --interval=5s --timeout=3s --retries=10 --start-period=10s \
-  CMD ["wget", "--spider", "-q", "http://127.0.0.1:9100/metrics"]
+  CMD ["/bin/sh", "-c", "if [ -n \"$TROGON_ATLAS_TLS_CERT\" ]; then exec wget --spider -q --no-check-certificate https://127.0.0.1:50069/-/liveness; else exec wget --spider -q http://127.0.0.1:50069/-/liveness; fi"]
 ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/trogon-atlas-server"]

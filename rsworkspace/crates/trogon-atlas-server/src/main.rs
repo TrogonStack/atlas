@@ -2,16 +2,14 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use tonic::{
-    service::interceptor::InterceptedService,
-    transport::{Identity, Server, ServerTlsConfig},
-};
+use tonic::transport::{server::TcpIncoming, Server};
 use trogon_atlas_core::WriterRole;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{
-    auth::{AuthzLayer, BearerAuth, TokenRegistry},
+    auth::{BearerAuth, TokenRegistry},
     git_mirror::{GitMirror, MirrorAuthor},
+    health::StoreStatus,
 };
 use trogon_atlas_store::{
     nats::{NatsStore, NatsStoreConfig},
@@ -98,21 +96,25 @@ struct Args {
         default_value = "trogon-atlas@local"
     )]
     git_author_email: String,
-    /// `host:port` to bind the Prometheus exporter on. Omit to disable metrics.
-    /// Binding a non-loopback address also requires --metrics-allow-external.
-    #[arg(long, env = "TROGON_ATLAS_METRICS_LISTEN")]
-    metrics_listen: Option<String>,
-    /// Explicitly allow the Prometheus /metrics endpoint to bind on a
-    /// non-loopback interface. Required when --metrics-listen resolves to
-    /// a public or private-network address. Loopback binding is always
-    /// permitted and does not require this flag. Set
-    /// `TROGON_ATLAS_METRICS_ALLOW_EXTERNAL=true` to enable.
+    /// Serve a Prometheus scrape at `/-/metrics` on this same listener,
+    /// outside auth. Off by default: metrics are pushed over OTLP when
+    /// `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+    #[arg(long, env = "TROGON_ATLAS_PROMETHEUS_METRICS", default_value_t = false)]
+    prometheus_metrics: bool,
+    /// Serve MCP over Streamable HTTP at `/mcp`, on this same gRPC listener.
+    /// Off by default. Every MCP request acts as its own `Authorization:
+    /// Bearer` token, exactly as a gRPC call would.
+    #[arg(long, env = "TROGON_ATLAS_MCP", default_value_t = false)]
+    mcp: bool,
+    /// Comma-separated `Host` header values the MCP endpoint accepts, as a
+    /// guard against DNS rebinding. Entries without a port match any port;
+    /// `*` disables the check. Only guards `/mcp`; gRPC is unaffected.
     #[arg(
         long,
-        env = "TROGON_ATLAS_METRICS_ALLOW_EXTERNAL",
-        default_value_t = false
+        env = "TROGON_ATLAS_MCP_ALLOWED_HOSTS",
+        default_value = "localhost,127.0.0.1,::1"
     )]
-    metrics_allow_external: bool,
+    mcp_allowed_hosts: trogon_atlas_server::mcp::AllowedHosts,
     /// Shared bearer token required on every RPC. Deprecated in favor of
     /// `--auth-tokens-file`. When set without a tokens file, the token is
     /// treated as belonging to a synthetic principal named "legacy-admin" with
@@ -762,41 +764,36 @@ async fn main() -> Result<()> {
         .parse()
         .with_context(|| format!("parsing --listen={}", args.listen))?;
 
-    if let Some(metrics_addr) = args.metrics_listen.as_deref() {
-        let parsed = metrics_addr
-            .parse()
-            .with_context(|| format!("parsing --metrics-listen={metrics_addr}"))?;
-        trogon_atlas_server::telemetry::install_prometheus_exporter(
-            parsed,
-            args.metrics_allow_external,
-        )?;
-        tracing::info!(metrics_addr = %parsed, "prometheus exporter started");
+    let metrics =
+        trogon_atlas_server::metrics_export::MetricsExporters::from_env(args.prometheus_metrics)?
+            .install()?;
+    if metrics.is_recording() {
         trogon_atlas_server::telemetry::spawn_change_stream_stats_publisher(
             store.clone(),
             Duration::from_secs(30),
         );
     }
 
-    let mut builder = Server::builder();
-    match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
+    let tls = match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
         (Some(cert), Some(key)) => {
             let cert_pem = std::fs::read(cert)
                 .with_context(|| format!("reading --tls-cert={}", cert.display()))?;
             let key_pem = std::fs::read(key)
                 .with_context(|| format!("reading --tls-key={}", key.display()))?;
-            builder = builder
-                .tls_config(ServerTlsConfig::new().identity(Identity::from_pem(cert_pem, key_pem)))
+            let acceptor = trogon_atlas_server::tls::TlsAcceptor::from_pem(&cert_pem, &key_pem)
                 .context("configuring TLS")?;
             tracing::info!("TLS enabled");
+            Some(acceptor)
         }
         (None, None) => {
             tracing::warn!(
                 "serving plaintext gRPC; set TROGON_ATLAS_TLS_CERT/TROGON_ATLAS_TLS_KEY or terminate \
                  TLS in front of this process"
             );
+            None
         }
         _ => anyhow::bail!("--tls-cert and --tls-key must be set together"),
-    }
+    };
 
     let registry = if let Some(path) = args.auth_tokens_file.as_ref() {
         // Tokens file takes precedence over legacy --auth-token.
@@ -907,9 +904,9 @@ async fn main() -> Result<()> {
         .max_decoding_message_size(args.max_message_bytes)
         .max_encoding_message_size(args.max_message_bytes);
 
-    let (health_reporter, health_service) = tonic_health::server::health_reporter();
+    let health = trogon_atlas_server::health::Health::new().await;
 
-    // Verify store connectivity before advertising SERVING. A cheap list
+    // Verify store connectivity before advertising readiness. A cheap list
     // with limit=1 is enough to confirm the backend is reachable.
     match store
         .list(
@@ -920,27 +917,28 @@ async fn main() -> Result<()> {
         .await
     {
         Ok(_) => {
-            health_reporter.set_serving::<ServiceServer>().await;
-            tracing::info!("store connectivity verified; health=SERVING");
+            health.set_store(StoreStatus::Reachable).await;
+            tracing::info!("store connectivity verified; readiness=ok");
         }
         Err(err) => {
+            health.set_store(StoreStatus::Unreachable).await;
             tracing::error!(
                 error = %err,
-                "store connectivity check failed; health remains NOT_SERVING"
+                "store connectivity check failed; readiness remains not ready"
             );
-            // Keep NOT_SERVING so load balancers withhold traffic until the
+            // Stay not ready so load balancers withhold traffic until the
             // store is reachable. The server still starts so it can be
-            // probed and will become SERVING once a mutation succeeds.
+            // probed, and becomes ready once the background check succeeds.
         }
     }
 
-    // Background health probe: re-checks the store every 15 seconds and
-    // toggles the gRPC health status accordingly. The task stops when the
+    // Background store check: re-checks the store every 15 seconds and
+    // records the result for the readiness probe. The task stops when the
     // shutdown channel fires.
     let (health_shutdown_tx, mut health_shutdown_rx) = tokio::sync::watch::channel(false);
     {
         let store_for_health = store.clone();
-        let health_reporter_bg = health_reporter.clone();
+        let health_bg = health.clone();
         tokio::spawn(async move {
             const HEALTH_INTERVAL: Duration = Duration::from_secs(15);
             let mut interval = tokio::time::interval(HEALTH_INTERVAL);
@@ -959,18 +957,16 @@ async fn main() -> Result<()> {
                     .await
                 {
                     Ok(_) => {
-                        health_reporter_bg.set_serving::<ServiceServer>().await;
+                        health_bg.set_store(StoreStatus::Reachable).await;
                     }
                     Err(err) => {
-                        tracing::warn!(error = %err, "health probe: store unreachable; health=NOT_SERVING");
-                        health_reporter_bg.set_not_serving::<ServiceServer>().await;
+                        tracing::warn!(error = %err, "store check: store unreachable; readiness=not ready");
+                        health_bg.set_store(StoreStatus::Unreachable).await;
                     }
                 }
             }
         });
     }
-
-    tracing::info!(%addr, "trogon-atlas-server starting");
 
     let drain_deadline = std::time::Duration::from_secs(args.shutdown_drain_secs);
 
@@ -978,10 +974,10 @@ async fn main() -> Result<()> {
     // current count; await_inflight_drain wakes on each send.
     let (drain_tx, drain_rx) = tokio::sync::watch::channel(0i64);
     let drain_tx = std::sync::Arc::new(drain_tx);
+    let inflight =
+        trogon_atlas_server::telemetry::InflightLayer::new(inflight_counter.clone(), drain_tx);
 
-    let inflight_for_layer = inflight_counter.clone();
-    let mut builder = builder.concurrency_limit_per_connection(args.concurrency_limit);
-    if args.rpc_timeout_secs > 0 {
+    let rpc_timeout = (args.rpc_timeout_secs > 0).then(|| {
         // An LLM-backed RPC needs headroom above the LLM's own timeout,
         // otherwise the gRPC deadline fires first and turns a slow-but-valid
         // LLM response into DEADLINE_EXCEEDED. Widen with a fixed buffer
@@ -1003,53 +999,113 @@ async fn main() -> Result<()> {
                 "widening RPC timeout to allow analysis and fallback to complete"
             );
         }
-        builder = builder.timeout(std::time::Duration::from_secs(rpc_timeout_secs));
-    }
-    builder
-        .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new())
-        .layer(trogon_atlas_server::telemetry::InflightLayer::new(
-            inflight_for_layer,
-            drain_tx,
-        ))
-        .trace_fn(trogon_atlas_server::telemetry::rpc_span_from_request)
-        // The health service is mounted OUTSIDE the auth stack so
-        // liveness/readiness probes (kube-proxy, GCP HC, etc.) can reach it
-        // without holding a bearer token. It exposes only liveness -- no
-        // entity data -- so the bypass is intentional and bounded. Anything
-        // touching the EventModelService data plane must stay inside the
-        // auth stack below.
-        //
-        // Request flow for the data-plane service:
-        //   InterceptedService/BearerAuth (token -> Principal in extensions, authn)
-        //     -> AuthzLayer (required_role(uri.path()) vs principal.role, authz)
-        //       -> handler
-        //
-        // Ordering is critical: InterceptedService is the OUTERMOST wrapper so
-        // BearerAuth runs first and populates extensions before AuthzLayer reads
-        // them. Inverting the nesting puts AuthzLayer before authn and denies
-        // every request.
-        .add_service(health_service)
-        .add_service(InterceptedService::new(
-            tower::ServiceBuilder::new()
-                .layer(AuthzLayer)
-                .service(grpc_service),
-            auth,
-        ))
-        .serve_with_shutdown(addr, async {
-            shutdown_signal().await;
-            // Stop the background health probe before toggling the status so
-            // the probe cannot race and flip back to SERVING after we set
-            // NOT_SERVING here.
-            let _ = health_shutdown_tx.send(true);
-            health_reporter.set_not_serving::<ServiceServer>().await;
-            await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
-        })
-        .await?;
+        std::time::Duration::from_secs(rpc_timeout_secs)
+    });
 
-    // Flush any spans the batch OTLP exporter still has queued. Must run
-    // before the process exits or the last few seconds of trace data are
-    // silently dropped.
-    tracing_guard.shutdown();
+    // Request flow for the data-plane service, for gRPC and MCP callers alike:
+    //   InterceptedService/BearerAuth (token -> Principal in extensions, authn)
+    //     -> AuthzLayer (required_role(uri.path()) vs principal.role, authz)
+    //       -> handler
+    let data_plane = trogon_atlas_server::mcp::data_plane(grpc_service, auth);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(true);
+    });
+    let shutdown_requested = move || {
+        let mut shutdown_rx = shutdown_rx.clone();
+        async move {
+            let _ = shutdown_rx.wait_for(|requested| *requested).await;
+        }
+    };
+
+    // Health, over gRPC and at /-/readiness and /-/liveness, is mounted
+    // OUTSIDE the auth stack so probes (kubelet, kube-proxy, GCP HC, etc.)
+    // can reach it without holding a bearer token. It exposes only
+    // readiness and liveness -- no entity data -- so the bypass is
+    // intentional and bounded. The opt-in Prometheus scrape at /-/metrics
+    // sits beside them for the same reason: scrapers hold no token and the
+    // payload is operational counters only. Anything touching the
+    // EventModelService data plane must stay inside `data_plane`.
+    let mut routes = tonic::service::Routes::builder();
+    routes.add_service(health.grpc_service());
+    routes.add_service(data_plane.clone());
+    let mut routes = routes.routes();
+    let merged = routes.axum_router_mut().clone().merge(health.router());
+    *routes.axum_router_mut() = merged;
+    let merged = routes.axum_router_mut().clone().merge(metrics.router());
+    *routes.axum_router_mut() = merged;
+    if metrics.serves_prometheus() {
+        tracing::info!(
+            "serving Prometheus metrics at {} on the gRPC listener",
+            trogon_atlas_server::metrics_export::METRICS_PATH
+        );
+    }
+    // Must run before `/mcp` is merged: a single-RPC deadline would cut off
+    // MCP tool calls that issue several RPCs, each already timed out on its own.
+    if let Some(rpc_timeout) = rpc_timeout {
+        let timed_out = trogon_atlas_server::mcp::with_grpc_timeout(
+            routes.axum_router_mut().clone(),
+            rpc_timeout,
+        );
+        *routes.axum_router_mut() = timed_out;
+    }
+    if args.mcp {
+        let mcp_router = trogon_atlas_server::mcp::mcp_router(
+            data_plane,
+            inflight.clone(),
+            rpc_timeout,
+            args.max_message_bytes,
+            args.mcp_allowed_hosts.clone(),
+        )?;
+        let merged = routes.axum_router_mut().clone().merge(mcp_router);
+        *routes.axum_router_mut() = merged;
+        tracing::info!(
+            "serving MCP over Streamable HTTP at {} on the gRPC listener",
+            trogon_atlas_server::mcp::MCP_PATH
+        );
+    }
+
+    tracing::info!(%addr, "trogon-atlas-server starting");
+
+    let mut builder = Server::builder().concurrency_limit_per_connection(args.concurrency_limit);
+    // The kubelet's httpGet probes and MCP clients speak HTTP/1.1; the gRPC
+    // listener is HTTP/2 only by default.
+    builder = builder.accept_http1(true);
+    let tcp = TcpIncoming::bind(addr)
+        .with_context(|| format!("binding {addr}"))?
+        .with_nodelay(Some(true));
+    health.mark_live().await;
+    let router = builder
+        .layer(trogon_atlas_server::telemetry::RpcMetricsLayer::new())
+        .layer(inflight)
+        .trace_fn(trogon_atlas_server::telemetry::rpc_span_from_request)
+        .add_routes(routes);
+    let shutdown = async {
+        shutdown_requested().await;
+        let _ = health_shutdown_tx.send(true);
+        health.begin_shutdown().await;
+        await_inflight_drain(&inflight_counter, drain_rx, drain_deadline).await;
+    };
+    match tls {
+        Some(tls) => {
+            router
+                .serve_with_incoming_shutdown(tls.incoming(tcp), shutdown)
+                .await?;
+        }
+        None => router.serve_with_incoming_shutdown(tcp, shutdown).await?,
+    }
+
+    // Flush any spans and metrics the OTLP exporters still have queued. Must
+    // run before the process exits or the last few seconds of telemetry are
+    // silently dropped. Both flushes block on the exporters, so they run off
+    // the async runtime the exporters themselves depend on.
+    tokio::task::spawn_blocking(move || {
+        metrics.shutdown();
+        tracing_guard.shutdown();
+    })
+    .await?;
     Ok(())
 }
 

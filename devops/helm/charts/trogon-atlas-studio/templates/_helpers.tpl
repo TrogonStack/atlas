@@ -87,5 +87,5 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{- define "trogon-atlas-studio.grpcUrl" -}}
-{{- default (printf "http://%s:%d" (include "trogon-atlas-studio.serverFullname" .) (int .Values.server.grpcPort)) .Values.config.grpcUrl }}
+{{- default (printf "http://%s:%d" (include "trogon-atlas-studio.serverFullname" .) (int .Values.server.port)) .Values.config.grpcUrl }}
 {{- end }}

@@ -25,6 +25,7 @@ trogon-atlas-core = { path = "crates/trogon-atlas-core" }
 trogon-atlas-types = { path = "crates/trogon-atlas-types" }
 trogon-atlas-authzed = { path = "crates/trogon-atlas-authzed" }
 trogon-atlas-client = { path = "crates/trogon-atlas-client" }
+trogon-atlas-mcp = { path = "crates/trogon-atlas-mcp" }
 trogon-atlas-server = { path = "crates/trogon-atlas-server" }
 trogon-atlas-store = { path = "crates/trogon-atlas-store" }
 trogon-atlas-testsupport = { path = "crates/trogon-atlas-testsupport" }
@@ -38,7 +39,7 @@ tonic-health = "0.14"
 tokio = { version = "1.49", features = ["rt-multi-thread", "macros"] }
 tokio-stream = "0.1"
 
-async-nats = "0.49"
+async-nats = "0.50"
 futures = "0.3"
 async-trait = "0.1"
 parking_lot = "0.12"

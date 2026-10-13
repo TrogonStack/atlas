@@ -60,17 +60,18 @@ services:
       # service above; override both together.
       TROGON_ATLAS_NATS_URL: nats://service:${TROGON_ATLAS_NATS_PASSWORD:-localdevpass}@nats:4222
       TROGON_ATLAS_GIT_MIRROR: /var/lib/trogon-atlas/mirror
-      TROGON_ATLAS_METRICS_LISTEN: 0.0.0.0:9100
-      # /metrics must bind non-loopback for the host port mapping to work;
-      # the published port stays on 127.0.0.1, so this opt-in exposes
-      # nothing beyond the local machine and the compose network.
-      TROGON_ATLAS_METRICS_ALLOW_EXTERNAL: "true"
+      # Prometheus scrape at /-/metrics on the gRPC port, for local
+      # inspection. Off by default outside this stack, where metrics are
+      # pushed over OTLP instead.
+      TROGON_ATLAS_PROMETHEUS_METRICS: "true"
+      TROGON_ATLAS_MCP: "true"
+      TROGON_ATLAS_MCP_ALLOWED_HOSTS: localhost,127.0.0.1,::1,trogon-atlas-server,trogon-atlas-server.trogon-atlas.orb.local
       # Deliberately not defaulted to the empty string. clap reads a
       # set-but-empty env var as a value, which sends the server down the
       # legacy-token path and makes it reject the anonymous callers this
       # stack is built around. Set it in the shell or .env to use a token.
       # The reference compose stack is the local-development front door.
-      # No token + this opt-in lets the studio bridge and MCP adapter
+      # No token + this opt-in lets the studio bridge and MCP clients
       # reach the server; outside trusted local networks, set a real
       # token and drop this flag.
       TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS: ${TROGON_ATLAS_INSECURE_ALLOW_ANONYMOUS:-true}
@@ -85,7 +86,6 @@ services:
       - trogon-atlas-mirror:/var/lib/trogon-atlas/mirror
     ports:
       - "127.0.0.1:50069:50069"
-      - "127.0.0.1:9100:9100"
     networks:
       - trogon-atlas
     depends_on:
@@ -100,7 +100,7 @@ services:
           memory: 1g
           cpus: "2.0"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9100/metrics"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:50069/-/readiness"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -245,37 +245,14 @@ services:
         limits:
           memory: 1g
           cpus: "1.0"
+    # Port 80 is Vite, which proxies only /api, so the probe asks the bridge
+    # directly.
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:80/api/info"]
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8787/-/readiness"]
       interval: 5s
       timeout: 3s
       retries: 30
       start_period: 30s
-
-  trogon-atlas-mcp:
-    build:
-      context: ../../../..
-      dockerfile: devops/docker/images/trogon-atlas-mcp/Dockerfile
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      TROGON_ATLAS_GRPC: http://trogon-atlas-server:50069
-      TROGON_ATLAS_AUTH_TOKEN: ${TROGON_ATLAS_AUTH_TOKEN:-}
-      RUST_LOG: info
-    stdin_open: true
-    tty: true
-    networks:
-      - trogon-atlas
-    depends_on:
-      trogon-atlas-server:
-        condition: service_healthy
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 256m
-          cpus: "0.5"
 
 networks:
   trogon-atlas:

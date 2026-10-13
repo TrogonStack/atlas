@@ -10,7 +10,7 @@ use prost_reflect::{Cardinality, FieldDescriptor, Kind, MessageDescriptor};
 use prost_types::Any;
 use trogon_atlas_proto::{entity, field_type, Entity, FieldSpec, FieldType, Schema};
 
-use crate::transcode;
+use crate::transcode::{self, TranscodeError, TranscodePool};
 
 pub const SCHEMA_MESSAGE: &str = "trogonatlas.eventmodel.v1alpha1.Schema";
 
@@ -61,14 +61,26 @@ pub fn entity_schema(entity: &Entity) -> Option<&Any> {
 /// other message type is resolved through the descriptor pool; a type
 /// that cannot be decoded or resolved yields no fields.
 pub fn schema_fields(schema: Option<&Any>) -> Vec<FieldSpec> {
+    resolve_schema_fields(schema, transcode::message_descriptor)
+}
+
+/// [`schema_fields`] resolving message types through `pool`, so a schema
+/// that names a tenant type layered onto the pool yields its fields.
+pub fn schema_fields_in(pool: &TranscodePool, schema: Option<&Any>) -> Vec<FieldSpec> {
+    resolve_schema_fields(schema, |name| pool.message_descriptor(name))
+}
+
+fn resolve_schema_fields(
+    schema: Option<&Any>,
+    resolve: impl FnOnce(&str) -> Result<MessageDescriptor, TranscodeError>,
+) -> Vec<FieldSpec> {
     let Some(any) = schema else {
         return Vec::new();
     };
     if is_schema(any) {
         return Schema::decode(any.value.as_slice()).map_or_else(|_| Vec::new(), |s| s.fields);
     }
-    transcode::message_descriptor(type_name(any))
-        .map_or_else(|_| Vec::new(), |desc| message_fields(&desc, 0))
+    resolve(type_name(any)).map_or_else(|_| Vec::new(), |desc| message_fields(&desc, 0))
 }
 
 pub fn kind_fields(kind: &entity::Kind) -> Vec<FieldSpec> {

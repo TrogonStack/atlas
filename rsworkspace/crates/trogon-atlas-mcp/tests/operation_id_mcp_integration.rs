@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod support;
+
 // operation_id surface: the idempotency-key param on the mutating tools,
 // the get_operation tool, and operation_id showing up in a failed
 // mutation's error data. Same duplex-pipe harness as
@@ -38,10 +40,7 @@ type McpServiceRunning =
 
 async fn start_mcp_client() -> (McpClient, McpServiceRunning, String) {
     let grpc_endpoint = start_server().await;
-    let mcp_server =
-        trogon_atlas_mcp::server::McpServer::connect(&grpc_endpoint, None, None, 30, None)
-            .await
-            .unwrap();
+    let mcp_server = support::mcp_server(&grpc_endpoint, None);
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(
@@ -59,15 +58,7 @@ async fn mcp_client_for(
     grpc_endpoint: &str,
     branch: Option<&str>,
 ) -> (McpClient, McpServiceRunning) {
-    let mcp_server = trogon_atlas_mcp::server::McpServer::connect(
-        grpc_endpoint,
-        None,
-        None,
-        30,
-        branch.map(str::to_string),
-    )
-    .await
-    .unwrap();
+    let mcp_server = support::mcp_server(grpc_endpoint, branch.map(str::to_string));
     let (client_half, server_half) = tokio::io::duplex(64 * 1024);
     use rmcp::ServiceExt;
     let (mcp_service_result, client_result) = tokio::join!(

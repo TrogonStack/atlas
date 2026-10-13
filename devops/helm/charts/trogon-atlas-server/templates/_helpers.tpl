@@ -200,3 +200,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail "server.spicedb.sync.enabled=true without server.spicedb.endpoint: sync-spicedb has nothing to sync to and the Job would fail on every schedule." }}
 {{- end }}
 {{- end }}
+
+{{/*
+  TROGON_ATLAS_MCP_ALLOWED_HOSTS: every Host header this release's own
+  Service may be reached on, plus the loopback names a port-forward or an
+  in-cluster curl uses, plus whatever the operator adds in mcp.allowedHosts.
+*/}}
+{{- define "trogon-atlas-server.mcpAllowedHosts" -}}
+{{- $fullname := include "trogon-atlas-server.fullname" . }}
+{{- $namespace := .Release.Namespace }}
+{{- $hosts := list "localhost" "127.0.0.1" "::1" $fullname (printf "%s.%s" $fullname $namespace) (printf "%s.%s.svc" $fullname $namespace) (printf "%s.%s.svc.cluster.local" $fullname $namespace) }}
+{{- $hosts = concat $hosts .Values.mcp.allowedHosts }}
+{{- join "," $hosts }}
+{{- end }}

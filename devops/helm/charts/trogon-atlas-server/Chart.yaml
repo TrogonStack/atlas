@@ -1,8 +1,8 @@
 apiVersion: v2
 name: trogon-atlas-server
-description: Event model gRPC server backed by NATS JetStream
+description: Event model gRPC and MCP server backed by NATS JetStream
 type: application
-version: 0.1.2
+version: 1.0.0
 appVersion: "0.1.0"
 keywords:
   - trogon-atlas

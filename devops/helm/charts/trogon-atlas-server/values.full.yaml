@@ -15,7 +15,10 @@ spicedb:
 gitMirror:
   enabled: true
 metrics:
-  serviceMonitor:
+  prometheus:
     enabled: true
 tls:
   existingSecret: trogon-atlas-server-tls
+mcp:
+  allowedHosts:
+    - mcp.trogon-atlas.example.com
