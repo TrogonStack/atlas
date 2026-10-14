@@ -71,4 +71,32 @@ test.describe('Overview to board flow', () => {
     // The scoped title in the TopBar shows the model name.
     await expect(page.getByText('Order Service', { exact: true }).first()).toBeVisible();
   });
+
+  test('the overview boards take real height, so their empty states stay inside them', async ({ page }) => {
+    await page.goto('/');
+    const search = page.getByRole('textbox', { name: 'Search models and entities' });
+    const chartCard = page.getByText(/No domains or subdomains in the store yet/);
+    const chartLegend = page.getByText(/where investment goes/);
+    await expect(chartCard).toBeVisible();
+
+    const searchBox = await search.boundingBox();
+    const cardBox = await chartCard.boundingBox();
+    const legendBox = await chartLegend.boundingBox();
+    if (!searchBox || !cardBox || !legendBox)
+      throw new Error('Search box, empty state, or legend has no visible bounds');
+    expect(cardBox.y).toBeGreaterThan(searchBox.y + searchBox.height);
+    expect(legendBox.y).toBeGreaterThan(cardBox.y + cardBox.height);
+
+    await page.getByRole('button', { name: 'Contexts' }).click();
+    const contextsCard = page.getByText('No bounded contexts in the Overview data yet.');
+    const contextsLegend = page.getByText('published events into subscription views');
+    await expect(contextsCard).toBeVisible();
+
+    const contextsCardBox = await contextsCard.boundingBox();
+    const contextsLegendBox = await contextsLegend.boundingBox();
+    if (!contextsCardBox || !contextsLegendBox)
+      throw new Error('Context map empty state or legend has no visible bounds');
+    expect(contextsCardBox.y).toBeGreaterThan(searchBox.y + searchBox.height);
+    expect(contextsLegendBox.y).toBeGreaterThan(contextsCardBox.y + contextsCardBox.height);
+  });
 });

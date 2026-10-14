@@ -358,7 +358,7 @@ export function OverviewPage() {
   const chartFocusEntity = chartFocusKey && visibleChart ? visibleChart.byKey.get(chartFocusKey) : undefined;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-screen flex-col overflow-hidden">
       <header className="border-b border-border bg-card px-6 py-4">
         <div className="flex flex-wrap items-baseline gap-3">
           <h1 className="text-lg font-semibold">Overview</h1>
