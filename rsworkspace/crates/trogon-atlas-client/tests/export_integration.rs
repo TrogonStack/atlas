@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use serde::Deserialize as _;
 use tokio::net::TcpListener;
 use trogon_atlas_client::{client, export, manifest};
 use trogon_atlas_proto as pb;
@@ -961,4 +962,274 @@ async fn board_manifests_for_a_missing_event_model_are_not_found() {
     let mut client = client::connect(&endpoint, None, 30).await.unwrap();
     let status = export_board(&mut client, "board-none").await.unwrap_err();
     assert_eq!(status.code(), tonic::Code::NotFound);
+}
+
+async fn assert_board_namespace_types(foreign_proto_path: &str) {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    for (namespace, proto_path, field, json_field, value) in [
+        (
+            "board-types-local",
+            "shared/payload.proto",
+            "local_value",
+            "localValue",
+            "local payload",
+        ),
+        (
+            "board-types-foreign",
+            foreign_proto_path,
+            "foreign_value",
+            "foreignValue",
+            "foreign payload",
+        ),
+    ] {
+        let yaml = format!(
+            r#"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: TypeLibrary
+metadata: {{ namespace: {namespace}, name: shared.payload }}
+spec:
+  title: Payload types
+  files:
+    - path: {proto_path}
+      content: |
+        syntax = "proto3";
+        package shared.payload;
+        message Payload {{ string {field} = 1; }}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: {{ namespace: {namespace}, name: payload }}
+spec:
+  title: Typed payload
+  schema:
+    "@type": type.googleapis.com/shared.payload.Payload
+    {json_field}: {value}
+"#
+        );
+        let documents = manifest::read_str(&yaml, "seed").unwrap();
+        let resolved = manifest::load_with_tenant_types(&mut client, documents)
+            .await
+            .unwrap();
+        let plan = trogon_atlas_client::apply::plan(&mut client, resolved.manifests)
+            .await
+            .unwrap();
+        trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+            .await
+            .unwrap();
+    }
+    seed(
+        &mut client,
+        r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata: { namespace: board-types-local, name: shop }
+spec:
+  title: Payload board
+  members:
+    - { kind: event, id: payload }
+    - { kind: event, id: board-types-foreign/payload }
+",
+    )
+    .await;
+
+    let out = export_board(&mut client, "board-types-local")
+        .await
+        .unwrap();
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert!(!out.truncated);
+    for (yaml, namespace, field, other_field, value) in [
+        (
+            &out.manifests,
+            "board-types-local",
+            "localValue",
+            "foreignValue",
+            "local payload",
+        ),
+        (
+            &out.external_manifests,
+            "board-types-foreign",
+            "foreignValue",
+            "localValue",
+            "foreign payload",
+        ),
+    ] {
+        let documents: Vec<serde_json::Value> = serde_norway::Deserializer::from_str(yaml)
+            .map(|doc| serde_json::Value::deserialize(doc).unwrap())
+            .collect();
+        let event = documents.iter().find(|doc| doc["kind"] == "Event").unwrap();
+        assert_eq!(event["metadata"]["namespace"], namespace);
+        let schema = &event["spec"]["schema"];
+        assert_eq!(
+            schema["@type"],
+            "type.googleapis.com/shared.payload.Payload"
+        );
+        assert_eq!(schema[field], value, "{yaml}");
+        assert!(schema.get(other_field).is_none(), "{yaml}");
+    }
+}
+
+#[tokio::test]
+async fn board_manifests_keep_same_filename_types_namespace_scoped() {
+    assert_board_namespace_types("shared/payload.proto").await;
+}
+
+#[tokio::test]
+async fn board_manifests_keep_same_package_types_namespace_scoped() {
+    assert_board_namespace_types("foreign/payload.proto").await;
+}
+
+#[tokio::test]
+async fn board_manifests_carry_metadata_only_tenant_types() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    let yaml = r#"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: TypeLibrary
+metadata: { namespace: board-annotations-src, name: board.annotations }
+spec:
+  title: Board annotations
+  files:
+    - path: board/annotations.proto
+      content: |
+        syntax = "proto3";
+        package board.annotations;
+        message Note { string text = 1; }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata: { namespace: board-annotations-src, name: shop }
+spec:
+  title: Annotated board
+  metadata:
+    - "@type": type.googleapis.com/board.annotations.Note
+      text: Board rationale
+"#;
+    let documents = manifest::read_str(yaml, "seed").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .unwrap();
+    let plan = trogon_atlas_client::apply::plan(&mut client, resolved.manifests)
+        .await
+        .unwrap();
+    trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+        .await
+        .unwrap();
+
+    let out = export_board(&mut client, "board-annotations-src")
+        .await
+        .unwrap();
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert!(!out.truncated);
+    assert_eq!(out.external_manifests, "");
+    let copy = out
+        .manifests
+        .replace("board-annotations-src", "board-annotations-copy");
+    let documents = manifest::read_str(&copy, "export").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .expect("export must carry the library needed to decode tenant metadata");
+    assert!(resolved
+        .manifests
+        .iter()
+        .any(|doc| doc.kind == pb::EntityKind::TypeLibrary));
+    let plan = trogon_atlas_client::apply::plan(&mut client, resolved.manifests)
+        .await
+        .unwrap();
+    trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+        .await
+        .unwrap();
+    let copied = export_board(&mut client, "board-annotations-copy")
+        .await
+        .unwrap();
+    assert_eq!(copied.manifests, copy);
+}
+
+#[tokio::test]
+async fn board_manifests_carry_nested_tenant_metadata_types() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    let yaml = r#"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: TypeLibrary
+metadata: { namespace: board-nested-src, name: board.outer }
+spec:
+  title: Outer annotation
+  files:
+    - path: board/outer.proto
+      content: |
+        syntax = "proto3";
+        package board.outer;
+        import "google/protobuf/any.proto";
+        message Envelope { google.protobuf.Any detail = 1; }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: TypeLibrary
+metadata: { namespace: board-nested-src, name: board.inner }
+spec:
+  title: Inner annotation
+  files:
+    - path: board/inner.proto
+      content: |
+        syntax = "proto3";
+        package board.inner;
+        message Note { string text = 1; }
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata: { namespace: board-nested-src, name: shop }
+spec:
+  title: Nested annotation board
+  metadata:
+    - "@type": type.googleapis.com/board.outer.Envelope
+      detail:
+        "@type": type.googleapis.com/board.inner.Note
+        text: Nested rationale
+"#;
+    let documents = manifest::read_str(yaml, "seed").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .unwrap();
+    for document in resolved.manifests {
+        let plan = trogon_atlas_client::apply::plan(&mut client, vec![document])
+            .await
+            .unwrap();
+        trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+            .await
+            .unwrap();
+    }
+
+    let out = export_board(&mut client, "board-nested-src").await.unwrap();
+    assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+    assert!(!out.truncated);
+    assert_eq!(out.external_manifests, "");
+    let copy = out
+        .manifests
+        .replace("board-nested-src", "board-nested-copy");
+    let documents = manifest::read_str(&copy, "export").unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, documents)
+        .await
+        .expect("export must carry libraries used inside tenant Any payloads");
+    let libraries: std::collections::BTreeSet<_> = resolved
+        .manifests
+        .iter()
+        .filter(|doc| doc.kind == pb::EntityKind::TypeLibrary)
+        .map(|doc| doc.id.slug.as_str())
+        .collect();
+    assert_eq!(
+        libraries,
+        std::collections::BTreeSet::from(["board.inner", "board.outer"])
+    );
+    for document in resolved.manifests {
+        let plan = trogon_atlas_client::apply::plan(&mut client, vec![document])
+            .await
+            .unwrap();
+        trogon_atlas_client::apply::apply(&mut client, plan, false, None)
+            .await
+            .unwrap();
+    }
+    let copied = export_board(&mut client, "board-nested-copy")
+        .await
+        .unwrap();
+    assert_eq!(copied.manifests, copy);
 }

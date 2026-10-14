@@ -295,9 +295,19 @@ pub fn render_board(
     external: &[pb::Entity],
     types: &TranscodePool,
 ) -> Result<BoardManifests> {
+    render_board_scoped(own, external, |_| Some(types))
+}
+
+/// Render each entity with its namespace's types, so independent namespaces
+/// can reuse protobuf file and message names.
+pub fn render_board_scoped<'a>(
+    own: &[pb::Entity],
+    external: &[pb::Entity],
+    types: impl Fn(&str) -> Option<&'a TranscodePool>,
+) -> Result<BoardManifests> {
     let mut skipped = Vec::new();
-    let manifests = render_sorted(own, types, &mut skipped)?;
-    let external_manifests = render_sorted(external, types, &mut skipped)?;
+    let manifests = render_sorted(own, &types, &mut skipped)?;
+    let external_manifests = render_sorted(external, &types, &mut skipped)?;
     Ok(BoardManifests {
         manifests,
         external_manifests,
@@ -305,14 +315,21 @@ pub fn render_board(
     })
 }
 
-fn render_sorted(
+fn render_sorted<'a>(
     entities: &[pb::Entity],
-    types: &TranscodePool,
+    types: &impl Fn(&str) -> Option<&'a TranscodePool>,
     skipped: &mut Vec<pb::SkippedEntity>,
 ) -> Result<String> {
     let mut docs: Vec<(pb::EntityKey, Value)> = Vec::new();
     for entity in entities {
-        match entity_to_manifest(entity, types) {
+        let rendered = refs::entity_id(entity)
+            .ok_or_else(|| anyhow!("stored entity has no id"))
+            .and_then(|id| {
+                types(&id.namespace)
+                    .ok_or_else(|| anyhow!("no type pool for namespace {:?}", id.namespace))
+            })
+            .and_then(|types| entity_to_manifest(entity, types));
+        match rendered {
             Ok((kind, id, doc)) => docs.push((pb::EntityKey::new(kind, &id), doc)),
             Err(err) => skipped.push(pb::SkippedEntity {
                 entity: Some(pb::EntityRef {

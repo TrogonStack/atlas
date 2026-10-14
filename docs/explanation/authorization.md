@@ -570,9 +570,10 @@ The full list of key-shaped reads that carry their own gate:
 wearing a diff for a hat; `GetLatestVersion` accepts an empty namespace
 meaning "any", so its filter runs on the results rather than on the request.
 
-The six before `ListChanges` are the ones worth naming individually,
-because they read *both* ways and only one of the two was covered. Each fetches a root entity
-by key and then walks its neighbourhood through the lens-filtered snapshot.
+`GetOutgoingReferences`, the projection RPCs, `ExportEventModelManifests`,
+and `ValidateEventModel` read *both* ways. Each fetches a root entity by key
+and then walks its neighbourhood through the lens-filtered snapshot, but
+only the snapshot read was covered.
 The neighbourhood was narrowed correctly, which made the handler look
 guarded from the outside and in review: the response held nothing but the
 root. But the root is the entity the caller named, and it was returned

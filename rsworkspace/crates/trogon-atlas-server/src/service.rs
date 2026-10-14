@@ -628,21 +628,17 @@ impl EventModelServiceImpl {
         Ok(filtered)
     }
 
-    /// The built-in types plus every live type library in `namespaces`, so
+    /// The built-in types plus every live type library in `namespace`, so
     /// tenant payloads and annotations render as JSON instead of bytes.
     async fn transcode_pool(
         &self,
-        namespaces: &std::collections::BTreeSet<&str>,
+        namespace: &str,
         branch: Option<&str>,
     ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
-        let mut files = Vec::new();
-        for namespace in namespaces {
-            files.extend(
-                self.type_libraries
-                    .tenant_files(&*self.store, namespace, branch)
-                    .await?,
-            );
-        }
+        let files = self
+            .type_libraries
+            .tenant_files(&*self.store, namespace, branch)
+            .await?;
         trogon_atlas_core::transcode::TranscodePool::builtin()
             .and_then(|pool| pool.with_files(files))
             .map_err(|e| Status::internal(format!("building type pool: {e}")))
@@ -3678,18 +3674,37 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let (all, load_truncated) = self
             .snapshot_with_truncation(branch.as_deref(), &vis)
             .await?;
-        let board =
-            graph::board_closure(&all, &stored.entity, MAX_PROJECTION_ENTITIES, &self.metrics);
+        let root_types = self
+            .transcode_pool(&id.namespace, branch.as_deref())
+            .await?;
+        let board = graph::board_closure(
+            &all,
+            &stored.entity,
+            MAX_PROJECTION_ENTITIES,
+            &self.metrics,
+            &root_types,
+        );
         let namespaces: std::collections::BTreeSet<&str> = board
             .own
             .iter()
             .chain(&board.external)
             .filter_map(|e| trogon_atlas_store::refs::entity_id(e).map(|i| i.namespace.as_str()))
             .collect();
-        let types = self.transcode_pool(&namespaces, branch.as_deref()).await?;
-        let rendered =
-            trogon_atlas_client::export::render_board(&board.own, &board.external, &types)
-                .map_err(|e| Status::internal(format!("rendering manifests: {e:#}")))?;
+        let mut types = BTreeMap::from([(id.namespace.as_str(), root_types)]);
+        for namespace in namespaces {
+            if namespace != id.namespace {
+                types.insert(
+                    namespace,
+                    self.transcode_pool(namespace, branch.as_deref()).await?,
+                );
+            }
+        }
+        let rendered = trogon_atlas_client::export::render_board_scoped(
+            &board.own,
+            &board.external,
+            |namespace| types.get(namespace),
+        )
+        .map_err(|e| Status::internal(format!("rendering manifests: {e:#}")))?;
         Ok(Response::new(pb::ExportEventModelManifestsResponse {
             manifests: rendered.manifests,
             external_manifests: rendered.external_manifests,
