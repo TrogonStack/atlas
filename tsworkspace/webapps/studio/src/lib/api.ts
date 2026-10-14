@@ -294,7 +294,7 @@ export interface BoardManifests {
   manifests?: string;
   /** Entities in other namespaces the board references directly. */
   externalManifests?: string;
-  skipped?: { entity?: { kind?: string; id?: EntityId }; reason?: string }[];
+  skipped?: { entity?: EntityRefWire; reason?: string }[];
   truncated?: boolean;
 }
 
