@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSnapshotHtml } from './export-html';
+import { buildSnapshotHtml, snapshotManifests } from './export-html';
 import { parseSnapshot, SNAPSHOT_VERSION, type StudioSnapshot } from './snapshot';
 
 const snapshot: StudioSnapshot = {
@@ -12,6 +12,7 @@ const snapshot: StudioSnapshot = {
       entities: [{ event: { doc: 'ends with </script><script>alert(1)</script>' } }],
     },
   },
+  manifests: { model: 'kind: Event\nspec:\n  doc: "</script>"\n', external: '' },
 };
 
 function build(overrides: Partial<Parameters<typeof buildSnapshotHtml>[0]> = {}): string {
@@ -60,5 +61,24 @@ describe('buildSnapshotHtml', () => {
   it('puts the data before the runtime that reads it', () => {
     const html = build();
     expect(html.indexOf('id="atlas-snapshot"')).toBeLessThan(html.indexOf('<script type="module">'));
+  });
+});
+
+describe('snapshotManifests', () => {
+  it('keeps the model and external YAML of a complete board', () => {
+    expect(snapshotManifests({ manifests: 'a', externalManifests: 'b' })).toEqual({ model: 'a', external: 'b' });
+  });
+
+  it('records an empty external set when the board references no other namespace', () => {
+    expect(snapshotManifests({ manifests: 'a' })).toEqual({ model: 'a', external: '' });
+  });
+
+  it.each([
+    ['no response', undefined],
+    ['no manifests', {}],
+    ['a clipped board', { manifests: 'a', truncated: true }],
+    ['a board with entities it could not render', { manifests: 'a', skipped: [{ reason: 'no type' }] }],
+  ])('leaves out %s, so an apply never drops entities quietly', (_, resp) => {
+    expect(snapshotManifests(resp)).toBeUndefined();
   });
 });

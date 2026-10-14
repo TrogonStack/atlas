@@ -318,6 +318,7 @@ function currentPrincipalToken() {
 const READ_RPCS = new Set([
   "compileTypeLibrary",
   "diffBranch",
+  "exportEventModelManifests",
   "getEntity",
   "getServerInfo",
   "getTypeLibraryDescriptorSet",
@@ -1129,29 +1130,23 @@ app.get(
 
 const PATH_PARAM_MAX = 512;
 
+/** The `:namespace/:slug` pair a route names, checked before it reaches gRPC. @param {AppRequest} req */
+function namespaceSlugParams(req) {
+  const ns = String(req.params.namespace);
+  const slug = String(req.params.slug);
+  if (ns.length > PATH_PARAM_MAX || slug.length > PATH_PARAM_MAX) throw badRequest("path param too long");
+  if (!isSafeNamespace(ns)) throw badRequest(`invalid namespace: ${JSON.stringify(ns)}`);
+  if (!isSafeNamespace(slug)) throw badRequest(`invalid slug: ${JSON.stringify(slug)}`);
+  return { ns, slug };
+}
+
 // List every entity scoped to a Domain via the server-side
 // EM->BC->Subdomain->Domain walk. Query:
 //   /api/by-domain/<namespace>/<slug>?kinds=event_model,bounded_context
 app.get(
   "/api/by-domain/:namespace/:slug",
   branchHandler(async (req) => {
-    const nsParam = String(req.params.namespace);
-    const slugParam = String(req.params.slug);
-    if (nsParam.length > PATH_PARAM_MAX || slugParam.length > PATH_PARAM_MAX) {
-      const err = /** @type {HttpError} */ (new Error("path param too long"));
-      err.status = 400;
-      throw err;
-    }
-    if (!isSafeNamespace(nsParam)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid namespace: ${JSON.stringify(nsParam)}`));
-      err.status = 400;
-      throw err;
-    }
-    if (!isSafeNamespace(slugParam)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid slug: ${JSON.stringify(slugParam)}`));
-      err.status = 400;
-      throw err;
-    }
+    const { ns: nsParam, slug: slugParam } = namespaceSlugParams(req);
     const kinds = [];
     if (req.query.kinds) {
       for (const raw of String(req.query.kinds).split(",").filter(Boolean)) {
@@ -1456,23 +1451,7 @@ app.get(
 app.get(
   "/api/event-model/:namespace/:slug",
   branchHandler(async (req) => {
-    const ns = String(req.params.namespace);
-    const slug = String(req.params.slug);
-    if (ns.length > PATH_PARAM_MAX || slug.length > PATH_PARAM_MAX) {
-      const err = /** @type {HttpError} */ (new Error("path param too long"));
-      err.status = 400;
-      throw err;
-    }
-    if (!isSafeNamespace(ns)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid namespace: ${JSON.stringify(ns)}`));
-      err.status = 400;
-      throw err;
-    }
-    if (!isSafeNamespace(slug)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid slug: ${JSON.stringify(slug)}`));
-      err.status = 400;
-      throw err;
-    }
+    const { ns, slug } = namespaceSlugParams(req);
     const emResp = /** @type {any} */ (await call("getEntity", {
       kind: 12,
       id: { namespace: ns, slug, version: "1" },
@@ -1621,6 +1600,16 @@ app.get(
         ...knowledge,
       ]),
     };
+  }),
+);
+
+// The board as the YAML manifests `trogon-atlas apply` reads, so a saved
+// board can be loaded back into an Atlas.
+app.get(
+  "/api/event-model/:namespace/:slug/manifests",
+  branchHandler(async (req) => {
+    const { ns, slug } = namespaceSlugParams(req);
+    return call("exportEventModelManifests", { id: { namespace: ns, slug, version: "1" } });
   }),
 );
 

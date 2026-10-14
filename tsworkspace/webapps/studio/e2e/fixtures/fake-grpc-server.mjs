@@ -146,6 +146,22 @@ function searchEntities(_call, callback) {
   callback(null, { results: [] });
 }
 
+export const ORDER_MANIFESTS = `apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata:
+  namespace: ${ORDER_MODEL_ID.namespace}
+  name: ${ORDER_MODEL_ID.slug}
+  version: 1
+`;
+
+function exportEventModelManifests(call, callback) {
+  if (call.request.id?.slug !== ORDER_MODEL_ID.slug) {
+    callback({ code: grpc.status.NOT_FOUND, details: 'event model not found' });
+    return;
+  }
+  callback(null, { manifests: ORDER_MANIFESTS });
+}
+
 function validateEventModel(call, callback) {
   // Dedicated slug so contract tests can observe the `issues` field name
   // under defaults:false (empty repeated fields are omitted on the wire).
@@ -251,6 +267,7 @@ export async function startFakeGrpcServer() {
     searchEntities,
     validateEventModel,
     validateProject,
+    exportEventModelManifests,
     listChanges,
     deleteByQuery,
     compileTypeLibrary,

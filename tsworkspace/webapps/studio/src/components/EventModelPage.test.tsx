@@ -74,7 +74,7 @@ describe('EventModelPage', () => {
       <EventModelPage
         namespace="shop"
         slug="missing"
-        snapshot={{ capturedAt: '2026-10-13T00:00:00Z', branch: 'baseline' }}
+        snapshot={{ capturedAt: '2026-10-13T00:00:00Z', branch: 'baseline', slug: 'checkout' }}
       />,
     );
     await waitFor(() => {

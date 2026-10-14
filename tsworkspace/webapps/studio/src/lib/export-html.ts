@@ -2,8 +2,9 @@
 // build:snapshot plus the board's read responses, inlined so the file opens
 // from disk with no backend. Only the reads the board page makes are
 // recorded; realtime and credential endpoints are never part of a snapshot.
-import { api, boardPaths } from '@/lib/api';
-import { SNAPSHOT_VERSION, type StudioSnapshot, snapshotFileName } from '@/lib/snapshot';
+import { api, type BoardManifests, boardPaths } from '@/lib/api';
+import { download } from '@/lib/download';
+import { SNAPSHOT_VERSION, type SnapshotManifests, type StudioSnapshot, snapshotFileName } from '@/lib/snapshot';
 
 const RUNTIME_JS = '/snapshot/runtime.js';
 const RUNTIME_CSS = '/snapshot/runtime.css';
@@ -83,18 +84,21 @@ async function captureSnapshot({
   branch?: string;
 }): Promise<StudioSnapshot> {
   const id = { namespace, slug };
-  const [info, eventModel, validate] = await Promise.all([
+  const [info, eventModel, validate, manifests] = await Promise.all([
     api.info(),
     api.eventModel(namespace, slug, { branch }),
     // A validator that is down should not block the export; the snapshot
     // then shows validation as not run, the same as the live page does.
     api.validate(id, { branch }).catch(() => undefined),
+    // An older server has no manifests RPC; the board still saves, without YAML.
+    api.manifests(namespace, slug, { branch }).catch(() => undefined),
   ]);
   const responses: Record<string, unknown> = {
     [boardPaths.info()]: info,
     [boardPaths.eventModel(namespace, slug)]: eventModel,
   };
   if (validate) responses[boardPaths.validate(id)] = validate;
+  const embedded = snapshotManifests(manifests);
   return {
     version: SNAPSHOT_VERSION,
     capturedAt: new Date().toISOString(),
@@ -102,19 +106,17 @@ async function captureSnapshot({
     slug,
     ...(branch ? { branch } : {}),
     responses,
+    ...(embedded ? { manifests: embedded } : {}),
   };
 }
 
-function download(fileName: string, html: string): void {
-  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Revoke on the next tick: some browsers start the download after click returns.
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+/**
+ * Only a complete board is embedded: applying a clipped or partly rendered
+ * one would drop entities with no sign that anything is missing.
+ */
+export function snapshotManifests(resp: BoardManifests | undefined): SnapshotManifests | undefined {
+  if (!resp?.manifests || resp.truncated || resp.skipped?.length) return undefined;
+  return { model: resp.manifests, external: resp.externalManifests ?? '' };
 }
 
 export async function exportBoardHtml(board: {
@@ -124,5 +126,5 @@ export async function exportBoardHtml(board: {
   title: string;
 }): Promise<void> {
   const [snapshot, [js, css]] = await Promise.all([captureSnapshot(board), loadRuntime()]);
-  download(snapshotFileName(snapshot), buildSnapshotHtml({ js, css, snapshot, title: board.title }));
+  download(snapshotFileName(snapshot), buildSnapshotHtml({ js, css, snapshot, title: board.title }), 'text/html');
 }

@@ -15,10 +15,19 @@ export interface StudioSnapshot {
   branch?: string;
   /** Response bodies keyed by the request path `api.ts` asked for. */
   responses: Record<string, unknown>;
+  /** The board as `trogon-atlas apply` manifests; omitted when the server could not give all of it. */
+  manifests?: SnapshotManifests;
+}
+
+export interface SnapshotManifests {
+  /** The board's own namespace, as multi-document YAML. */
+  model: string;
+  /** Foreign entities the board references directly; empty when there are none. */
+  external: string;
 }
 
 /** What a page shows about where a snapshot came from. */
-export type SnapshotStamp = Pick<StudioSnapshot, 'capturedAt' | 'branch'>;
+export type SnapshotStamp = Pick<StudioSnapshot, 'capturedAt' | 'branch' | 'slug' | 'manifests'>;
 
 let active: StudioSnapshot | undefined;
 
@@ -69,6 +78,12 @@ export function parseSnapshot(text: string): StudioSnapshot {
     throw new Error('snapshot branch must be a string');
   }
   if (!isRecord(raw.responses)) throw new Error('snapshot is missing responses');
+  if (
+    raw.manifests !== undefined &&
+    !(isRecord(raw.manifests) && typeof raw.manifests.model === 'string' && typeof raw.manifests.external === 'string')
+  ) {
+    throw new Error('snapshot manifests must hold model and external strings');
+  }
   return raw as unknown as StudioSnapshot;
 }
 
@@ -76,13 +91,16 @@ function filePart(s: string): string {
   return s.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
-/** `<slug>[-<branch>]-<YYYYMMDD-HHmm>.html`, in UTC so the name does not depend on who saved it. */
-export function snapshotFileName(snapshot: Pick<StudioSnapshot, 'slug' | 'branch' | 'capturedAt'>): string {
+/** `<slug>[-<branch>]-<YYYYMMDD-HHmm><ext>`, in UTC so the name does not depend on who saved it. */
+export function snapshotFileName(
+  snapshot: Pick<StudioSnapshot, 'slug' | 'branch' | 'capturedAt'>,
+  ext = '.html',
+): string {
   const at = new Date(snapshot.capturedAt);
   const pad = (n: number) => String(n).padStart(2, '0');
   const stamp = Number.isNaN(at.getTime())
     ? 'snapshot'
     : `${at.getUTCFullYear()}${pad(at.getUTCMonth() + 1)}${pad(at.getUTCDate())}-${pad(at.getUTCHours())}${pad(at.getUTCMinutes())}`;
   const parts = [filePart(snapshot.slug), snapshot.branch ? filePart(snapshot.branch) : '', stamp].filter(Boolean);
-  return `${parts.join('-')}.html`;
+  return `${parts.join('-')}${ext}`;
 }

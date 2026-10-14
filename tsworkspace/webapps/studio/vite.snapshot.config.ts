@@ -5,18 +5,21 @@ import path from 'node:path';
 import { defineConfig, mergeConfig, type UserConfigFnObject } from 'vite';
 import studio from './vite.config.ts';
 
-const REALTIME = /\/src\/lib\/realtime(\.ts)?$/;
-const REALTIME_STUB = path.resolve(import.meta.dirname, 'src/lib/realtime.snapshot.ts');
+// Modules a saved board never runs, swapped for stubs by resolved path.
+const STUBS: [RegExp, string][] = [
+  [/\/src\/lib\/realtime(\.ts)?$/, path.resolve(import.meta.dirname, 'src/lib/realtime.snapshot.ts')],
+  [/\/src\/lib\/export-html(\.ts)?$/, path.resolve(import.meta.dirname, 'src/lib/export-html.snapshot.ts')],
+];
 
 export default defineConfig((env) =>
   mergeConfig((studio as UserConfigFnObject)(env), {
     publicDir: false,
     plugins: [
       {
-        name: 'snapshot-without-realtime',
+        name: 'snapshot-stubs',
         enforce: 'pre',
         // Runs after the `@` alias, so it sees the resolved path.
-        resolveId: (id: string) => (REALTIME.test(id) ? REALTIME_STUB : undefined),
+        resolveId: (id: string) => STUBS.find(([pattern]) => pattern.test(id))?.[1],
       },
     ],
     build: {

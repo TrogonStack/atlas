@@ -24,6 +24,7 @@ const upstreamCalls = {
   putEntity: null,
   compileTypeLibrary: null,
   getTypeLibraryDescriptorSet: null,
+  exportEventModelManifests: null,
   authorization: null,
 };
 
@@ -37,6 +38,10 @@ const fakeClient = {
   validateEventModel: (_req, _meta, _opts, cb) => cb(null, { issues: [] }),
   validateProject: (_req, _meta, _opts, cb) => cb(null, { reports: [], totalErrors: 0, totalWarnings: 0, totalInfo: 0 }),
   getEntity: (_req, _meta, _opts, cb) => cb(null, { entity: null }),
+  exportEventModelManifests: (req, _meta, _opts, cb) => {
+    upstreamCalls.exportEventModelManifests = req;
+    cb(null, { manifests: 'kind: EventModel\n', externalManifests: '' });
+  },
   listEntitiesByDomain: (_req, _meta, _opts, cb) => cb(null, { entities: [] }),
   listNamespaces: (_req, meta, _opts, cb) => {
     upstreamCalls.authorization = meta?.get('authorization')?.[0] ?? null;
@@ -479,6 +484,22 @@ describe('GET /api/validate-project', () => {
 
   it('returns 400 when projectNamespace is unsafe', async () => {
     const res = await request(app).get('/api/validate-project?projectNamespace=../bad&projectSlug=my-project');
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('GET /api/event-model/:namespace/:slug/manifests', () => {
+  it('returns the board manifests for the model', async () => {
+    const res = await request(app).get('/api/event-model/my-ns/my-model/manifests');
+    expect(res.status).toBe(200);
+    expect(res.body.manifests).toBe('kind: EventModel\n');
+    expect(upstreamCalls.exportEventModelManifests).toEqual({
+      id: { namespace: 'my-ns', slug: 'my-model', version: '1' },
+    });
+  });
+
+  it('returns 400 for an unsafe namespace', async () => {
+    const res = await request(app).get('/api/event-model/bad%20ns/my-model/manifests');
     expect(res.status).toBe(400);
   });
 });

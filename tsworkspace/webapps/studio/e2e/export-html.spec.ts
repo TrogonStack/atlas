@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
-import { ORDER_MODEL_ID, ORDER_PLACED_EVENT } from './fixtures/fake-grpc-server.mjs';
+import { ORDER_MANIFESTS, ORDER_MODEL_ID, ORDER_PLACED_EVENT } from './fixtures/fake-grpc-server.mjs';
 
 const { namespace, slug } = ORDER_MODEL_ID;
 const eventTitle = ORDER_PLACED_EVENT.event.title;
@@ -36,12 +36,24 @@ test('Export HTML saves a board that renders from disk with no network', async (
   await expect(offline.getByText(eventTitle)).toBeVisible();
   await expect(offline.getByRole('status', { name: 'Snapshot' })).toContainText('baseline');
   await expect(offline.getByRole('button', { name: 'More actions' })).toHaveCount(0);
+
+  // The YAML in the file is what `trogon-atlas apply` reads, so the board maps back to manifests.
+  const savingYaml = offline.waitForEvent('download');
+  await offline.getByRole('button', { name: 'Download YAML' }).click();
+  const yaml = await savingYaml;
+  expect(yaml.suggestedFilename()).toMatch(new RegExp(`^${slug}-\\d{8}-\\d{4}\\.yaml$`));
+  expect(await readFile((await yaml.path()) ?? '', 'utf8')).toBe(ORDER_MANIFESTS);
   expect(problems).toEqual([]);
-  // The file carries the board's reads and nothing else: no realtime or credential responses.
   // Read from the file: the page drops the data element once it has parsed it.
   const html = await readFile(file, 'utf8');
-  const data = html.match(/<script id="atlas-snapshot" type="application\/json">(.*?)<\/script>/s)?.[1];
-  expect(Object.keys(JSON.parse(data ?? '{}').responses).sort()).toEqual([
+  // One data tag only, so a reader that takes the first one gets the board, not the runtime's source.
+  expect(html.split('<script id="atlas-snapshot"').length - 1).toBe(1);
+  const data = JSON.parse(
+    html.match(/<script id="atlas-snapshot" type="application\/json">(.*?)<\/script>/s)?.[1] ?? '{}',
+  );
+  expect(data.manifests).toEqual({ model: ORDER_MANIFESTS, external: '' });
+  // The file carries the board's reads and nothing else: no realtime or credential responses.
+  expect(Object.keys(data.responses).sort()).toEqual([
     `/api/event-model/${namespace}/${slug}`,
     '/api/info',
     `/api/validate?namespace=${namespace}&slug=${slug}`,

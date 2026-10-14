@@ -106,7 +106,7 @@ describe('TopBar', () => {
   });
 
   describe('snapshot', () => {
-    const snapshot = { capturedAt: '2026-10-13T17:10:00.000Z', branch: 'alex/x' };
+    const snapshot = { capturedAt: '2026-10-13T17:10:00.000Z', branch: 'alex/x', slug: 'checkout' };
 
     it('replaces the live controls with when and where the snapshot was taken', () => {
       render(
@@ -129,9 +129,39 @@ describe('TopBar', () => {
 
     it('labels a snapshot without a branch as the baseline', () => {
       render(
-        <TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} snapshot={{ capturedAt: snapshot.capturedAt }} />,
+        <TopBar
+          realtime={{ state: 'offline' }}
+          onRefresh={vi.fn()}
+          snapshot={{ capturedAt: snapshot.capturedAt, slug: snapshot.slug }}
+        />,
       );
       expect(screen.getByRole('status', { name: 'Snapshot' }).textContent).toContain('baseline');
+    });
+
+    it('offers Download YAML only when the snapshot carries manifests', () => {
+      const { rerender } = render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} snapshot={snapshot} />);
+      expect(screen.queryByRole('button', { name: /download yaml/i })).toBeNull();
+      rerender(
+        <TopBar
+          realtime={{ state: 'offline' }}
+          onRefresh={vi.fn()}
+          snapshot={{ ...snapshot, manifests: { model: 'kind: EventModel\n', external: '' } }}
+        />,
+      );
+      expect(screen.getByRole('button', { name: /download yaml/i })).toBeDefined();
+      expect(screen.queryByRole('button', { name: /external yaml/i })).toBeNull();
+    });
+
+    it('offers the external entities as their own download, one file per click', () => {
+      render(
+        <TopBar
+          realtime={{ state: 'offline' }}
+          onRefresh={vi.fn()}
+          snapshot={{ ...snapshot, manifests: { model: 'kind: EventModel\n', external: 'kind: Event\n' } }}
+        />,
+      );
+      expect(screen.getByRole('button', { name: /download yaml/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /external yaml/i })).toBeDefined();
     });
   });
 
@@ -141,7 +171,7 @@ describe('TopBar', () => {
         realtime={{ state: 'offline' }}
         onRefresh={vi.fn()}
         onExportHtml={vi.fn(() => Promise.resolve())}
-        snapshot={{ capturedAt: '2026-10-13T17:10:00.000Z' }}
+        snapshot={{ capturedAt: '2026-10-13T17:10:00.000Z', slug: 'checkout' }}
       />,
     );
     expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
