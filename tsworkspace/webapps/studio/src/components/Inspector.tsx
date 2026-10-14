@@ -40,6 +40,7 @@ import {
   trackingOf,
   uiTransitionsOf,
 } from '@/lib/model';
+import { activeSnapshot } from '@/lib/snapshot';
 import { useEntityHomes } from '@/lib/useEntityHomes';
 import { isSafeNamespace } from '../../shared/safe-namespace.mjs';
 
@@ -146,7 +147,9 @@ function SeamSection({ entity, model, onSelect }: { entity: Entity; model: Model
                 </div>
               ) : (
                 <span className="mt-1 block text-[10px] text-muted-foreground">
-                  no event model curates this upstream; context not loaded
+                  {activeSnapshot()
+                    ? 'other contexts are not in this snapshot'
+                    : 'no event model curates this upstream; context not loaded'}
                 </span>
               )}
             </div>

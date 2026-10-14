@@ -1,5 +1,6 @@
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
+import { activeSnapshot, notInSnapshot, snapshotResponse } from '@/lib/snapshot';
 
 // Hard ceiling on every browser → gateway request. Long-running RPCs are
 // expected to stream (SSE / NATS WS); a 30 s wall clock for a single JSON
@@ -98,6 +99,8 @@ function isTimeoutAbort(timeoutSignal: AbortSignal, callerSignal: AbortSignal | 
 }
 
 async function getJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
+  const snapshot = activeSnapshot();
+  if (snapshot) return snapshotResponse(snapshot, url) as T;
   // Compose the caller's signal (if any) with our internal timeout so an
   // unmount-during-fetch cancels the network call, not just the rendered
   // state. Native AbortSignal.any is widely supported but not universal yet,
@@ -133,6 +136,7 @@ async function getJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {
 }
 
 async function postJson<T>(url: string, body: unknown, opts: FetchOptions = {}): Promise<T> {
+  if (activeSnapshot()) throw notInSnapshot(url);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const timeoutCtrl = new AbortController();
   const timer =
@@ -289,8 +293,17 @@ export interface TypeLibraryMessage {
   library?: EntityId;
 }
 
+/** The paths a board page reads. A snapshot records its responses under these keys. */
+export const boardPaths = {
+  info: () => '/api/info',
+  eventModel: (namespace: string, slug: string) =>
+    `/api/event-model/${encodeURIComponent(namespace)}/${encodeURIComponent(slug)}`,
+  validate: (id: { namespace: string; slug: string; version?: string }) =>
+    `/api/validate${buildQuery({ namespace: id.namespace, slug: id.slug, version: id.version })}`,
+};
+
 export const api = {
-  info: (opts?: Omit<FetchOptions, 'branch'>) => getJson<ServerInfo>('/api/info', opts),
+  info: (opts?: Omit<FetchOptions, 'branch'>) => getJson<ServerInfo>(boardPaths.info(), opts),
   // `namespaces` are NamespaceIds, which is what every other endpoint
   // filters on; `labels` maps each to the name to show a person.
   namespaces: (opts?: FetchOptions) =>
@@ -325,22 +338,12 @@ export const api = {
   overview: (opts?: FetchOptions) => getJson<{ entities: WireEntityEnvelope[] }>('/api/overview', opts),
   eventModels: (opts?: FetchOptions) => getJson<{ entities: WireEntityEnvelope[] }>('/api/event-models', opts),
   eventModel: (namespace: string, slug: string, opts?: FetchOptions) =>
-    getJson<{ entities: WireEntityEnvelope[] }>(
-      `/api/event-model/${encodeURIComponent(namespace)}/${encodeURIComponent(slug)}`,
-      opts,
-    ),
+    getJson<{ entities: WireEntityEnvelope[] }>(boardPaths.eventModel(namespace, slug), opts),
   branches: (opts?: Omit<FetchOptions, 'branch'>) => getJson<{ branches: BranchInfo[] }>('/api/branches', opts),
   branchDiff: (name: string, opts?: Omit<FetchOptions, 'branch'>) =>
     getJson<{ entries: BranchDiffEntry[] }>(`/api/branch-diff?name=${encodeURIComponent(name)}`, opts),
   validate: (id: { namespace: string; slug: string; version?: string }, opts?: FetchOptions) =>
-    getJson<{ issues?: unknown[] }>(
-      `/api/validate${buildQuery({
-        namespace: id.namespace,
-        slug: id.slug,
-        version: id.version,
-      })}`,
-      opts,
-    ),
+    getJson<{ issues?: unknown[] }>(boardPaths.validate(id), opts),
   compileTypeLibrary: (library: TypeLibraryWire, opts?: FetchOptions) =>
     postJson<CompileTypeLibraryResult>('/api/type-libraries/compile', { library }, opts),
   typeMessages: (namespace: string, opts?: FetchOptions) =>

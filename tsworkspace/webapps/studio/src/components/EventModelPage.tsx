@@ -7,10 +7,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ModelShell } from '@/components/ModelShell';
 import { api } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
+import { exportBoardHtml } from '@/lib/export-html';
 import { buildIssueIndex, EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import { buildModel, type Model } from '@/lib/model';
+import type { SnapshotStamp } from '@/lib/snapshot';
 
-export function EventModelPage({ namespace, slug }: { namespace: string; slug: string }) {
+export function EventModelPage({
+  namespace,
+  slug,
+  snapshot,
+}: {
+  namespace: string;
+  slug: string;
+  /** Set when the page renders a saved snapshot instead of the live store. */
+  snapshot?: SnapshotStamp;
+}) {
   const [model, setModel] = useState<Model>();
   const [issues, setIssues] = useState<IssueIndex>(EMPTY_ISSUE_INDEX);
   const [error, setError] = useState<string>();
@@ -77,9 +88,12 @@ export function EventModelPage({ namespace, slug }: { namespace: string; slug: s
             {namespace}/{slug}
           </div>
           <div className="mt-2">{error}</div>
-          <a href={withBranchQuery('/', branch)} className="mt-3 inline-block text-xs underline">
-            ← Back to Overview
-          </a>
+          {/* A snapshot holds one board, so it has no overview to go back to. */}
+          {!snapshot && (
+            <a href={withBranchQuery('/', branch)} className="mt-3 inline-block text-xs underline">
+              ← Back to Overview
+            </a>
+          )}
         </div>
       </div>
     );
@@ -94,13 +108,18 @@ export function EventModelPage({ namespace, slug }: { namespace: string; slug: s
   }
 
   const em = model.entities.find((e) => e.kind === 'eventModel' && e.id.namespace === namespace && e.id.slug === slug);
+  const title = em?.title ?? `${namespace}/${slug}`;
   return (
     <ModelShell
       model={model}
-      scopedTitle={em?.title ?? `${namespace}/${slug}`}
+      scopedTitle={title}
       backHref={withBranchQuery('/', branch)}
       issues={issues}
-      onRefetch={load}
+      snapshot={snapshot}
+      // A snapshot cannot change, so it gets no refetch and therefore no live feed.
+      onRefetch={snapshot ? undefined : load}
+      // Read at click time: a branch switch in ModelShell does not re-render this page.
+      onExportHtml={() => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })}
     />
   );
 }

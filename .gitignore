@@ -33,6 +33,7 @@ rsworkspace/lcov.info
 tsworkspace/node_modules/
 tsworkspace/webapps/studio/coverage/
 tsworkspace/webapps/studio/dist/
+tsworkspace/webapps/studio/public/snapshot/
 tsworkspace/webapps/studio/node_modules/
 tsworkspace/webapps/studio/test-results/
 tsworkspace/webapps/studio/playwright-report/

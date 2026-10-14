@@ -30,6 +30,7 @@ import type { BoardEdgeData } from '@/lib/layout';
 import { buildModel, entityKey, type Model } from '@/lib/model';
 import { layoutBoards } from '@/lib/multiboard';
 import type { RealtimeStatus } from '@/lib/realtime';
+import type { SnapshotStamp } from '@/lib/snapshot';
 import { invalidateEntityHomes } from '@/lib/useEntityHomes';
 import { isSafeNamespace } from '../../shared/safe-namespace.mjs';
 
@@ -66,6 +67,10 @@ export interface ModelShellProps {
    * realtime subscription is not started and the badge stays offline.
    */
   onRefetch?: () => void;
+  /** Set when the board is a saved snapshot; the top bar then shows when it was taken. */
+  snapshot?: SnapshotStamp;
+  /** Saves the board as one HTML file; omitted where there is no single board to save. */
+  onExportHtml?: () => Promise<void>;
 }
 
 // The empty model is structurally invariant and small; hoisted out of
@@ -78,6 +83,8 @@ export function ModelShell({
   backHref,
   issues = EMPTY_ISSUE_INDEX,
   onRefetch,
+  snapshot,
+  onExportHtml,
 }: ModelShellProps) {
   const [internalModel, setInternalModel] = useState<Model>(modelProp ?? EMPTY_MODEL);
   const [info, setInfo] = useState<ServerInfo>();
@@ -510,6 +517,8 @@ export function ModelShell({
         onRefresh={() => (scoped ? onRefetch?.() : refresh(namespaces))}
         scopedTitle={scopedTitle}
         backHref={backHref}
+        snapshot={snapshot}
+        onExportHtml={onExportHtml}
         branch={branch}
         onSelectBranch={(next) => {
           setBranch(next);

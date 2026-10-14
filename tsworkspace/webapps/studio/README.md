@@ -14,6 +14,10 @@ swimlane below), rendered live from the gRPC store.
 - **Search**: server-side Tantivy search.
 - **Live**: polls the change feed and refreshes the board when the model
   changes.
+- **Export HTML**: saves the open board as one HTML file that opens from
+  disk with no backend. The file is a snapshot: it shows when and where it
+  was taken and does not update. It holds only the board's read responses
+  and the runtime from `build:snapshot`.
 
 ## Architecture
 

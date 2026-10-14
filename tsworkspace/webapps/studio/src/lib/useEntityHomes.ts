@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '@/lib/api';
 import { readBranchFromUrl } from '@/lib/branch';
 import { buildModel, type Entity, type EntityId, wireKind } from '@/lib/model';
+import { activeSnapshot } from '@/lib/snapshot';
 
 interface Index {
   // key: `${entityKind}:${namespace}/${slug}` → EventModel entities
@@ -73,6 +74,9 @@ export function useEntityHomes(refs: { kind: string; id: EntityId }[]): {
   const [attempt, setAttempt] = useState(0);
   const branch = readBranchFromUrl();
   useEffect(() => {
+    // A snapshot holds one board, not the event-model index, so it has no
+    // homes to look up and no jump target to open.
+    if (activeSnapshot()) return;
     let alive = true;
     setError(undefined);
     loadIndex(branch)

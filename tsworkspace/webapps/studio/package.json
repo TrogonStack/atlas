@@ -8,14 +8,15 @@
     "dev": "concurrently -k \"node server/index.mjs\" \"vite\"",
     "dev:web": "vite",
     "dev:api": "node server/index.mjs",
-    "build": "tsc --noEmit -p tsconfig.json && vite build",
+    "build": "tsc --noEmit -p tsconfig.json && pnpm run build:snapshot && vite build",
+    "build:snapshot": "vite build -c vite.snapshot.config.ts",
     "serve": "vite preview",
     "lint": "oxlint -c ../../.oxlintrc.json . && oxfmt -c ../../.oxfmtrc.json --check .",
     "format": "oxfmt -c ../../.oxfmtrc.json --write . && oxlint -c ../../.oxlintrc.json --fix .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc -p tsconfig.server.json",
-    "test:e2e": "playwright test"
+    "test:e2e": "pnpm run build:snapshot && playwright test"
   },
   "dependencies": {
     "@base-ui/react": "1.9.0",
