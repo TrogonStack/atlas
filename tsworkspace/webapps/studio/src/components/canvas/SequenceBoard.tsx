@@ -16,6 +16,7 @@ import type { SelectedEdge, Selection } from '@/components/canvas/Board';
 import { BoardTopRight } from '@/components/canvas/BoardTopRight';
 import { BoardEmptyState } from '@/components/ui/empty-state';
 import {
+  CardTitle,
   ContextHeaderNode,
   kindStyle,
   SliceHeaderNode,
@@ -71,7 +72,7 @@ function SeqLoopStubNode({ data }: NodeProps & { data: { entity?: Entity; doc: s
         <Repeat className="h-3 w-3" />
         Road continues
       </div>
-      <div className="mt-1 text-[13px] font-semibold leading-snug text-zinc-900">{data.entity?.title}</div>
+      <CardTitle title={data.entity?.title} />
       {data.doc ? <div className="mt-1 text-[10px] leading-tight text-zinc-600">when {data.doc}</div> : null}
       <div className="mt-1 text-[9px] font-medium text-amber-700">a new moment: click to jump ↗</div>
     </div>
