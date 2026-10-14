@@ -49,8 +49,19 @@ describe('NamespacesPage', () => {
 
     // The point of the banner: a scoped key does not see this namespace at
     // all, and no other screen in the studio can tell you that.
-    await waitFor(() => expect(screen.getByText(/no registry row/i)).toBeDefined());
+    await waitFor(() => expect(screen.getByText('1 namespace holds entities but has no registry row')).toBeDefined());
     expect(screen.getByText('unregistered')).toBeDefined();
+  });
+
+  it('pluralizes the unowned banner when more than one namespace is unregistered', async () => {
+    registryMock.mockResolvedValue({
+      namespaces: [
+        row({ id: '', parent: '', registered: false, name: 'orphan' }),
+        row({ id: '', parent: '', registered: false, name: 'stray' }),
+      ],
+    });
+    render(<NamespacesPage />);
+    await waitFor(() => expect(screen.getByText('2 namespaces hold entities but have no registry row')).toBeDefined());
   });
 
   it('says nothing about unowned namespaces when every row has an owner', async () => {

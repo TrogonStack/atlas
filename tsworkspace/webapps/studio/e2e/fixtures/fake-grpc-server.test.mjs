@@ -106,6 +106,17 @@ describe('fake-grpc happy-path smoke RPCs', () => {
     const res = await call('getEntity', { kind: 12, id: ORDER_MODEL_ID });
     expect(res.entity?.eventModel?.title).toBe('Order Service');
   });
+
+  // The bridge reads this for both the namespace picker and the registry
+  // page; the unregistered row must arrive with no `id` so the bridge can
+  // flag it rather than invent one.
+  it('ListNamespaces returns the registered model namespace and one unregistered row', async () => {
+    const res = await call('listNamespaces', {});
+    expect(res.namespaces?.map((n) => [n.name, n.id ?? '', n.entityCount])).toEqual([
+      ['shop', 'shop', 2],
+      ['legacy', '', 1],
+    ]);
+  });
 });
 
 describe('fake-grpc type library RPCs', () => {

@@ -103,4 +103,22 @@ test.describe('Real-stack smoke', () => {
     // "Changed" group heading in the left rail.
     await expect(page.getByRole('heading', { name: 'Changed', level: 3 })).toBeVisible();
   });
+
+  test('(f) the namespace registry is reached from the overview and lists both registered and unowned rows', async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    failOnConsoleErrors(page, errors);
+
+    await page.goto('/');
+    await page.getByRole('link', { name: 'Namespaces' }).click();
+    await expect(page.getByRole('heading', { name: 'Namespaces', level: 1 })).toBeVisible();
+
+    const rows = page.getByRole('row');
+    await expect(rows.filter({ hasText: 'shop' })).toContainText('default');
+    await expect(rows.filter({ hasText: 'legacy' })).toContainText('unregistered');
+    await expect(page.getByText('1 namespace holds entities but has no registry row')).toBeVisible();
+
+    expect(errors, `console errors on registry load: ${JSON.stringify(errors)}`).toEqual([]);
+  });
 });

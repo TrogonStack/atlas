@@ -101,7 +101,9 @@ export function NamespacesPage() {
       {unregistered.length > 0 ? (
         <section className="flex flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
           <h2 className="text-xs font-semibold text-amber-900">
-            {unregistered.length} namespace{unregistered.length === 1 ? '' : 's'} hold entities but have no registry row
+            {unregistered.length === 1
+              ? '1 namespace holds entities but has no registry row'
+              : `${unregistered.length} namespaces hold entities but have no registry row`}
           </h2>
           <p className="text-xs text-amber-800">
             Nobody owns these, so a key scoped to an owner cannot see them at all. An agent claiming one through the CLI
