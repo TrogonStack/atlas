@@ -37,14 +37,17 @@ export function TopBarMenu({
 
   return (
     <div className="flex items-center gap-2">
+      <output className="sr-only">
+        {exportState.kind === 'working' || exportState.kind === 'done' ? title : null}
+      </output>
       {exportState.kind === 'failed' ? (
-        <span className="max-w-xs truncate text-xs text-red-600">{exportState.message}</span>
+        <span role="alert" className="max-w-xs truncate text-xs text-red-600">
+          <span className="sr-only">{title}: </span>
+          {exportState.message}
+        </span>
       ) : null}
       <DropdownMenu>
-        <DropdownMenuTrigger
-          disabled={exportState.kind === 'working'}
-          render={<Button variant="outline" size="icon" aria-label="More actions" title={title} />}
-        >
+        <DropdownMenuTrigger render={<Button variant="outline" size="icon" aria-label="More actions" title={title} />}>
           <Icon className={cn(tone)} />
         </DropdownMenuTrigger>
         <DropdownMenuContent>
@@ -54,6 +57,7 @@ export function TopBarMenu({
           </DropdownMenuItem>
           {onExportHtml ? (
             <DropdownMenuItem
+              disabled={exportState.kind === 'working'}
               title="Save this board as one HTML file that opens without Atlas"
               onClick={async () => {
                 setExportState({ kind: 'working' });
