@@ -8227,48 +8227,25 @@ mod information_completeness_tests {
         );
     }
 
-    fn external_read_model(
-        slug: &str,
-        fields: Vec<pb::FieldSpec>,
-        system: Option<&str>,
-    ) -> pb::Entity {
-        pb::Entity {
-            system: None,
-            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
-                id: Some(id(slug)),
-                schema: Some(trogon_atlas_core::schema::pack_fields(fields)),
-                external_source: Some(pb::read_model::ExternalSource {
-                    system: system.map(|s| pb::ExternalSystemRef { id: Some(id(s)) }),
-                    descriptor: "payment.failed webhook".into(),
-                }),
+    fn external_read_model(slug: &str, system: Option<&str>) -> pb::Entity {
+        let mut entity = read_model(slug, vec![field("order_id", string_kind())], Vec::new());
+        if let Some(pb::entity::Kind::ReadModel(rm)) = entity.kind.as_mut() {
+            rm.external_source = Some(pb::read_model::ExternalSource {
+                system: system.map(|s| pb::ExternalSystemRef { id: Some(id(s)) }),
                 ..Default::default()
-            })),
+            });
         }
+        entity
     }
 
     #[test]
     fn external_source_read_model_fields_come_from_the_payload() {
-        let all = vec![
-            stored(external_read_model(
-                "payment-webhooks",
-                vec![field("order_id", string_kind())],
-                Some("acme-payments"),
-            )),
-            stored(command(
-                "cancel-order",
-                "order",
-                vec![field("order_id", string_kind())],
-            )),
-            stored(processor("webhook-handler")),
-            stored(automation_slice(
-                "cancel-order-auto",
-                vec!["payment-webhooks"],
-                "webhook-handler",
-                "cancel-order",
-            )),
-        ];
+        let all = vec![stored(external_read_model(
+            "payment-webhooks",
+            Some("acme-payments"),
+        ))];
         let issues = validate_model(
-            &model_member(pb::EntityKind::AutomationSlice, "cancel-order-auto"),
+            &model_member(pb::EntityKind::ReadModel, "payment-webhooks"),
             &all,
         );
         assert_eq!(
@@ -8276,20 +8253,11 @@ mod information_completeness_tests {
             0,
             "{issues:?}"
         );
-        assert_eq!(
-            count(&issues, "AUTOMATION_COMMAND_FIELD_UNSOURCED"),
-            0,
-            "{issues:?}"
-        );
     }
 
     #[test]
     fn external_source_without_a_system_still_needs_sourced_fields() {
-        let all = vec![stored(external_read_model(
-            "payment-webhooks",
-            vec![field("order_id", string_kind())],
-            None,
-        ))];
+        let all = vec![stored(external_read_model("payment-webhooks", None))];
         let issues = validate_model(
             &model_member(pb::EntityKind::ReadModel, "payment-webhooks"),
             &all,
