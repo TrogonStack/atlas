@@ -18,9 +18,11 @@
 //     on an unregistered namespace: it is visible to an unrestricted caller
 //     and to nobody else, so a client with a scoped key sees it as simply not
 //     existing. That is invisible from every other screen.
+import { FolderTree, SearchX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { api, type NamespaceRegistryRow } from '@/lib/api';
 
@@ -134,9 +136,17 @@ export function NamespacesPage() {
             </output>
           ) : null
         ) : visible.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            {rows.length === 0 ? 'No namespaces yet.' : 'No namespace matches that filter.'}
-          </p>
+          <div className="flex justify-center py-10">
+            {rows.length === 0 ? (
+              <EmptyState icon={FolderTree} title="No namespaces yet">
+                Namespaces appear here once the store holds entities or the registry has rows.
+              </EmptyState>
+            ) : (
+              <EmptyState icon={SearchX} title="No namespace matches that filter">
+                The filter checks name, owner, and id. Clear it to see all {rows.length} namespaces.
+              </EmptyState>
+            )}
+          </div>
         ) : (
           <table className="w-full border-collapse text-xs">
             <thead>

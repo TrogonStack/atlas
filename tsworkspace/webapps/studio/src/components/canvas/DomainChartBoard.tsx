@@ -8,9 +8,10 @@ import {
   Position,
   ReactFlow,
 } from '@xyflow/react';
-import { Globe } from 'lucide-react';
+import { Globe, Waypoints } from 'lucide-react';
 import { useMemo } from 'react';
 import type { Selection } from '@/components/canvas/Board';
+import { BoardEmptyState } from '@/components/ui/empty-state';
 import {
   type BandData,
   buildDomainChart,
@@ -165,13 +166,19 @@ export function DomainChartBoard({
         <Controls showInteractive={false} />
       </ReactFlow>
       {!hasKnowledge ? (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="max-w-md rounded-lg border border-border bg-card px-6 py-4 text-sm text-muted-foreground">
-            No domains or subdomains in the store yet. Add a Domain root entity with
-            <span className="font-mono"> id.slug == id.namespace</span> and the Subdomains that partition its problem
-            space (Decision #29).
-          </div>
-        </div>
+        <BoardEmptyState
+          icon={Waypoints}
+          title="No domains yet"
+          hint={
+            <>
+              Start with a Domain root whose <span className="font-mono">id.slug</span> equals its{' '}
+              <span className="font-mono">id.namespace</span>, then add its Subdomains (Decision #29).
+            </>
+          }
+        >
+          The domain chart draws the problem space: a Domain root, the Subdomains that partition it, and the contexts
+          that realize them.
+        </BoardEmptyState>
       ) : null}
       <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5">

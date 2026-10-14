@@ -8,12 +8,13 @@
 // Renders without loading the whole store: only EventModel entities and
 // the problem-space namespaces (Decision #29).
 import { ReactFlowProvider } from '@xyflow/react';
-import { Search } from 'lucide-react';
+import { Boxes, Search, SearchX } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { Selection } from '@/components/canvas/Board';
 import { ContextMapBoard } from '@/components/canvas/ContextMapBoard';
 import { DomainChartBoard } from '@/components/canvas/DomainChartBoard';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { EmptyState } from '@/components/ui/empty-state';
 import { api } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
 import {
@@ -510,7 +511,12 @@ export function OverviewPage() {
               })}
             </div>
           ) : (
-            <div className="text-xs text-muted-foreground">No matching entities.</div>
+            <div className="flex flex-1 items-center justify-center">
+              <EmptyState icon={SearchX} title={`No matches for “${searchQuery.trim()}”`}>
+                Search looks at entity titles and ids across every model. Try another name, or clear the search to get
+                back to the {OVERVIEW_MODE_LABELS[mode].toLowerCase()} view.
+              </EmptyState>
+            </div>
           )}
         </section>
       ) : mode === 'chart' ? (
@@ -604,12 +610,24 @@ export function OverviewPage() {
                 </div>
               );
             })}
-            {sortedNamespaces.length === 0 ? (
-              <div className="text-xs text-muted-foreground">
-                No event models match the selected domain{selectedDomains.length === 1 ? '' : 's'}.
-              </div>
-            ) : null}
           </div>
+          {chart && sortedNamespaces.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center">
+              {eventModels.length === 0 ? (
+                <EmptyState icon={Boxes} title="No event models yet">
+                  Event models show up here grouped by namespace as soon as the store has one. Each card opens its
+                  board.
+                </EmptyState>
+              ) : (
+                <EmptyState
+                  icon={Boxes}
+                  title={`No event models in the selected domain${selectedDomains.length === 1 ? '' : 's'}`}
+                >
+                  Pick another domain above, or clear the filter to see all {eventModels.length} models.
+                </EmptyState>
+              )}
+            </div>
+          ) : null}
         </section>
       )}
     </div>

@@ -268,6 +268,34 @@ describe('OverviewPage', () => {
       expect(window.location.search).toBe('');
     });
 
+    it('says the store has no event models only once the overview has loaded', async () => {
+      let resolveOverview: (value: { entities: unknown[] }) => void = () => {};
+      (api.overview as ReturnType<typeof vi.fn>).mockReturnValue(
+        new Promise((resolve) => {
+          resolveOverview = resolve;
+        }),
+      );
+      render(<OverviewPage />);
+      expect(screen.queryByText('No event models yet')).toBeNull();
+
+      await act(async () => {
+        resolveOverview(EMPTY_OVERVIEW);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(screen.getByText('No event models yet')).toBeDefined();
+    });
+
+    it('names the query when a search finds nothing', async () => {
+      vi.useFakeTimers();
+      render(<OverviewPage />);
+      fireEvent.change(screen.getByPlaceholderText('Search models and entities'), { target: { value: 'order' } });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByText('No matches for “order”')).toBeDefined();
+      expect(screen.getByText(/get back to the models view/)).toBeDefined();
+    });
+
     it('shows search results in place of a board, and picking a view clears the search', async () => {
       vi.useFakeTimers();
       render(<OverviewPage />);

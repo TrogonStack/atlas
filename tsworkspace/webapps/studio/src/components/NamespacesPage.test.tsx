@@ -97,6 +97,21 @@ describe('NamespacesPage', () => {
     expect(screen.queryByText('billing')).toBeNull();
   });
 
+  it('tells apart an empty registry from a filter that matches nothing', async () => {
+    render(<NamespacesPage />);
+    await waitFor(() => expect(screen.getByText('No namespaces yet')).toBeDefined());
+    cleanup();
+
+    registryMock.mockResolvedValue({ namespaces: [row(), row({ id: 'ns_ffff', name: 'shipping' })] });
+    render(<NamespacesPage />);
+    await waitFor(() => expect(screen.getByText('shipping')).toBeDefined());
+    fireEvent.change(screen.getByLabelText('filter namespaces'), { target: { value: 'nope' } });
+
+    expect(screen.getByText('No namespace matches that filter')).toBeDefined();
+    expect(screen.getByText(/Clear it to see all 2 namespaces/)).toBeDefined();
+    expect(screen.queryByText('No namespaces yet')).toBeNull();
+  });
+
   it('shows the load failure instead of an empty registry', async () => {
     registryMock.mockRejectedValue(new Error('upstream unavailable'));
     render(<NamespacesPage />);

@@ -9,11 +9,12 @@ import {
   ReactFlow,
   useReactFlow,
 } from '@xyflow/react';
-import { Repeat } from 'lucide-react';
+import { Clock, Repeat } from 'lucide-react';
 import { useQueryState } from 'nuqs';
 import { useMemo } from 'react';
 import type { SelectedEdge, Selection } from '@/components/canvas/Board';
 import { BoardTopRight } from '@/components/canvas/BoardTopRight';
+import { BoardEmptyState } from '@/components/ui/empty-state';
 import {
   ContextHeaderNode,
   kindStyle,
@@ -284,11 +285,9 @@ export function SequenceBoard({
         <Controls showInteractive={false} />
       </ReactFlow>
       {nodes.length === 0 ? (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="max-w-md rounded-lg border border-border bg-card px-6 py-4 text-sm text-muted-foreground">
-            Nothing to sequence yet. This view puts the model's slices in time order, and this model has no slices.
-          </div>
-        </div>
+        <BoardEmptyState icon={Clock} title="Nothing to sequence yet">
+          This view puts the model's slices in time order, and this model has no slices.
+        </BoardEmptyState>
       ) : null}
       <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5">

@@ -83,12 +83,12 @@ test.describe('Overview to board flow', () => {
 
     await page.getByRole('button', { name: 'Domain chart' }).click();
     await expect(page).toHaveURL(/\?mode=chart$/);
-    await expect(page.getByText(/No domains or subdomains in the store yet/)).toBeVisible();
+    await expect(page.getByText('No domains yet')).toBeVisible();
     await expect(modelsHeading).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Contexts' }).click();
     await expect(page).toHaveURL(/\?mode=contexts$/);
-    await expect(page.getByText('No bounded contexts in the Overview data yet.')).toBeVisible();
+    await expect(page.getByText('No bounded contexts yet')).toBeVisible();
     await expect(modelsHeading).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Models' }).click();
@@ -100,7 +100,7 @@ test.describe('Overview to board flow', () => {
   test('the overview boards take real height, so their empty states stay inside them', async ({ page }) => {
     await page.goto('/?mode=chart');
     const search = page.getByRole('textbox', { name: 'Search models and entities' });
-    const chartCard = page.getByText(/No domains or subdomains in the store yet/);
+    const chartCard = page.getByText('No domains yet');
     const chartLegend = page.getByText(/where investment goes/);
     await expect(chartCard).toBeVisible();
 
@@ -113,7 +113,7 @@ test.describe('Overview to board flow', () => {
     expect(legendBox.y).toBeGreaterThan(cardBox.y + cardBox.height);
 
     await page.getByRole('button', { name: 'Contexts' }).click();
-    const contextsCard = page.getByText('No bounded contexts in the Overview data yet.');
+    const contextsCard = page.getByText('No bounded contexts yet');
     const contextsLegend = page.getByText('published events into subscription views');
     await expect(contextsCard).toBeVisible();
 
