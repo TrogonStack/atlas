@@ -3673,7 +3673,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .get(pb::EntityKind::EventModel, id, branch.as_deref())
             .await
             .map_err(store_err)?;
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        // A clipped store load means the walk may have missed members, and
+        // an apply from the output would silently drop them.
+        let (all, load_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let board =
             graph::board_closure(&all, &stored.entity, MAX_PROJECTION_ENTITIES, &self.metrics);
         let namespaces: std::collections::BTreeSet<&str> = board
@@ -3690,7 +3694,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             manifests: rendered.manifests,
             external_manifests: rendered.external_manifests,
             skipped: rendered.skipped,
-            truncated: board.truncated,
+            truncated: board.truncated || load_truncated,
         }))
     }
 
