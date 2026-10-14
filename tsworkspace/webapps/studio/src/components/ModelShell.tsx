@@ -573,22 +573,23 @@ export function ModelShell({
                 }}
               />
             }
+            switcher={
+              <Tabs
+                value={activeView}
+                onValueChange={(next) => {
+                  if (isView(next)) setView(next);
+                }}
+              >
+                <TabsList aria-label="Model view" className="shadow-sm">
+                  {availableViews.map((v) => (
+                    <TabsTab key={v} value={v}>
+                      {VIEW_LABELS[v]}
+                    </TabsTab>
+                  ))}
+                </TabsList>
+              </Tabs>
+            }
           >
-            <Tabs
-              value={activeView}
-              onValueChange={(next) => {
-                if (isView(next)) setView(next);
-              }}
-              className="absolute left-2 top-2 z-10"
-            >
-              <TabsList aria-label="Model view" className="shadow-sm">
-                {availableViews.map((v) => (
-                  <TabsTab key={v} value={v}>
-                    {VIEW_LABELS[v]}
-                  </TabsTab>
-                ))}
-              </TabsList>
-            </Tabs>
             <IssuesProvider issues={issues}>
               <ReactFlowProvider>
                 {activeView === 'board' ? (

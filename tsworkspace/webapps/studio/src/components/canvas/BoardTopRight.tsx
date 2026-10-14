@@ -7,24 +7,43 @@
 // read-model filter rendered straight on top of the summary's counts. Boards
 // now render through BoardTopRight into the single row below, where a new
 // control pushes its neighbours aside instead of covering them.
+//
+// The view switcher shares that row from the left. A breakpoint used to drop
+// the corner a full row below it on anything narrower than `lg`, which left
+// the summary floating mid-canvas on screens that had room for both.
 
 import { createContext, useContext, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const TopRightHost = createContext<HTMLElement | null>(null);
 
-export function BoardTopRightHost({ corner, children }: { corner: React.ReactNode; children: React.ReactNode }) {
+export function BoardTopRightHost({
+  corner,
+  switcher,
+  children,
+}: {
+  corner: React.ReactNode;
+  switcher?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   const [host, setHost] = useState<HTMLDivElement | null>(null);
   return (
     <TopRightHost.Provider value={host}>
-      {/* Wraps rather than grows past the view switcher on the far left. */}
+      {/* The row itself lets pointer events through, so the canvas stays draggable between the two ends. */}
       <div
-        ref={setHost}
-        data-testid="board-top-right"
-        className="absolute right-2 top-12 z-10 flex max-w-[75%] flex-wrap items-start justify-end gap-2 lg:top-2"
+        data-testid="board-toolbar"
+        className="pointer-events-none absolute inset-x-2 top-2 z-10 flex items-start justify-between gap-2"
       >
-        {/* Portaled controls append after this node, so the summary is ordered back to the corner. */}
-        <div className="order-last">{corner}</div>
+        <div className="pointer-events-auto shrink-0">{switcher}</div>
+        {/* Wraps under itself, right-aligned, once the controls outgrow the space left by the switcher. */}
+        <div
+          ref={setHost}
+          data-testid="board-top-right"
+          className="pointer-events-auto flex min-w-0 flex-wrap items-start justify-end gap-2"
+        >
+          {/* Portaled controls append after this node, so the summary is ordered back to the corner. */}
+          <div className="order-last">{corner}</div>
+        </div>
       </div>
       {children}
     </TopRightHost.Provider>
