@@ -636,7 +636,7 @@ export function Inspector({
         onValueChange={(value) => handleTabChange(value as InspectorTab)}
         className="flex min-h-0 flex-1 flex-col"
       >
-        <TabsList className="px-4">
+        <TabsList variant="underline" className="px-4">
           <TabsTab value="details">Details</TabsTab>
           <TabsTab value="validation">
             Validation

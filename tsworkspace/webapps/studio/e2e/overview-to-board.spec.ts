@@ -85,20 +85,20 @@ test.describe('Overview to board flow', () => {
     const board = page.locator('.react-flow');
 
     await expect(modelsHeading).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Models', pressed: true })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Models', selected: true })).toBeVisible();
     await expect(board).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Domain chart' }).click();
+    await page.getByRole('tab', { name: 'Domain chart' }).click();
     await expect(page).toHaveURL(/\?mode=chart$/);
     await expect(page.getByText('No domains mapped yet')).toBeVisible();
     await expect(modelsHeading).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Contexts' }).click();
+    await page.getByRole('tab', { name: 'Contexts' }).click();
     await expect(page).toHaveURL(/\?mode=contexts$/);
     await expect(page.getByText('No bounded contexts yet')).toBeVisible();
     await expect(modelsHeading).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Models' }).click();
+    await page.getByRole('tab', { name: 'Models' }).click();
     await expect(page).toHaveURL(/\/$/);
     await expect(modelsHeading).toBeVisible();
     await expect(board).toHaveCount(0);
@@ -119,7 +119,7 @@ test.describe('Overview to board flow', () => {
     expect(cardBox.y).toBeGreaterThan(searchBox.y + searchBox.height);
     expect(legendBox.y).toBeGreaterThan(cardBox.y + cardBox.height);
 
-    await page.getByRole('button', { name: 'Contexts' }).click();
+    await page.getByRole('tab', { name: 'Contexts' }).click();
     const contextsCard = page.getByText('No bounded contexts yet');
     const contextsLegend = page.getByText('published events into subscription views');
     await expect(contextsCard).toBeVisible();

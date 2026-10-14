@@ -243,7 +243,7 @@ describe('OverviewPage', () => {
 
     it('lands on the model list, with no board above it', async () => {
       await renderOverview();
-      expect(screen.getByRole('button', { name: 'Models', pressed: true })).toBeDefined();
+      expect(screen.getByRole('tab', { name: 'Models', selected: true })).toBeDefined();
       expect(screen.getByText(/Event Models/)).toBeDefined();
       expect(screen.queryByTestId('domain-chart-board')).toBeNull();
       expect(screen.queryByTestId('context-map-board')).toBeNull();
@@ -258,17 +258,17 @@ describe('OverviewPage', () => {
     it('swaps the list for the chosen board instead of stacking them', async () => {
       await renderOverview();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Domain chart' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
       expect(screen.getByTestId('domain-chart-board')).toBeDefined();
       expect(screen.queryByText(/Event Models/)).toBeNull();
       expect(window.location.search).toBe('?mode=chart');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Contexts' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Contexts' }));
       expect(screen.getByTestId('context-map-board')).toBeDefined();
       expect(screen.queryByTestId('domain-chart-board')).toBeNull();
       expect(screen.queryByText(/Event Models/)).toBeNull();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Models' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Models' }));
       expect(screen.getByText(/Event Models/)).toBeDefined();
       expect(screen.queryByTestId('context-map-board')).toBeNull();
       expect(window.location.search).toBe('');
@@ -308,7 +308,7 @@ describe('OverviewPage', () => {
       await act(async () => {
         await vi.runAllTimersAsync();
       });
-      fireEvent.click(screen.getByRole('button', { name: 'Domain chart' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
       const input = screen.getByPlaceholderText('Search models and entities');
 
       fireEvent.change(input, { target: { value: 'order' } });
@@ -318,7 +318,7 @@ describe('OverviewPage', () => {
       expect(screen.getByText(/Search Results/)).toBeDefined();
       expect(screen.queryByTestId('domain-chart-board')).toBeNull();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Contexts' }));
+      fireEvent.click(screen.getByRole('tab', { name: 'Contexts' }));
       expect(screen.queryByText(/Search Results/)).toBeNull();
       expect((input as HTMLInputElement).value).toBe('');
       expect(screen.getByTestId('context-map-board')).toBeDefined();
@@ -344,7 +344,7 @@ describe('OverviewPage', () => {
     await act(async () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Domain chart' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
     fireEvent.click(screen.getByTestId('domain-chart-board'));
     expect(screen.getByText('The trading charter.')).toBeDefined();
   });

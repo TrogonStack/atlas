@@ -21,6 +21,7 @@ import { KIND_SHORT_TO_CAMEL } from '@/components/ModelShell.kindmap';
 import { MultiInspector } from '@/components/MultiInspector';
 import { Sidebar } from '@/components/Sidebar';
 import { TopBar } from '@/components/TopBar';
+import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import { ValidationInspector } from '@/components/ValidationInspector';
 import { ValidationSummary } from '@/components/ValidationSummary';
 import { api, type BranchDiffEntry, type ServerInfo } from '@/lib/api';
@@ -40,6 +41,17 @@ function edgeIdentity(data: BoardEdgeData): string {
 }
 
 const VIEWS = ['board', 'sequence', 'ui', 'plan', 'domain'] as const;
+type View = (typeof VIEWS)[number];
+const VIEW_LABELS: Record<View, string> = {
+  board: 'Board',
+  sequence: 'Sequence',
+  ui: 'UI',
+  plan: 'Plan',
+  domain: 'Domain',
+};
+function isView(value: unknown): value is View {
+  return (VIEWS as readonly unknown[]).includes(value);
+}
 
 // URL query-state parsers (nuqs). Params are cleared when they equal the
 // default, so a pristine board view keeps a clean URL.
@@ -562,26 +574,21 @@ export function ModelShell({
               />
             }
           >
-            <div className="absolute left-2 top-2 z-10 flex overflow-hidden rounded-md border border-border bg-card text-xs shadow-sm">
-              {availableViews.map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setView(v)}
-                  className={`px-3 py-1.5 font-medium capitalize ${activeView === v ? 'bg-foreground text-background' : 'hover:bg-accent'}`}
-                >
-                  {v === 'board'
-                    ? 'Board'
-                    : v === 'sequence'
-                      ? 'Sequence'
-                      : v === 'ui'
-                        ? 'UI'
-                        : v === 'plan'
-                          ? 'Plan'
-                          : 'Domain'}
-                </button>
-              ))}
-            </div>
+            <Tabs
+              value={activeView}
+              onValueChange={(next) => {
+                if (isView(next)) setView(next);
+              }}
+              className="absolute left-2 top-2 z-10"
+            >
+              <TabsList aria-label="Model view" className="shadow-sm">
+                {availableViews.map((v) => (
+                  <TabsTab key={v} value={v}>
+                    {VIEW_LABELS[v]}
+                  </TabsTab>
+                ))}
+              </TabsList>
+            </Tabs>
             <IssuesProvider issues={issues}>
               <ReactFlowProvider>
                 {activeView === 'board' ? (

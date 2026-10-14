@@ -14,7 +14,9 @@ import type { Selection } from '@/components/canvas/Board';
 import { ContextMapBoard } from '@/components/canvas/ContextMapBoard';
 import { DomainChartBoard } from '@/components/canvas/DomainChartBoard';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { buttonVariants } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
 import {
@@ -372,29 +374,22 @@ export function OverviewPage() {
             The map of everything. Pick an event model to walk a flow; click a domain or context to read its charter.
           </p>
           <div className="ml-auto flex items-center gap-3">
-            <div className="inline-flex overflow-hidden rounded-md border border-border text-xs">
-              {OVERVIEW_MODES.map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => selectMode(m)}
-                  aria-pressed={mode === m}
-                  className={cn(
-                    'px-3 py-1 font-medium transition-colors',
-                    mode === m
-                      ? 'bg-foreground text-background'
-                      : 'bg-card text-foreground hover:bg-accent hover:text-accent-foreground',
-                  )}
-                >
-                  {OVERVIEW_MODE_LABELS[m]}
-                </button>
-              ))}
-            </div>
-            <a
-              href="/namespaces"
-              className="inline-flex items-center gap-1.5 rounded-md border border-border bg-card px-3 py-1 text-xs font-medium text-foreground hover:bg-accent hover:text-accent-foreground"
+            <Tabs
+              value={mode}
+              onValueChange={(next) => {
+                if (isOverviewMode(next)) selectMode(next);
+              }}
             >
-              <Library className="h-3.5 w-3.5" aria-hidden="true" />
+              <TabsList aria-label="Overview view">
+                {OVERVIEW_MODES.map((m) => (
+                  <TabsTab key={m} value={m}>
+                    {OVERVIEW_MODE_LABELS[m]}
+                  </TabsTab>
+                ))}
+              </TabsList>
+            </Tabs>
+            <a href="/namespaces" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+              <Library aria-hidden="true" />
               Namespaces
             </a>
           </div>
