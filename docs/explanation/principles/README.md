@@ -19,3 +19,4 @@ that every desired interface, profile, or agent workflow already exists.
 - [Multiplayer](multiplayer.md): Support people, individual agents, and agent swarms working concurrently.
 - [Multiple roles](multiple-roles.md): Adapt views to roles and preferences while preserving a complete, coherent model for every affected role.
 - [Event Modeling](event-modeling.md): Anchor every layer in the model's behavioral primitives.
+- [Code is the truth](code-is-the-truth.md): Once a slice is implemented the model follows the code; before that it may run ahead as a proposal.

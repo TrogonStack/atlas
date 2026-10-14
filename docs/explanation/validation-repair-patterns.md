@@ -108,6 +108,47 @@ automation should preserve these checks while extracting repeated context
 collection and verification, rather than generalizing the domain-specific
 membership edits into an unconditional fix.
 
+## External read model reported as unsourced
+
+### Rule finding and evidence
+
+`READ_MODEL_FIELD_UNSOURCED` reports every field of a read model whose
+`externalSource` names a system. The read model has no source events,
+because the data arrives from outside the model: for example
+`readModel:acme-payments/payment-webhooks@1`, fed by
+`externalSystem:acme-payments/payment-gateway@1`. An automation slice reads
+the view and emits a command that records the webhook.
+
+The rule checked only source events and swimlane state. An external feed
+has neither, so no repair inside the model could satisfy it.
+
+### Validator change
+
+The model was correct, so the validator changed. A read model with an
+`externalSource` system is exempt from the rule: the external payload
+supplies its fields. The rule's description says so.
+
+These alternatives would have changed behavior or hidden the finding:
+
+- Inventing a local event that "carries" the webhook fields describes a
+  fact the system does not record.
+- Dropping the fields hides the payload the automation reads.
+- Removing the external source deletes the seam to the outside system.
+
+### Verification after the fix
+
+Scoped validation of the board reported no `READ_MODEL_FIELD_UNSOURCED`
+finding after the server was rebuilt with the fix. A server test pins
+both cases: an external read model with a system reports no finding, and
+one without a system still reports each field.
+
+### Remaining limits
+
+- An external source with no system still reports one finding per field.
+  A single finding about the missing system would be clearer.
+- A read model that has both source events and an external source skips
+  the check for every field, including fields its events should carry.
+
 ## Add a pattern after a repair
 
 Give each new pattern a descriptive heading. Record its symptom,
