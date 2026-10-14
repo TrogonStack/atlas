@@ -96,6 +96,15 @@ storyboard's declared entry view. The
 shows the evidence required for that distinction. Removing a member is not
 a general solution to a validation error.
 
+Sometimes the model is right and the rule is wrong. Check the rule's
+description against the definitions you fetched. If the finding
+contradicts a fact that the model states on purpose, such as an external
+source that supplies a read model's fields, change the validator, not the
+model. Do not invent a source event, drop a field, or remove the fact only
+to pass the rule. Record the case in the
+[repair patterns](../explanation/validation-repair-patterns.md) so the next
+reviewer can tell a modeling gap from a rule gap.
+
 Limit the proposed edits to the affected definitions. Preserve their
 unrelated fields and use the current `etag` for every existing entity put.
 If a contract needs a new version, follow the
