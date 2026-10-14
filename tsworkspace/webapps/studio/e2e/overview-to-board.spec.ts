@@ -72,8 +72,33 @@ test.describe('Overview to board flow', () => {
     await expect(page.getByText('Order Service', { exact: true }).first()).toBeVisible();
   });
 
-  test('the overview boards take real height, so their empty states stay inside them', async ({ page }) => {
+  test('the overview shows one view at a time, landing on the model list', async ({ page }) => {
     await page.goto('/');
+    const modelsHeading = page.getByRole('heading', { name: /Event Models/ });
+    const board = page.locator('.react-flow');
+
+    await expect(modelsHeading).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Models', pressed: true })).toBeVisible();
+    await expect(board).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Domain chart' }).click();
+    await expect(page).toHaveURL(/\?mode=chart$/);
+    await expect(page.getByText(/No domains or subdomains in the store yet/)).toBeVisible();
+    await expect(modelsHeading).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Contexts' }).click();
+    await expect(page).toHaveURL(/\?mode=contexts$/);
+    await expect(page.getByText('No bounded contexts in the Overview data yet.')).toBeVisible();
+    await expect(modelsHeading).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Models' }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(modelsHeading).toBeVisible();
+    await expect(board).toHaveCount(0);
+  });
+
+  test('the overview boards take real height, so their empty states stay inside them', async ({ page }) => {
+    await page.goto('/?mode=chart');
     const search = page.getByRole('textbox', { name: 'Search models and entities' });
     const chartCard = page.getByText(/No domains or subdomains in the store yet/);
     const chartLegend = page.getByText(/where investment goes/);
