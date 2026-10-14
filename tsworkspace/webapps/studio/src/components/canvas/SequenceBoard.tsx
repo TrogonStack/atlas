@@ -283,6 +283,13 @@ export function SequenceBoard({
         <Background variant={BackgroundVariant.Dots} gap={18} size={1.2} color="#d4d4d8" />
         <Controls showInteractive={false} />
       </ReactFlow>
+      {nodes.length === 0 ? (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="max-w-md rounded-lg border border-border bg-card px-6 py-4 text-sm text-muted-foreground">
+            Nothing to sequence yet. This view puts the model's slices in time order, and this model has no slices.
+          </div>
+        </div>
+      ) : null}
       <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 bg-zinc-400" />

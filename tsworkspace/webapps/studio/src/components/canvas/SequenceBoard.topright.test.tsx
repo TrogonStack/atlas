@@ -3,10 +3,10 @@
 // summary to, so the filter rendered on top of the summary's counts. It now
 // goes through BoardTopRight; this holds it there.
 
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { withNuqsTestingAdapter } from 'nuqs/adapters/testing';
 import type React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@xyflow/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@xyflow/react')>();
@@ -32,6 +32,8 @@ vi.mock('@/components/canvas/useFocusNode', () => ({
 import { buildModel } from '@/lib/model';
 import { BoardTopRightHost } from './BoardTopRight';
 import { SequenceBoard } from './SequenceBoard';
+
+afterEach(cleanup);
 
 const wireId = (slug: string) => ({ namespace: 'demo', slug, version: '1' });
 
@@ -76,5 +78,18 @@ describe('SequenceBoard top-right control', () => {
     expect(row.contains(screen.getByText('validation summary'))).toBe(true);
     // Nothing inside the row may re-anchor itself to the corner.
     expect(row.querySelector('.absolute')).toBeNull();
+    expect(screen.queryByText(/Nothing to sequence yet/)).toBeNull();
+  });
+});
+
+describe('SequenceBoard without slices', () => {
+  it('says why the canvas is empty instead of showing a blank board', () => {
+    const noSlices = buildModel([{ event: { id: wireId('thing.published'), title: 'Thing published' } }] as never);
+    render(<SequenceBoard model={noSlices} selections={[]} onSelect={vi.fn()} onSelectEdge={vi.fn()} />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+
+    expect(screen.getByText(/Nothing to sequence yet/)).toBeDefined();
+    expect(screen.queryByRole('combobox')).toBeNull();
   });
 });
