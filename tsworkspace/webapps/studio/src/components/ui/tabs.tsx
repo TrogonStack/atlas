@@ -14,7 +14,7 @@ export function TabsTab({ className, ...props }: React.ComponentProps<typeof Bas
   return (
     <BaseTabs.Tab
       className={cn(
-        'inline-flex items-center gap-1 border-b-2 border-transparent px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[active]:border-foreground data-[active]:text-foreground',
+        'inline-flex cursor-pointer items-center gap-1 border-b-2 border-transparent px-3 py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring data-[active]:border-foreground data-[active]:text-foreground',
         className,
       )}
       {...props}
