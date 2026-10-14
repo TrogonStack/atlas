@@ -25,11 +25,13 @@ RUN case "$TARGETARCH" in \
 # rsworkspace arrives as a bind mount from the repository root context
 # instead of a COPY, so the image never embeds a stale snapshot of the
 # tree. The mount is read-only, so the build and its target
-# directory live under cache mounts instead of inside /src.
+# directory live under cache mounts instead of inside /src. Both platforms
+# build at once on the build host, and cargo's download lock sits outside the
+# registry mount, so each platform gets its own registry cache.
 WORKDIR /src
 RUN --mount=type=bind,source=rsworkspace,target=/src \
     --mount=type=cache,target=/target,id=trogon-atlas-server-target \
-    --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/registry,id=trogon-atlas-server-cargo-registry-${TARGETARCH} \
     . /cross.env \
  && cargo build --release --locked -p trogon-atlas-server --bin trogon-atlas-server --target "$(cat /target.txt)" --target-dir /target \
  && mkdir -p /out \
