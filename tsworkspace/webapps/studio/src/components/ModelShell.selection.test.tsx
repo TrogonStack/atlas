@@ -15,8 +15,20 @@ vi.mock('@/lib/realtime', () => ({
   watchEntities: vi.fn(() => new Promise(() => {})),
 }));
 vi.mock('@/components/canvas/Board', () => ({
-  Board: ({ focus, selections }: { focus?: { key: string; n: number }; selections: unknown[] }) => (
-    <div data-testid="board" data-focus={JSON.stringify(focus)} data-selections={JSON.stringify(selections)} />
+  Board: ({
+    focus,
+    selections,
+    onSelect,
+  }: {
+    focus?: { key: string; n: number };
+    selections: unknown[];
+    onSelect: (key: string) => void;
+  }) => (
+    <div data-testid="board" data-focus={JSON.stringify(focus)} data-selections={JSON.stringify(selections)}>
+      <button type="button" onClick={() => onSelect('event:shop/order.placed@1')}>
+        Board select order placed
+      </button>
+    </div>
   ),
 }));
 vi.mock('@/components/canvas/SequenceBoard', () => ({ SequenceBoard: () => null }));
@@ -29,10 +41,21 @@ vi.mock('@xyflow/react', async (importOriginal) => {
 });
 vi.mock('@tanstack/react-hotkeys', () => ({ useHotkey: vi.fn() }));
 vi.mock('@/components/Inspector', () => ({
-  Inspector: ({ entity, onClose }: { entity: { title: string }; onClose: () => void }) => (
-    <div data-testid="inspector">
+  Inspector: ({
+    entity,
+    tab,
+    onTabChange,
+    onClose,
+  }: {
+    entity: { title: string };
+    tab?: string;
+    onTabChange?: (tab: string) => void;
+    onClose: () => void;
+  }) => (
+    <div data-testid="inspector" data-tab={tab}>
       {entity.title}
       <button type="button" aria-label="Close inspector" onClick={onClose} />
+      <button type="button" aria-label="Inspector tab details" onClick={() => onTabChange?.('details')} />
     </div>
   ),
 }));
@@ -166,5 +189,40 @@ describe('ModelShell selection drawer routing', () => {
     });
     expect(screen.queryByTestId('multi-inspector')).toBeNull();
     expect(screen.getByTestId('inspector').textContent).toBe('Order placed');
+  });
+
+  it('jumps the Inspector to the Validation tab from a finding, and resets to Details on a fresh selection', async () => {
+    const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
+    const model = buildModel([{ event: { id, title: 'Order placed' } }] as never);
+    const issues = buildIssueIndex([
+      {
+        severity: 'SEVERITY_ERROR',
+        code: 'MISSING_EVENT_FIELD',
+        message: 'Order placed needs a customer identifier.',
+        subject: { kind: 'ENTITY_KIND_EVENT', id },
+        subjectField: 'schema.fields',
+      },
+    ]);
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" issues={issues} />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /validation findings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /shop\/order\.placed@1/ }));
+    await waitFor(() => expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('validation'));
+
+    // The Inspector reports its own tab changes back up; ModelShell must keep
+    // its state in sync rather than only pushing `tab` one way down.
+    fireEvent.click(screen.getByRole('button', { name: 'Inspector tab details' }));
+    expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('details');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Validation findings' }));
+    fireEvent.click(screen.getByRole('button', { name: /shop\/order\.placed@1/ }));
+    await waitFor(() => expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('validation'));
+
+    // A fresh selection from the board is a new look at an entity, not a
+    // continuation of the validation jump: it must land back on Details.
+    fireEvent.click(screen.getByRole('button', { name: 'Board select order placed' }));
+    expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('details');
   });
 });

@@ -1,12 +1,12 @@
 import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { CopyContextButton } from '@/components/CopyContextButton';
 import { CopyFixPromptButton } from '@/components/CopyFixPromptButton';
 import { kindStyle } from '@/components/canvas/StickyNode';
 import { PayloadTypePicker, TypeLibrarySources } from '@/components/TypeLibraryPanels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
+import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
 import { entityContext } from '@/lib/context';
 import { EMPTY_ISSUE_INDEX, type Issue, type IssueIndex, type Severity } from '@/lib/issues';
@@ -459,11 +459,20 @@ const SEVERITY_STYLE: Record<Severity, string> = {
   info: 'border-sky-200 bg-sky-50 text-sky-800',
 };
 
-// The validator's findings for this entity, rendered above everything else
-// the panel claims about the model. A silent panel and a clean panel used
-// to look identical, so an entity the server rejects read as healthy.
-// `error` is not swallowed: "validation did not run" and "validation found
-// nothing" are different states and must not render the same.
+// Worst severity among an entity's findings colors its Validation tab pill,
+// so the drawer hints how bad the news is before the tab is even opened.
+const VALIDATION_TAB_PILL_STYLE: Record<Severity, string> = {
+  error: 'bg-red-100 text-red-800',
+  warning: 'bg-amber-100 text-amber-900',
+  info: 'bg-sky-100 text-sky-800',
+};
+
+// The validator's findings for this entity, kept in their own tab instead of
+// inline with everything else the panel claims about the model. A silent
+// panel and a clean panel used to look identical, so an entity the server
+// rejects read as healthy. `error` is not swallowed: "validation did not
+// run" and "validation found nothing" are different states and must not
+// render the same.
 function IssueList({
   issues,
   error,
@@ -477,40 +486,37 @@ function IssueList({
 }) {
   if (error)
     return (
-      <section>
-        <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Validation</h3>
-        <p className="text-[11px] italic text-muted-foreground">
-          unavailable ({error}). This panel cannot say whether the entity is valid.
-        </p>
-      </section>
+      <p className="text-[11px] italic text-muted-foreground">
+        unavailable ({error}). This panel cannot say whether the entity is valid.
+      </p>
     );
-  if (issues.length === 0) return null;
+  if (issues.length === 0)
+    return <p className="text-[11px] italic text-muted-foreground">No validation findings for this entity.</p>;
   return (
-    <section>
-      <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Validation ({issues.length})</h3>
-      <div className="flex flex-col gap-2">
-        {issues.map((i) => (
-          <div
-            key={`${i.code} ${i.field} ${i.message}`}
-            className={`flex flex-col gap-1.5 rounded border px-2 py-1.5 ${SEVERITY_STYLE[i.severity]}`}
-          >
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[9px] font-bold uppercase tracking-wide">{i.severity}</span>
-              <span className="font-mono text-[10px]">{i.code}</span>
-              {i.field ? <span className="font-mono text-[10px] opacity-70">{i.field}</span> : null}
-            </div>
-            {i.ruleTitle ? <div className="text-[11px] font-semibold">{i.ruleTitle}</div> : null}
-            <p className="text-[11px] leading-snug">{i.message}</p>
-            {i.defaultSeverity && i.defaultSeverity !== i.severity ? (
-              <p className="text-[10px] italic opacity-70">rule default: {i.defaultSeverity}</p>
-            ) : null}
-            <CopyFixPromptButton model={model} issue={i} momentKey={momentKey} />
+    <div className="flex flex-col gap-2">
+      {issues.map((i) => (
+        <div
+          key={[i.code, i.field, i.message].join('\u0000')}
+          className={`flex flex-col gap-1.5 rounded border px-2 py-1.5 ${SEVERITY_STYLE[i.severity]}`}
+        >
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[9px] font-bold uppercase tracking-wide">{i.severity}</span>
+            <span className="font-mono text-[10px]">{i.code}</span>
+            {i.field ? <span className="font-mono text-[10px] opacity-70">{i.field}</span> : null}
           </div>
-        ))}
-      </div>
-    </section>
+          {i.ruleTitle ? <div className="text-[11px] font-semibold">{i.ruleTitle}</div> : null}
+          <p className="text-[11px] leading-snug">{i.message}</p>
+          {i.defaultSeverity && i.defaultSeverity !== i.severity ? (
+            <p className="text-[10px] italic opacity-70">rule default: {i.defaultSeverity}</p>
+          ) : null}
+          <CopyFixPromptButton model={model} issue={i} momentKey={momentKey} />
+        </div>
+      ))}
+    </div>
   );
 }
+
+export type InspectorTab = 'details' | 'validation';
 
 export function Inspector({
   model,
@@ -518,6 +524,8 @@ export function Inspector({
   instanceUid,
   momentKey,
   issues = EMPTY_ISSUE_INDEX,
+  tab,
+  onTabChange,
   onClose,
   onSelect,
 }: {
@@ -530,11 +538,23 @@ export function Inspector({
   instanceUid?: string;
   // The clicked moment's defining slice: makes the Timeline instance-aware.
   momentKey?: string;
+  /** Controlled active tab. Omit to let the drawer manage its own, starting on 'details'. */
+  tab?: InspectorTab;
+  onTabChange?: (tab: InspectorTab) => void;
   onClose: () => void;
   onSelect: (key: string) => void;
 }) {
   const style = kindStyle(entity.kind);
   const ownIssues = useMemo(() => issues.for(entity), [issues, entity]);
+  const [uncontrolledTab, setUncontrolledTab] = useState<InspectorTab>('details');
+  const activeTab = tab ?? uncontrolledTab;
+  // Base-ui's Tabs.Root always gets a concrete value: toggling it between
+  // controlled and uncontrolled based on whether `tab` is passed would change
+  // how base-ui resolves the initially active tab.
+  const handleTabChange = (next: InspectorTab) => {
+    setUncontrolledTab(next);
+    onTabChange?.(next);
+  };
   const ownSlice = useMemo(() => model.slices.find((s) => s.entity.key === entity.key), [model, entity]);
   const sliceScenarios = ownSlice?.scenarios ?? [];
   const memberships = useMemo(
@@ -611,621 +631,652 @@ export function Inspector({
       <div className="px-4 pb-3">
         <CopyContextButton getText={() => entityContext(model, entity, momentKey, ownIssues)} />
       </div>
-      <Separator />
-      <div className="flex-1 space-y-4 overflow-y-auto p-4 text-sm">
-        <IssueList issues={ownIssues} error={issues.error} model={model} momentKey={momentKey} />
-        {neighborsBackward.length > 0 || neighborsForward.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
-              Timeline{momentKey ? ': this moment' : ''}
-            </h3>
-            <div className="space-y-2">
-              <NeighborList title="Backward" arrow="back" items={neighborsBackward} onSelect={onSelect} />
-              <NeighborList title="Forward" arrow="fwd" items={neighborsForward} onSelect={onSelect} />
-            </div>
-          </section>
-        ) : null}
-        {entity.doc ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Doc</h3>
-            <p className="leading-relaxed text-foreground/90">{entity.doc}</p>
-          </section>
-        ) : null}
-        {entity.role ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Role</h3>
-            <Badge variant="outline">{entity.role}</Badge>
-          </section>
-        ) : null}
-        {entity.streamId ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Stream identity</h3>
-            <p className="text-xs leading-relaxed">
-              <span className="rounded bg-muted px-1.5 py-0.5 font-mono">{entity.streamId}</span>
-            </p>
-          </section>
-        ) : null}
-        {entity.externalSource ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">External source</h3>
-            <p className="text-xs leading-relaxed text-foreground/90">
-              Populated by <span className="font-semibold">{entity.externalSource.system}</span>
-              {entity.externalSource.descriptor ? ` (${entity.externalSource.descriptor})` : ''}: not projected from
-              internal events.
-            </p>
-          </section>
-        ) : null}
-        {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}
-        {entity.kind === 'event' || entity.kind === 'command' || entity.kind === 'readModel' ? (
-          <PayloadTypePicker entity={entity} />
-        ) : null}
-        <SeamSection entity={entity} model={model} onSelect={onSelect} />
-        {(() => {
-          const find = (kind: Entity['kind'], id: { namespace: string; slug: string }) =>
-            model.entities.find((e) => e.kind === kind && e.id.namespace === id.namespace && e.id.slug === id.slug);
-          const rows: React.ReactNode[] = [];
-          if (entity.kind === 'ui' && entity.screenSlot) {
-            const screen = screenOfUi(model, entity);
-            rows.push(
-              screen ? (
-                <button
-                  key="screen"
-                  type="button"
-                  onClick={() => onSelect(screen.key)}
-                  className="w-full rounded-md border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-left text-xs hover:bg-teal-100"
-                >
-                  fills <span className="font-mono font-semibold">{entity.screenSlot.slot}</span> on{' '}
-                  <span className="font-mono font-semibold">{screen.title}</span>
-                </button>
-              ) : (
-                <div key="screen" className="rounded-md border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-xs">
-                  fills <span className="font-mono font-semibold">{entity.screenSlot.slot}</span> on{' '}
-                  <span className="font-mono font-semibold">
-                    {entity.screenSlot.screen.namespace}/{entity.screenSlot.screen.slug}
-                  </span>
-                </div>
-              ),
-            );
-          } else if (entity.kind === 'screen') {
-            for (const slot of screenSlotsOf(model, entity)) {
-              rows.push(
-                <div key={slot.name} className="rounded-md border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-xs">
-                  <div className="font-mono font-semibold">
-                    {slot.name}
-                    {slot.required ? <span className="ml-1 text-[10px] uppercase text-teal-700">required</span> : null}
-                  </div>
-                  {slot.doc ? <div className="text-[10px] text-muted-foreground">{slot.doc}</div> : null}
-                  <div className="mt-1 space-y-1">
-                    {slot.contributors.length > 0 ? (
-                      slot.contributors.map((ui) => (
-                        <button
-                          key={ui.key}
-                          type="button"
-                          onClick={() => onSelect(ui.key)}
-                          className="block w-full rounded border border-teal-200 bg-white/60 px-1.5 py-1 text-left font-mono text-[10px] hover:bg-teal-100"
-                        >
-                          {ui.id.namespace}/{ui.id.slug}
-                        </button>
-                      ))
-                    ) : (
-                      <span className="text-[10px] text-muted-foreground">unfilled</span>
-                    )}
-                  </div>
-                </div>,
-              );
-            }
-          } else if (entity.kind === 'term') {
-            for (const ref of termEmbodiedBy(entity)) {
-              const target = find(ref.kind, ref.id);
-              rows.push(
-                target ? (
-                  <button
-                    key={`${ref.kind}:${ref.id.namespace}/${ref.id.slug}`}
-                    type="button"
-                    onClick={() => onSelect(target.key)}
-                    className="w-full rounded-md border border-lime-200 bg-lime-50/70 px-2 py-1.5 text-left text-xs hover:bg-lime-100"
-                  >
-                    embodied by <span className="font-mono font-semibold">{target.title}</span>
-                  </button>
-                ) : (
-                  <div
-                    key={`${ref.kind}:${ref.id.namespace}/${ref.id.slug}`}
-                    className="rounded-md border border-lime-200 bg-lime-50/70 px-2 py-1.5 text-xs"
-                  >
-                    embodied by{' '}
-                    <span className="font-mono font-semibold">
-                      {ref.kind}:{ref.id.namespace}/{ref.id.slug}
-                    </span>
-                  </div>
-                ),
-              );
-            }
-          } else if (entity.kind === 'ambiguity') {
-            const ruling = ambiguityRulingOf(entity);
-            if (ruling) {
-              rows.push(
-                <div key="ruling" className="rounded-md border border-rose-200 bg-rose-50/70 px-2 py-1.5 text-xs">
-                  <span className="font-semibold uppercase text-rose-700">{ruling}</span>
-                </div>,
-              );
-            }
-            for (const id of ambiguityTermsOf(entity)) {
-              const term = find('term', id);
-              rows.push(
-                term ? (
-                  <button
-                    key={`${id.namespace}/${id.slug}`}
-                    type="button"
-                    onClick={() => onSelect(term.key)}
-                    className="w-full rounded-md border border-rose-200 bg-rose-50/70 px-2 py-1.5 text-left text-xs hover:bg-rose-100"
-                  >
-                    term <span className="font-mono font-semibold">{term.title}</span>
-                  </button>
-                ) : (
-                  <div
-                    key={`${id.namespace}/${id.slug}`}
-                    className="rounded-md border border-rose-200 bg-rose-50/70 px-2 py-1.5 text-xs"
-                  >
-                    term{' '}
-                    <span className="font-mono font-semibold">
-                      {id.namespace}/{id.slug}
-                    </span>
-                  </div>
-                ),
-              );
-            }
-          }
-          if (rows.length === 0) return null;
-          return (
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => handleTabChange(value as InspectorTab)}
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <TabsList className="px-4">
+          <TabsTab value="details">Details</TabsTab>
+          <TabsTab value="validation">
+            Validation
+            {/* "validation did not run" (error) and "validation found nothing" (no
+                issues) are different states; the tab marker must not look the same
+                for both. */}
+            {issues.error ? (
+              // SVG has no `title` attribute of its own (unlike HTML elements); the
+              // wrapping span carries it so the native tooltip still shows on hover.
+              <span title="Validation unavailable">
+                <TriangleAlert aria-label="unavailable" className="h-3 w-3 text-amber-700" />
+              </span>
+            ) : ownIssues.length > 0 ? (
+              <span
+                className={`rounded-full px-1.5 text-[10px] font-semibold ${VALIDATION_TAB_PILL_STYLE[ownIssues[0].severity]}`}
+              >
+                {ownIssues.length}
+              </span>
+            ) : null}
+          </TabsTab>
+        </TabsList>
+        <TabsPanel value="details" className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm">
+          {neighborsBackward.length > 0 || neighborsForward.length > 0 ? (
             <section>
               <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
-                {entity.kind === 'screen' || entity.kind === 'ui' ? 'Screen composition' : 'Language'}
+                Timeline{momentKey ? ': this moment' : ''}
               </h3>
-              <div className="space-y-1.5">{rows}</div>
-            </section>
-          );
-        })()}
-        {(() => {
-          const stale = staleRefsOf(model, entity);
-          if (stale.length === 0) return null;
-          return (
-            <section>
-              <h3 className="mb-1 text-xs font-semibold uppercase text-amber-700">Migration pending</h3>
-              <div className="space-y-1.5">
-                {stale.map((sr) => (
-                  <div
-                    key={`${sr.label}:${sr.ref.namespace}/${sr.ref.slug}`}
-                    className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs"
-                  >
-                    {sr.label} <span className="font-mono font-semibold">{sr.ref.slug}</span> pins{' '}
-                    <span className="font-mono">v{sr.ref.version}</span>;{' '}
-                    <span className="font-mono">v{sr.latest}</span> exists
-                  </div>
-                ))}
+              <div className="space-y-2">
+                <NeighborList title="Backward" arrow="back" items={neighborsBackward} onSelect={onSelect} />
+                <NeighborList title="Forward" arrow="fwd" items={neighborsForward} onSelect={onSelect} />
               </div>
-              <p className="mt-1 text-[10px] text-muted-foreground">
-                A breaking change is mid-flight: re-point the ref or keep both versions deliberately.
-              </p>
             </section>
-          );
-        })()}
-        {(() => {
-          // Decision #29: the knowledge graph in the drawer realizes on
-          // contexts, domain + realized-by on subdomains, subdomains on
-          // domains. Targets may live in an unloaded namespace.
-          const linkBtn = (e: Entity, prefix: string) => (
-            <button
-              key={`${prefix}:${e.key}`}
-              type="button"
-              onClick={() => onSelect(e.key)}
-              className="w-full rounded-md border border-indigo-200 bg-indigo-50/60 px-2 py-1.5 text-left text-xs hover:bg-indigo-100"
-            >
-              {prefix} <span className="font-mono font-semibold">{e.title}</span>
-              {classificationOf(e) ? (
-                <span className="ml-1.5 text-[10px] font-bold uppercase text-indigo-700">{classificationOf(e)}</span>
-              ) : null}
-            </button>
-          );
-          const missing = (label: string, key: string) => (
-            <div key={key} className="rounded-md border border-indigo-200 bg-indigo-50/60 px-2 py-1.5 text-xs">
-              <span className="font-mono font-semibold">{label}</span>
-              <span className="block text-[10px] text-muted-foreground">
-                not loaded; switch to all namespaces to navigate
-              </span>
-            </div>
-          );
-          const find = (kind: Entity['kind'], id: { namespace: string; slug: string }) =>
-            model.entities.find((e) => e.kind === kind && e.id.namespace === id.namespace && e.id.slug === id.slug);
-          const rows: React.ReactNode[] = [];
-          if (entity.kind === 'boundedContext') {
-            for (const rid of realizesOf(entity)) {
-              const sd = find('subdomain', rid);
-              rows.push(sd ? linkBtn(sd, 'realizes') : missing(`${rid.namespace}/${rid.slug}`, `r:${rid.slug}`));
-            }
-            for (const rel of relationshipsOf(entity)) {
-              const up = find('boundedContext', rel.upstream);
-              rows.push(
-                <div
-                  key={`rel:${rel.upstream.namespace}`}
-                  className="rounded-md border border-indigo-200 bg-indigo-50/60 px-2 py-1.5 text-xs"
-                >
-                  {up ? (
-                    <button
-                      type="button"
-                      onClick={() => onSelect(up.key)}
-                      className="font-mono font-semibold hover:underline"
-                    >
-                      {rel.upstream.namespace}
-                    </button>
-                  ) : (
-                    <span className="font-mono font-semibold">{rel.upstream.namespace}</span>
-                  )}
-                  <span className="ml-1.5 rounded bg-indigo-100 px-1 text-[10px] font-bold uppercase text-indigo-700">
-                    {rel.intent}
-                  </span>
-                  {rel.doc ? <span className="block text-[10px] text-muted-foreground">{rel.doc}</span> : null}
-                </div>,
-              );
-            }
-          } else if (entity.kind === 'subdomain') {
-            const did = domainOf(entity);
-            if (did) {
-              const d = find('domain', did);
-              rows.push(d ? linkBtn(d, 'belongs to') : missing(`${did.namespace}/${did.slug}`, 'domain'));
-            }
-            for (const bc of realizedBy(model, entity)) rows.push(linkBtn(bc, 'realized by'));
-          } else if (entity.kind === 'domain') {
-            for (const sd of subdomainsOf(model, entity)) rows.push(linkBtn(sd, 'contains'));
-          }
-          if (rows.length === 0) return null;
-          return (
+          ) : null}
+          {entity.doc ? (
             <section>
-              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Problem space</h3>
-              <div className="space-y-1.5">{rows}</div>
-              <p className="mt-1 text-[10px] text-muted-foreground">
-                Knowledge, not coupling: realizes maps solution to problem; no data flows.
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Doc</h3>
+              <p className="leading-relaxed text-foreground/90">{entity.doc}</p>
+            </section>
+          ) : null}
+          {entity.role ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Role</h3>
+              <Badge variant="outline">{entity.role}</Badge>
+            </section>
+          ) : null}
+          {entity.streamId ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Stream identity</h3>
+              <p className="text-xs leading-relaxed">
+                <span className="rounded bg-muted px-1.5 py-0.5 font-mono">{entity.streamId}</span>
               </p>
             </section>
-          );
-        })()}
-        {uiTransitionsOf(entity).length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Navigates to</h3>
-            <div className="space-y-1.5">
-              {uiTransitionsOf(entity).map((t) => {
-                const target = model.entities.find(
-                  (e) => e.kind === 'ui' && e.id.namespace === t.to.namespace && e.id.slug === t.to.slug,
-                );
-                const label = `${t.to.namespace}/${t.to.slug}`;
-                return target ? (
+          ) : null}
+          {entity.externalSource ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">External source</h3>
+              <p className="text-xs leading-relaxed text-foreground/90">
+                Populated by <span className="font-semibold">{entity.externalSource.system}</span>
+                {entity.externalSource.descriptor ? ` (${entity.externalSource.descriptor})` : ''}: not projected from
+                internal events.
+              </p>
+            </section>
+          ) : null}
+          {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}
+          {entity.kind === 'event' || entity.kind === 'command' || entity.kind === 'readModel' ? (
+            <PayloadTypePicker entity={entity} />
+          ) : null}
+          <SeamSection entity={entity} model={model} onSelect={onSelect} />
+          {(() => {
+            const find = (kind: Entity['kind'], id: { namespace: string; slug: string }) =>
+              model.entities.find((e) => e.kind === kind && e.id.namespace === id.namespace && e.id.slug === id.slug);
+            const rows: React.ReactNode[] = [];
+            if (entity.kind === 'ui' && entity.screenSlot) {
+              const screen = screenOfUi(model, entity);
+              rows.push(
+                screen ? (
                   <button
-                    key={label}
+                    key="screen"
                     type="button"
-                    onClick={() => onSelect(target.key)}
-                    className="w-full rounded-md border border-border bg-muted/40 px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    onClick={() => onSelect(screen.key)}
+                    className="w-full rounded-md border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-left text-xs hover:bg-teal-100"
                   >
-                    <span className="font-mono font-semibold">{target.title}</span>
-                    {t.doc ? <span className="block text-[10px] text-muted-foreground">{t.doc}</span> : null}
+                    fills <span className="font-mono font-semibold">{entity.screenSlot.slot}</span> on{' '}
+                    <span className="font-mono font-semibold">{screen.title}</span>
                   </button>
                 ) : (
-                  <div key={label} className="rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs">
-                    <span className="font-mono font-semibold">{label}</span>
-                    {t.doc ? <span className="block text-[10px] text-muted-foreground">{t.doc}</span> : null}
+                  <div key="screen" className="rounded-md border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-xs">
+                    fills <span className="font-mono font-semibold">{entity.screenSlot.slot}</span> on{' '}
+                    <span className="font-mono font-semibold">
+                      {entity.screenSlot.screen.namespace}/{entity.screenSlot.screen.slug}
+                    </span>
                   </div>
+                ),
+              );
+            } else if (entity.kind === 'screen') {
+              for (const slot of screenSlotsOf(model, entity)) {
+                rows.push(
+                  <div key={slot.name} className="rounded-md border border-teal-200 bg-teal-50/70 px-2 py-1.5 text-xs">
+                    <div className="font-mono font-semibold">
+                      {slot.name}
+                      {slot.required ? (
+                        <span className="ml-1 text-[10px] uppercase text-teal-700">required</span>
+                      ) : null}
+                    </div>
+                    {slot.doc ? <div className="text-[10px] text-muted-foreground">{slot.doc}</div> : null}
+                    <div className="mt-1 space-y-1">
+                      {slot.contributors.length > 0 ? (
+                        slot.contributors.map((ui) => (
+                          <button
+                            key={ui.key}
+                            type="button"
+                            onClick={() => onSelect(ui.key)}
+                            className="block w-full rounded border border-teal-200 bg-white/60 px-1.5 py-1 text-left font-mono text-[10px] hover:bg-teal-100"
+                          >
+                            {ui.id.namespace}/{ui.id.slug}
+                          </button>
+                        ))
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">unfilled</span>
+                      )}
+                    </div>
+                  </div>,
                 );
-              })}
-            </div>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              Declared pure navigation: links no command path explains.
-            </p>
-          </section>
-        ) : null}
-        {trackingOf(model, entity).length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Tracking</h3>
-            <div className="space-y-1.5">
-              {trackingOf(model, entity).map((t) => (
-                <button
-                  key={t.tracker.key}
-                  type="button"
-                  onClick={() => onSelect(t.tracker.key)}
-                  className="flex w-full items-baseline gap-2 rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-accent"
-                >
-                  <span
-                    className={
-                      t.status === 'blocked'
-                        ? 'rounded bg-red-100 px-1 font-mono text-[10px] font-bold text-red-700'
-                        : t.status === 'done'
-                          ? 'rounded bg-emerald-100 px-1 font-mono text-[10px] text-emerald-800'
-                          : 'rounded bg-muted px-1 font-mono text-[10px]'
-                    }
-                  >
-                    {t.status || 'todo'}
-                  </span>
-                  <span className="truncate text-muted-foreground">{t.tracker.title}</span>
-                  {t.doc ? <span className="ml-auto truncate text-[10px] text-muted-foreground">{t.doc}</span> : null}
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {entity.kind === 'tracker' && Array.isArray(entity.raw.items) && entity.raw.items.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
-              Items ({entity.raw.items.length})
-            </h3>
-            <div className="overflow-hidden rounded-md border border-border">
-              {(entity.raw.items as Record<string, unknown>[]).map((item, i) => {
-                const subject = item.subject as { id?: { slug?: string } } | undefined;
-                const status = humanStatus(item.status);
-                return (
+              }
+            } else if (entity.kind === 'term') {
+              for (const ref of termEmbodiedBy(entity)) {
+                const target = find(ref.kind, ref.id);
+                rows.push(
+                  target ? (
+                    <button
+                      key={`${ref.kind}:${ref.id.namespace}/${ref.id.slug}`}
+                      type="button"
+                      onClick={() => onSelect(target.key)}
+                      className="w-full rounded-md border border-lime-200 bg-lime-50/70 px-2 py-1.5 text-left text-xs hover:bg-lime-100"
+                    >
+                      embodied by <span className="font-mono font-semibold">{target.title}</span>
+                    </button>
+                  ) : (
+                    <div
+                      key={`${ref.kind}:${ref.id.namespace}/${ref.id.slug}`}
+                      className="rounded-md border border-lime-200 bg-lime-50/70 px-2 py-1.5 text-xs"
+                    >
+                      embodied by{' '}
+                      <span className="font-mono font-semibold">
+                        {ref.kind}:{ref.id.namespace}/{ref.id.slug}
+                      </span>
+                    </div>
+                  ),
+                );
+              }
+            } else if (entity.kind === 'ambiguity') {
+              const ruling = ambiguityRulingOf(entity);
+              if (ruling) {
+                rows.push(
+                  <div key="ruling" className="rounded-md border border-rose-200 bg-rose-50/70 px-2 py-1.5 text-xs">
+                    <span className="font-semibold uppercase text-rose-700">{ruling}</span>
+                  </div>,
+                );
+              }
+              for (const id of ambiguityTermsOf(entity)) {
+                const term = find('term', id);
+                rows.push(
+                  term ? (
+                    <button
+                      key={`${id.namespace}/${id.slug}`}
+                      type="button"
+                      onClick={() => onSelect(term.key)}
+                      className="w-full rounded-md border border-rose-200 bg-rose-50/70 px-2 py-1.5 text-left text-xs hover:bg-rose-100"
+                    >
+                      term <span className="font-mono font-semibold">{term.title}</span>
+                    </button>
+                  ) : (
+                    <div
+                      key={`${id.namespace}/${id.slug}`}
+                      className="rounded-md border border-rose-200 bg-rose-50/70 px-2 py-1.5 text-xs"
+                    >
+                      term{' '}
+                      <span className="font-mono font-semibold">
+                        {id.namespace}/{id.slug}
+                      </span>
+                    </div>
+                  ),
+                );
+              }
+            }
+            if (rows.length === 0) return null;
+            return (
+              <section>
+                <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                  {entity.kind === 'screen' || entity.kind === 'ui' ? 'Screen composition' : 'Language'}
+                </h3>
+                <div className="space-y-1.5">{rows}</div>
+              </section>
+            );
+          })()}
+          {(() => {
+            const stale = staleRefsOf(model, entity);
+            if (stale.length === 0) return null;
+            return (
+              <section>
+                <h3 className="mb-1 text-xs font-semibold uppercase text-amber-700">Migration pending</h3>
+                <div className="space-y-1.5">
+                  {stale.map((sr) => (
+                    <div
+                      key={`${sr.label}:${sr.ref.namespace}/${sr.ref.slug}`}
+                      className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs"
+                    >
+                      {sr.label} <span className="font-mono font-semibold">{sr.ref.slug}</span> pins{' '}
+                      <span className="font-mono">v{sr.ref.version}</span>;{' '}
+                      <span className="font-mono">v{sr.latest}</span> exists
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  A breaking change is mid-flight: re-point the ref or keep both versions deliberately.
+                </p>
+              </section>
+            );
+          })()}
+          {(() => {
+            // Decision #29: the knowledge graph in the drawer realizes on
+            // contexts, domain + realized-by on subdomains, subdomains on
+            // domains. Targets may live in an unloaded namespace.
+            const linkBtn = (e: Entity, prefix: string) => (
+              <button
+                key={`${prefix}:${e.key}`}
+                type="button"
+                onClick={() => onSelect(e.key)}
+                className="w-full rounded-md border border-indigo-200 bg-indigo-50/60 px-2 py-1.5 text-left text-xs hover:bg-indigo-100"
+              >
+                {prefix} <span className="font-mono font-semibold">{e.title}</span>
+                {classificationOf(e) ? (
+                  <span className="ml-1.5 text-[10px] font-bold uppercase text-indigo-700">{classificationOf(e)}</span>
+                ) : null}
+              </button>
+            );
+            const missing = (label: string, key: string) => (
+              <div key={key} className="rounded-md border border-indigo-200 bg-indigo-50/60 px-2 py-1.5 text-xs">
+                <span className="font-mono font-semibold">{label}</span>
+                <span className="block text-[10px] text-muted-foreground">
+                  not loaded; switch to all namespaces to navigate
+                </span>
+              </div>
+            );
+            const find = (kind: Entity['kind'], id: { namespace: string; slug: string }) =>
+              model.entities.find((e) => e.kind === kind && e.id.namespace === id.namespace && e.id.slug === id.slug);
+            const rows: React.ReactNode[] = [];
+            if (entity.kind === 'boundedContext') {
+              for (const rid of realizesOf(entity)) {
+                const sd = find('subdomain', rid);
+                rows.push(sd ? linkBtn(sd, 'realizes') : missing(`${rid.namespace}/${rid.slug}`, `r:${rid.slug}`));
+              }
+              for (const rel of relationshipsOf(entity)) {
+                const up = find('boundedContext', rel.upstream);
+                rows.push(
                   <div
-                    // oxlint-disable-next-line react/no-array-index-key -- items have no stable id
-                    key={i}
-                    className="flex items-baseline gap-2 border-b border-border px-2 py-1.5 last:border-0"
+                    key={`rel:${rel.upstream.namespace}`}
+                    className="rounded-md border border-indigo-200 bg-indigo-50/60 px-2 py-1.5 text-xs"
+                  >
+                    {up ? (
+                      <button
+                        type="button"
+                        onClick={() => onSelect(up.key)}
+                        className="font-mono font-semibold hover:underline"
+                      >
+                        {rel.upstream.namespace}
+                      </button>
+                    ) : (
+                      <span className="font-mono font-semibold">{rel.upstream.namespace}</span>
+                    )}
+                    <span className="ml-1.5 rounded bg-indigo-100 px-1 text-[10px] font-bold uppercase text-indigo-700">
+                      {rel.intent}
+                    </span>
+                    {rel.doc ? <span className="block text-[10px] text-muted-foreground">{rel.doc}</span> : null}
+                  </div>,
+                );
+              }
+            } else if (entity.kind === 'subdomain') {
+              const did = domainOf(entity);
+              if (did) {
+                const d = find('domain', did);
+                rows.push(d ? linkBtn(d, 'belongs to') : missing(`${did.namespace}/${did.slug}`, 'domain'));
+              }
+              for (const bc of realizedBy(model, entity)) rows.push(linkBtn(bc, 'realized by'));
+            } else if (entity.kind === 'domain') {
+              for (const sd of subdomainsOf(model, entity)) rows.push(linkBtn(sd, 'contains'));
+            }
+            if (rows.length === 0) return null;
+            return (
+              <section>
+                <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Problem space</h3>
+                <div className="space-y-1.5">{rows}</div>
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  Knowledge, not coupling: realizes maps solution to problem; no data flows.
+                </p>
+              </section>
+            );
+          })()}
+          {uiTransitionsOf(entity).length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Navigates to</h3>
+              <div className="space-y-1.5">
+                {uiTransitionsOf(entity).map((t) => {
+                  const target = model.entities.find(
+                    (e) => e.kind === 'ui' && e.id.namespace === t.to.namespace && e.id.slug === t.to.slug,
+                  );
+                  const label = `${t.to.namespace}/${t.to.slug}`;
+                  return target ? (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => onSelect(target.key)}
+                      className="w-full rounded-md border border-border bg-muted/40 px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    >
+                      <span className="font-mono font-semibold">{target.title}</span>
+                      {t.doc ? <span className="block text-[10px] text-muted-foreground">{t.doc}</span> : null}
+                    </button>
+                  ) : (
+                    <div key={label} className="rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs">
+                      <span className="font-mono font-semibold">{label}</span>
+                      {t.doc ? <span className="block text-[10px] text-muted-foreground">{t.doc}</span> : null}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                Declared pure navigation: links no command path explains.
+              </p>
+            </section>
+          ) : null}
+          {trackingOf(model, entity).length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Tracking</h3>
+              <div className="space-y-1.5">
+                {trackingOf(model, entity).map((t) => (
+                  <button
+                    key={t.tracker.key}
+                    type="button"
+                    onClick={() => onSelect(t.tracker.key)}
+                    className="flex w-full items-baseline gap-2 rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-accent"
                   >
                     <span
                       className={
-                        status === 'blocked'
+                        t.status === 'blocked'
                           ? 'rounded bg-red-100 px-1 font-mono text-[10px] font-bold text-red-700'
-                          : status === 'done'
+                          : t.status === 'done'
                             ? 'rounded bg-emerald-100 px-1 font-mono text-[10px] text-emerald-800'
                             : 'rounded bg-muted px-1 font-mono text-[10px]'
                       }
                     >
-                      {status || 'todo'}
+                      {t.status || 'todo'}
                     </span>
-                    <span className="truncate font-mono text-xs">{String(subject?.id?.slug ?? '?')}</span>
-                    {item.doc ? (
-                      <span className="ml-auto truncate text-[10px] text-muted-foreground">{String(item.doc)}</span>
+                    <span className="truncate text-muted-foreground">{t.tracker.title}</span>
+                    {t.doc ? <span className="ml-auto truncate text-[10px] text-muted-foreground">{t.doc}</span> : null}
+                  </button>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {entity.kind === 'tracker' && Array.isArray(entity.raw.items) && entity.raw.items.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                Items ({entity.raw.items.length})
+              </h3>
+              <div className="overflow-hidden rounded-md border border-border">
+                {(entity.raw.items as Record<string, unknown>[]).map((item, i) => {
+                  const subject = item.subject as { id?: { slug?: string } } | undefined;
+                  const status = humanStatus(item.status);
+                  return (
+                    <div
+                      // oxlint-disable-next-line react/no-array-index-key -- items have no stable id
+                      key={i}
+                      className="flex items-baseline gap-2 border-b border-border px-2 py-1.5 last:border-0"
+                    >
+                      <span
+                        className={
+                          status === 'blocked'
+                            ? 'rounded bg-red-100 px-1 font-mono text-[10px] font-bold text-red-700'
+                            : status === 'done'
+                              ? 'rounded bg-emerald-100 px-1 font-mono text-[10px] text-emerald-800'
+                              : 'rounded bg-muted px-1 font-mono text-[10px]'
+                        }
+                      >
+                        {status || 'todo'}
+                      </span>
+                      <span className="truncate font-mono text-xs">{String(subject?.id?.slug ?? '?')}</span>
+                      {item.doc ? (
+                        <span className="ml-auto truncate text-[10px] text-muted-foreground">{String(item.doc)}</span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+          {entity.kind === 'readModel'
+            ? (() => {
+                const roads = model.continuations.filter((c) => {
+                  const rm = storyboardEntryReadModel(c.to);
+                  return rm && rm.namespace === entity.id.namespace && rm.slug === entity.id.slug;
+                });
+                return roads.length > 0 ? (
+                  <section>
+                    <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Opens roads</h3>
+                    <div className="space-y-1.5">
+                      {roads.map((c) => (
+                        <button
+                          key={c.to.key}
+                          type="button"
+                          onClick={() => onSelect(c.to.key)}
+                          className="w-full rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-left text-xs hover:bg-amber-100"
+                        >
+                          <span className="inline-flex items-center gap-1 font-semibold">
+                            <Split aria-hidden className="h-3 w-3" />
+                            {c.to.title}
+                          </span>
+                          {c.doc ? <span className="block text-[10px] text-muted-foreground">when {c.doc}</span> : null}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-1 text-[10px] text-muted-foreground">
+                      Observing this state is how the road begins; the {roads[0].afterEvent.slug} stream decides which
+                      one wins.
+                    </p>
+                  </section>
+                ) : null;
+              })()
+            : null}
+          {entity.kind === 'swimlane' && Array.isArray(entity.raw.transitions) && entity.raw.transitions.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Lifecycle</h3>
+              <div className="space-y-1.5">
+                {(entity.raw.transitions as Record<string, unknown>[]).map((t, i) => {
+                  const after = (t.after as { id?: { slug?: string } } | undefined)?.id?.slug ?? '?';
+                  const next = Array.isArray(t.next) ? (t.next as Record<string, unknown>[]) : [];
+                  return (
+                    // oxlint-disable-next-line react/no-array-index-key -- transitions have no stable id
+                    <div key={i} className="rounded-md border border-border px-2 py-1.5 text-xs">
+                      <div className="font-mono text-[11px]">after {after}</div>
+                      <div className="mt-0.5 space-y-0.5">
+                        {next.map((n, j) => {
+                          const slug = (n.event as { id?: { slug?: string } } | undefined)?.id?.slug ?? '?';
+                          return (
+                            // oxlint-disable-next-line react/no-array-index-key -- branches have no stable id
+                            <div key={j} className="flex items-baseline gap-1.5">
+                              <span className="text-amber-600">→</span>
+                              <span className="font-mono text-[11px]">{slug}</span>
+                              {n.doc ? (
+                                <span className="text-[10px] text-muted-foreground">when {String(n.doc)}</span>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                The stream decides the fork: one successor wins per instance.
+              </p>
+            </section>
+          ) : null}
+          {entity.kind === 'storyboard' && model.continuations.some((c) => c.from.key === entity.key) ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Forks into</h3>
+              <div className="space-y-1.5">
+                {model.continuations
+                  .filter((c) => c.from.key === entity.key)
+                  .map((c) => (
+                    <button
+                      key={c.to.key}
+                      type="button"
+                      onClick={() => onSelect(c.to.key)}
+                      className="w-full rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-left text-xs hover:bg-amber-100"
+                    >
+                      <span className="font-semibold">{c.to.title}</span>
+                      {c.doc ? <span className="block text-[10px] text-muted-foreground">when {c.doc}</span> : null}
+                    </button>
+                  ))}
+              </div>
+              <p className="mt-1 text-[10px] text-muted-foreground">Alternative timelines: one instance follows one.</p>
+            </section>
+          ) : null}
+          {entity.kind === 'storyboard' && model.continuations.some((c) => c.to.key === entity.key) ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Continues from</h3>
+              <div className="space-y-1.5">
+                {model.continuations
+                  .filter((c) => c.to.key === entity.key)
+                  .map((c) => (
+                    <button
+                      key={c.from.key}
+                      type="button"
+                      onClick={() => onSelect(c.from.key)}
+                      className="w-full rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-accent"
+                    >
+                      <span className="font-semibold">{c.from.title}</span>
+                      {c.doc ? <span className="block text-[10px] text-muted-foreground">when {c.doc}</span> : null}
+                    </button>
+                  ))}
+              </div>
+            </section>
+          ) : null}
+          {entity.tech && entity.tech.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Tech</h3>
+              <div className="flex flex-wrap gap-1">
+                {entity.tech.map((t) => (
+                  <Badge key={t} variant="outline" className="font-mono">
+                    {t}
+                  </Badge>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {entity.kind === 'component' && Array.isArray(entity.raw.members) && entity.raw.members.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                Members ({entity.raw.members.length})
+              </h3>
+              <div className="overflow-hidden rounded-md border border-border">
+                {(entity.raw.members as { kind?: string; id?: { namespace?: string; slug?: string } }[]).map((m, i) => (
+                  <div
+                    // oxlint-disable-next-line react/no-array-index-key -- members have no stable id beyond ref
+                    key={i}
+                    className="flex items-baseline gap-2 border-b border-border px-2 py-1.5 last:border-0"
+                  >
+                    <span className="font-mono text-xs">{String(m.id?.slug ?? '?')}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground">
+                      {String(m.kind ?? '')
+                        .replace('ENTITY_KIND_', '')
+                        .toLowerCase()
+                        .replace(/_/g, ' ')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {orphanOf(entity) !== undefined ? (
+            <section>
+              <h3 className="mb-1 flex items-center gap-1 text-xs font-semibold uppercase text-amber-700">
+                <TriangleAlert aria-hidden className="h-3 w-3" />
+                Orphan
+              </h3>
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs">
+                {orphanOf(entity) || (
+                  <span className="italic text-amber-700">
+                    OrphanAnnotation is set but its doc is empty: ORPHAN_DOC_EMPTY. Fill in the reason or remove the
+                    annotation.
+                  </span>
+                )}
+              </div>
+              <p className="mt-1 text-[10px] text-muted-foreground">
+                This entity is intentionally disconnected from any slice in its model (Decision #31). Wire it into a
+                slice or keep the doc explaining why.
+              </p>
+            </section>
+          ) : null}
+          {listedAnnotations.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Annotations</h3>
+              <div className="space-y-1.5">
+                {listedAnnotations.map((a, i) => (
+                  // oxlint-disable-next-line react/no-array-index-key -- annotations have no stable id
+                  <AnnotationView key={i} annotation={a} />
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {sliceScenarios.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                Scenarios ({sliceScenarios.length})
+              </h3>
+              <div className="space-y-1.5">
+                {sliceScenarios.map((s, i) => (
+                  <ScenarioBlock key={s.id || i} scenario={s} givenApplies={ownSlice?.kind !== 'readModelSlice'} />
+                ))}
+              </div>
+            </section>
+          ) : null}
+          {entity.fields.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                Fields ({entity.fields.length})
+              </h3>
+              <div className="overflow-hidden rounded-md border border-border">
+                {entity.fields.map((f, i) => (
+                  <div
+                    key={`${f.name ?? i}`}
+                    className="flex items-baseline gap-2 border-b border-border px-2 py-1.5 last:border-0"
+                  >
+                    <span className="font-mono text-xs">{String(f.name ?? '?')}</span>
+                    {fieldTypeLabel(f) ? (
+                      <span className="font-mono text-[10px] text-muted-foreground">{fieldTypeLabel(f)}</span>
+                    ) : null}
+                    {f.doc ? (
+                      <span className="ml-auto max-w-[10rem] truncate text-[10px] text-muted-foreground">
+                        {String(f.doc)}
+                      </span>
                     ) : null}
                   </div>
-                );
-              })}
-            </div>
-          </section>
-        ) : null}
-        {entity.kind === 'readModel'
-          ? (() => {
-              const roads = model.continuations.filter((c) => {
-                const rm = storyboardEntryReadModel(c.to);
-                return rm && rm.namespace === entity.id.namespace && rm.slug === entity.id.slug;
-              });
-              return roads.length > 0 ? (
-                <section>
-                  <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Opens roads</h3>
-                  <div className="space-y-1.5">
-                    {roads.map((c) => (
-                      <button
-                        key={c.to.key}
-                        type="button"
-                        onClick={() => onSelect(c.to.key)}
-                        className="w-full rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-left text-xs hover:bg-amber-100"
-                      >
-                        <span className="inline-flex items-center gap-1 font-semibold">
-                          <Split aria-hidden className="h-3 w-3" />
-                          {c.to.title}
-                        </span>
-                        {c.doc ? <span className="block text-[10px] text-muted-foreground">when {c.doc}</span> : null}
-                      </button>
-                    ))}
-                  </div>
-                  <p className="mt-1 text-[10px] text-muted-foreground">
-                    Observing this state is how the road begins; the {roads[0].afterEvent.slug} stream decides which one
-                    wins.
-                  </p>
-                </section>
-              ) : null;
-            })()
-          : null}
-        {entity.kind === 'swimlane' && Array.isArray(entity.raw.transitions) && entity.raw.transitions.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Lifecycle</h3>
-            <div className="space-y-1.5">
-              {(entity.raw.transitions as Record<string, unknown>[]).map((t, i) => {
-                const after = (t.after as { id?: { slug?: string } } | undefined)?.id?.slug ?? '?';
-                const next = Array.isArray(t.next) ? (t.next as Record<string, unknown>[]) : [];
-                return (
-                  // oxlint-disable-next-line react/no-array-index-key -- transitions have no stable id
-                  <div key={i} className="rounded-md border border-border px-2 py-1.5 text-xs">
-                    <div className="font-mono text-[11px]">after {after}</div>
-                    <div className="mt-0.5 space-y-0.5">
-                      {next.map((n, j) => {
-                        const slug = (n.event as { id?: { slug?: string } } | undefined)?.id?.slug ?? '?';
-                        return (
-                          // oxlint-disable-next-line react/no-array-index-key -- branches have no stable id
-                          <div key={j} className="flex items-baseline gap-1.5">
-                            <span className="text-amber-600">→</span>
-                            <span className="font-mono text-[11px]">{slug}</span>
-                            {n.doc ? (
-                              <span className="text-[10px] text-muted-foreground">when {String(n.doc)}</span>
-                            ) : null}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              The stream decides the fork: one successor wins per instance.
-            </p>
-          </section>
-        ) : null}
-        {entity.kind === 'storyboard' && model.continuations.some((c) => c.from.key === entity.key) ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Forks into</h3>
-            <div className="space-y-1.5">
-              {model.continuations
-                .filter((c) => c.from.key === entity.key)
-                .map((c) => (
-                  <button
-                    key={c.to.key}
-                    type="button"
-                    onClick={() => onSelect(c.to.key)}
-                    className="w-full rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-left text-xs hover:bg-amber-100"
-                  >
-                    <span className="font-semibold">{c.to.title}</span>
-                    {c.doc ? <span className="block text-[10px] text-muted-foreground">when {c.doc}</span> : null}
-                  </button>
                 ))}
-            </div>
-            <p className="mt-1 text-[10px] text-muted-foreground">Alternative timelines: one instance follows one.</p>
-          </section>
-        ) : null}
-        {entity.kind === 'storyboard' && model.continuations.some((c) => c.to.key === entity.key) ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Continues from</h3>
-            <div className="space-y-1.5">
-              {model.continuations
-                .filter((c) => c.to.key === entity.key)
-                .map((c) => (
-                  <button
-                    key={c.from.key}
-                    type="button"
-                    onClick={() => onSelect(c.from.key)}
-                    className="w-full rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-accent"
-                  >
-                    <span className="font-semibold">{c.from.title}</span>
-                    {c.doc ? <span className="block text-[10px] text-muted-foreground">when {c.doc}</span> : null}
-                  </button>
+              </div>
+            </section>
+          ) : null}
+          {memberships.length > 0 ? (
+            <section>
+              <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
+                Slices ({memberships.length})
+              </h3>
+              <ul className="space-y-1">
+                {memberships.map((s) => (
+                  <li key={s.entity.key}>
+                    <button
+                      type="button"
+                      className="w-full rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-accent"
+                      onClick={() => onSelect(s.entity.key)}
+                    >
+                      <span className="font-medium">{s.entity.title}</span>
+                      <span className="ml-2 text-[10px] text-muted-foreground">
+                        {s.kind === 'commandSlice'
+                          ? 'command slice'
+                          : s.kind === 'readModelSlice'
+                            ? 'read model slice'
+                            : 'automation slice'}
+                      </span>
+                    </button>
+                  </li>
                 ))}
-            </div>
-          </section>
-        ) : null}
-        {entity.tech && entity.tech.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Tech</h3>
-            <div className="flex flex-wrap gap-1">
-              {entity.tech.map((t) => (
-                <Badge key={t} variant="outline" className="font-mono">
-                  {t}
-                </Badge>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {entity.kind === 'component' && Array.isArray(entity.raw.members) && entity.raw.members.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
-              Members ({entity.raw.members.length})
-            </h3>
-            <div className="overflow-hidden rounded-md border border-border">
-              {(entity.raw.members as { kind?: string; id?: { namespace?: string; slug?: string } }[]).map((m, i) => (
-                <div
-                  // oxlint-disable-next-line react/no-array-index-key -- members have no stable id beyond ref
-                  key={i}
-                  className="flex items-baseline gap-2 border-b border-border px-2 py-1.5 last:border-0"
-                >
-                  <span className="font-mono text-xs">{String(m.id?.slug ?? '?')}</span>
-                  <span className="ml-auto text-[10px] text-muted-foreground">
-                    {String(m.kind ?? '')
-                      .replace('ENTITY_KIND_', '')
-                      .toLowerCase()
-                      .replace(/_/g, ' ')}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {orphanOf(entity) !== undefined ? (
-          <section>
-            <h3 className="mb-1 flex items-center gap-1 text-xs font-semibold uppercase text-amber-700">
-              <TriangleAlert aria-hidden className="h-3 w-3" />
-              Orphan
-            </h3>
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs">
-              {orphanOf(entity) || (
-                <span className="italic text-amber-700">
-                  OrphanAnnotation is set but its doc is empty: ORPHAN_DOC_EMPTY. Fill in the reason or remove the
-                  annotation.
-                </span>
-              )}
-            </div>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              This entity is intentionally disconnected from any slice in its model (Decision #31). Wire it into a slice
-              or keep the doc explaining why.
-            </p>
-          </section>
-        ) : null}
-        {listedAnnotations.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">Annotations</h3>
-            <div className="space-y-1.5">
-              {listedAnnotations.map((a, i) => (
-                // oxlint-disable-next-line react/no-array-index-key -- annotations have no stable id
-                <AnnotationView key={i} annotation={a} />
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {sliceScenarios.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
-              Scenarios ({sliceScenarios.length})
-            </h3>
-            <div className="space-y-1.5">
-              {sliceScenarios.map((s, i) => (
-                <ScenarioBlock key={s.id || i} scenario={s} givenApplies={ownSlice?.kind !== 'readModelSlice'} />
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {entity.fields.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
-              Fields ({entity.fields.length})
-            </h3>
-            <div className="overflow-hidden rounded-md border border-border">
-              {entity.fields.map((f, i) => (
-                <div
-                  key={`${f.name ?? i}`}
-                  className="flex items-baseline gap-2 border-b border-border px-2 py-1.5 last:border-0"
-                >
-                  <span className="font-mono text-xs">{String(f.name ?? '?')}</span>
-                  {fieldTypeLabel(f) ? (
-                    <span className="font-mono text-[10px] text-muted-foreground">{fieldTypeLabel(f)}</span>
-                  ) : null}
-                  {f.doc ? (
-                    <span className="ml-auto max-w-[10rem] truncate text-[10px] text-muted-foreground">
-                      {String(f.doc)}
-                    </span>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
-        {memberships.length > 0 ? (
-          <section>
-            <h3 className="mb-1 text-xs font-semibold uppercase text-muted-foreground">
-              Slices ({memberships.length})
-            </h3>
-            <ul className="space-y-1">
-              {memberships.map((s) => (
-                <li key={s.entity.key}>
-                  <button
-                    type="button"
-                    className="w-full rounded-md border border-border px-2 py-1.5 text-left text-xs hover:bg-accent"
-                    onClick={() => onSelect(s.entity.key)}
-                  >
-                    <span className="font-medium">{s.entity.title}</span>
-                    <span className="ml-2 text-[10px] text-muted-foreground">
-                      {s.kind === 'commandSlice'
-                        ? 'command slice'
-                        : s.kind === 'readModelSlice'
-                          ? 'read model slice'
-                          : 'automation slice'}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-      </div>
+              </ul>
+            </section>
+          ) : null}
+        </TabsPanel>
+        <TabsPanel value="validation" className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
+          <IssueList issues={ownIssues} error={issues.error} model={model} momentKey={momentKey} />
+        </TabsPanel>
+      </Tabs>
     </aside>
   );
 }

@@ -4,7 +4,7 @@
 // Scenarios, Slices membership, Tech, Problem space, Tracking, etc.) using
 // realistic wire fixtures built through buildModel, following the fixture
 // idiom in src/lib/model.test.ts (commandSliceFixture-style wire arrays).
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/components/CopyContextButton', () => ({
@@ -414,6 +414,7 @@ describe('Inspector: validation findings', () => {
         readModel: {
           id: mkId('registry', 'changesets-awaiting-review'),
           title: 'Changesets awaiting review',
+          doc: 'Everything waiting for someone to look at it.',
           sourceEvents: [
             { event: { id: mkId('registry', 'changeset.submitted') } },
             { event: { id: mkId('registry', 'changeset.rejected') } },
@@ -436,27 +437,52 @@ describe('Inspector: validation findings', () => {
     ruleDefaultSeverity: 'SEVERITY_WARNING',
   };
 
-  it('shows the code, field, rule title, and message of a finding on the selected entity', () => {
+  it('opens on the Details tab by default, with findings hidden and entity sections visible', () => {
     const model = rmModel();
     const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
     render(
       <Inspector model={model} entity={rm} issues={buildIssueIndex([finding])} onClose={vi.fn()} onSelect={vi.fn()} />,
     );
-    expect(screen.getByText('Validation (1)')).toBeDefined();
+    expect(screen.getByRole('tab', { name: 'Details', selected: true })).toBeDefined();
+    expect(screen.getByText('Everything waiting for someone to look at it.')).toBeDefined();
+    expect(screen.queryByText('RM_EVENT_NOT_PROJECTED')).toBeNull();
+    expect(screen.queryByText(finding.message)).toBeNull();
+  });
+
+  it('shows a count pill on the Validation tab when the entity has findings', () => {
+    const model = rmModel();
+    const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
+    render(
+      <Inspector model={model} entity={rm} issues={buildIssueIndex([finding])} onClose={vi.fn()} onSelect={vi.fn()} />,
+    );
+    const validationTab = screen.getByRole('tab', { name: /Validation/ });
+    expect(within(validationTab).getByText('1')).toBeDefined();
+  });
+
+  it("reveals the finding's code, field, rule title, and message when the Validation tab is clicked", () => {
+    const model = rmModel();
+    const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
+    render(
+      <Inspector model={model} entity={rm} issues={buildIssueIndex([finding])} onClose={vi.fn()} onSelect={vi.fn()} />,
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
+    expect(screen.getByRole('tab', { name: /Validation/, selected: true })).toBeDefined();
     expect(screen.getByText('RM_EVENT_NOT_PROJECTED')).toBeDefined();
     expect(screen.getByText('source_events')).toBeDefined();
     expect(screen.getByText('Read model declares an event nothing projects')).toBeDefined();
     expect(screen.getByText(/no in-model read-model slice projects it/)).toBeDefined();
   });
 
-  it('shows no validation section for an entity with no findings', () => {
+  it('shows the empty-state message when the entity has no findings', () => {
     const model = rmModel();
     const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
     render(<Inspector model={model} entity={rm} issues={buildIssueIndex([])} onClose={vi.fn()} onSelect={vi.fn()} />);
-    expect(screen.queryByText(/^Validation/)).toBeNull();
+    // No pill/icon: the Validation tab's accessible name stays plain "Validation".
+    fireEvent.click(screen.getByRole('tab', { name: 'Validation' }));
+    expect(screen.getByText('No validation findings for this entity.')).toBeDefined();
   });
 
-  it('says validation did not run rather than rendering the clean-model silence', () => {
+  it('marks the Validation tab and panel when validation did not run, instead of rendering the clean-model silence', () => {
     const model = rmModel();
     const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
     render(
@@ -468,6 +494,43 @@ describe('Inspector: validation findings', () => {
         onSelect={vi.fn()}
       />,
     );
+    expect(screen.getByTitle('Validation unavailable')).toBeDefined();
+    fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
     expect(screen.getByText(/unavailable \(validate: 503\)/)).toBeDefined();
+  });
+
+  it('renders the Validation panel directly when the tab prop is controlled', () => {
+    const model = rmModel();
+    const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
+    render(
+      <Inspector
+        model={model}
+        entity={rm}
+        issues={buildIssueIndex([finding])}
+        tab="validation"
+        onClose={vi.fn()}
+        onSelect={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('tab', { name: /Validation/, selected: true })).toBeDefined();
+    expect(screen.getByText('RM_EVENT_NOT_PROJECTED')).toBeDefined();
+  });
+
+  it('calls onTabChange with the clicked tab', () => {
+    const model = rmModel();
+    const rm = mustFind(model.entities.find((e) => e.kind === 'readModel'));
+    const onTabChange = vi.fn();
+    render(
+      <Inspector
+        model={model}
+        entity={rm}
+        issues={buildIssueIndex([finding])}
+        onTabChange={onTabChange}
+        onClose={vi.fn()}
+        onSelect={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
+    expect(onTabChange).toHaveBeenCalledWith('validation');
   });
 });

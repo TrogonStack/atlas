@@ -15,7 +15,7 @@ import { SequenceBoard } from '@/components/canvas/SequenceBoard';
 import type { FocusRequest } from '@/components/canvas/useFocusNode';
 import { EdgeInspector } from '@/components/EdgeInspector';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { Inspector } from '@/components/Inspector';
+import { Inspector, type InspectorTab } from '@/components/Inspector';
 import { IssuesProvider } from '@/components/IssuesProvider';
 import { KIND_SHORT_TO_CAMEL } from '@/components/ModelShell.kindmap';
 import { MultiInspector } from '@/components/MultiInspector';
@@ -134,6 +134,7 @@ export function ModelShell({
   const [view, setView] = useQueryState('view', viewParser);
   const [error, setError] = useState<string>();
   const [validationOpen, setValidationOpen] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('details');
   const validationPanelId = useId();
   const validationTrigger = useRef<HTMLButtonElement>(null);
   const closeValidation = useCallback(() => {
@@ -172,6 +173,7 @@ export function ModelShell({
   const selectEntity = useCallback(
     (key: string | undefined, occId?: string, additive?: boolean, instanceUid?: string, momentKey?: string) => {
       setValidationOpen(false);
+      setInspectorTab('details');
       setSelections((prev) => {
         if (!key) return [];
         const entry: Selection = { type: 'entity', key, occId, instanceUid, momentKey };
@@ -637,6 +639,10 @@ export function ModelShell({
             onSelect={(subject) => {
               closeValidation();
               selectAndFocus(entityKey(subject.kind, subject.id));
+              // Must come after selectAndFocus: it calls selectEntity, which resets
+              // the tab to 'details'; both setInspectorTab calls are batched, so the
+              // one issued last wins and lands the drawer on 'validation'.
+              setInspectorTab('validation');
             }}
           />
         ) : reviewOpen && branch ? (
@@ -648,6 +654,8 @@ export function ModelShell({
             instanceUid={soleSelection?.instanceUid}
             momentKey={soleSelection?.momentKey}
             issues={issues}
+            tab={inspectorTab}
+            onTabChange={setInspectorTab}
             onClose={() => selectEntity(undefined)}
             onSelect={selectAndFocus}
           />
