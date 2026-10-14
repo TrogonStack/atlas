@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import { CopyContextButton } from '@/components/CopyContextButton';
 import { CopyFixPromptButton } from '@/components/CopyFixPromptButton';
 import { kindStyle } from '@/components/canvas/StickyNode';
-import { PayloadTypePicker, TypeLibrarySources } from '@/components/TypeLibraryPanels';
+import { TypeLibrarySources } from '@/components/TypeLibraryPanels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
@@ -701,9 +701,6 @@ export function Inspector({
             </section>
           ) : null}
           {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}
-          {entity.kind === 'event' || entity.kind === 'command' || entity.kind === 'readModel' ? (
-            <PayloadTypePicker entity={entity} />
-          ) : null}
           <SeamSection entity={entity} model={model} onSelect={onSelect} />
           {(() => {
             const find = (kind: Entity['kind'], id: { namespace: string; slug: string }) =>
