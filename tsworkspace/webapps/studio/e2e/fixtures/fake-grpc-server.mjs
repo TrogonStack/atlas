@@ -57,6 +57,15 @@ export const FIXTURE_BRANCH = {
   deltaCount: 1,
 };
 
+// The registry the bridge's namespace picker and /namespaces page read.
+// `shop` was adopted before the registry existed, so its id is its name;
+// `legacy` holds entities but was never registered, which is the row the
+// registry page flags.
+export const FIXTURE_NAMESPACES = [
+  { name: 'shop', entityCount: 2, id: 'shop', parent: '' },
+  { name: 'legacy', entityCount: 1, id: '', parent: '' },
+];
+
 const DIFF_ENTRY = {
   ref: { kind: 'ENTITY_KIND_EVENT', id: ORDER_PLACED_EVENT.event.id },
   status: 'STATUS_CHANGED',
@@ -107,6 +116,10 @@ function getEntity(call, callback) {
 
 function listEntitiesByDomain(_call, callback) {
   callback(null, { entities: [] });
+}
+
+function listNamespaces(_call, callback) {
+  callback(null, { namespaces: FIXTURE_NAMESPACES });
 }
 
 function listBranches(_call, callback) {
@@ -230,6 +243,7 @@ export async function startFakeGrpcServer() {
     listEntities,
     getEntity,
     listEntitiesByDomain,
+    listNamespaces,
     listBranches,
     diffBranch,
     listValidationRules,

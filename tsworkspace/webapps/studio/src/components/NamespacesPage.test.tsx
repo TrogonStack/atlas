@@ -49,8 +49,19 @@ describe('NamespacesPage', () => {
 
     // The point of the banner: a scoped key does not see this namespace at
     // all, and no other screen in the studio can tell you that.
-    await waitFor(() => expect(screen.getByText(/no registry row/i)).toBeDefined());
+    await waitFor(() => expect(screen.getByText('1 namespace holds entities but has no registry row')).toBeDefined());
     expect(screen.getByText('unregistered')).toBeDefined();
+  });
+
+  it('pluralizes the unowned banner when more than one namespace is unregistered', async () => {
+    registryMock.mockResolvedValue({
+      namespaces: [
+        row({ id: '', parent: '', registered: false, name: 'orphan' }),
+        row({ id: '', parent: '', registered: false, name: 'stray' }),
+      ],
+    });
+    render(<NamespacesPage />);
+    await waitFor(() => expect(screen.getByText('2 namespaces hold entities but have no registry row')).toBeDefined());
   });
 
   it('says nothing about unowned namespaces when every row has an owner', async () => {
@@ -97,9 +108,32 @@ describe('NamespacesPage', () => {
     expect(screen.queryByText('billing')).toBeNull();
   });
 
+  it('tells apart an empty registry from a filter that matches nothing', async () => {
+    render(<NamespacesPage />);
+    await waitFor(() => expect(screen.getByText('No namespaces yet')).toBeDefined());
+    cleanup();
+
+    registryMock.mockResolvedValue({ namespaces: [row(), row({ id: 'ns_ffff', name: 'shipping' })] });
+    render(<NamespacesPage />);
+    await waitFor(() => expect(screen.getByText('shipping')).toBeDefined());
+    fireEvent.change(screen.getByLabelText('filter namespaces'), { target: { value: 'nope' } });
+
+    expect(screen.getByText('No namespace matches that filter')).toBeDefined();
+    expect(screen.getByText(/Clear it to see all 2 namespaces/)).toBeDefined();
+    expect(screen.queryByText('No namespaces yet')).toBeNull();
+  });
+
   it('shows the load failure instead of an empty registry', async () => {
     registryMock.mockRejectedValue(new Error('upstream unavailable'));
     render(<NamespacesPage />);
     await waitFor(() => expect(screen.getByText(/upstream unavailable/)).toBeDefined());
+  });
+
+  it('stops saying it is loading once the load has failed', async () => {
+    registryMock.mockRejectedValue(new Error('upstream unavailable'));
+    render(<NamespacesPage />);
+    expect(screen.getByText('Loading…')).toBeDefined();
+    await waitFor(() => expect(screen.getByText(/upstream unavailable/)).toBeDefined());
+    expect(screen.queryByText('Loading…')).toBeNull();
   });
 });

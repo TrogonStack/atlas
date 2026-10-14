@@ -23,14 +23,37 @@ describe('TopBar', () => {
     expect(screen.getAllByText('offline').length).toBeGreaterThan(0);
   });
 
-  it('calls onRefresh when the Refresh button is clicked', () => {
+  it('keeps Refresh behind the actions menu and calls onRefresh from there', async () => {
     const onRefresh = vi.fn();
     render(<TopBar realtime={{ state: 'offline' }} onRefresh={onRefresh} />);
-    const buttons = screen.getAllByRole('button');
-    const refreshButton = buttons.find((b) => /refresh/i.test(b.textContent ?? ''));
-    expect(refreshButton).toBeDefined();
-    fireEvent.click(refreshButton!);
+    expect(screen.queryByRole('button', { name: 'Refresh' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Refresh' }));
     expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers Export HTML in the menu only when the page can export', async () => {
+    render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await screen.findByRole('menuitem', { name: 'Refresh' });
+    expect(screen.queryByRole('menuitem', { name: 'Export HTML' })).toBeNull();
+    cleanup();
+
+    const onExportHtml = vi.fn().mockResolvedValue(undefined);
+    render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} onExportHtml={onExportHtml} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export HTML' }));
+    expect(onExportHtml).toHaveBeenCalledTimes(1);
+    expect(await screen.findByTitle('Saved')).toBeDefined();
+  });
+
+  it('shows why an export failed next to the menu', async () => {
+    const onExportHtml = vi.fn().mockRejectedValue(new Error('Snapshot bundle missing'));
+    render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} onExportHtml={onExportHtml} />);
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Export HTML' }));
+    expect(await screen.findByText('Snapshot bundle missing')).toBeDefined();
   });
 
   it('displays the scoped title when provided', () => {
@@ -44,10 +67,9 @@ describe('TopBar', () => {
     expect((link as HTMLAnchorElement).href).toContain('/overview');
   });
 
-  it('always offers the namespace registry, which has no other entry point', () => {
+  it('leaves the namespace registry to the overview instead of linking it from a model', () => {
     render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} />);
-    const link = screen.getByRole('link', { name: /namespaces/i });
-    expect((link as HTMLAnchorElement).href).toContain('/namespaces');
+    expect(screen.queryByRole('link', { name: /namespaces/i })).toBeNull();
   });
 
   it('displays the schema version badge when info includes schemaVersion', () => {
@@ -67,7 +89,7 @@ describe('TopBar', () => {
     render(
       <TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} branch="alex/rework" onSelectBranch={vi.fn()} />,
     );
-    expect(screen.queryByRole('button', { name: /review/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review' })).toBeNull();
   });
 
   it('renders Review when onOpenBranchReview is provided', () => {
@@ -80,7 +102,7 @@ describe('TopBar', () => {
         onOpenBranchReview={vi.fn()}
       />,
     );
-    expect(screen.getByRole('button', { name: /review/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Review' })).toBeDefined();
   });
 
   describe('snapshot', () => {
@@ -101,7 +123,7 @@ describe('TopBar', () => {
       expect(badge.textContent).toContain('branch alex/x');
       expect(badge.textContent).toContain('server 0.1.0');
       expect(screen.queryByRole('status', { name: 'Live updates' })).toBeNull();
-      expect(screen.queryByRole('button', { name: /refresh/i })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
       expect(screen.queryByRole('link')).toBeNull();
     });
 
@@ -113,16 +135,7 @@ describe('TopBar', () => {
     });
   });
 
-  it('offers Export HTML only when the page can export', () => {
-    const { rerender } = render(<TopBar realtime={{ state: 'live' }} onRefresh={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: /export html/i })).toBeNull();
-    const onExportHtml = vi.fn(() => Promise.resolve());
-    rerender(<TopBar realtime={{ state: 'live' }} onRefresh={vi.fn()} onExportHtml={onExportHtml} />);
-    fireEvent.click(screen.getByRole('button', { name: /export html/i }));
-    expect(onExportHtml).toHaveBeenCalledTimes(1);
-  });
-
-  it('never offers Export HTML inside a snapshot', () => {
+  it('never offers the actions menu inside a snapshot, so Export HTML cannot export an export', () => {
     render(
       <TopBar
         realtime={{ state: 'offline' }}
@@ -131,6 +144,6 @@ describe('TopBar', () => {
         snapshot={{ capturedAt: '2026-10-13T17:10:00.000Z' }}
       />,
     );
-    expect(screen.queryByRole('button', { name: /export html/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'More actions' })).toBeNull();
   });
 });

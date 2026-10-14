@@ -10,7 +10,6 @@ vi.mock('@/lib/api', () => ({
     branches: vi.fn(),
     branchDiff: vi.fn(),
     search: vi.fn(),
-    typeMessages: vi.fn(() => Promise.resolve({ messages: [] })),
   },
 }));
 

@@ -288,11 +288,6 @@ export interface CompileTypeLibraryResult {
   compatibilityViolations?: { message?: string }[];
 }
 
-export interface TypeLibraryMessage {
-  fullName: string;
-  library?: EntityId;
-}
-
 /** The paths a board page reads. A snapshot records its responses under these keys. */
 export const boardPaths = {
   info: () => '/api/info',
@@ -346,8 +341,6 @@ export const api = {
     getJson<{ issues?: unknown[] }>(boardPaths.validate(id), opts),
   compileTypeLibrary: (library: TypeLibraryWire, opts?: FetchOptions) =>
     postJson<CompileTypeLibraryResult>('/api/type-libraries/compile', { library }, opts),
-  typeMessages: (namespace: string, opts?: FetchOptions) =>
-    getJson<{ messages?: TypeLibraryMessage[] }>(`/api/type-libraries/messages${buildQuery({ namespace })}`, opts),
   validateProject: (scope: ValidateProjectScope, opts?: FetchOptions) =>
     getJson<{ reports?: unknown[]; totalErrors?: number; totalWarnings?: number; totalInfo?: number }>(
       `/api/validate-project${buildQuery({

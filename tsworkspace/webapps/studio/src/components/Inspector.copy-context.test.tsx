@@ -98,6 +98,7 @@ describe('Inspector copy context vs moment timeline', () => {
       },
     ]);
     render(<Inspector model={model} entity={command} issues={issues} onClose={vi.fn()} onSelect={vi.fn()} />);
+    fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Copy fix prompt' }));
     await waitFor(() => expect(screen.getByText('Fix prompt copied')).toBeDefined());
     const copied = String(writeText.mock.calls[0]?.[0] ?? '');

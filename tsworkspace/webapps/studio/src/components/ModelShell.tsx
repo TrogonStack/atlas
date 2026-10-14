@@ -15,12 +15,13 @@ import { SequenceBoard } from '@/components/canvas/SequenceBoard';
 import type { FocusRequest } from '@/components/canvas/useFocusNode';
 import { EdgeInspector } from '@/components/EdgeInspector';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
-import { Inspector } from '@/components/Inspector';
+import { Inspector, type InspectorTab } from '@/components/Inspector';
 import { IssuesProvider } from '@/components/IssuesProvider';
 import { KIND_SHORT_TO_CAMEL } from '@/components/ModelShell.kindmap';
 import { MultiInspector } from '@/components/MultiInspector';
 import { Sidebar } from '@/components/Sidebar';
 import { TopBar } from '@/components/TopBar';
+import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import { ValidationInspector } from '@/components/ValidationInspector';
 import { ValidationSummary } from '@/components/ValidationSummary';
 import { api, type BranchDiffEntry, type ServerInfo } from '@/lib/api';
@@ -40,6 +41,17 @@ function edgeIdentity(data: BoardEdgeData): string {
 }
 
 const VIEWS = ['board', 'sequence', 'ui', 'plan', 'domain'] as const;
+type View = (typeof VIEWS)[number];
+const VIEW_LABELS: Record<View, string> = {
+  board: 'Board',
+  sequence: 'Sequence',
+  ui: 'UI',
+  plan: 'Plan',
+  domain: 'Domain',
+};
+function isView(value: unknown): value is View {
+  return (VIEWS as readonly unknown[]).includes(value);
+}
 
 // URL query-state parsers (nuqs). Params are cleared when they equal the
 // default, so a pristine board view keeps a clean URL.
@@ -134,6 +146,7 @@ export function ModelShell({
   const [view, setView] = useQueryState('view', viewParser);
   const [error, setError] = useState<string>();
   const [validationOpen, setValidationOpen] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>('details');
   const validationPanelId = useId();
   const validationTrigger = useRef<HTMLButtonElement>(null);
   const closeValidation = useCallback(() => {
@@ -172,6 +185,7 @@ export function ModelShell({
   const selectEntity = useCallback(
     (key: string | undefined, occId?: string, additive?: boolean, instanceUid?: string, momentKey?: string) => {
       setValidationOpen(false);
+      setInspectorTab('details');
       setSelections((prev) => {
         if (!key) return [];
         const entry: Selection = { type: 'entity', key, occId, instanceUid, momentKey };
@@ -559,27 +573,23 @@ export function ModelShell({
                 }}
               />
             }
+            switcher={
+              <Tabs
+                value={activeView}
+                onValueChange={(next) => {
+                  if (isView(next)) setView(next);
+                }}
+              >
+                <TabsList aria-label="Model view" className="shadow-sm">
+                  {availableViews.map((v) => (
+                    <TabsTab key={v} value={v}>
+                      {VIEW_LABELS[v]}
+                    </TabsTab>
+                  ))}
+                </TabsList>
+              </Tabs>
+            }
           >
-            <div className="absolute left-2 top-2 z-10 flex overflow-hidden rounded-md border border-border bg-card text-xs shadow-sm">
-              {availableViews.map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setView(v)}
-                  className={`px-3 py-1.5 font-medium capitalize ${activeView === v ? 'bg-foreground text-background' : 'hover:bg-accent'}`}
-                >
-                  {v === 'board'
-                    ? 'Board'
-                    : v === 'sequence'
-                      ? 'Sequence'
-                      : v === 'ui'
-                        ? 'UI'
-                        : v === 'plan'
-                          ? 'Plan'
-                          : 'Domain'}
-                </button>
-              ))}
-            </div>
             <IssuesProvider issues={issues}>
               <ReactFlowProvider>
                 {activeView === 'board' ? (
@@ -637,6 +647,10 @@ export function ModelShell({
             onSelect={(subject) => {
               closeValidation();
               selectAndFocus(entityKey(subject.kind, subject.id));
+              // Must come after selectAndFocus: it calls selectEntity, which resets
+              // the tab to 'details'; both setInspectorTab calls are batched, so the
+              // one issued last wins and lands the drawer on 'validation'.
+              setInspectorTab('validation');
             }}
           />
         ) : reviewOpen && branch ? (
@@ -648,6 +662,8 @@ export function ModelShell({
             instanceUid={soleSelection?.instanceUid}
             momentKey={soleSelection?.momentKey}
             issues={issues}
+            tab={inspectorTab}
+            onTabChange={setInspectorTab}
             onClose={() => selectEntity(undefined)}
             onSelect={selectAndFocus}
           />

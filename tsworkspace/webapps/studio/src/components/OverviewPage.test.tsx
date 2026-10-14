@@ -172,6 +172,29 @@ describe('OverviewPage', () => {
 
       expect(screen.queryByText(/Search Results/)).toBeNull();
     });
+
+    it('drops a failed search error as soon as the query moves on', async () => {
+      (api.search as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('search backend down'));
+      render(<OverviewPage />);
+      const input = screen.getByPlaceholderText('Search models and entities');
+
+      fireEvent.change(input, { target: { value: 'order' } });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByRole('alert').textContent).toBe('search backend down');
+
+      fireEvent.change(input, { target: { value: 'o' } });
+      fireEvent.change(input, { target: { value: 'orders' } });
+      expect(screen.getByText(/Search Results/)).toBeDefined();
+      expect(screen.queryByRole('alert')).toBeNull();
+
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(api.search).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
   });
 
   describe('domain filter behavior', () => {
@@ -233,9 +256,98 @@ describe('OverviewPage', () => {
     });
   });
 
-  // BUG: Overview copy says "click a domain or context to read its charter",
-  // but DomainChartBoard is wired with onSelect={() => {}}. Selecting a
-  // domain therefore never surfaces charter details.
+  describe('one view at a time', () => {
+    async function renderOverview() {
+      render(<OverviewPage />);
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    it('lands on the model list, with no board above it', async () => {
+      await renderOverview();
+      expect(screen.getByRole('tab', { name: 'Models', selected: true })).toBeDefined();
+      expect(screen.getByText(/Event Models/)).toBeDefined();
+      expect(screen.queryByTestId('domain-chart-board')).toBeNull();
+      expect(screen.queryByTestId('context-map-board')).toBeNull();
+    });
+
+    it('is where the namespace registry is reached from', async () => {
+      await renderOverview();
+      const link = screen.getByRole('link', { name: 'Namespaces' });
+      expect((link as HTMLAnchorElement).getAttribute('href')).toBe('/namespaces');
+    });
+
+    it('swaps the list for the chosen board instead of stacking them', async () => {
+      await renderOverview();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
+      expect(screen.getByTestId('domain-chart-board')).toBeDefined();
+      expect(screen.queryByText(/Event Models/)).toBeNull();
+      expect(window.location.search).toBe('?mode=chart');
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Contexts' }));
+      expect(screen.getByTestId('context-map-board')).toBeDefined();
+      expect(screen.queryByTestId('domain-chart-board')).toBeNull();
+      expect(screen.queryByText(/Event Models/)).toBeNull();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Models' }));
+      expect(screen.getByText(/Event Models/)).toBeDefined();
+      expect(screen.queryByTestId('context-map-board')).toBeNull();
+      expect(window.location.search).toBe('');
+    });
+
+    it('says the store has no event models only once the overview has loaded', async () => {
+      let resolveOverview: (value: { entities: unknown[] }) => void = () => {};
+      (api.overview as ReturnType<typeof vi.fn>).mockReturnValue(
+        new Promise((resolve) => {
+          resolveOverview = resolve;
+        }),
+      );
+      render(<OverviewPage />);
+      expect(screen.queryByText('No event models yet')).toBeNull();
+
+      await act(async () => {
+        resolveOverview(EMPTY_OVERVIEW);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(screen.getByText('No event models yet')).toBeDefined();
+    });
+
+    it('names the query when a search finds nothing', async () => {
+      vi.useFakeTimers();
+      render(<OverviewPage />);
+      fireEvent.change(screen.getByPlaceholderText('Search models and entities'), { target: { value: 'order' } });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByText('No matches for “order”')).toBeDefined();
+      expect(screen.getByText(/get back to the models view/)).toBeDefined();
+    });
+
+    it('shows search results in place of a board, and picking a view clears the search', async () => {
+      vi.useFakeTimers();
+      render(<OverviewPage />);
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
+      const input = screen.getByPlaceholderText('Search models and entities');
+
+      fireEvent.change(input, { target: { value: 'order' } });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByText(/Search Results/)).toBeDefined();
+      expect(screen.queryByTestId('domain-chart-board')).toBeNull();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'Contexts' }));
+      expect(screen.queryByText(/Search Results/)).toBeNull();
+      expect((input as HTMLInputElement).value).toBe('');
+      expect(screen.getByTestId('context-map-board')).toBeDefined();
+    });
+  });
+
   it('surfaces a domain charter when a domain chart node is selected', async () => {
     (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue({
       entities: [
@@ -255,6 +367,7 @@ describe('OverviewPage', () => {
     await act(async () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
+    fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
     fireEvent.click(screen.getByTestId('domain-chart-board'));
     expect(screen.getByText('The trading charter.')).toBeDefined();
   });

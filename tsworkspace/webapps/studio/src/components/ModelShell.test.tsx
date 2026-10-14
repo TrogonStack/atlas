@@ -116,9 +116,9 @@ describe('ModelShell', () => {
   it('hides view tabs that have nothing to render', async () => {
     render(<ModelShell model={buildModel([])} scopedTitle="Empty" />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Board' })).toBeDefined();
+      expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
     });
-    expect(screen.getByRole('button', { name: 'Sequence' })).toBeDefined();
+    expect(screen.getByRole('tab', { name: 'Sequence' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'UI' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Plan' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Domain' })).toBeNull();
@@ -130,7 +130,7 @@ describe('ModelShell', () => {
     ] as never);
     render(<ModelShell model={model} scopedTitle="Shop" />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'UI' })).toBeDefined();
+      expect(screen.getByRole('tab', { name: 'UI' })).toBeDefined();
     });
   });
 
@@ -230,9 +230,10 @@ describe('ModelShell', () => {
     const onRefetch = vi.fn();
     render(<ModelShell model={buildModel([])} scopedTitle="Shop" onRefetch={onRefetch} />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /refresh/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'More actions' })).toBeDefined();
     });
-    fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Refresh' }));
     expect(onRefetch).toHaveBeenCalled();
   });
 
@@ -246,9 +247,9 @@ describe('ModelShell', () => {
     const onRefetch = vi.fn();
     render(<ModelShell model={buildModel([])} scopedTitle="Shop" onRefetch={onRefetch} />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /branch/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /^Branch:/ })).toBeDefined();
     });
-    fireEvent.click(screen.getByRole('button', { name: /branch/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Branch:/ }));
     await waitFor(() => {
       expect(screen.getByText('alex/rework')).toBeDefined();
     });

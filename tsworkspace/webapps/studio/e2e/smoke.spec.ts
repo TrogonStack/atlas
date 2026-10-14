@@ -59,21 +59,21 @@ test.describe('Real-stack smoke', () => {
     expect(errors, `console errors on board load: ${JSON.stringify(errors)}`).toEqual([]);
   });
 
-  test('(c) ?branch= renders the BranchBar chip and read-only hint', async ({ page }) => {
+  test('(c) ?branch= names the branch on the switcher with the read-only hint', async ({ page }) => {
     await page.goto(`${EM_PATH}?branch=${encodeURIComponent(FIXTURE_BRANCH.name)}`);
     await expect(page.getByRole('heading', { name: 'Event Model Studio', level: 1 })).toBeVisible();
 
-    // The chip shows the branch name (font-mono span inside BranchBar).
+    // The switcher itself carries the branch name (font-mono span inside BranchBar).
     await expect(page.getByText(FIXTURE_BRANCH.name, { exact: true })).toBeVisible();
-    // The read-only-preview hint is a fixed uppercase label next to the chip.
+    // The read-only-preview hint is a fixed uppercase tag inside the switcher.
     await expect(page.getByText('read-only preview')).toBeVisible();
   });
 
   test('(d) the branch picker lists and switches branches', async ({ page }) => {
     await page.goto(EM_PATH);
 
-    // No branch active yet: the toggle button reads "Branch".
-    await page.getByRole('button', { name: 'Branch' }).click();
+    // No branch active yet: the switcher names the baseline.
+    await page.getByRole('button', { name: 'Branch: baseline' }).click();
     await expect(page.getByText('No branches yet.')).not.toBeVisible();
     await expect(page.getByText(FIXTURE_BRANCH.doc)).toBeVisible();
 
@@ -84,8 +84,8 @@ test.describe('Real-stack smoke', () => {
     await expect(page).toHaveURL(new RegExp(escapeRegExp(`branch=${FIXTURE_BRANCH.name}`)));
     await expect(page.getByText(FIXTURE_BRANCH.name, { exact: true })).toBeVisible();
 
-    // Switching back to baseline via the picker clears the chip.
-    await page.getByRole('button', { name: 'Switch' }).click();
+    // Switching back to baseline via the picker renames the switcher.
+    await page.getByRole('button', { name: `Branch: ${FIXTURE_BRANCH.name}` }).click();
     await page.getByRole('button', { name: 'baseline' }).click();
     await expect(page).not.toHaveURL(/branch=/);
   });
@@ -94,7 +94,8 @@ test.describe('Real-stack smoke', () => {
     await page.goto(`${EM_PATH}?branch=${encodeURIComponent(FIXTURE_BRANCH.name)}`);
     await expect(page.getByText(FIXTURE_BRANCH.name, { exact: true })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Review' }).click();
+    // exact: the switcher's own name ends in "read-only preview".
+    await page.getByRole('button', { name: 'Review', exact: true }).click();
 
     // ConflictInspector's header: "Branch review" badge + "Diff (<n>)" heading.
     await expect(page.getByText('Branch review')).toBeVisible();
@@ -102,5 +103,23 @@ test.describe('Real-stack smoke', () => {
     // The fixture's single STATUS_CHANGED entry renders under the
     // "Changed" group heading in the left rail.
     await expect(page.getByRole('heading', { name: 'Changed', level: 3 })).toBeVisible();
+  });
+
+  test('(f) the namespace registry is reached from the overview and lists both registered and unowned rows', async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    failOnConsoleErrors(page, errors);
+
+    await page.goto('/');
+    await page.getByRole('link', { name: 'Namespaces' }).click();
+    await expect(page.getByRole('heading', { name: 'Namespaces', level: 1 })).toBeVisible();
+
+    const rows = page.getByRole('row');
+    await expect(rows.filter({ hasText: 'shop' })).toContainText('default');
+    await expect(rows.filter({ hasText: 'legacy' })).toContainText('unregistered');
+    await expect(page.getByText('1 namespace holds entities but has no registry row')).toBeVisible();
+
+    expect(errors, `console errors on registry load: ${JSON.stringify(errors)}`).toEqual([]);
   });
 });

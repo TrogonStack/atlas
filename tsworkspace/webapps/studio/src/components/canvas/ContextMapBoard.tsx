@@ -8,9 +8,10 @@ import {
   Position,
   ReactFlow,
 } from '@xyflow/react';
-import { GitBranch } from 'lucide-react';
+import { GitBranch, Map as MapIcon } from 'lucide-react';
 import { useMemo } from 'react';
 import type { Selection } from '@/components/canvas/Board';
+import { BoardEmptyState } from '@/components/ui/empty-state';
 import { buildContextMap, CONTEXT_MAP_H, CONTEXT_MAP_W, type ContextMapNodeData } from '@/lib/contextmap';
 import type { Model } from '@/lib/model';
 import { cn } from '@/lib/utils';
@@ -90,11 +91,19 @@ export function ContextMapBoard({
         <Controls showInteractive={false} />
       </ReactFlow>
       {nodes.length === 0 ? (
-        <div className="absolute inset-0 flex items-center justify-center">
-          <div className="max-w-md rounded-lg border border-border bg-card px-6 py-4 text-sm text-muted-foreground">
-            No bounded contexts in the Overview data yet.
-          </div>
-        </div>
+        <BoardEmptyState
+          icon={MapIcon}
+          title="No bounded contexts yet"
+          hint={
+            <>
+              Declare <span className="font-mono">BoundedContext</span> manifests and apply them with{' '}
+              <span className="font-mono">trogon-atlas apply</span>. Studio only reads the model.
+            </>
+          }
+        >
+          This map shows how contexts talk to each other: the events one of them publishes, and the views in another
+          that listen for them.
+        </BoardEmptyState>
       ) : null}
       <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5">

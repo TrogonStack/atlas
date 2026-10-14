@@ -18,9 +18,11 @@
 //     on an unregistered namespace: it is visible to an unrestricted caller
 //     and to nobody else, so a client with a scoped key sees it as simply not
 //     existing. That is invisible from every other screen.
+import { FolderTree, SearchX } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { api, type NamespaceRegistryRow } from '@/lib/api';
 
@@ -33,10 +35,12 @@ function ownerLabel(row: NamespaceRegistryRow): string {
 
 export function NamespacesPage() {
   const [rows, setRows] = useState<NamespaceRegistryRow[] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
     try {
       const res = await api.namespaceRegistry({ signal });
       if (signal?.aborted) return;
@@ -45,6 +49,8 @@ export function NamespacesPage() {
     } catch (e) {
       if (signal?.aborted || (e as Error)?.name === 'AbortError') return;
       setError((e as Error).message);
+    } finally {
+      if (!signal?.aborted) setLoading(false);
     }
   }, []);
 
@@ -95,7 +101,9 @@ export function NamespacesPage() {
       {unregistered.length > 0 ? (
         <section className="flex flex-col gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-3">
           <h2 className="text-xs font-semibold text-amber-900">
-            {unregistered.length} namespace{unregistered.length === 1 ? '' : 's'} hold entities but have no registry row
+            {unregistered.length === 1
+              ? '1 namespace holds entities but has no registry row'
+              : `${unregistered.length} namespaces hold entities but have no registry row`}
           </h2>
           <p className="text-xs text-amber-800">
             Nobody owns these, so a key scoped to an owner cannot see them at all. An agent claiming one through the CLI
@@ -124,13 +132,23 @@ export function NamespacesPage() {
         </div>
 
         {rows == null ? (
-          <output aria-live="polite" className="text-xs text-muted-foreground">
-            Loading…
-          </output>
+          loading ? (
+            <output aria-live="polite" className="text-xs text-muted-foreground">
+              Loading…
+            </output>
+          ) : null
         ) : visible.length === 0 ? (
-          <p className="text-xs text-muted-foreground">
-            {rows.length === 0 ? 'No namespaces yet.' : 'No namespace matches that filter.'}
-          </p>
+          <div className="flex justify-center py-10">
+            {rows.length === 0 ? (
+              <EmptyState icon={FolderTree} title="No namespaces yet">
+                Namespaces appear here once the store holds entities or the registry has rows.
+              </EmptyState>
+            ) : (
+              <EmptyState icon={SearchX} title="No namespace matches that filter">
+                The filter checks name, owner, and id. Clear it to see all {rows.length} namespaces.
+              </EmptyState>
+            )}
+          </div>
         ) : (
           <table className="w-full border-collapse text-xs">
             <thead>

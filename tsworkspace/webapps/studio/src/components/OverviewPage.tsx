@@ -1,17 +1,22 @@
 // Overview, the studio's landing surface (Decision: the studio is navigated,
-// not filtered). Three sections:
-//   1. Core Domain Chart of the problem-space knowledge graph (lightweight).
-//   2. EventModel index, grouped by namespace, each card linking to /em/...
-//   3. (later) Context map.
+// not filtered). One view at a time:
+//   - Models: the EventModel index, grouped by namespace, each card linking
+//     to /em/... This is the landing view, because picking a model is what
+//     most visits are for.
+//   - Domain chart: the problem-space knowledge graph (lightweight).
+//   - Contexts: the context map.
 // Renders without loading the whole store: only EventModel entities and
 // the problem-space namespaces (Decision #29).
 import { ReactFlowProvider } from '@xyflow/react';
-import { Search } from 'lucide-react';
+import { Boxes, Library, Search, SearchX } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { Selection } from '@/components/canvas/Board';
 import { ContextMapBoard } from '@/components/canvas/ContextMapBoard';
 import { DomainChartBoard } from '@/components/canvas/DomainChartBoard';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { buttonVariants } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
+import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import { api } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
 import {
@@ -32,13 +37,14 @@ const MODE_STORAGE_KEY = 'overview:mode';
 // Overview-level visualizations of the same data. Each is the whole overview
 // re-shaped, not a filter. Distinct from the per-model `?view=` on the
 // ModelShell tabs, which are scoped to one event model.
-const OVERVIEW_MODES = ['chart', 'contexts', 'models'] as const;
+const OVERVIEW_MODES = ['models', 'chart', 'contexts'] as const;
 type OverviewMode = (typeof OVERVIEW_MODES)[number];
+const DEFAULT_MODE: OverviewMode = 'models';
 
 const OVERVIEW_MODE_LABELS: Record<OverviewMode, string> = {
+  models: 'Models',
   chart: 'Domain chart',
   contexts: 'Contexts',
-  models: 'Models',
 };
 
 const KIND_SHORT: Record<Entity['kind'], string> = {
@@ -104,12 +110,12 @@ function persistDomains(slugs: string[]) {
 
 function persistMode(mode: OverviewMode) {
   const p = new URLSearchParams(window.location.search);
-  if (mode === 'chart') p.delete('mode');
+  if (mode === DEFAULT_MODE) p.delete('mode');
   else p.set('mode', mode);
   const qs = p.toString();
   window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
   try {
-    if (mode === 'chart') window.localStorage.removeItem(MODE_STORAGE_KEY);
+    if (mode === DEFAULT_MODE) window.localStorage.removeItem(MODE_STORAGE_KEY);
     else window.localStorage.setItem(MODE_STORAGE_KEY, mode);
   } catch {
     // localStorage may be unavailable; URL is the source of truth.
@@ -140,14 +146,15 @@ export function OverviewPage() {
     if (fromUrl) return fromUrl;
     try {
       const stored = window.localStorage.getItem(MODE_STORAGE_KEY);
-      return isOverviewMode(stored) ? stored : 'chart';
+      return isOverviewMode(stored) ? stored : DEFAULT_MODE;
     } catch {
-      return 'chart';
+      return DEFAULT_MODE;
     }
   });
 
   const selectMode = (next: OverviewMode) => {
     setMode(next);
+    setSearchQuery('');
     persistMode(next);
   };
 
@@ -177,6 +184,7 @@ export function OverviewPage() {
 
   useEffect(() => {
     const q = searchQuery.trim();
+    setSearchError(undefined);
     if (q.length < 2) {
       setSearchResults([]);
       setSearching(false);
@@ -356,32 +364,35 @@ export function OverviewPage() {
   }, [visibleEventModels]);
   const sortedNamespaces = useMemo(() => [...grouped.keys()].sort(), [grouped]);
   const chartFocusEntity = chartFocusKey && visibleChart ? visibleChart.byKey.get(chartFocusKey) : undefined;
+  const searchOpen = searchQuery.trim().length >= 2;
 
   return (
-    <div className="flex h-full flex-col overflow-hidden">
+    <div className="flex h-screen flex-col overflow-hidden">
       <header className="border-b border-border bg-card px-6 py-4">
         <div className="flex flex-wrap items-baseline gap-3">
           <h1 className="text-lg font-semibold">Overview</h1>
           <p className="text-xs text-muted-foreground">
             The map of everything. Pick an event model to walk a flow; click a domain or context to read its charter.
           </p>
-          <div className="ml-auto inline-flex overflow-hidden rounded-md border border-border text-xs">
-            {OVERVIEW_MODES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => selectMode(m)}
-                aria-pressed={mode === m}
-                className={cn(
-                  'px-3 py-1 font-medium transition-colors',
-                  mode === m
-                    ? 'bg-foreground text-background'
-                    : 'bg-card text-foreground hover:bg-accent hover:text-accent-foreground',
-                )}
-              >
-                {OVERVIEW_MODE_LABELS[m]}
-              </button>
-            ))}
+          <div className="ml-auto flex items-center gap-3">
+            <Tabs
+              value={mode}
+              onValueChange={(next) => {
+                if (isOverviewMode(next)) selectMode(next);
+              }}
+            >
+              <TabsList aria-label="Overview view">
+                {OVERVIEW_MODES.map((m) => (
+                  <TabsTab key={m} value={m}>
+                    {OVERVIEW_MODE_LABELS[m]}
+                  </TabsTab>
+                ))}
+              </TabsList>
+            </Tabs>
+            <a href="/namespaces" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+              <Library aria-hidden="true" />
+              Namespaces
+            </a>
           </div>
         </div>
         <div className="mt-3 flex max-w-xl items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm">
@@ -450,26 +461,101 @@ export function OverviewPage() {
           {overviewError}
         </div>
       ) : null}
-      {mode === 'chart' ? (
-        <section className="border-b border-border" style={{ height: '40%' }}>
-          {visibleChart ? (
-            <ReactFlowProvider>
-              <ErrorBoundary>
-                <DomainChartBoard
-                  model={visibleChart}
-                  selections={(chartFocusKey ? [{ type: 'entity', key: chartFocusKey }] : []) as Selection[]}
-                  onSelect={(key) => setChartFocusKey(key)}
-                />
-              </ErrorBoundary>
-            </ReactFlowProvider>
+      {searchOpen ? (
+        <section className="flex flex-1 flex-col gap-3 overflow-y-auto p-6">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Search Results ({searchResults.length})
+          </h2>
+          {searchError ? (
+            <div role="alert" aria-live="assertive" className="text-xs text-red-600">
+              {searchError}
+            </div>
+          ) : null}
+          {searchResults.length > 0 ? (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {searchResults.map((entity) => {
+                const homes = homesFor(entity);
+                const href =
+                  homes[0] && KIND_SHORT[entity.kind]
+                    ? withBranchQuery(
+                        `/em/${encodeURIComponent(homes[0].id.namespace)}/${encodeURIComponent(homes[0].id.slug)}?focus=${encodeURIComponent(
+                          `${KIND_SHORT[entity.kind]}:${entity.id.namespace}/${entity.id.slug}`,
+                        )}`,
+                        branch,
+                      )
+                    : undefined;
+                const body = (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="truncate font-semibold">{entity.title}</span>
+                      <span className="ml-auto shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-zinc-600">
+                        {entity.kind}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+                      {entity.id.namespace}/{entity.id.slug}@v{entity.id.version}
+                    </div>
+                    <div className="mt-1 truncate text-[10px] text-muted-foreground">
+                      {homes.length > 0 ? `in ${homes.map((home) => home.title).join(', ')}` : entity.doc}
+                    </div>
+                  </>
+                );
+                return href ? (
+                  <a
+                    key={entity.key}
+                    href={href}
+                    className="block rounded-lg border border-border bg-card px-3 py-2 text-sm hover:border-indigo-300 hover:bg-indigo-50/40"
+                  >
+                    {body}
+                  </a>
+                ) : (
+                  <div key={entity.key} className="rounded-lg border border-border bg-card px-3 py-2 text-sm">
+                    {body}
+                  </div>
+                );
+              })}
+            </div>
           ) : (
-            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
-              Loading the map…
+            <div className="flex flex-1 items-center justify-center">
+              <EmptyState icon={SearchX} title={`No matches for “${searchQuery.trim()}”`}>
+                Search looks at entity titles and ids across every model. Try another name, or clear the search to get
+                back to the {OVERVIEW_MODE_LABELS[mode].toLowerCase()} view.
+              </EmptyState>
             </div>
           )}
         </section>
+      ) : mode === 'chart' ? (
+        <>
+          <section className="min-h-0 flex-1">
+            {visibleChart ? (
+              <ReactFlowProvider>
+                <ErrorBoundary>
+                  <DomainChartBoard
+                    model={visibleChart}
+                    selections={(chartFocusKey ? [{ type: 'entity', key: chartFocusKey }] : []) as Selection[]}
+                    onSelect={(key) => setChartFocusKey(key)}
+                  />
+                </ErrorBoundary>
+              </ReactFlowProvider>
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                Loading the map…
+              </div>
+            )}
+          </section>
+          {chartFocusEntity ? (
+            <div className="border-t border-border bg-card px-6 py-3">
+              <div className="text-sm font-semibold">{chartFocusEntity.title}</div>
+              {chartFocusEntity.doc ? (
+                <p className="mt-1 text-xs text-muted-foreground">{chartFocusEntity.doc}</p>
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">No charter documented yet.</p>
+              )}
+            </div>
+          ) : null}
+        </>
       ) : mode === 'contexts' ? (
-        <section className="border-b border-border" style={{ height: '40%' }}>
+        <section className="min-h-0 flex-1">
           {chart ? (
             <ReactFlowProvider>
               <ErrorBoundary>
@@ -482,129 +568,73 @@ export function OverviewPage() {
             </div>
           )}
         </section>
-      ) : null}
-      {chartFocusEntity && mode === 'chart' ? (
-        <div className="border-b border-border bg-card px-6 py-3">
-          <div className="text-sm font-semibold">{chartFocusEntity.title}</div>
-          {chartFocusEntity.doc ? (
-            <p className="mt-1 text-xs text-muted-foreground">{chartFocusEntity.doc}</p>
-          ) : (
-            <p className="mt-1 text-xs text-muted-foreground">No charter documented yet.</p>
-          )}
-        </div>
-      ) : null}
-      <section className="flex-1 overflow-y-auto p-6">
-        {searchQuery.trim().length >= 2 ? (
-          <div className="mb-6">
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Search Results ({searchResults.length})
-            </h2>
-            {searchError ? (
-              <div role="alert" aria-live="assertive" className="text-xs text-red-600">
-                {searchError}
-              </div>
-            ) : null}
-            {searchResults.length > 0 ? (
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                {searchResults.map((entity) => {
-                  const homes = homesFor(entity);
-                  const href =
-                    homes[0] && KIND_SHORT[entity.kind]
-                      ? withBranchQuery(
-                          `/em/${encodeURIComponent(homes[0].id.namespace)}/${encodeURIComponent(homes[0].id.slug)}?focus=${encodeURIComponent(
-                            `${KIND_SHORT[entity.kind]}:${entity.id.namespace}/${entity.id.slug}`,
-                          )}`,
-                          branch,
-                        )
-                      : undefined;
-                  const body = (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <span className="truncate font-semibold">{entity.title}</span>
-                        <span className="ml-auto shrink-0 rounded bg-zinc-100 px-1.5 py-0.5 text-[9px] font-bold uppercase text-zinc-600">
-                          {entity.kind}
-                        </span>
-                      </div>
-                      <div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
-                        {entity.id.namespace}/{entity.id.slug}@v{entity.id.version}
-                      </div>
-                      <div className="mt-1 truncate text-[10px] text-muted-foreground">
-                        {homes.length > 0 ? `in ${homes.map((home) => home.title).join(', ')}` : entity.doc}
-                      </div>
-                    </>
-                  );
-                  return href ? (
-                    <a
-                      key={entity.key}
-                      href={href}
-                      className="block rounded-lg border border-border bg-card px-3 py-2 text-sm hover:border-indigo-300 hover:bg-indigo-50/40"
-                    >
-                      {body}
-                    </a>
-                  ) : (
-                    <div key={entity.key} className="rounded-lg border border-border bg-card px-3 py-2 text-sm">
-                      {body}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-xs text-muted-foreground">No matching entities.</div>
-            )}
-          </div>
-        ) : null}
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Event Models ({visibleEventModels.length}
-          {selectedDomains.length > 0 ? ` of ${eventModels.length}` : ''})
-        </h2>
-        <div className="space-y-6">
-          {sortedNamespaces.map((ns) => {
-            const list = (grouped.get(ns) ?? []).sort((a, b) => a.title.localeCompare(b.title));
-            return (
-              <div key={ns}>
-                <h3 className="mb-2 font-mono text-[11px] font-semibold uppercase text-muted-foreground">
-                  {ns}
-                  <span className="ml-2 text-muted-foreground">·</span>
-                  <span className="ml-2 font-sans normal-case">
-                    {list.length} model{list.length === 1 ? '' : 's'}
-                  </span>
-                </h3>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {list.map((em) => {
-                    const members = Array.isArray(em.raw.members) ? em.raw.members.length : 0;
-                    return (
-                      <a
-                        key={em.key}
-                        href={withBranchQuery(
-                          `/em/${encodeURIComponent(em.id.namespace)}/${encodeURIComponent(em.id.slug)}`,
-                          branch,
-                        )}
-                        className={cn(
-                          'block rounded-lg border border-border bg-card px-3 py-2 text-sm hover:border-indigo-300 hover:bg-indigo-50/40',
-                        )}
-                      >
-                        <div className="truncate font-semibold">{em.title}</div>
-                        <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                          {em.id.namespace}/{em.id.slug}@v{em.id.version}
-                        </div>
-                        <div className="mt-1 text-[10px] text-muted-foreground">
-                          {members} member{members === 1 ? '' : 's'}
-                          {em.doc ? ` · ${em.doc.slice(0, 80)}${em.doc.length > 80 ? '…' : ''}` : ''}
-                        </div>
-                      </a>
-                    );
-                  })}
+      ) : (
+        <section className="flex flex-1 flex-col gap-3 overflow-y-auto p-6">
+          <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Event Models ({visibleEventModels.length}
+            {selectedDomains.length > 0 ? ` of ${eventModels.length}` : ''})
+          </h2>
+          <div className="flex flex-col gap-6">
+            {sortedNamespaces.map((ns) => {
+              const list = (grouped.get(ns) ?? []).sort((a, b) => a.title.localeCompare(b.title));
+              return (
+                <div key={ns}>
+                  <h3 className="mb-2 font-mono text-[11px] font-semibold uppercase text-muted-foreground">
+                    {ns}
+                    <span className="ml-2 text-muted-foreground">·</span>
+                    <span className="ml-2 font-sans normal-case">
+                      {list.length} model{list.length === 1 ? '' : 's'}
+                    </span>
+                  </h3>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                    {list.map((em) => {
+                      const members = Array.isArray(em.raw.members) ? em.raw.members.length : 0;
+                      return (
+                        <a
+                          key={em.key}
+                          href={withBranchQuery(
+                            `/em/${encodeURIComponent(em.id.namespace)}/${encodeURIComponent(em.id.slug)}`,
+                            branch,
+                          )}
+                          className={cn(
+                            'block rounded-lg border border-border bg-card px-3 py-2 text-sm hover:border-indigo-300 hover:bg-indigo-50/40',
+                          )}
+                        >
+                          <div className="truncate font-semibold">{em.title}</div>
+                          <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                            {em.id.namespace}/{em.id.slug}@v{em.id.version}
+                          </div>
+                          <div className="mt-1 text-[10px] text-muted-foreground">
+                            {members} member{members === 1 ? '' : 's'}
+                            {em.doc ? ` · ${em.doc.slice(0, 80)}${em.doc.length > 80 ? '…' : ''}` : ''}
+                          </div>
+                        </a>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-          {sortedNamespaces.length === 0 ? (
-            <div className="text-xs text-muted-foreground">
-              No event models match the selected domain{selectedDomains.length === 1 ? '' : 's'}.
+              );
+            })}
+          </div>
+          {chart && sortedNamespaces.length === 0 ? (
+            <div className="flex flex-1 items-center justify-center">
+              {eventModels.length === 0 ? (
+                <EmptyState icon={Boxes} title="No event models yet">
+                  Event models show up here grouped by namespace as soon as the store has one. Each card opens its
+                  board.
+                </EmptyState>
+              ) : (
+                <EmptyState
+                  icon={Boxes}
+                  title={`No event models in the selected domain${selectedDomains.length === 1 ? '' : 's'}`}
+                >
+                  Pick another domain above, or clear the filter to see all {eventModels.length} models.
+                </EmptyState>
+              )}
             </div>
           ) : null}
-        </div>
-      </section>
+        </section>
+      )}
     </div>
   );
 }

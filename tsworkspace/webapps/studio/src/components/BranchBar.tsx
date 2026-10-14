@@ -1,17 +1,27 @@
 // Branch indicator + switcher (Phase 3: Studio, requirements 3 & 4).
-// Rendered in TopBar only when relevant: the chip + read-only-preview hint
-// always show when a branch is active; the picker (listing /api/branches
-// plus "baseline" to exit) is available regardless, so a baseline user can
-// jump onto a branch from anywhere in the studio.
+// Rendered in TopBar only when relevant. The trigger reads as state the way
+// a git client's branch switcher does: it names the current ref ("baseline"
+// or the branch) and turns amber with a read-only-preview tag while a branch
+// is active. Opening it lists /api/branches plus "baseline" to exit, so a
+// baseline user can jump onto a branch from anywhere in the studio.
 //
-// No headless-UI/popover library exists in this codebase (src/components/ui
-// has only card/badge/separator/button/input); this is a hand-rolled
-// disclosure, not a new modal abstraction.
-import { GitBranch } from 'lucide-react';
+// A hand-rolled disclosure rather than src/components/ui/dropdown-menu: its
+// rows carry more than a menu item (doc, change count, async load and error
+// states).
+import { ChevronDown, GitBranch } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { api, type BranchInfo } from '@/lib/api';
 import { cn } from '@/lib/utils';
+
+function CurrentBadge() {
+  return (
+    <Badge variant="secondary" className="ml-auto px-1.5 text-[9px] font-semibold uppercase tracking-wide leading-3">
+      current
+    </Badge>
+  );
+}
 
 export function BranchBar({
   branch,
@@ -56,25 +66,33 @@ export function BranchBar({
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative flex items-center gap-2">
-      {branch ? (
-        <div className="flex items-center gap-1.5 rounded-md border border-amber-400 bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900">
-          <GitBranch className="h-3.5 w-3.5" />
-          <span className="max-w-[16rem] truncate font-mono">{branch}</span>
-          <span className="rounded bg-amber-200 px-1 text-[9px] font-bold uppercase tracking-wide">
+    <div ref={containerRef} className="relative flex min-w-0 items-center gap-2">
+      {/* The name yields to the bar: it shrinks and ellipsizes with the available width, and caps so it cannot hog a wide bar either. */}
+      <Button
+        variant="outline"
+        size="sm"
+        aria-label={branch ? `Branch: ${branch}, read-only preview` : 'Branch: baseline'}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          'min-w-0',
+          branch && 'border-amber-400 bg-amber-100 text-amber-900 hover:bg-amber-200 hover:text-amber-900',
+        )}
+      >
+        <GitBranch />
+        <span className={cn('min-w-0 max-w-[16rem] truncate', branch && 'font-mono')}>{branch ?? 'baseline'}</span>
+        {branch ? (
+          <span className="hidden shrink-0 rounded bg-amber-200 px-1 text-[9px] font-bold uppercase tracking-wide md:inline">
             read-only preview
           </span>
-          {onOpenReview ? (
-            <Button variant="ghost" size="sm" className="h-5 px-1.5 text-[10px]" onClick={onOpenReview}>
-              Review
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-      <Button variant="outline" size="sm" onClick={() => setOpen((v) => !v)}>
-        <GitBranch />
-        {branch ? 'Switch' : 'Branch'}
+        ) : null}
+        <ChevronDown className="opacity-60" />
       </Button>
+      {branch && onOpenReview ? (
+        <Button variant="outline" size="sm" onClick={onOpenReview}>
+          Review
+        </Button>
+      ) : null}
       {open ? (
         <div className="absolute right-0 top-full z-20 mt-1 w-72 rounded-md border border-border bg-card p-1 shadow-md">
           <button
@@ -89,7 +107,7 @@ export function BranchBar({
             )}
           >
             baseline
-            {!branch ? <span className="ml-auto text-[9px] text-muted-foreground">current</span> : null}
+            {!branch ? <CurrentBadge /> : null}
           </button>
           {error ? <div className="px-2 py-1.5 text-[11px] text-red-600">{error}</div> : null}
           {branches === undefined && !error ? (
@@ -113,7 +131,7 @@ export function BranchBar({
             >
               <span className="flex w-full items-center gap-2">
                 <span className="truncate font-mono">{b.name}</span>
-                {branch === b.name ? <span className="ml-auto text-[9px] text-muted-foreground">current</span> : null}
+                {branch === b.name ? <CurrentBadge /> : null}
               </span>
               {b.doc ? <span className="truncate text-[10px] font-normal text-muted-foreground">{b.doc}</span> : null}
               <span className="text-[9px] text-muted-foreground">{b.deltaCount} change(s)</span>
