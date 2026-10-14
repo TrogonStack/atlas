@@ -168,16 +168,17 @@ export function DomainChartBoard({
       {!hasKnowledge ? (
         <BoardEmptyState
           icon={Waypoints}
-          title="No domains yet"
+          title="No domains mapped yet"
           hint={
             <>
-              Start with a Domain root whose <span className="font-mono">id.slug</span> equals its{' '}
-              <span className="font-mono">id.namespace</span>, then add its Subdomains (Decision #29).
+              Declare <span className="font-mono">Domain</span> and <span className="font-mono">Subdomain</span>{' '}
+              manifests and apply them with <span className="font-mono">trogon-atlas apply</span>. Studio only reads the
+              model.
             </>
           }
         >
-          The domain chart draws the problem space: a Domain root, the Subdomains that partition it, and the contexts
-          that realize them.
+          This chart shows how the business problem is split up: the domain, its subdomains, and which bounded contexts
+          take care of each one.
         </BoardEmptyState>
       ) : null}
       <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">

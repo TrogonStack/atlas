@@ -91,9 +91,18 @@ export function ContextMapBoard({
         <Controls showInteractive={false} />
       </ReactFlow>
       {nodes.length === 0 ? (
-        <BoardEmptyState icon={MapIcon} title="No bounded contexts yet">
-          The context map shows how contexts talk to each other: published events flowing into the views that subscribe
-          to them.
+        <BoardEmptyState
+          icon={MapIcon}
+          title="No bounded contexts yet"
+          hint={
+            <>
+              Declare <span className="font-mono">BoundedContext</span> manifests and apply them with{' '}
+              <span className="font-mono">trogon-atlas apply</span>. Studio only reads the model.
+            </>
+          }
+        >
+          This map shows how contexts talk to each other: the events one of them publishes, and the views in another
+          that listen for them.
         </BoardEmptyState>
       ) : null}
       <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
