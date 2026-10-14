@@ -184,6 +184,7 @@ export function OverviewPage() {
 
   useEffect(() => {
     const q = searchQuery.trim();
+    setSearchError(undefined);
     if (q.length < 2) {
       setSearchResults([]);
       setSearching(false);

@@ -172,6 +172,29 @@ describe('OverviewPage', () => {
 
       expect(screen.queryByText(/Search Results/)).toBeNull();
     });
+
+    it('drops a failed search error as soon as the query moves on', async () => {
+      (api.search as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('search backend down'));
+      render(<OverviewPage />);
+      const input = screen.getByPlaceholderText('Search models and entities');
+
+      fireEvent.change(input, { target: { value: 'order' } });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByRole('alert').textContent).toBe('search backend down');
+
+      fireEvent.change(input, { target: { value: 'o' } });
+      fireEvent.change(input, { target: { value: 'orders' } });
+      expect(screen.getByText(/Search Results/)).toBeDefined();
+      expect(screen.queryByRole('alert')).toBeNull();
+
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(api.search).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
   });
 
   describe('domain filter behavior', () => {
