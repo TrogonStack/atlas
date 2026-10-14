@@ -288,6 +288,16 @@ export interface CompileTypeLibraryResult {
   compatibilityViolations?: { message?: string }[];
 }
 
+/** An event model as `trogon-atlas apply` manifests. Empty fields are omitted on the wire. */
+export interface BoardManifests {
+  /** The board and everything it reaches in its own namespace, as multi-document YAML. */
+  manifests?: string;
+  /** Entities in other namespaces the board references directly. */
+  externalManifests?: string;
+  skipped?: { entity?: { kind?: string; id?: EntityId }; reason?: string }[];
+  truncated?: boolean;
+}
+
 /** The paths a board page reads. A snapshot records its responses under these keys. */
 export const boardPaths = {
   info: () => '/api/info',
@@ -339,6 +349,8 @@ export const api = {
     getJson<{ entries: BranchDiffEntry[] }>(`/api/branch-diff?name=${encodeURIComponent(name)}`, opts),
   validate: (id: { namespace: string; slug: string; version?: string }, opts?: FetchOptions) =>
     getJson<{ issues?: unknown[] }>(boardPaths.validate(id), opts),
+  manifests: (namespace: string, slug: string, opts?: FetchOptions) =>
+    getJson<BoardManifests>(`${boardPaths.eventModel(namespace, slug)}/manifests`, opts),
   compileTypeLibrary: (library: TypeLibraryWire, opts?: FetchOptions) =>
     postJson<CompileTypeLibraryResult>('/api/type-libraries/compile', { library }, opts),
   validateProject: (scope: ValidateProjectScope, opts?: FetchOptions) =>

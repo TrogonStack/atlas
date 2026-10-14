@@ -1,5 +1,6 @@
 import { Camera, ChevronLeft, Workflow } from 'lucide-react';
 import { BranchBar } from '@/components/BranchBar';
+import { DownloadYamlButton } from '@/components/DownloadYamlButton';
 import { TopBarMenu } from '@/components/TopBarMenu';
 import { Badge } from '@/components/ui/badge';
 import type { ServerInfo } from '@/lib/api';
@@ -68,7 +69,10 @@ export function TopBar({
       <div className="ml-auto flex min-w-0 items-center gap-3">
         {error ? <span className="max-w-md truncate text-xs text-red-600">{error}</span> : null}
         {snapshot ? (
-          <SnapshotBadge snapshot={snapshot} serverVersion={info?.serverVersion} />
+          <>
+            <SnapshotBadge snapshot={snapshot} serverVersion={info?.serverVersion} />
+            <DownloadYamlButton snapshot={snapshot} />
+          </>
         ) : (
           <>
             <output

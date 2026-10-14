@@ -37,6 +37,19 @@ describe('parseSnapshot', () => {
   it('rejects a snapshot without responses', () => {
     expect(() => parseSnapshot(JSON.stringify({ ...snapshot(), responses: [] }))).toThrow('missing responses');
   });
+
+  it('round-trips the manifests a snapshot carries', () => {
+    const s = snapshot({ manifests: { model: 'kind: EventModel\n', external: '' } });
+    expect(parseSnapshot(JSON.stringify(s))).toEqual(s);
+  });
+
+  it.each([
+    ['a string', 'kind: EventModel'],
+    ['no external part', { model: 'kind: EventModel' }],
+    ['a non-string model', { model: 1, external: '' }],
+  ])('rejects manifests that are %s', (_, manifests) => {
+    expect(() => parseSnapshot(JSON.stringify({ ...snapshot(), manifests }))).toThrow('snapshot manifests');
+  });
 });
 
 describe('snapshotResponse', () => {
@@ -60,6 +73,10 @@ describe('snapshotFileName', () => {
 
   it('adds the branch and makes it safe for a file name', () => {
     expect(snapshotFileName(snapshot({ branch: 'alex/new flow' }))).toBe('checkout-alex-new-flow-20261013-1710.html');
+  });
+
+  it('takes another extension for the files saved next to the board', () => {
+    expect(snapshotFileName(snapshot(), '.external.yaml')).toBe('checkout-20261013-1710.external.yaml');
   });
 
   it('still produces a name when the time cannot be parsed', () => {

@@ -318,6 +318,7 @@ function currentPrincipalToken() {
 const READ_RPCS = new Set([
   "compileTypeLibrary",
   "diffBranch",
+  "exportEventModelManifests",
   "getEntity",
   "getServerInfo",
   "getTypeLibraryDescriptorSet",
@@ -1450,29 +1451,35 @@ app.get(
   }),
 );
 
+/** @param {AppRequest} req */
+function eventModelPathParams(req) {
+  const ns = String(req.params.namespace);
+  const slug = String(req.params.slug);
+  if (ns.length > PATH_PARAM_MAX || slug.length > PATH_PARAM_MAX) {
+    const err = /** @type {HttpError} */ (new Error("path param too long"));
+    err.status = 400;
+    throw err;
+  }
+  if (!isSafeNamespace(ns)) {
+    const err = /** @type {HttpError} */ (new Error(`invalid namespace: ${JSON.stringify(ns)}`));
+    err.status = 400;
+    throw err;
+  }
+  if (!isSafeNamespace(slug)) {
+    const err = /** @type {HttpError} */ (new Error(`invalid slug: ${JSON.stringify(slug)}`));
+    err.status = 400;
+    throw err;
+  }
+  return { ns, slug };
+}
+
 // One EventModel scoped to its members. Walks members, fetches each, and
 // adds a halo of foreign-namespace events referenced as sourceEvents so
 // the board can render cross-context stubs at the boundary.
 app.get(
   "/api/event-model/:namespace/:slug",
   branchHandler(async (req) => {
-    const ns = String(req.params.namespace);
-    const slug = String(req.params.slug);
-    if (ns.length > PATH_PARAM_MAX || slug.length > PATH_PARAM_MAX) {
-      const err = /** @type {HttpError} */ (new Error("path param too long"));
-      err.status = 400;
-      throw err;
-    }
-    if (!isSafeNamespace(ns)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid namespace: ${JSON.stringify(ns)}`));
-      err.status = 400;
-      throw err;
-    }
-    if (!isSafeNamespace(slug)) {
-      const err = /** @type {HttpError} */ (new Error(`invalid slug: ${JSON.stringify(slug)}`));
-      err.status = 400;
-      throw err;
-    }
+    const { ns, slug } = eventModelPathParams(req);
     const emResp = /** @type {any} */ (await call("getEntity", {
       kind: 12,
       id: { namespace: ns, slug, version: "1" },
@@ -1621,6 +1628,16 @@ app.get(
         ...knowledge,
       ]),
     };
+  }),
+);
+
+// The board as the YAML manifests `trogon-atlas apply` reads, so a saved
+// board can be loaded back into an Atlas.
+app.get(
+  "/api/event-model/:namespace/:slug/manifests",
+  branchHandler(async (req) => {
+    const { ns, slug } = eventModelPathParams(req);
+    return call("exportEventModelManifests", { id: { namespace: ns, slug, version: "1" } });
   }),
 );
 
