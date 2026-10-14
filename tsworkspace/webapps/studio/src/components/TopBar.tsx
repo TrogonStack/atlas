@@ -1,8 +1,7 @@
-import { Camera, ChevronLeft, RefreshCw, Workflow } from 'lucide-react';
+import { Camera, ChevronLeft, Workflow } from 'lucide-react';
 import { BranchBar } from '@/components/BranchBar';
-import { ExportHtmlButton } from '@/components/ExportHtmlButton';
+import { TopBarMenu } from '@/components/TopBarMenu';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
 import type { ServerInfo } from '@/lib/api';
 import type { RealtimeStatus } from '@/lib/realtime';
 import type { SnapshotStamp } from '@/lib/snapshot';
@@ -97,14 +96,10 @@ export function TopBar({
               {realtime.state}
               {realtime.detail ? <span className="sr-only">: {realtime.detail}</span> : null}
             </output>
-            <Button variant="outline" size="sm" onClick={onRefresh}>
-              <RefreshCw />
-              Refresh
-            </Button>
-            {onExportHtml ? <ExportHtmlButton onExport={onExportHtml} /> : null}
             {onSelectBranch ? (
               <BranchBar branch={branch} onSelectBranch={onSelectBranch} onOpenReview={onOpenBranchReview} />
             ) : null}
+            <TopBarMenu onRefresh={onRefresh} onExportHtml={onExportHtml} />
           </>
         )}
       </div>

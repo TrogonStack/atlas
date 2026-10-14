@@ -230,9 +230,10 @@ describe('ModelShell', () => {
     const onRefetch = vi.fn();
     render(<ModelShell model={buildModel([])} scopedTitle="Shop" onRefetch={onRefetch} />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /refresh/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: 'More actions' })).toBeDefined();
     });
-    fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Refresh' }));
     expect(onRefetch).toHaveBeenCalled();
   });
 

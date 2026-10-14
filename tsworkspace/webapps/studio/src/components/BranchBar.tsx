@@ -4,9 +4,9 @@
 // plus "baseline" to exit) is available regardless, so a baseline user can
 // jump onto a branch from anywhere in the studio.
 //
-// No headless-UI/popover library exists in this codebase (src/components/ui
-// has only card/badge/separator/button/input); this is a hand-rolled
-// disclosure, not a new modal abstraction.
+// A hand-rolled disclosure rather than src/components/ui/dropdown-menu: its
+// rows carry more than a menu item (doc, change count, async load and error
+// states).
 import { GitBranch } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Badge } from '@/components/ui/badge';

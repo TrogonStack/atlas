@@ -12,7 +12,8 @@ test('Export HTML saves a board that renders from disk with no network', async (
   await expect(page.getByText(eventTitle)).toBeVisible();
 
   const downloading = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export HTML' }).click();
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByRole('menuitem', { name: 'Export HTML' }).click();
   const download = await downloading;
   expect(download.suggestedFilename()).toMatch(new RegExp(`^${slug}-\\d{8}-\\d{4}\\.html$`));
   // Keep the .html name: Chrome shows a file without it as plain text.
@@ -34,8 +35,7 @@ test('Export HTML saves a board that renders from disk with no network', async (
   await expect(offline.getByRole('heading', { name: 'Event Model Studio', level: 1 })).toBeVisible();
   await expect(offline.getByText(eventTitle)).toBeVisible();
   await expect(offline.getByRole('status', { name: 'Snapshot' })).toContainText('baseline');
-  await expect(offline.getByRole('button', { name: 'Refresh' })).toHaveCount(0);
-  await expect(offline.getByRole('button', { name: 'Export HTML' })).toHaveCount(0);
+  await expect(offline.getByRole('button', { name: 'More actions' })).toHaveCount(0);
   expect(problems).toEqual([]);
   // The file carries the board's reads and nothing else: no realtime or credential responses.
   // Read from the file: the page drops the data element once it has parsed it.
