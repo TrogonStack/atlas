@@ -89,7 +89,7 @@ describe('TopBar', () => {
     render(
       <TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} branch="alex/rework" onSelectBranch={vi.fn()} />,
     );
-    expect(screen.queryByRole('button', { name: /review/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Review' })).toBeNull();
   });
 
   it('renders Review when onOpenBranchReview is provided', () => {
@@ -102,7 +102,7 @@ describe('TopBar', () => {
         onOpenBranchReview={vi.fn()}
       />,
     );
-    expect(screen.getByRole('button', { name: /review/i })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Review' })).toBeDefined();
   });
 
   describe('snapshot', () => {

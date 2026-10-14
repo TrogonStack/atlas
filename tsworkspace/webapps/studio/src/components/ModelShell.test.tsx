@@ -247,9 +247,9 @@ describe('ModelShell', () => {
     const onRefetch = vi.fn();
     render(<ModelShell model={buildModel([])} scopedTitle="Shop" onRefetch={onRefetch} />);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /branch/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /^Branch:/ })).toBeDefined();
     });
-    fireEvent.click(screen.getByRole('button', { name: /branch/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Branch:/ }));
     await waitFor(() => {
       expect(screen.getByText('alex/rework')).toBeDefined();
     });
