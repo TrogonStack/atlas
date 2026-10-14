@@ -64,7 +64,8 @@ export function TopBar({
           </Badge>
         ) : null}
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-3">
+      {/* min-w-0, not shrink-0: a long branch name must ellipsize here rather than push the title out of the bar. */}
+      <div className="ml-auto flex min-w-0 items-center gap-3">
         {error ? <span className="max-w-md truncate text-xs text-red-600">{error}</span> : null}
         {snapshot ? (
           <SnapshotBadge snapshot={snapshot} serverVersion={info?.serverVersion} />
@@ -80,7 +81,7 @@ export function TopBar({
                   offline: 'Live updates disconnected. Use Refresh to get the latest model.',
                 }[realtime.state]
               }
-              className="flex items-center gap-1.5 text-xs text-muted-foreground"
+              className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
             >
               <span
                 aria-hidden="true"

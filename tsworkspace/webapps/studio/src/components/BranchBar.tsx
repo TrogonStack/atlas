@@ -66,21 +66,23 @@ export function BranchBar({
   }, [open]);
 
   return (
-    <div ref={containerRef} className="relative flex items-center gap-2">
+    <div ref={containerRef} className="relative flex min-w-0 items-center gap-2">
+      {/* The name yields to the bar: it shrinks and ellipsizes with the available width, and caps so it cannot hog a wide bar either. */}
       <Button
         variant="outline"
         size="sm"
         aria-label={branch ? `Branch: ${branch}, read-only preview` : 'Branch: baseline'}
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className={cn(branch && 'border-amber-400 bg-amber-100 text-amber-900 hover:bg-amber-200 hover:text-amber-900')}
+        className={cn(
+          'min-w-0',
+          branch && 'border-amber-400 bg-amber-100 text-amber-900 hover:bg-amber-200 hover:text-amber-900',
+        )}
       >
         <GitBranch />
-        <span className={cn('max-w-[10rem] truncate md:max-w-[16rem]', branch && 'font-mono')}>
-          {branch ?? 'baseline'}
-        </span>
+        <span className={cn('min-w-0 max-w-[16rem] truncate', branch && 'font-mono')}>{branch ?? 'baseline'}</span>
         {branch ? (
-          <span className="rounded bg-amber-200 px-1 text-[9px] font-bold uppercase tracking-wide">
+          <span className="hidden shrink-0 rounded bg-amber-200 px-1 text-[9px] font-bold uppercase tracking-wide md:inline">
             read-only preview
           </span>
         ) : null}
