@@ -47,6 +47,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+}
+
 .react-flow__node {
   font-family: inherit;
 }
