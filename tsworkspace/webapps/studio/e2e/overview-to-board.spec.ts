@@ -62,6 +62,10 @@ test.describe('Overview to board flow', () => {
     // The event model card should render with its title.
     await expect(page.getByText('Order Service')).toBeVisible();
 
+    // The namespace registry is store-wide, so the overview is where it is linked from.
+    const registryLink = page.getByRole('link', { name: 'Namespaces' });
+    await expect(registryLink).toHaveAttribute('href', '/namespaces');
+
     // Step 2: click the event model card to navigate to the board.
     await page.getByRole('link', { name: /order service/i }).click();
 
@@ -70,6 +74,9 @@ test.describe('Overview to board flow', () => {
 
     // The scoped title in the TopBar shows the model name.
     await expect(page.getByText('Order Service', { exact: true }).first()).toBeVisible();
+
+    // A single model's top bar does not carry store-wide navigation.
+    await expect(registryLink).toHaveCount(0);
   });
 
   test('the overview shows one view at a time, landing on the model list', async ({ page }) => {

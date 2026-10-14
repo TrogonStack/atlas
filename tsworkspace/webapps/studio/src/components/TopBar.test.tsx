@@ -44,10 +44,9 @@ describe('TopBar', () => {
     expect((link as HTMLAnchorElement).href).toContain('/overview');
   });
 
-  it('always offers the namespace registry, which has no other entry point', () => {
+  it('leaves the namespace registry to the overview instead of linking it from a model', () => {
     render(<TopBar realtime={{ state: 'offline' }} onRefresh={vi.fn()} />);
-    const link = screen.getByRole('link', { name: /namespaces/i });
-    expect((link as HTMLAnchorElement).href).toContain('/namespaces');
+    expect(screen.queryByRole('link', { name: /namespaces/i })).toBeNull();
   });
 
   it('displays the schema version badge when info includes schemaVersion', () => {

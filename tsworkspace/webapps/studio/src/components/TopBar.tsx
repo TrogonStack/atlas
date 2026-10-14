@@ -1,4 +1,4 @@
-import { Camera, ChevronLeft, Library, RefreshCw, Workflow } from 'lucide-react';
+import { Camera, ChevronLeft, RefreshCw, Workflow } from 'lucide-react';
 import { BranchBar } from '@/components/BranchBar';
 import { ExportHtmlButton } from '@/components/ExportHtmlButton';
 import { Badge } from '@/components/ui/badge';
@@ -102,13 +102,6 @@ export function TopBar({
               Refresh
             </Button>
             {onExportHtml ? <ExportHtmlButton onExport={onExportHtml} /> : null}
-            <a
-              href="/namespaces"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-3 text-xs font-medium hover:bg-accent hover:text-accent-foreground"
-            >
-              <Library className="h-4 w-4" />
-              Namespaces
-            </a>
             {onSelectBranch ? (
               <BranchBar branch={branch} onSelectBranch={onSelectBranch} onOpenReview={onOpenBranchReview} />
             ) : null}

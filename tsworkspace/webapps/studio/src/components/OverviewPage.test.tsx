@@ -249,6 +249,12 @@ describe('OverviewPage', () => {
       expect(screen.queryByTestId('context-map-board')).toBeNull();
     });
 
+    it('is where the namespace registry is reached from', async () => {
+      await renderOverview();
+      const link = screen.getByRole('link', { name: 'Namespaces' });
+      expect((link as HTMLAnchorElement).getAttribute('href')).toBe('/namespaces');
+    });
+
     it('swaps the list for the chosen board instead of stacking them', async () => {
       await renderOverview();
 
