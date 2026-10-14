@@ -18,9 +18,11 @@ primitives.
 Strategic design explains the problems and boundaries around that
 behavior. Domains and subdomains describe business problems; bounded
 contexts declare language and responsibility; explicit mappings and seams
-connect them. The model describes decisions and data that survive an
-implementation rewrite. Code, design-tool links, and vendor bindings
-connect outward from that description.
+connect them. The model describes decisions and data that outlive any one
+implementation. Design-tool links and vendor bindings connect outward from
+that description. A code binding marks a slice as implemented, and from
+then on the [code is the truth](code-is-the-truth.md) about that slice's
+behavior.
 
 Schemas declare shapes, and entity references preserve exact
 breaking-change versions so contracts can evolve without silently
