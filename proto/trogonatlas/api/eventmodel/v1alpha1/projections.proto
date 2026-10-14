@@ -105,11 +105,16 @@ message ExportEventModelManifestsResponse {
   // Multi-document YAML: each entity in another namespace that `manifests`
   // references directly. Its own references are not followed.
   string external_manifests = 2;
-  // Entities that could not be rendered, as `kind:namespace/slug@version: reason`.
-  repeated string skipped = 3;
+  // Entities that could not be rendered. They are reported, not dropped.
+  repeated SkippedEntity skipped = 3;
   // True when the closure exceeded
   // `GetServerInfo.limits.max_projection_entities` and `manifests` was clipped.
   bool truncated = 4;
+}
+
+message SkippedEntity {
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 1;
+  string reason = 2;
 }
 
 // ---------- Subgraph extraction ----------------------------------------------

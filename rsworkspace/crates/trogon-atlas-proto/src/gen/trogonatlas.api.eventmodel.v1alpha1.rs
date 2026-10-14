@@ -447,7 +447,7 @@ pub struct ExportEventModelManifestsRequest {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ExportEventModelManifestsResponse {
     /// Multi-document YAML: the event model and every entity it reaches in its
     /// own namespace, including declared schemas and the type libraries that
@@ -458,13 +458,20 @@ pub struct ExportEventModelManifestsResponse {
     /// references directly. Its own references are not followed.
     #[prost(string, tag="2")]
     pub external_manifests: ::prost::alloc::string::String,
-    /// Entities that could not be rendered, as `kind:namespace/slug@version: reason`.
-    #[prost(string, repeated, tag="3")]
-    pub skipped: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Entities that could not be rendered. They are reported, not dropped.
+    #[prost(message, repeated, tag="3")]
+    pub skipped: ::prost::alloc::vec::Vec<SkippedEntity>,
     /// True when the closure exceeded
     /// `GetServerInfo.limits.max_projection_entities` and `manifests` was clipped.
     #[prost(bool, tag="4")]
     pub truncated: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SkippedEntity {
+    #[prost(message, optional, tag="1")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub reason: ::prost::alloc::string::String,
 }
 // ---------- Subgraph extraction ----------------------------------------------
 //

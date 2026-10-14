@@ -8,7 +8,10 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::{anyhow, bail, Context as _, Result};
 use serde_json::{Map, Value};
-use trogon_atlas_core::{refs::outbound_refs, transcode::TranscodePool};
+use trogon_atlas_core::{
+    refs::{self, outbound_refs},
+    transcode::TranscodePool,
+};
 use trogon_atlas_proto as pb;
 
 use crate::{
@@ -278,11 +281,11 @@ pub async fn export_namespace(client: &mut Client, namespace: &str) -> Result<Ex
 
 /// A board rendered as manifests: its own entities, and the entities in
 /// other namespaces it references directly.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct BoardManifests {
     pub manifests: String,
     pub external_manifests: String,
-    pub skipped: Vec<String>,
+    pub skipped: Vec<pb::SkippedEntity>,
 }
 
 /// Render a board's entities as multi-document YAML, each set sorted by
@@ -293,24 +296,35 @@ pub fn render_board(
     types: &TranscodePool,
 ) -> Result<BoardManifests> {
     let mut skipped = Vec::new();
-    let mut render = |entities: &[pb::Entity]| -> Result<String> {
-        let mut docs: Vec<(pb::EntityKey, Value)> = Vec::new();
-        for entity in entities {
-            match entity_to_manifest(entity, types) {
-                Ok((kind, id, doc)) => docs.push((pb::EntityKey::new(kind, &id), doc)),
-                Err(err) => skipped.push(format!("{}: {err:#}", entity_label(entity))),
-            }
-        }
-        docs.sort_by(|a, b| sort_key(&a.0).cmp(&sort_key(&b.0)));
-        render_docs(docs.iter().map(|(_, doc)| doc))
-    };
-    let manifests = render(own)?;
-    let external_manifests = render(external)?;
+    let manifests = render_sorted(own, types, &mut skipped)?;
+    let external_manifests = render_sorted(external, types, &mut skipped)?;
     Ok(BoardManifests {
         manifests,
         external_manifests,
         skipped,
     })
+}
+
+fn render_sorted(
+    entities: &[pb::Entity],
+    types: &TranscodePool,
+    skipped: &mut Vec<pb::SkippedEntity>,
+) -> Result<String> {
+    let mut docs: Vec<(pb::EntityKey, Value)> = Vec::new();
+    for entity in entities {
+        match entity_to_manifest(entity, types) {
+            Ok((kind, id, doc)) => docs.push((pb::EntityKey::new(kind, &id), doc)),
+            Err(err) => skipped.push(pb::SkippedEntity {
+                entity: Some(pb::EntityRef {
+                    kind: refs::entity_kind(entity).map_or(0, |k| k as i32),
+                    id: refs::entity_id(entity).cloned(),
+                }),
+                reason: format!("{err:#}"),
+            }),
+        }
+    }
+    docs.sort_by(|a, b| sort_key(&a.0).cmp(&sort_key(&b.0)));
+    render_docs(docs.iter().map(|(_, doc)| doc))
 }
 
 fn is_slice_kind(kind: pb::EntityKind) -> bool {

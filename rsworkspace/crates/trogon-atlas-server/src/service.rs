@@ -628,6 +628,26 @@ impl EventModelServiceImpl {
         Ok(filtered)
     }
 
+    /// The built-in types plus every live type library in `namespaces`, so
+    /// tenant payloads and annotations render as JSON instead of bytes.
+    async fn transcode_pool(
+        &self,
+        namespaces: &std::collections::BTreeSet<&str>,
+        branch: Option<&str>,
+    ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
+        let mut files = Vec::new();
+        for namespace in namespaces {
+            files.extend(
+                self.type_libraries
+                    .tenant_files(&*self.store, namespace, branch)
+                    .await?,
+            );
+        }
+        trogon_atlas_core::transcode::TranscodePool::builtin()
+            .and_then(|pool| pool.with_files(files))
+            .map_err(|e| Status::internal(format!("building type pool: {e}")))
+    }
+
     /// Branch-aware variant of `snapshot()`. When `branch` is `None`,
     /// delegates to the cached baseline `snapshot()` unchanged. When
     /// `branch` is `Some`, always issues a fresh `graph::load_all` scoped to
@@ -636,32 +656,6 @@ impl EventModelServiceImpl {
     /// require per-branch cache keys and per-branch invalidation, which
     /// Phase 1 does not need given branches are expected to be small,
     /// short-lived overlays (see `docs/explanation/branching.md`).
-    /// The built-in types plus every live type library in `namespaces`, so
-    /// tenant payloads and annotations render as JSON instead of bytes.
-    async fn transcode_pool<'a>(
-        &self,
-        namespaces: impl IntoIterator<Item = &'a str>,
-        branch: Option<&str>,
-    ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
-        use prost::Message as _;
-        let mut files = Vec::new();
-        for namespace in namespaces {
-            let set = self
-                .type_libraries
-                .descriptor_set(&*self.store, namespace, branch)
-                .await?;
-            let decoded =
-                prost_types::FileDescriptorSet::decode(set.file_descriptor_set.as_slice())
-                    .map_err(|e| {
-                        Status::internal(format!("decoding {namespace} type libraries: {e}"))
-                    })?;
-            files.extend(decoded.file);
-        }
-        trogon_atlas_core::transcode::TranscodePool::builtin()
-            .and_then(|pool| pool.with_files(files))
-            .map_err(|e| Status::internal(format!("building type pool: {e}")))
-    }
-
     async fn snapshot_for(
         &self,
         branch: Option<&str>,
@@ -3688,7 +3682,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .chain(&board.external)
             .filter_map(|e| trogon_atlas_store::refs::entity_id(e).map(|i| i.namespace.as_str()))
             .collect();
-        let types = self.transcode_pool(namespaces, branch.as_deref()).await?;
+        let types = self.transcode_pool(&namespaces, branch.as_deref()).await?;
         let rendered =
             trogon_atlas_client::export::render_board(&board.own, &board.external, &types)
                 .map_err(|e| Status::internal(format!("rendering manifests: {e:#}")))?;

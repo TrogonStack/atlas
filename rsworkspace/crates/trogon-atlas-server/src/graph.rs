@@ -503,6 +503,7 @@ pub fn closure(
 
 /// What a shared board carries: the root and everything it reaches in its
 /// own namespace, plus the entities in other namespaces those reference.
+#[derive(Default)]
 pub struct BoardClosure {
     pub own: Vec<pb::Entity>,
     pub external: Vec<pb::Entity>,
@@ -518,74 +519,72 @@ pub fn board_closure(
     max_entities: usize,
     metrics: &ServerMetrics,
 ) -> BoardClosure {
-    let by_key = entity_lookup(all);
+    // Borrowed, so a request copies only the entities the board returns.
+    let by_key: HashMap<pb::EntityKey, &pb::Entity> = all
+        .iter()
+        .filter_map(|se| {
+            let key = pb::EntityKey::new(ref_entity_kind(&se.entity)?, ref_entity_id(&se.entity)?);
+            Some((key, &se.entity))
+        })
+        .collect();
     let known: HashSet<pb::EntityKey> = by_key.keys().cloned().collect();
     let owners = TypeOwners::build(all);
     let (Some(root_kind), Some(root_id)) = (ref_entity_kind(root), ref_entity_id(root)) else {
-        return BoardClosure {
-            own: Vec::new(),
-            external: Vec::new(),
-            truncated: false,
-        };
+        return BoardClosure::default();
     };
-    let mut own = vec![root.clone()];
-    let mut external = Vec::new();
+    let mut board = BoardClosure {
+        own: vec![root.clone()],
+        ..BoardClosure::default()
+    };
     let mut seen: HashSet<pb::EntityKey> = HashSet::from([pb::EntityKey::new(root_kind, root_id)]);
     let mut queue: VecDeque<pb::EntityKey> = board_targets(root, &known, &owners).into();
-    let mut truncated = false;
     while let Some(key) = queue.pop_front() {
         if !seen.insert(key.clone()) {
             continue;
         }
-        let Some(entity) = by_key.get(&key) else {
+        let Some(&entity) = by_key.get(&key) else {
             continue;
         };
         if key.namespace != root_id.namespace {
-            external.push(entity.clone());
+            board.external.push(entity.clone());
             continue;
         }
-        if own.len() >= max_entities {
-            truncated = true;
+        if board.own.len() >= max_entities {
+            board.truncated = true;
             break;
         }
-        own.push(entity.clone());
+        board.own.push(entity.clone());
         queue.extend(board_targets(entity, &known, &owners));
     }
-    if truncated {
+    if board.truncated {
         tracing::warn!(cap = max_entities, "board closure truncated");
         metrics.record_graph_closure_truncation();
     }
-    BoardClosure {
-        own,
-        external,
-        truncated,
-    }
+    board
 }
 
-/// Every entity `entity` needs to load elsewhere: its references, the
-/// `Schema` it declares, and the type library that owns a tenant payload.
-fn board_targets<S: std::hash::BuildHasher>(
+/// Every entity `entity` needs to load elsewhere: its references, the type
+/// library that owns a tenant payload, and the `Schema` it declares.
+fn board_targets(
     entity: &pb::Entity,
-    known: &HashSet<pb::EntityKey, S>,
+    known: &HashSet<pb::EntityKey>,
     owners: &TypeOwners,
 ) -> Vec<pb::EntityKey> {
-    let mut out: Vec<pb::EntityKey> = outbound_refs(entity)
-        .iter()
-        .flat_map(|o| {
-            resolve_to_kinds(o.to_kind, &o.to_id, known)
-                .into_iter()
-                .map(|k| pb::EntityKey::new(k, &o.to_id))
+    let mut refs = outgoing_of_resolved(entity, known);
+    refs.extend(owners.schema_ref(entity));
+    let mut out: Vec<pb::EntityKey> = refs
+        .into_iter()
+        .filter_map(|r| {
+            let to = r.to?;
+            Some(pb::EntityKey::new(
+                pb::EntityKind::try_from(to.kind).ok()?,
+                to.id.as_ref()?,
+            ))
         })
         .collect();
     out.extend(
         trogon_atlas_core::schema::declared_schema_id(entity)
             .map(|id| pb::EntityKey::new(pb::EntityKind::Schema, &id)),
-    );
-    out.extend(
-        owners
-            .schema_ref(entity)
-            .and_then(|r| r.to?.id)
-            .map(|id| pb::EntityKey::new(pb::EntityKind::TypeLibrary, &id)),
     );
     out
 }
