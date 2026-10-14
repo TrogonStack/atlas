@@ -149,6 +149,19 @@ describe('TopBar', () => {
         />,
       );
       expect(screen.getByRole('button', { name: /download yaml/i })).toBeDefined();
+      expect(screen.queryByRole('button', { name: /external yaml/i })).toBeNull();
+    });
+
+    it('offers the external entities as their own download, one file per click', () => {
+      render(
+        <TopBar
+          realtime={{ state: 'offline' }}
+          onRefresh={vi.fn()}
+          snapshot={{ ...snapshot, manifests: { model: 'kind: EventModel\n', external: 'kind: Event\n' } }}
+        />,
+      );
+      expect(screen.getByRole('button', { name: /download yaml/i })).toBeDefined();
+      expect(screen.getByRole('button', { name: /external yaml/i })).toBeDefined();
     });
   });
 
