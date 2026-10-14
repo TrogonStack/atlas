@@ -240,7 +240,13 @@ export function StickyCardBody({
           ) : null}
         </span>
       </div>
-      <div className="mt-1 text-[13px] font-semibold leading-snug text-zinc-900">{entity.title}</div>
+      {/* Cards have a fixed height, and a title can hold one long identifier such as an RPC name. */}
+      <div
+        title={entity.title}
+        className="mt-1 line-clamp-3 text-[13px] font-semibold leading-snug text-zinc-900 wrap-anywhere"
+      >
+        {entity.title}
+      </div>
       {/* At-a-glance only: the slug. Full identity (ns + defining slice) and
           the doc live in the tooltip and the drawer. */}
       <div
