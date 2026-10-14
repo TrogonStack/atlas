@@ -102,4 +102,12 @@ describe('NamespacesPage', () => {
     render(<NamespacesPage />);
     await waitFor(() => expect(screen.getByText(/upstream unavailable/)).toBeDefined());
   });
+
+  it('stops saying it is loading once the load has failed', async () => {
+    registryMock.mockRejectedValue(new Error('upstream unavailable'));
+    render(<NamespacesPage />);
+    expect(screen.getByText('Loading…')).toBeDefined();
+    await waitFor(() => expect(screen.getByText(/upstream unavailable/)).toBeDefined());
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
 });

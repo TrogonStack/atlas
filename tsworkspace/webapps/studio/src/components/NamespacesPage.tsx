@@ -33,10 +33,12 @@ function ownerLabel(row: NamespaceRegistryRow): string {
 
 export function NamespacesPage() {
   const [rows, setRows] = useState<NamespaceRegistryRow[] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
 
   const load = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
     try {
       const res = await api.namespaceRegistry({ signal });
       if (signal?.aborted) return;
@@ -45,6 +47,8 @@ export function NamespacesPage() {
     } catch (e) {
       if (signal?.aborted || (e as Error)?.name === 'AbortError') return;
       setError((e as Error).message);
+    } finally {
+      if (!signal?.aborted) setLoading(false);
     }
   }, []);
 
@@ -124,9 +128,11 @@ export function NamespacesPage() {
         </div>
 
         {rows == null ? (
-          <output aria-live="polite" className="text-xs text-muted-foreground">
-            Loading…
-          </output>
+          loading ? (
+            <output aria-live="polite" className="text-xs text-muted-foreground">
+              Loading…
+            </output>
+          ) : null
         ) : visible.length === 0 ? (
           <p className="text-xs text-muted-foreground">
             {rows.length === 0 ? 'No namespaces yet.' : 'No namespace matches that filter.'}
