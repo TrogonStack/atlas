@@ -39,22 +39,33 @@ export function TopBar({
 }) {
   return (
     <header className="flex h-12 items-center gap-3 border-b border-border bg-card px-4">
-      {backHref && !snapshot ? (
-        <a href={backHref} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
-          <ChevronLeft className="h-4 w-4" />
-          Overview
-        </a>
-      ) : null}
-      <Workflow className="h-5 w-5 text-primary" />
-      <h1 className="text-sm font-semibold tracking-tight">Event Model Studio</h1>
-      {scopedTitle ? (
-        <>
-          <span className="text-muted-foreground">/</span>
-          <span className="truncate text-sm font-medium">{scopedTitle}</span>
-        </>
-      ) : null}
-      {info?.schemaVersion ? <Badge variant="outline">{info.schemaVersion}</Badge> : null}
-      <div className="ml-auto flex items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
+        {backHref && !snapshot ? (
+          <a
+            href={backHref}
+            className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            Overview
+          </a>
+        ) : null}
+        <Workflow className="h-5 w-5 shrink-0 text-primary" />
+        <h1 className="sr-only text-sm font-semibold tracking-tight lg:not-sr-only lg:whitespace-nowrap">
+          Event Model Studio
+        </h1>
+        {scopedTitle ? (
+          <>
+            <span className="hidden text-muted-foreground lg:inline">/</span>
+            <span className="min-w-0 truncate text-sm font-medium">{scopedTitle}</span>
+          </>
+        ) : null}
+        {info?.schemaVersion ? (
+          <Badge variant="outline" className="shrink-0">
+            {info.schemaVersion}
+          </Badge>
+        ) : null}
+      </div>
+      <div className="ml-auto flex shrink-0 items-center gap-3">
         {error ? <span className="max-w-md truncate text-xs text-red-600">{error}</span> : null}
         {snapshot ? (
           <SnapshotBadge snapshot={snapshot} serverVersion={info?.serverVersion} />
