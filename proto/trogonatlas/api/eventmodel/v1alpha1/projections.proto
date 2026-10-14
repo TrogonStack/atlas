@@ -84,6 +84,39 @@ message GetEventModelProjectionResponse {
   bool truncated = 2;
 }
 
+// ---------- Board manifests --------------------------------------------------
+//
+// Render an event model as the manifests `trogon-atlas apply` reads, so a
+// shared copy of the board can be loaded into another store. The manifests
+// hold what the model reaches inside its own namespace. An entity in another
+// namespace that the board references directly comes back separately and is
+// not walked: a board needs the shape of what it receives from another
+// context, not that context's internals.
+
+message ExportEventModelManifestsRequest {
+  trogonatlas.type.v1alpha1.Id id = 1;
+}
+
+message ExportEventModelManifestsResponse {
+  // Multi-document YAML: the event model and every entity it reaches in its
+  // own namespace, including declared schemas and the type libraries that
+  // own their payload types.
+  string manifests = 1;
+  // Multi-document YAML: each entity in another namespace that `manifests`
+  // references directly. Its own references are not followed.
+  string external_manifests = 2;
+  // Entities that could not be rendered. They are reported, not dropped.
+  repeated SkippedEntity skipped = 3;
+  // True when the closure exceeded
+  // `GetServerInfo.limits.max_projection_entities` and `manifests` was clipped.
+  bool truncated = 4;
+}
+
+message SkippedEntity {
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 1;
+  string reason = 2;
+}
+
 // ---------- Subgraph extraction ----------------------------------------------
 //
 // Take a scope (slice / storyboard / event model) and emit a new,

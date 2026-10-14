@@ -3,7 +3,10 @@ use std::{
     sync::Arc,
 };
 
+use prost::Message as _;
+use prost_reflect::{DynamicMessage, ReflectMessage as _, Value};
 use tonic::Status;
+use trogon_atlas_core::transcode::TranscodePool;
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
     refs::{entity_id as ref_entity_id, entity_kind as ref_entity_kind, outbound_refs},
@@ -499,6 +502,149 @@ pub fn closure(
         entities: out,
         truncated,
     }
+}
+
+/// What a shared board carries: the root and everything it reaches in its
+/// own namespace, plus the entities in other namespaces those reference.
+#[derive(Default)]
+pub struct BoardClosure {
+    pub own: Vec<pb::Entity>,
+    pub external: Vec<pb::Entity>,
+    pub truncated: bool,
+}
+
+/// Walks from `root` through its own namespace only. A reference into
+/// another namespace lands in `external` and is not followed, so a shared
+/// board never carries another context's internals.
+pub fn board_closure(
+    all: &[StoredEntity],
+    root: &pb::Entity,
+    max_entities: usize,
+    metrics: &ServerMetrics,
+    types: &TranscodePool,
+) -> BoardClosure {
+    // Borrowed, so a request copies only the entities the board returns.
+    let by_key: HashMap<pb::EntityKey, &pb::Entity> = all
+        .iter()
+        .filter_map(|se| {
+            let key = pb::EntityKey::new(ref_entity_kind(&se.entity)?, ref_entity_id(&se.entity)?);
+            Some((key, &se.entity))
+        })
+        .collect();
+    let known: HashSet<pb::EntityKey> = by_key.keys().cloned().collect();
+    let owners = TypeOwners::build(all);
+    let (Some(root_kind), Some(root_id)) = (ref_entity_kind(root), ref_entity_id(root)) else {
+        return BoardClosure::default();
+    };
+    let mut board = BoardClosure {
+        own: vec![root.clone()],
+        ..BoardClosure::default()
+    };
+    let mut seen: HashSet<pb::EntityKey> = HashSet::from([pb::EntityKey::new(root_kind, root_id)]);
+    let mut queue: VecDeque<pb::EntityKey> = board_targets(root, &known, &owners, types).into();
+    while let Some(key) = queue.pop_front() {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let Some(&entity) = by_key.get(&key) else {
+            continue;
+        };
+        if key.namespace != root_id.namespace {
+            board.external.push(entity.clone());
+            continue;
+        }
+        if board.own.len() >= max_entities {
+            board.truncated = true;
+            continue;
+        }
+        board.own.push(entity.clone());
+        queue.extend(board_targets(entity, &known, &owners, types));
+    }
+    if board.truncated {
+        tracing::warn!(cap = max_entities, "board closure truncated");
+        metrics.record_graph_closure_truncation();
+    }
+    board
+}
+
+/// Every entity `entity` needs to load elsewhere: its references, the type
+/// libraries that own its tenant payloads, and the `Schema` it declares.
+fn board_targets(
+    entity: &pb::Entity,
+    known: &HashSet<pb::EntityKey>,
+    owners: &TypeOwners,
+    types: &TranscodePool,
+) -> Vec<pb::EntityKey> {
+    let mut refs = outgoing_of_resolved(entity, known);
+    refs.extend(owners.schema_ref(entity));
+    let mut out: Vec<pb::EntityKey> = refs
+        .into_iter()
+        .filter_map(|r| {
+            let to = r.to?;
+            Some(pb::EntityKey::new(
+                pb::EntityKind::try_from(to.kind).ok()?,
+                to.id.as_ref()?,
+            ))
+        })
+        .collect();
+    out.extend(
+        trogon_atlas_core::schema::declared_schema_id(entity)
+            .map(|id| pb::EntityKey::new(pb::EntityKind::Schema, &id)),
+    );
+    out.extend(board_type_libraries(entity, owners, types));
+    out
+}
+
+fn board_type_libraries(
+    entity: &pb::Entity,
+    owners: &TypeOwners,
+    types: &TranscodePool,
+) -> Vec<pb::EntityKey> {
+    let Some(id) = ref_entity_id(entity) else {
+        return Vec::new();
+    };
+    let Ok(desc) = types.entity_descriptor() else {
+        return Vec::new();
+    };
+    let Ok(message) = DynamicMessage::decode(desc, entity.encode_to_vec().as_slice()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut pending = vec![Value::Message(message)];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Message(mut message) => {
+                let desc = message.descriptor();
+                if desc.full_name() == "google.protobuf.Any" {
+                    let Some(Value::String(raw_url)) = message.take_field_by_name("type_url")
+                    else {
+                        continue;
+                    };
+                    let Ok(type_url) = trogon_atlas_types::TypeUrl::parse(&raw_url) else {
+                        continue;
+                    };
+                    if let Some(owner) = owners.owner(&id.namespace, type_url.full_name()) {
+                        out.push(pb::EntityKey::new(pb::EntityKind::TypeLibrary, owner));
+                    }
+                    if let (Some(payload_desc), Some(Value::Bytes(bytes))) = (
+                        desc.parent_pool().get_message_by_name(type_url.full_name()),
+                        message.take_field_by_name("value"),
+                    ) {
+                        if let Ok(payload) = DynamicMessage::decode(payload_desc, bytes) {
+                            pending.push(Value::Message(payload));
+                        }
+                    }
+                }
+                pending.extend(message.take_fields().map(|(_, value)| value));
+            }
+            Value::List(values) => pending.extend(values),
+            Value::Map(values) => pending.extend(values.into_values()),
+            _ => {}
+        }
+    }
+    out.sort_by(|a, b| (&a.namespace, &a.slug, a.version).cmp(&(&b.namespace, &b.slug, b.version)));
+    out.dedup();
+    out
 }
 
 #[must_use]
@@ -1074,5 +1220,405 @@ mod impact_tests {
                     .map(|i| i.slug.as_str()))
                 .collect::<Vec<_>>()
         );
+    }
+}
+
+#[cfg(test)]
+mod board_closure_tests {
+    use trogon_atlas_store::store::StoredEntity;
+
+    use super::*;
+
+    fn id(ns: &str, slug: &str) -> pb::Id {
+        pb::Id {
+            namespace: ns.into(),
+            slug: slug.into(),
+            version: 1,
+        }
+    }
+
+    fn stored(kind: pb::entity::Kind) -> StoredEntity {
+        StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(kind),
+            },
+            etag: String::new(),
+        }
+    }
+
+    fn event(
+        ns: &str,
+        slug: &str,
+        swimlane: Option<pb::Id>,
+        schema: Option<prost_types::Any>,
+    ) -> StoredEntity {
+        stored(pb::entity::Kind::Event(pb::Event {
+            id: Some(id(ns, slug)),
+            title: slug.into(),
+            swimlane: swimlane.map(|id| pb::SwimlaneRef { id: Some(id) }),
+            schema,
+            ..Default::default()
+        }))
+    }
+
+    fn slice_emitting(ns: &str, slug: &str, events: &[pb::Id]) -> StoredEntity {
+        stored(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+            id: Some(id(ns, slug)),
+            title: slug.into(),
+            emitted_events: events
+                .iter()
+                .map(|e| pb::EventEdge {
+                    event: Some(pb::EventRef {
+                        id: Some(e.clone()),
+                    }),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }))
+    }
+
+    fn slugs(entities: &[pb::Entity]) -> Vec<String> {
+        let mut out: Vec<String> = entities
+            .iter()
+            .filter_map(|e| ref_entity_id(e).map(|i| format!("{}/{}", i.namespace, i.slug)))
+            .collect();
+        out.sort();
+        out
+    }
+
+    fn walk(all: &[StoredEntity], root: &StoredEntity, max: usize) -> BoardClosure {
+        let Ok(types) = TranscodePool::builtin() else {
+            panic!("built-in descriptors must be available");
+        };
+        board_closure(all, &root.entity, max, &ServerMetrics::default(), &types)
+    }
+
+    #[test]
+    fn foreign_entities_are_carried_once_and_not_walked() {
+        let root = slice_emitting(
+            "shop",
+            "place-order",
+            &[id("shop", "order.placed"), id("pay", "payment.captured")],
+        );
+        let all = vec![
+            root.clone(),
+            event("shop", "order.placed", None, None),
+            stored(pb::entity::Kind::Event(pb::Event {
+                id: Some(id("pay", "payment.captured")),
+                swimlane: Some(pb::SwimlaneRef {
+                    id: Some(id("pay", "payments")),
+                }),
+                metadata: vec![prost_types::Any {
+                    type_url: "type.googleapis.com/acme.pay.v1.Note".into(),
+                    value: Vec::new(),
+                }],
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::Swimlane(pb::Swimlane {
+                id: Some(id("pay", "payments")),
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                id: Some(id("pay", "acme.pay")),
+                ..Default::default()
+            })),
+        ];
+        let board = walk(&all, &root, 100);
+        assert_eq!(slugs(&board.own), ["shop/order.placed", "shop/place-order"]);
+        assert_eq!(slugs(&board.external), ["pay/payment.captured"]);
+        assert!(!board.truncated);
+    }
+
+    #[test]
+    fn declared_schema_and_owning_type_library_come_along() {
+        let schema = trogon_atlas_core::schema::pack_schema(&pb::Schema {
+            id: Some(id("shop", "order-fields")),
+            ..Default::default()
+        });
+        let tenant = prost_types::Any {
+            type_url: "type.googleapis.com/acme.shop.v1.RefundIssued".into(),
+            value: Vec::new(),
+        };
+        let root = slice_emitting(
+            "shop",
+            "place-order",
+            &[id("shop", "order.placed"), id("shop", "refund.issued")],
+        );
+        let all = vec![
+            root.clone(),
+            event("shop", "order.placed", None, Some(schema)),
+            event("shop", "refund.issued", None, Some(tenant)),
+            stored(pb::entity::Kind::Schema(pb::Schema {
+                id: Some(id("shop", "order-fields")),
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                id: Some(id("shop", "acme.shop")),
+                ..Default::default()
+            })),
+        ];
+        let board = walk(&all, &root, 100);
+        assert_eq!(
+            slugs(&board.own),
+            [
+                "shop/acme.shop",
+                "shop/order-fields",
+                "shop/order.placed",
+                "shop/place-order",
+                "shop/refund.issued",
+            ]
+        );
+    }
+
+    #[test]
+    fn metadata_bring_the_live_type_library_in_the_entity_namespace() {
+        let tenant = prost_types::Any {
+            type_url: "type.googleapis.com/acme.notes.v1.Note".into(),
+            value: Vec::new(),
+        };
+        let root = stored(pb::entity::Kind::Event(pb::Event {
+            id: Some(id("shop", "order.placed")),
+            metadata: vec![tenant.clone(), tenant],
+            ..Default::default()
+        }));
+        let old_library = stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+            id: Some(id("shop", "acme.notes")),
+            ..Default::default()
+        }));
+        let mut live_id = id("shop", "acme.notes");
+        live_id.version = 2;
+        let live_library = stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+            id: Some(live_id.clone()),
+            dependencies: vec![pb::TypeLibraryRef {
+                id: Some(id("shop", "acme.shared")),
+            }],
+            ..Default::default()
+        }));
+        let foreign_library = stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+            id: Some(id("pay", "acme.notes")),
+            ..Default::default()
+        }));
+        let mut shared_new_id = id("shop", "acme.shared");
+        shared_new_id.version = 2;
+        let all = vec![
+            root.clone(),
+            old_library,
+            live_library,
+            foreign_library,
+            stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                id: Some(id("shop", "acme.shared")),
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                id: Some(shared_new_id.clone()),
+                ..Default::default()
+            })),
+        ];
+        let board = walk(&all, &root, 100);
+        assert_eq!(
+            slugs(&board.own),
+            ["shop/acme.notes", "shop/acme.shared", "shop/order.placed"]
+        );
+        assert!(board
+            .own
+            .iter()
+            .any(|entity| ref_entity_id(entity) == Some(&live_id)));
+        assert!(board
+            .own
+            .iter()
+            .all(|entity| ref_entity_id(entity) != Some(&shared_new_id)));
+        assert_eq!(board.external, Vec::<pb::Entity>::new());
+        assert!(!board.truncated);
+    }
+
+    #[test]
+    fn nested_scenario_and_edge_payloads_bring_their_type_libraries() {
+        let tenant = |name: &str| prost_types::Any {
+            type_url: format!("type.googleapis.com/{name}.v1.Note"),
+            value: Vec::new(),
+        };
+        let root = stored(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+            id: Some(id("shop", "place-order")),
+            metadata: vec![tenant("acme.board")],
+            scenarios: vec![pb::CommandScenario {
+                metadata: vec![tenant("acme.scenario")],
+                when: Some(pb::CommandExample {
+                    payload: Some(tenant("acme.payload")),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            emitted_events: vec![pb::EventEdge {
+                metadata: vec![tenant("acme.edge")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        let mut all = vec![root.clone()];
+        all.extend(
+            ["acme.board", "acme.scenario", "acme.payload", "acme.edge"]
+                .into_iter()
+                .map(|slug| {
+                    stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                        id: Some(id("shop", slug)),
+                        ..Default::default()
+                    }))
+                }),
+        );
+        let board = walk(&all, &root, 100);
+        assert_eq!(
+            slugs(&board.own),
+            [
+                "shop/acme.board",
+                "shop/acme.edge",
+                "shop/acme.payload",
+                "shop/acme.scenario",
+                "shop/place-order",
+            ]
+        );
+        assert_eq!(board.external, Vec::<pb::Entity>::new());
+        assert!(!board.truncated);
+    }
+
+    #[test]
+    fn builtin_schema_any_bring_nested_metadata_type_libraries() {
+        let schema = trogon_atlas_core::schema::pack_schema(&pb::Schema {
+            fields: vec![pb::FieldSpec {
+                name: "order_id".into(),
+                metadata: vec![prost_types::Any {
+                    type_url: "type.googleapis.com/acme.fields.v1.Note".into(),
+                    value: Vec::new(),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let root = event("shop", "order.placed", None, Some(schema));
+        let all = vec![
+            root.clone(),
+            stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                id: Some(id("shop", "acme.fields")),
+                ..Default::default()
+            })),
+        ];
+        let board = walk(&all, &root, 100);
+        assert_eq!(slugs(&board.own), ["shop/acme.fields", "shop/order.placed"]);
+        assert_eq!(board.external, Vec::<pb::Entity>::new());
+    }
+
+    #[test]
+    fn metadata_library_selection_at_the_cap_is_stable() {
+        for order in [
+            ["acme.a", "acme.z", "acme.a"],
+            ["acme.z", "acme.a", "acme.z"],
+        ] {
+            let root = stored(pb::entity::Kind::Event(pb::Event {
+                id: Some(id("shop", "order.placed")),
+                metadata: order
+                    .into_iter()
+                    .map(|prefix| prost_types::Any {
+                        type_url: format!("type.googleapis.com/{prefix}.Note"),
+                        value: Vec::new(),
+                    })
+                    .collect(),
+                ..Default::default()
+            }));
+            let all = vec![
+                root.clone(),
+                stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                    id: Some(id("shop", "acme.a")),
+                    ..Default::default()
+                })),
+                stored(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                    id: Some(id("shop", "acme.z")),
+                    ..Default::default()
+                })),
+            ];
+            let board = walk(&all, &root, 2);
+            assert_eq!(slugs(&board.own), ["shop/acme.a", "shop/order.placed"]);
+            assert!(board.truncated);
+        }
+    }
+
+    #[test]
+    fn stops_at_the_cap_and_says_so() {
+        let root = slice_emitting("shop", "place-order", &[id("shop", "a"), id("shop", "b")]);
+        let all = vec![
+            root.clone(),
+            event("shop", "a", None, None),
+            event("shop", "b", None, None),
+        ];
+        let board = walk(&all, &root, 2);
+        assert_eq!(board.own.len(), 2);
+        assert!(board.truncated);
+    }
+
+    #[test]
+    fn capped_walk_keeps_externals_from_retained_entities_only() {
+        let root = slice_emitting(
+            "shop",
+            "place-order",
+            &[
+                id("shop", "a"),
+                id("shop", "b"),
+                id("pay", "payment.captured"),
+                id("pay", "payment.captured"),
+            ],
+        );
+        let all = vec![
+            root.clone(),
+            event("shop", "a", Some(id("pay", "payments")), None),
+            event("shop", "b", Some(id("pay", "omitted")), None),
+            event("pay", "payment.captured", Some(id("pay", "internal")), None),
+            stored(pb::entity::Kind::Swimlane(pb::Swimlane {
+                id: Some(id("pay", "payments")),
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::Swimlane(pb::Swimlane {
+                id: Some(id("pay", "omitted")),
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::Swimlane(pb::Swimlane {
+                id: Some(id("pay", "internal")),
+                ..Default::default()
+            })),
+        ];
+
+        let board = walk(&all, &root, 2);
+        assert_eq!(slugs(&board.own), ["shop/a", "shop/place-order"]);
+        assert_eq!(
+            slugs(&board.external),
+            ["pay/payment.captured", "pay/payments"]
+        );
+        assert!(board.truncated);
+
+        let root_only = walk(&all, &root, 1);
+        assert_eq!(slugs(&root_only.own), ["shop/place-order"]);
+        assert_eq!(slugs(&root_only.external), ["pay/payment.captured"]);
+        assert!(root_only.truncated);
+    }
+
+    #[test]
+    fn reaching_cap_without_omitting_own_entities_is_not_truncated() {
+        let root = slice_emitting(
+            "shop",
+            "place-order",
+            &[
+                id("shop", "a"),
+                id("shop", "a"),
+                id("pay", "payment.captured"),
+            ],
+        );
+        let all = vec![
+            root.clone(),
+            event("shop", "a", None, None),
+            event("pay", "payment.captured", None, None),
+        ];
+        let board = walk(&all, &root, 2);
+        assert_eq!(slugs(&board.own), ["shop/a", "shop/place-order"]);
+        assert_eq!(slugs(&board.external), ["pay/payment.captured"]);
+        assert!(!board.truncated);
     }
 }

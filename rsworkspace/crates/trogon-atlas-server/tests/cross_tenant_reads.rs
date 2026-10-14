@@ -485,6 +485,24 @@ async fn get_event_model_projection_does_not_project_another_owners_model() {
     });
 }
 
+/// The manifests are the model and its members in full, so rendering them
+/// for another owner would hand over the whole graph.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_event_model_manifests_does_not_render_another_owners_model() {
+    let mut c = world().await;
+    let out = c
+        .export_event_model_manifests(authed(
+            pb::ExportEventModelManifestsRequest {
+                id: Some(id("model")),
+            },
+            BETA_TOKEN,
+        ))
+        .await;
+    assert_hidden("export_event_model_manifests", out, |r| {
+        r.manifests.is_empty()
+    });
+}
+
 /// Validating by id loads the stored model. The issues it reports name the
 /// model's members, so answering at all describes acme's graph to beta.
 #[tokio::test(flavor = "multi_thread")]

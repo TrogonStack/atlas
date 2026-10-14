@@ -7,9 +7,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use prost::Message as _;
 use serde_json::{Map, Value};
-use trogon_atlas_core::{refs::outbound_refs, transcode::TranscodePool};
+use trogon_atlas_core::{
+    refs::{self, outbound_refs},
+    transcode::TranscodePool,
+};
 use trogon_atlas_proto as pb;
 
 use crate::{
@@ -277,6 +279,71 @@ pub async fn export_namespace(client: &mut Client, namespace: &str) -> Result<Ex
     Ok(ExportOutcome { files, skipped })
 }
 
+/// A board rendered as manifests: its own entities, and the entities in
+/// other namespaces it references directly.
+#[derive(Debug)]
+pub struct BoardManifests {
+    pub manifests: String,
+    pub external_manifests: String,
+    pub skipped: Vec<pb::SkippedEntity>,
+}
+
+/// Render a board's entities as multi-document YAML, each set sorted by
+/// (kind, namespace, slug, version) so the output is stable across exports.
+pub fn render_board(
+    own: &[pb::Entity],
+    external: &[pb::Entity],
+    types: &TranscodePool,
+) -> Result<BoardManifests> {
+    render_board_scoped(own, external, |_| Some(types))
+}
+
+/// Render each entity with its namespace's types, so independent namespaces
+/// can reuse protobuf file and message names.
+pub fn render_board_scoped<'a>(
+    own: &[pb::Entity],
+    external: &[pb::Entity],
+    types: impl Fn(&str) -> Option<&'a TranscodePool>,
+) -> Result<BoardManifests> {
+    let mut skipped = Vec::new();
+    let manifests = render_sorted(own, &types, &mut skipped)?;
+    let external_manifests = render_sorted(external, &types, &mut skipped)?;
+    Ok(BoardManifests {
+        manifests,
+        external_manifests,
+        skipped,
+    })
+}
+
+fn render_sorted<'a>(
+    entities: &[pb::Entity],
+    types: &impl Fn(&str) -> Option<&'a TranscodePool>,
+    skipped: &mut Vec<pb::SkippedEntity>,
+) -> Result<String> {
+    let mut docs: Vec<(pb::EntityKey, Value)> = Vec::new();
+    for entity in entities {
+        let rendered = refs::entity_id(entity)
+            .ok_or_else(|| anyhow!("stored entity has no id"))
+            .and_then(|id| {
+                types(&id.namespace)
+                    .ok_or_else(|| anyhow!("no type pool for namespace {:?}", id.namespace))
+            })
+            .and_then(|types| entity_to_manifest(entity, types));
+        match rendered {
+            Ok((kind, id, doc)) => docs.push((pb::EntityKey::new(kind, &id), doc)),
+            Err(err) => skipped.push(pb::SkippedEntity {
+                entity: Some(pb::EntityRef {
+                    kind: refs::entity_kind(entity).map_or(0, |k| k as i32),
+                    id: refs::entity_id(entity).cloned(),
+                }),
+                reason: format!("{err:#}"),
+            }),
+        }
+    }
+    docs.sort_by(|a, b| sort_key(&a.0).cmp(&sort_key(&b.0)));
+    render_docs(docs.iter().map(|(_, doc)| doc))
+}
+
 fn is_slice_kind(kind: pb::EntityKind) -> bool {
     matches!(
         kind,
@@ -285,17 +352,6 @@ fn is_slice_kind(kind: pb::EntityKind) -> bool {
             | pb::EntityKind::AutomationSlice
             | pb::EntityKind::UiSlice
     )
-}
-
-/// `outbound_refs` walks the FieldSpec refs inside a Decision #33 schema but
-/// not the schema's own identity, so a slice closure would miss the `Schema`.
-fn declared_schema_ref(entity: &pb::Entity) -> Option<pb::Id> {
-    let any = trogon_atlas_core::schema::entity_schema(entity)?;
-    if !trogon_atlas_core::schema::is_schema(any) {
-        return None;
-    }
-    let schema = pb::Schema::decode(any.value.as_slice()).ok()?;
-    schema.id
 }
 
 fn closure_refs(
@@ -315,7 +371,7 @@ fn closure_refs(
             .into_iter()
             .filter_map(|r| r.to_kind.map(|k| pb::EntityKey::new(k, &r.to_id)))
             .collect();
-        if let Some(id) = declared_schema_ref(entity) {
+        if let Some(id) = trogon_atlas_core::schema::declared_schema_id(entity) {
             targets.push(pb::EntityKey::new(pb::EntityKind::Schema, &id));
         }
         for target in targets {

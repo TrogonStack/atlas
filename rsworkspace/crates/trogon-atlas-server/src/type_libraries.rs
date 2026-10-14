@@ -420,6 +420,27 @@ impl TypeLibraryGate {
         })
     }
 
+    /// The namespace's live tenant files and their imports, ready to layer
+    /// onto a transcode pool without a trip through the wire encoding.
+    ///
+    /// # Errors
+    ///
+    /// `FailedPrecondition` when the live libraries do not compile together.
+    pub async fn tenant_files(
+        &self,
+        store: &dyn Store,
+        namespace: &str,
+        branch: Option<&str>,
+    ) -> Result<Vec<prost_types::FileDescriptorProto>, Status> {
+        let live = self.live_pool(store, namespace, &[], branch).await?;
+        let files: Vec<FileDescriptor> = live
+            .pool
+            .files()
+            .filter(|file| !self.is_builtin(file))
+            .collect();
+        Ok(file_closure(files).file)
+    }
+
     /// Checks that the payload type an Event, Command or ReadModel names is
     /// one its namespace can resolve, and that any payload bytes it carries
     /// decode as that type. `pending` are type libraries written alongside
