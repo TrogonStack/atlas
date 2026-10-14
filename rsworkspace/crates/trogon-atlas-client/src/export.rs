@@ -7,7 +7,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::{anyhow, bail, Context as _, Result};
-use prost::Message as _;
 use serde_json::{Map, Value};
 use trogon_atlas_core::{refs::outbound_refs, transcode::TranscodePool};
 use trogon_atlas_proto as pb;
@@ -277,6 +276,43 @@ pub async fn export_namespace(client: &mut Client, namespace: &str) -> Result<Ex
     Ok(ExportOutcome { files, skipped })
 }
 
+/// A board rendered as manifests: its own entities, and the entities in
+/// other namespaces it references directly.
+#[derive(Debug, Default)]
+pub struct BoardManifests {
+    pub manifests: String,
+    pub external_manifests: String,
+    pub skipped: Vec<String>,
+}
+
+/// Render a board's entities as multi-document YAML, each set sorted by
+/// (kind, namespace, slug, version) so the output is stable across exports.
+pub fn render_board(
+    own: &[pb::Entity],
+    external: &[pb::Entity],
+    types: &TranscodePool,
+) -> Result<BoardManifests> {
+    let mut skipped = Vec::new();
+    let mut render = |entities: &[pb::Entity]| -> Result<String> {
+        let mut docs: Vec<(pb::EntityKey, Value)> = Vec::new();
+        for entity in entities {
+            match entity_to_manifest(entity, types) {
+                Ok((kind, id, doc)) => docs.push((pb::EntityKey::new(kind, &id), doc)),
+                Err(err) => skipped.push(format!("{}: {err:#}", entity_label(entity))),
+            }
+        }
+        docs.sort_by(|a, b| sort_key(&a.0).cmp(&sort_key(&b.0)));
+        render_docs(docs.iter().map(|(_, doc)| doc))
+    };
+    let manifests = render(own)?;
+    let external_manifests = render(external)?;
+    Ok(BoardManifests {
+        manifests,
+        external_manifests,
+        skipped,
+    })
+}
+
 fn is_slice_kind(kind: pb::EntityKind) -> bool {
     matches!(
         kind,
@@ -285,17 +321,6 @@ fn is_slice_kind(kind: pb::EntityKind) -> bool {
             | pb::EntityKind::AutomationSlice
             | pb::EntityKind::UiSlice
     )
-}
-
-/// `outbound_refs` walks the FieldSpec refs inside a Decision #33 schema but
-/// not the schema's own identity, so a slice closure would miss the `Schema`.
-fn declared_schema_ref(entity: &pb::Entity) -> Option<pb::Id> {
-    let any = trogon_atlas_core::schema::entity_schema(entity)?;
-    if !trogon_atlas_core::schema::is_schema(any) {
-        return None;
-    }
-    let schema = pb::Schema::decode(any.value.as_slice()).ok()?;
-    schema.id
 }
 
 fn closure_refs(
@@ -315,7 +340,7 @@ fn closure_refs(
             .into_iter()
             .filter_map(|r| r.to_kind.map(|k| pb::EntityKey::new(k, &r.to_id)))
             .collect();
-        if let Some(id) = declared_schema_ref(entity) {
+        if let Some(id) = trogon_atlas_core::schema::declared_schema_id(entity) {
             targets.push(pb::EntityKey::new(pb::EntityKind::Schema, &id));
         }
         for target in targets {

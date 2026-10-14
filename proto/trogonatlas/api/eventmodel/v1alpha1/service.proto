@@ -1111,6 +1111,7 @@ message ResolveBranchEntryResponse {
 //     GetStoryboardProjection /
 //     GetEventModelProjection /
 //     ExtractSubgraph                    : denormalized subgraphs
+//   - ExportEventModelManifests          : a board as apply-ready manifests
 //   - DiffEntities                       : structural comparison
 //   - PutEntity / DeleteEntity /
 //     BatchMutate                        : mutation w/ etag + dry-run
@@ -1171,6 +1172,8 @@ service EventModelService {
   // Closure-as-new-model: extract a slice/storyboard's reachable graph
   // into a fresh, self-contained EventModel.
   rpc ExtractSubgraph(ExtractSubgraphRequest) returns (ExtractSubgraphResponse);
+  // An event model as apply-ready manifests, for sharing a board.
+  rpc ExportEventModelManifests(ExportEventModelManifestsRequest) returns (ExportEventModelManifestsResponse);
 
   // Structural comparison of two entities (typically two versions).
   rpc DiffEntities(DiffEntitiesRequest) returns (DiffEntitiesResponse);

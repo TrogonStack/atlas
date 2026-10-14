@@ -564,13 +564,14 @@ each carries its own gate.
 The full list of key-shaped reads that carry their own gate:
 `GetEntity`, `BatchGetEntities`, `GetEntityHistory`, `DiffEntities`,
 `GetLatestVersion`, `GetOutgoingReferences`, `GetSliceProjection`,
-`GetStoryboardProjection`, `GetEventModelProjection`, `ValidateEventModel`,
-and the unscoped `ListChanges` poll. `DiffEntities` is two key lookups
+`GetStoryboardProjection`, `GetEventModelProjection`,
+`ExportEventModelManifests`, `ValidateEventModel`, and the unscoped
+`ListChanges` poll. `DiffEntities` is two key lookups
 wearing a diff for a hat; `GetLatestVersion` accepts an empty namespace
 meaning "any", so its filter runs on the results rather than on the request.
 
-The last five are the ones worth naming individually, because they read
-*both* ways and only one of the two was covered. Each fetches a root entity
+The six before `ListChanges` are the ones worth naming individually,
+because they read *both* ways and only one of the two was covered. Each fetches a root entity
 by key and then walks its neighbourhood through the lens-filtered snapshot.
 The neighbourhood was narrowed correctly, which made the handler look
 guarded from the outside and in review: the response held nothing but the

@@ -433,6 +433,39 @@ pub struct GetEventModelProjectionResponse {
     #[prost(bool, tag="2")]
     pub truncated: bool,
 }
+// ---------- Board manifests --------------------------------------------------
+//
+// Render an event model as the manifests `trogon-atlas apply` reads, so a
+// shared copy of the board can be loaded into another store. The manifests
+// hold what the model reaches inside its own namespace. An entity in another
+// namespace that the board references directly comes back separately and is
+// not walked: a board needs the shape of what it receives from another
+// context, not that context's internals.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExportEventModelManifestsRequest {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExportEventModelManifestsResponse {
+    /// Multi-document YAML: the event model and every entity it reaches in its
+    /// own namespace, including declared schemas and the type libraries that
+    /// own their payload types.
+    #[prost(string, tag="1")]
+    pub manifests: ::prost::alloc::string::String,
+    /// Multi-document YAML: each entity in another namespace that `manifests`
+    /// references directly. Its own references are not followed.
+    #[prost(string, tag="2")]
+    pub external_manifests: ::prost::alloc::string::String,
+    /// Entities that could not be rendered, as `kind:namespace/slug@version: reason`.
+    #[prost(string, repeated, tag="3")]
+    pub skipped: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// True when the closure exceeded
+    /// `GetServerInfo.limits.max_projection_entities` and `manifests` was clipped.
+    #[prost(bool, tag="4")]
+    pub truncated: bool,
+}
 // ---------- Subgraph extraction ----------------------------------------------
 //
 // Take a scope (slice / storyboard / event model) and emit a new,

@@ -636,6 +636,32 @@ impl EventModelServiceImpl {
     /// require per-branch cache keys and per-branch invalidation, which
     /// Phase 1 does not need given branches are expected to be small,
     /// short-lived overlays (see `docs/explanation/branching.md`).
+    /// The built-in types plus every live type library in `namespaces`, so
+    /// tenant payloads and annotations render as JSON instead of bytes.
+    async fn transcode_pool<'a>(
+        &self,
+        namespaces: impl IntoIterator<Item = &'a str>,
+        branch: Option<&str>,
+    ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
+        use prost::Message as _;
+        let mut files = Vec::new();
+        for namespace in namespaces {
+            let set = self
+                .type_libraries
+                .descriptor_set(&*self.store, namespace, branch)
+                .await?;
+            let decoded =
+                prost_types::FileDescriptorSet::decode(set.file_descriptor_set.as_slice())
+                    .map_err(|e| {
+                        Status::internal(format!("decoding {namespace} type libraries: {e}"))
+                    })?;
+            files.extend(decoded.file);
+        }
+        trogon_atlas_core::transcode::TranscodePool::builtin()
+            .and_then(|pool| pool.with_files(files))
+            .map_err(|e| Status::internal(format!("building type pool: {e}")))
+    }
+
     async fn snapshot_for(
         &self,
         branch: Option<&str>,
@@ -3634,6 +3660,43 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }),
             entities: filtered,
             truncated,
+        }))
+    }
+
+    async fn export_event_model_manifests(
+        &self,
+        req: Request<pb::ExportEventModelManifestsRequest>,
+    ) -> Result<Response<pb::ExportEventModelManifestsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let req = req.into_inner();
+        let id = require_id(req.id.as_ref(), "")?;
+        // The root is fetched by key, so the lensed snapshot below
+        // narrows the neighbourhood but never the root itself.
+        self.require_visible(&vis, &id.namespace).await?;
+        let stored = self
+            .store
+            .get(pb::EntityKind::EventModel, id, branch.as_deref())
+            .await
+            .map_err(store_err)?;
+        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let board =
+            graph::board_closure(&all, &stored.entity, MAX_PROJECTION_ENTITIES, &self.metrics);
+        let namespaces: std::collections::BTreeSet<&str> = board
+            .own
+            .iter()
+            .chain(&board.external)
+            .filter_map(|e| trogon_atlas_store::refs::entity_id(e).map(|i| i.namespace.as_str()))
+            .collect();
+        let types = self.transcode_pool(namespaces, branch.as_deref()).await?;
+        let rendered =
+            trogon_atlas_client::export::render_board(&board.own, &board.external, &types)
+                .map_err(|e| Status::internal(format!("rendering manifests: {e:#}")))?;
+        Ok(Response::new(pb::ExportEventModelManifestsResponse {
+            manifests: rendered.manifests,
+            external_manifests: rendered.external_manifests,
+            skipped: rendered.skipped,
+            truncated: board.truncated,
         }))
     }
 

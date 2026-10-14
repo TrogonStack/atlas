@@ -57,6 +57,17 @@ pub fn entity_schema(entity: &Entity) -> Option<&Any> {
     entity.kind.as_ref().and_then(kind_schema)
 }
 
+/// The id of the `Schema` entity a field-bearing kind declares. Reference
+/// walks see the FieldSpec refs inside a schema but not the schema's own
+/// identity, so a closure needs this to carry the `Schema` along.
+pub fn declared_schema_id(entity: &Entity) -> Option<trogon_atlas_proto::Id> {
+    let any = entity_schema(entity)?;
+    if !is_schema(any) {
+        return None;
+    }
+    Schema::decode(any.value.as_slice()).ok()?.id
+}
+
 /// The fields `schema` declares. A `Schema` yields its FieldSpecs; any
 /// other message type is resolved through the descriptor pool; a type
 /// that cannot be decoded or resolved yields no fields.
