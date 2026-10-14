@@ -9,9 +9,18 @@
 // disclosure, not a new modal abstraction.
 import { GitBranch } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { api, type BranchInfo } from '@/lib/api';
 import { cn } from '@/lib/utils';
+
+function CurrentBadge() {
+  return (
+    <Badge variant="secondary" className="ml-auto px-1.5 text-[9px] font-semibold uppercase tracking-wide leading-3">
+      current
+    </Badge>
+  );
+}
 
 export function BranchBar({
   branch,
@@ -89,7 +98,7 @@ export function BranchBar({
             )}
           >
             baseline
-            {!branch ? <span className="ml-auto text-[9px] text-muted-foreground">current</span> : null}
+            {!branch ? <CurrentBadge /> : null}
           </button>
           {error ? <div className="px-2 py-1.5 text-[11px] text-red-600">{error}</div> : null}
           {branches === undefined && !error ? (
@@ -113,7 +122,7 @@ export function BranchBar({
             >
               <span className="flex w-full items-center gap-2">
                 <span className="truncate font-mono">{b.name}</span>
-                {branch === b.name ? <span className="ml-auto text-[9px] text-muted-foreground">current</span> : null}
+                {branch === b.name ? <CurrentBadge /> : null}
               </span>
               {b.doc ? <span className="truncate text-[10px] font-normal text-muted-foreground">{b.doc}</span> : null}
               <span className="text-[9px] text-muted-foreground">{b.deltaCount} change(s)</span>
