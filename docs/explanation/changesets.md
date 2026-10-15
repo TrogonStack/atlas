@@ -269,7 +269,9 @@ than a query the caller composes. Both are available as MCP tools
 `list_changesets` scans the bucket's keyspace per page, keeping at most
 `limit` keys in memory (a bounded top-N selection, since JetStream KV
 offers no filtered or ordered scan). Memory is bounded; time is O(total
-changesets) per page.
+changesets) per page. A `branch` or `namespace` filter that rejects most
+records needs several such scans to fill one page, so a rarely touched
+namespace pays the most.
 
 `get_entity_history` carries the same caveat and worse: with no ordered
 range scan, answering for one entity enumerates the whole revision
@@ -293,6 +295,9 @@ ListChangesets(page_token: <id of the oldest row you have>, page_size: 50)
 
 # Only this branch.
 ListChangesets(branch: "checkout-redesign")
+
+# Only changesets that touched this namespace.
+ListChangesets(namespace: "acme.orders")
 
 # Attribute a change event you saw on the feed.
 GetChangeset(id: <event.changeset_id>)

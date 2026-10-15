@@ -395,6 +395,21 @@ impl ChangesetScope<'_> {
     }
 }
 
+/// True when at least one of `record`'s ops wrote an entity in `namespace`.
+///
+/// A changeset can span namespaces, so a namespace filter keeps the whole
+/// record rather than trimming its ops: a trimmed record would describe a
+/// change that never happened.
+#[must_use]
+pub fn touches_namespace(record: &ChangesetRecord, namespace: &str) -> bool {
+    record.ops.iter().any(|op| {
+        op.entity_ref
+            .id
+            .as_ref()
+            .is_some_and(|id| id.namespace == namespace)
+    })
+}
+
 /// Paging request for [`Store::list_changesets`].
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ChangesetPage<'a> {
@@ -405,6 +420,8 @@ pub struct ChangesetPage<'a> {
     pub limit: usize,
     /// Which changesets the page covers.
     pub scope: ChangesetScope<'a>,
+    /// Only changesets with at least one op in this namespace. `None` = all.
+    pub namespace: Option<&'a str>,
 }
 
 /// Backend-agnostic persistence interface. The bundled implementation is
@@ -851,6 +868,7 @@ pub trait Store: Send + Sync {
                 before: None,
                 limit: 1,
                 scope: ChangesetScope::Baseline,
+                namespace: None,
             })
             .await?;
         Ok(newest.into_iter().next().map(|record| record.id))
@@ -1179,3 +1197,70 @@ pub struct ListFilter<'a> {
 // existing `trogon_atlas_store::store::stamp_system` import path keeps
 // working until call sites migrate.
 pub use trogon_atlas_core::system_meta::stamp_system;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn op(namespace: &str) -> ChangesetOp {
+        ChangesetOp {
+            kind: ChangeKind::Put,
+            entity_ref: EntityRef {
+                kind: EntityKind::Event as i32,
+                id: Some(Id {
+                    namespace: namespace.to_owned(),
+                    slug: "order.placed".to_owned(),
+                    version: 1,
+                }),
+            },
+        }
+    }
+
+    fn record(ops: Vec<ChangesetOp>) -> ChangesetRecord {
+        ChangesetRecord {
+            id: "0190f5a0-0000-7000-8000-000000000000".to_owned(),
+            author: "acme-bot".to_owned(),
+            at: "2026-10-15T00:00:00Z".to_owned(),
+            message: String::new(),
+            rpc: "PutEntity".to_owned(),
+            branch: None,
+            ops,
+            operation_id: None,
+        }
+    }
+
+    #[test]
+    fn touches_namespace_matches_an_op_in_the_namespace() {
+        assert!(touches_namespace(
+            &record(vec![op("acme.orders")]),
+            "acme.orders"
+        ));
+    }
+
+    #[test]
+    fn touches_namespace_rejects_ops_only_in_other_namespaces() {
+        assert!(!touches_namespace(
+            &record(vec![op("acme.billing")]),
+            "acme.orders"
+        ));
+    }
+
+    #[test]
+    fn touches_namespace_matches_when_any_op_of_a_mixed_changeset_matches() {
+        let mixed = record(vec![op("acme.billing"), op("acme.orders")]);
+        assert!(touches_namespace(&mixed, "acme.orders"));
+        assert!(touches_namespace(&mixed, "acme.billing"));
+        assert!(!touches_namespace(&mixed, "acme.shipping"));
+    }
+
+    #[test]
+    fn touches_namespace_rejects_a_changeset_with_no_ops() {
+        assert!(!touches_namespace(&record(Vec::new()), "acme.orders"));
+    }
+
+    #[test]
+    fn touches_namespace_needs_an_exact_match() {
+        // A prefix is a different namespace, not a parent of it.
+        assert!(!touches_namespace(&record(vec![op("acme.orders")]), "acme"));
+    }
+}

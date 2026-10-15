@@ -106,6 +106,7 @@ async fn changesets_touching(
                 page_token: page_token.clone(),
                 page_size: 100,
                 branch: String::new(),
+                namespace: String::new(),
             })
             .await
             .unwrap()
@@ -354,6 +355,7 @@ async fn branch_writes_are_recorded_and_filterable() {
             page_token: String::new(),
             page_size: 100,
             branch: "cs-branch".into(),
+            namespace: String::new(),
         })
         .await
         .unwrap()
@@ -361,6 +363,48 @@ async fn branch_writes_are_recorded_and_filterable() {
     assert_eq!(scoped.changesets.len(), 1);
     assert_eq!(scoped.changesets[0].branch, "cs-branch");
     assert_eq!(scoped.changesets[0].author, "grace");
+}
+
+/// A reader looking at one model's history should not have to page the whole
+/// log and filter it client-side.
+#[tokio::test(flavor = "multi_thread")]
+async fn namespace_filter_returns_only_changesets_touching_that_namespace() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(as_author(
+        put_req(event("cs-ns-acme-orders", "order.placed", "Order placed")),
+        "ivan",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(event("cs-ns-acme-billing", "invoice.sent", "Invoice sent")),
+        "ivan",
+    ))
+    .await
+    .unwrap();
+
+    let resp = c
+        .list_changesets(pb::ListChangesetsRequest {
+            page_token: String::new(),
+            page_size: 100,
+            branch: String::new(),
+            namespace: "cs-ns-acme-orders".into(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.changesets.len(), 1);
+    let ns: Vec<&str> = resp.changesets[0]
+        .ops
+        .iter()
+        .filter_map(|op| op.entity.as_ref()?.id.as_ref())
+        .map(|id| id.namespace.as_str())
+        .collect();
+    assert_eq!(ns, ["cs-ns-acme-orders"]);
+    assert_eq!(resp.next_page_token, "");
 }
 
 /// Paging must terminate and must not repeat a row, whatever the page size.
@@ -386,6 +430,7 @@ async fn paging_covers_the_log_exactly_once() {
                 page_token: page_token.clone(),
                 page_size: 2,
                 branch: String::new(),
+                namespace: String::new(),
             })
             .await
             .unwrap()

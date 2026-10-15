@@ -574,6 +574,10 @@ message ListChangesetsRequest {
   // Restrict to changesets that touched this branch. Empty = every
   // changeset, baseline and branch alike.
   string branch = 3;
+  // Only changesets with at least one op in this namespace. Empty = every
+  // namespace. A matching changeset comes back whole, including its ops in
+  // other namespaces.
+  string namespace = 4;
 }
 
 message ListChangesetsResponse {

@@ -1420,6 +1420,7 @@ impl EventModelServiceImpl {
                     before: cursor.as_deref(),
                     limit: BRANCH_BEHIND_CAP,
                     scope: ChangesetScope::Baseline,
+                    namespace: None,
                 })
                 .await
                 .map_err(store_err)?;
@@ -5041,6 +5042,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         } else {
             ChangesetScope::Branch(req.branch.as_str())
         };
+        let namespace = (!req.namespace.is_empty()).then_some(req.namespace.as_str());
 
         if vis.is_unrestricted() {
             let before = (!req.page_token.is_empty()).then_some(req.page_token.as_str());
@@ -5050,6 +5052,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     before,
                     limit,
                     scope,
+                    namespace,
                 })
                 .await
                 .map_err(store_err)?;
@@ -5085,6 +5088,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     before: cursor.as_deref(),
                     limit,
                     scope,
+                    namespace,
                 })
                 .await
                 .map_err(store_err)?;
