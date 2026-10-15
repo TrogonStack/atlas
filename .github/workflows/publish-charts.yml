@@ -21,13 +21,20 @@ jobs:
     uses: ./.github/workflows/runs-on.yml
 
   publish:
-    name: Publish
+    name: Publish (${{ matrix.chart }})
     needs: runs-on
     if: github.ref == 'refs/heads/main'
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        chart:
+          - trogon-atlas-server
+          - trogon-atlas-studio
+          - trogon-atlas
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,7 +50,8 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: printf '%s' "$REGISTRY_PASSWORD" | mise exec -- helm registry login ghcr.io --username "$REGISTRY_USERNAME" --password-stdin
 
-      - name: publish charts
+      - name: publish chart
         env:
           CHARTS_REGISTRY: oci://ghcr.io/trogonstack/atlas/charts
-        run: mise run github:workflows:publish-charts:push
+          CHART: ${{ matrix.chart }}
+        run: mise run github:workflows:publish-charts:push "$CHART"
