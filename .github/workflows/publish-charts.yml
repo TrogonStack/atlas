@@ -23,6 +23,7 @@ jobs:
   publish:
     name: Publish
     needs: runs-on
+    if: github.ref == 'refs/heads/main'
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
     permissions:
       contents: read

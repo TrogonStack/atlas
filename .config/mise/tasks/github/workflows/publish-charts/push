@@ -13,9 +13,15 @@ for chart in "$charts_dir"/*/; do
   name="$(basename "$chart")"
   version="$(helm show chart "$chart" | awk '/^version:/ { print $2 }')"
 
-  if helm show chart "$CHARTS_REGISTRY/$name" --version "$version" >/dev/null 2>&1; then
+  if lookup="$(helm show chart "$CHARTS_REGISTRY/$name" --version "$version" 2>&1 >/dev/null)"; then
     echo "skipping $name $version (already published)" >&2
     continue
+  fi
+  # GHCR answers "denied" for a package that does not exist yet; any other
+  # failure could hide a published version, and pushing would overwrite it.
+  if ! grep -qE ': not found$|: denied: ' <<<"$lookup"; then
+    echo "$lookup" >&2
+    exit 1
   fi
 
   if grep -q '^dependencies:' "$chart/Chart.yaml"; then
