@@ -22,7 +22,7 @@ use trogon_atlas_store::{
 };
 
 use crate::{
-    analysis,
+    analysis, as_of,
     conv::{
         entity_id, entity_kind, kind_from_i32, require_id, store_err, validate_branch_name,
         validate_entity_content,
@@ -665,6 +665,115 @@ impl EventModelServiceImpl {
             .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
             .await?;
         self.narrow(Arc::new(result.entities), vis).await
+    }
+
+    /// The caller's view of baseline right after `changeset_id` landed.
+    ///
+    /// Every newer baseline changeset is undone from its revision rows. A
+    /// key a newer changeset touched takes its value from those rows alone,
+    /// so a stale cached snapshot only ever supplies keys that have not
+    /// changed since, and the result does not depend on the cache's age.
+    async fn snapshot_as_of(
+        &self,
+        changeset_id: &str,
+        vis: &Visibility,
+    ) -> Result<Arc<Vec<StoredEntity>>, Status> {
+        // Validates the id and turns an unknown one into NOT_FOUND before
+        // any walk starts.
+        let target = self
+            .store
+            .get_changeset(changeset_id)
+            .await
+            .map_err(store_err)?;
+        if let Some(branch) = target.branch.as_deref() {
+            return Err(Status::invalid_argument(format!(
+                "changeset {changeset_id} landed on branch {branch}; as_of_changeset reads \
+                 baseline history only"
+            )));
+        }
+        // Snapshot before listing: a write that lands in between is then
+        // in `newer` and gets rewound, instead of leaking into the view.
+        let current = self.baseline_snapshot().await?;
+        let newer = self.baseline_changesets_after(changeset_id).await?;
+
+        let mut pre_images: Vec<as_of::PreImage> = Vec::new();
+        for record in &newer {
+            // Two ops on one key share one folded revision row.
+            let mut seen: std::collections::HashSet<pb::EntityKey> =
+                std::collections::HashSet::new();
+            for op in &record.ops {
+                let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
+                let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
+                let key = pb::EntityKey::new(kind, id);
+                if !seen.insert(key.clone()) {
+                    continue;
+                }
+                let revision = self
+                    .store
+                    .get_entity_revision(kind, id, &record.id, None)
+                    .await
+                    .map_err(|e| match e {
+                        trogon_atlas_store::error::StoreError::NotFound => {
+                            Status::failed_precondition(format!(
+                                "changeset {} recorded no revision for {}/{}: it predates \
+                                 revision recording or was written without changeset \
+                                 attribution, so the model as of an older changeset is not recoverable",
+                                record.id, id.namespace, id.slug
+                            ))
+                        }
+                        other => store_err(other),
+                    })?;
+                pre_images.push((key, revision.before));
+            }
+        }
+
+        let rewound = as_of::rewind(&current, pre_images);
+        self.narrow(Arc::new(rewound), vis).await
+    }
+
+    /// Baseline changesets newer than `changeset_id`, newest first, with
+    /// `changeset_id` itself excluded.
+    async fn baseline_changesets_after(
+        &self,
+        changeset_id: &str,
+    ) -> Result<Vec<ChangesetRecord>, Status> {
+        let limit = usize::try_from(CHANGESETS_MAX_PAGE_SIZE).unwrap_or(500);
+        let mut newer: Vec<ChangesetRecord> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = self
+                .store
+                .list_changesets(ChangesetPage {
+                    before: cursor.as_deref(),
+                    limit,
+                    scope: ChangesetScope::Baseline,
+                })
+                .await
+                .map_err(store_err)?;
+            let exhausted = page.len() < limit;
+            cursor = page.last().map(|r| r.id.clone());
+            for record in page {
+                // Ids are UUIDv7, so passing below the target means it is
+                // not on the baseline log.
+                if record.id.as_str() <= changeset_id {
+                    if record.id == changeset_id {
+                        return Ok(newer);
+                    }
+                    return Err(store_err(trogon_atlas_store::error::StoreError::NotFound));
+                }
+                if newer.len() >= as_of::MAX_REWIND_CHANGESETS {
+                    return Err(Status::failed_precondition(format!(
+                        "changeset {changeset_id} is more than {} baseline changesets old; \
+                         as_of_changeset rewinds at most that many",
+                        as_of::MAX_REWIND_CHANGESETS
+                    )));
+                }
+                newer.push(record);
+            }
+            if exhausted || cursor.is_none() {
+                return Err(store_err(trogon_atlas_store::error::StoreError::NotFound));
+            }
+        }
     }
 
     /// [`snapshot_for`](Self::snapshot_for) plus whether the view hit the
@@ -3535,18 +3644,39 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
         let id = require_id(req.id.as_ref(), "")?;
+        if !req.as_of_changeset.is_empty() && branch.is_some() {
+            return Err(Status::invalid_argument(
+                "as_of_changeset reads baseline history only; send it without a branch header",
+            ));
+        }
         // The root is fetched by key, so the lensed snapshot below
         // narrows the neighbourhood but never the root itself.
         self.require_visible(&vis, &id.namespace).await?;
-        let stored = self
-            .store
-            .get(pb::EntityKind::EventModel, id, branch.as_deref())
-            .await
-            .map_err(store_err)?;
-        let Some(pb::entity::Kind::EventModel(em)) = stored.entity.kind.clone() else {
-            return Err(Status::internal("event_model entity kind mismatch"));
+        let (em, all) = if req.as_of_changeset.is_empty() {
+            let stored = self
+                .store
+                .get(pb::EntityKind::EventModel, id, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+            let Some(pb::entity::Kind::EventModel(em)) = stored.entity.kind.clone() else {
+                return Err(Status::internal("event_model entity kind mismatch"));
+            };
+            (em, self.snapshot_for(branch.as_deref(), &vis).await?)
+        } else {
+            let all = self.snapshot_as_of(&req.as_of_changeset, &vis).await?;
+            // The live row may be gone or newer, so the root comes from the
+            // rewound set like everything it references.
+            let em = all
+                .iter()
+                .find_map(|se| match se.entity.kind.as_ref() {
+                    Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(id) => {
+                        Some(em.clone())
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
+            (em, all)
         };
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
         let root_refs: Vec<pb::EntityRef> = em.members.clone();
         let graph::Closure {
             mut entities,

@@ -527,6 +527,7 @@ async fn sweep_read_matrix(
             pb::GetEventModelProjectionRequest {
                 id: Some(id(beta_ns, MODEL_SLUG)),
                 include_cross_model: true,
+                as_of_changeset: String::new(),
             },
             beta_token,
         ))

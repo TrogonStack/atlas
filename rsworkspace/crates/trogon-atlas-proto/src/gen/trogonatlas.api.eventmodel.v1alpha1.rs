@@ -421,6 +421,13 @@ pub struct GetEventModelProjectionRequest {
     /// map only by Id (as empty Entity placeholders).
     #[prost(bool, tag="2")]
     pub include_cross_model: bool,
+    /// Read-only view of the model right after this changeset landed. Baseline
+    /// only: the request must not carry a branch header, and the id must name a
+    /// baseline changeset. The server rewinds every newer baseline changeset
+    /// from its recorded pre-images, so a write that recorded no changeset
+    /// cannot be rewound. Empty reads the current model.
+    #[prost(string, tag="3")]
+    pub as_of_changeset: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetEventModelProjectionResponse {

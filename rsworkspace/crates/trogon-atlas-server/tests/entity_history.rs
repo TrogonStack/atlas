@@ -633,3 +633,223 @@ async fn history_of_an_unwritten_entity_is_empty() {
     let revisions = history(&mut c, "hist-none", "never-written").await;
     assert_eq!(revisions, [] as [trogon_atlas_proto::EntityRevision; 0]);
 }
+
+fn event_model(ns: &str, slug: &str, members: &[&str]) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id(ns, slug)),
+            title: "Checkout".into(),
+            members: members.iter().map(|m| entity_ref(ns, m)).collect(),
+            ..Default::default()
+        })),
+    }
+}
+
+fn delete_req(ns: &str, slug: &str) -> pb::DeleteEntityRequest {
+    pb::DeleteEntityRequest {
+        operation_id: String::new(),
+        kind: pb::EntityKind::Event as i32,
+        id: Some(id(ns, slug)),
+        mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+        if_match: String::new(),
+    }
+}
+
+fn as_of_req(ns: &str, slug: &str, changeset: &str) -> pb::GetEventModelProjectionRequest {
+    pb::GetEventModelProjectionRequest {
+        id: Some(id(ns, slug)),
+        include_cross_model: false,
+        as_of_changeset: changeset.into(),
+    }
+}
+
+async fn newest_changeset(c: &mut EventModelServiceClient<Channel>) -> String {
+    c.list_changesets(pb::ListChangesetsRequest {
+        page_token: String::new(),
+        page_size: 1,
+        branch: String::new(),
+    })
+    .await
+    .unwrap()
+    .into_inner()
+    .changesets[0]
+        .id
+        .clone()
+}
+
+/// Member slugs and event titles, sorted, so the assertion ignores map order.
+fn board(projection: &pb::EventModelProjection) -> (Vec<String>, Vec<(String, String)>) {
+    let mut members: Vec<String> = projection
+        .event_model
+        .as_ref()
+        .unwrap()
+        .members
+        .iter()
+        .map(|m| m.id.as_ref().unwrap().slug.clone())
+        .collect();
+    members.sort();
+    let mut events: Vec<(String, String)> = projection
+        .entities
+        .values()
+        .filter_map(|e| match e.kind.as_ref() {
+            Some(pb::entity::Kind::Event(ev)) => {
+                Some((ev.id.as_ref().unwrap().slug.clone(), ev.title.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    events.sort();
+    (members, events)
+}
+
+/// Edit, delete and create after the target all unwind, and the target's own
+/// writes stay applied because the read is "right after" it.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_shows_the_board_right_after_the_changeset() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    let ns = "hist-asof";
+
+    for (slug, title) in [
+        ("order-placed", "Order placed"),
+        ("cart-emptied", "Cart emptied"),
+    ] {
+        c.put_entity(as_author(put_req(event(ns, slug, title)), "alice"))
+            .await
+            .unwrap();
+    }
+    c.put_entity(as_author(
+        put_req(event_model(
+            ns,
+            "checkout",
+            &["order-placed", "cart-emptied"],
+        )),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    c.put_entity(as_author(
+        put_req(event(ns, "order-placed", "Order was placed")),
+        "bob",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(event_model(ns, "checkout", &["order-placed"])),
+        "bob",
+    ))
+    .await
+    .unwrap();
+    c.delete_entity(as_author(delete_req(ns, "cart-emptied"), "bob"))
+        .await
+        .unwrap();
+    c.put_entity(as_author(
+        put_req(event(ns, "coupon-applied", "Coupon applied")),
+        "bob",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(event_model(
+            ns,
+            "checkout",
+            &["order-placed", "coupon-applied"],
+        )),
+        "bob",
+    ))
+    .await
+    .unwrap();
+
+    let then = c
+        .get_event_model_projection(as_of_req(ns, "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        board(then.projection.as_ref().unwrap()),
+        (
+            vec!["cart-emptied".to_string(), "order-placed".to_string()],
+            vec![
+                ("cart-emptied".to_string(), "Cart emptied".to_string()),
+                ("order-placed".to_string(), "Order placed".to_string()),
+            ],
+        )
+    );
+
+    let now = c
+        .get_event_model_projection(as_of_req(ns, "checkout", ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        board(now.projection.as_ref().unwrap()).1,
+        vec![
+            ("coupon-applied".to_string(), "Coupon applied".to_string()),
+            ("order-placed".to_string(), "Order was placed".to_string()),
+        ],
+        "an as-of read writes nothing"
+    );
+}
+
+/// A branch overlay has its own log, so mixing it with a baseline point in
+/// time would answer neither question.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_rejects_a_branch_header() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(as_author(
+        put_req(event_model("hist-asof-branch", "checkout", &[])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+    c.create_branch(tonic::Request::new(pb::CreateBranchRequest {
+        name: "hist-asof-work".into(),
+        doc: String::new(),
+    }))
+    .await
+    .unwrap();
+
+    let status = c
+        .get_event_model_projection(on_branch(
+            tonic::Request::new(as_of_req("hist-asof-branch", "checkout", &target)),
+            "hist-asof-work",
+        ))
+        .await
+        .expect_err("as-of is baseline only");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_of_an_unknown_changeset_is_not_found() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(as_author(
+        put_req(event_model("hist-asof-unknown", "checkout", &[])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+
+    let status = c
+        .get_event_model_projection(as_of_req(
+            "hist-asof-unknown",
+            "checkout",
+            &uuid::Uuid::now_v7().to_string(),
+        ))
+        .await
+        .expect_err("a changeset that was never recorded has no point in time");
+    assert_eq!(status.code(), tonic::Code::NotFound);
+
+    let status = c
+        .get_event_model_projection(as_of_req("hist-asof-unknown", "checkout", "not-a-uuid"))
+        .await
+        .expect_err("a malformed id is the caller's mistake");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+}
