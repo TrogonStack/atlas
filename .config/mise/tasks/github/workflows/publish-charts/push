@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#MISE description="Package every chart under devops/helm/charts and push each version the OCI registry does not already have"
+set -euo pipefail
+
+: "${CHARTS_REGISTRY:?set CHARTS_REGISTRY, e.g. oci://ghcr.io/trogonstack/atlas/charts}"
+
+root="$MISE_PROJECT_ROOT"
+charts_dir="$root/devops/helm/charts"
+packages_dir="$(mktemp -d)"
+trap 'rm -rf "$packages_dir"' EXIT
+
+for chart in "$charts_dir"/*/; do
+  name="$(basename "$chart")"
+  version="$(helm show chart "$chart" | awk '/^version:/ { print $2 }')"
+
+  if helm show chart "$CHARTS_REGISTRY/$name" --version "$version" >/dev/null 2>&1; then
+    echo "skipping $name $version (already published)" >&2
+    continue
+  fi
+
+  if grep -q '^dependencies:' "$chart/Chart.yaml"; then
+    helm dependency build "$chart" >/dev/null
+  fi
+
+  echo "publishing $name $version" >&2
+  helm package "$chart" --destination "$packages_dir" >/dev/null
+  helm push "$packages_dir/$name-$version.tgz" "$CHARTS_REGISTRY"
+done
