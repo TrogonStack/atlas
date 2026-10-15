@@ -320,6 +320,7 @@ const READ_RPCS = new Set([
   "diffBranch",
   "exportEventModelManifests",
   "getEntity",
+  "getEntityHistory",
   "getServerInfo",
   "getTypeLibraryDescriptorSet",
   "listBranches",
@@ -1295,6 +1296,43 @@ app.get(
       conflictFieldPaths: e.conflictFieldPaths ?? [],
     }));
     return { entries };
+  }),
+);
+
+// One entity's recorded revisions, newest first, for the Inspector's History
+// tab. Goes through branchHandler so a branch preview reads the branch's
+// history. `pageToken` is the changeset id the previous page ended on.
+app.get(
+  "/api/entity-history",
+  branchHandler(async (req) => {
+    /** @type {Record<string, string>} */
+    const q = {};
+    for (const key of ["namespace", "slug", "version", "pageToken"]) {
+      const raw = req.query[key];
+      if (raw == null || raw === "") continue;
+      const val = String(raw);
+      if (val.length > NAMESPACE_QUERY_MAX_LENGTH) throw badRequest(`${key} query value too long (max ${NAMESPACE_QUERY_MAX_LENGTH} chars)`);
+      if (!isSafeNamespace(val)) throw badRequest(`invalid value for ${key}: ${JSON.stringify(val)}`);
+      q[key] = val;
+    }
+    if (!q.namespace || !q.slug) throw badRequest("namespace and slug are required");
+    const kind = parseKindToken(String(req.query.kind ?? ""));
+    if (kind == null) throw badRequest(`unknown kind ${JSON.stringify(req.query.kind ?? "")}`);
+    const resp = /** @type {any} */ (await call("getEntityHistory", {
+      ref: { kind, id: { namespace: q.namespace, slug: q.slug, version: q.version ?? "1" } },
+      ...(q.pageToken ? { pageToken: q.pageToken } : {}),
+    }));
+    const revisions = (resp.revisions ?? []).map((/** @type {any} */ r) => ({
+      changesetId: r.changesetId ?? "",
+      author: r.author ?? "",
+      at: r.at ?? "",
+      rpc: r.rpc ?? "",
+      branch: r.branch ?? "",
+      kind: String(r.kind ?? "KIND_UNSPECIFIED"),
+      before: r.before ? decodeAnnotations(r.before) : null,
+      after: r.after ? decodeAnnotations(r.after) : null,
+    }));
+    return { revisions, nextPageToken: resp.nextPageToken ?? "" };
   }),
 );
 

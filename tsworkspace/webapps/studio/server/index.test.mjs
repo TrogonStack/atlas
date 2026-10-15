@@ -98,6 +98,23 @@ const fakeClient = {
         },
       ],
     }),
+  getEntityHistory: (_req, _meta, _opts, cb) =>
+    cb(null, {
+      revisions: [
+        {
+          changesetId: '0192f000-0000-7000-8000-000000000002',
+          author: 'acme-agent',
+          at: '2026-01-02T00:00:00Z',
+          rpc: 'PutEntity',
+          branch: '',
+          entity: { kind: 'ENTITY_KIND_EVENT', id: { namespace: 'acme', slug: 'order.placed', version: '1' } },
+          kind: 'KIND_PUT',
+          before: { event: { title: 'Order placed' } },
+          after: { event: { title: 'Order placed by shopper' } },
+        },
+      ],
+      nextPageToken: '0192f000-0000-7000-8000-000000000002',
+    }),
 };
 
 vi.mock('@grpc/grpc-js', async (importOriginal) => {
@@ -1020,6 +1037,53 @@ describe('GET /api/branch-diff', () => {
     fakeClient.diffBranch = original;
     expect(res.status).toBe(200);
     expect(receivedReq).toEqual({ name: 'alex/retention-rework' });
+  });
+});
+
+describe('GET /api/entity-history', () => {
+  it('returns revisions newest first with before/after and the next page token', async () => {
+    const res = await request(app).get('/api/entity-history?kind=event&namespace=acme&slug=order.placed');
+    expect(res.status).toBe(200);
+    expect(res.body.nextPageToken).toBe('0192f000-0000-7000-8000-000000000002');
+    expect(res.body.revisions).toHaveLength(1);
+    expect(res.body.revisions[0]).toMatchObject({
+      changesetId: '0192f000-0000-7000-8000-000000000002',
+      author: 'acme-agent',
+      kind: 'KIND_PUT',
+      before: { event: { title: 'Order placed' } },
+      after: { event: { title: 'Order placed by shopper' } },
+    });
+  });
+
+  it('forwards the ref, page token and branch to getEntityHistory', async () => {
+    let received;
+    const original = fakeClient.getEntityHistory;
+    fakeClient.getEntityHistory = (req, meta, _opts, cb) => {
+      received = { req, branch: meta.get('x-trogon-atlas-branch') };
+      cb(null, { revisions: [] });
+    };
+    const res = await request(app).get(
+      '/api/entity-history?kind=readModel&namespace=acme&slug=orders&version=2&pageToken=0192f000-0000-7000-8000-000000000001&branch=alex/retention-rework',
+    );
+    fakeClient.getEntityHistory = original;
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ revisions: [], nextPageToken: '' });
+    expect(received.req).toEqual({
+      ref: { kind: 3, id: { namespace: 'acme', slug: 'orders', version: '2' } },
+      pageToken: '0192f000-0000-7000-8000-000000000001',
+    });
+    expect(received.branch).toEqual(['alex/retention-rework']);
+  });
+
+  it.each([
+    ['slug is missing', '/api/entity-history?kind=event&namespace=acme'],
+    ['namespace is unsafe', '/api/entity-history?kind=event&namespace=..&slug=order.placed'],
+    ['kind is unknown', '/api/entity-history?kind=widget&namespace=acme&slug=order.placed'],
+    ['pageToken is unsafe', '/api/entity-history?kind=event&namespace=acme&slug=order.placed&pageToken=a%2Fb'],
+  ])('returns 400 when %s', async (_why, url) => {
+    const res = await request(app).get(url);
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
   });
 });
 
