@@ -224,6 +224,10 @@ pub struct ListChangesetsParams {
     pub page_token: Option<String>,
     #[schemars(description = "Restrict to changesets recorded on this branch. Omit for all.")]
     pub branch: Option<String>,
+    #[schemars(
+        description = "Restrict to changesets with at least one op in this namespace. Omit for all."
+    )]
+    pub namespace: Option<String>,
     #[schemars(description = "Page size (1-500). Defaults to 100.", range(max = 500))]
     #[serde(default = "default_page_size")]
     pub page_size: u32,

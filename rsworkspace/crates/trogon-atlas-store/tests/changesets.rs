@@ -131,6 +131,7 @@ async fn append_is_idempotent_on_id() {
             before: None,
             limit: 50,
             scope: ChangesetScope::All,
+            namespace: None,
         })
         .await
         .unwrap();
@@ -200,6 +201,7 @@ async fn list_returns_newest_first_and_pages_backwards() {
             before: None,
             limit: 3,
             scope: ChangesetScope::All,
+            namespace: None,
         })
         .await
         .unwrap();
@@ -211,6 +213,7 @@ async fn list_returns_newest_first_and_pages_backwards() {
             before: Some(&ids[4]),
             limit: 3,
             scope: ChangesetScope::All,
+            namespace: None,
         })
         .await
         .unwrap();
@@ -222,6 +225,7 @@ async fn list_returns_newest_first_and_pages_backwards() {
             before: Some(&ids[1]),
             limit: 3,
             scope: ChangesetScope::All,
+            namespace: None,
         })
         .await
         .unwrap();
@@ -233,6 +237,7 @@ async fn list_returns_newest_first_and_pages_backwards() {
             before: Some(&ids[0]),
             limit: 3,
             scope: ChangesetScope::All,
+            namespace: None,
         })
         .await
         .unwrap();
@@ -265,6 +270,7 @@ async fn list_filters_by_branch() {
             before: None,
             limit: 50,
             scope: ChangesetScope::Branch("feat"),
+            namespace: None,
         })
         .await
         .unwrap();
@@ -276,6 +282,7 @@ async fn list_filters_by_branch() {
             before: None,
             limit: 50,
             scope: ChangesetScope::All,
+            namespace: None,
         })
         .await
         .unwrap();
@@ -297,6 +304,7 @@ async fn zero_limit_returns_at_most_one_row_and_terminates() {
             before: None,
             limit: 0,
             scope: ChangesetScope::All,
+            namespace: None,
         })
         .await
         .unwrap();
