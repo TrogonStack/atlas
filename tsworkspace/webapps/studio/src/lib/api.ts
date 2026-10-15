@@ -230,6 +230,24 @@ export interface BranchDiffEntry {
   conflictFieldPaths: string[];
 }
 
+/** One write to one entity, as GetEntityHistory records it. `before` is null on create, `after` on delete. */
+export interface EntityRevision {
+  changesetId: string;
+  author: string;
+  at: string;
+  rpc: string;
+  branch: string;
+  kind: string;
+  before: WireEntityEnvelope | null;
+  after: WireEntityEnvelope | null;
+}
+
+export interface EntityHistoryPage {
+  revisions: EntityRevision[];
+  /** Empty when there are no older revisions. */
+  nextPageToken: string;
+}
+
 export interface ValidateProjectScope {
   projectNamespace?: string;
   projectSlug?: string;
@@ -347,6 +365,11 @@ export const api = {
   branches: (opts?: Omit<FetchOptions, 'branch'>) => getJson<{ branches: BranchInfo[] }>('/api/branches', opts),
   branchDiff: (name: string, opts?: Omit<FetchOptions, 'branch'>) =>
     getJson<{ entries: BranchDiffEntry[] }>(`/api/branch-diff?name=${encodeURIComponent(name)}`, opts),
+  entityHistory: (
+    ref: { kind: string; namespace: string; slug: string; version?: string },
+    pageToken?: string,
+    opts?: FetchOptions,
+  ) => getJson<EntityHistoryPage>(`/api/entity-history${buildQuery({ ...ref, pageToken })}`, opts),
   validate: (id: { namespace: string; slug: string; version?: string }, opts?: FetchOptions) =>
     getJson<{ issues?: unknown[] }>(boardPaths.validate(id), opts),
   manifests: (namespace: string, slug: string, opts?: FetchOptions) =>

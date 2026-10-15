@@ -2,6 +2,7 @@ import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { CopyContextButton } from '@/components/CopyContextButton';
 import { CopyFixPromptButton } from '@/components/CopyFixPromptButton';
+import { EntityHistory } from '@/components/EntityHistory';
 import { kindStyle } from '@/components/canvas/StickyNode';
 import { TypeLibrarySources } from '@/components/TypeLibraryPanels';
 import { Badge } from '@/components/ui/badge';
@@ -516,7 +517,7 @@ function IssueList({
   );
 }
 
-export type InspectorTab = 'details' | 'validation';
+export type InspectorTab = 'details' | 'validation' | 'history';
 
 export function Inspector({
   model,
@@ -657,6 +658,8 @@ export function Inspector({
               </span>
             ) : null}
           </TabsTab>
+          {/* A saved snapshot has no server to read history from. */}
+          {activeSnapshot() ? null : <TabsTab value="history">History</TabsTab>}
         </TabsList>
         <TabsPanel value="details" className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 text-sm">
           {neighborsBackward.length > 0 || neighborsForward.length > 0 ? (
@@ -1272,6 +1275,9 @@ export function Inspector({
         </TabsPanel>
         <TabsPanel value="validation" className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
           <IssueList issues={ownIssues} error={issues.error} model={model} momentKey={momentKey} />
+        </TabsPanel>
+        <TabsPanel value="history" className="min-h-0 flex-1 overflow-y-auto p-4 text-sm">
+          <EntityHistory key={entity.key} entity={entity} />
         </TabsPanel>
       </Tabs>
     </aside>
