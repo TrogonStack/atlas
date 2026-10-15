@@ -476,6 +476,7 @@ async fn get_event_model_projection_does_not_project_another_owners_model() {
             pb::GetEventModelProjectionRequest {
                 id: Some(id("model")),
                 include_cross_model: true,
+                as_of_changeset: String::new(),
             },
             BETA_TOKEN,
         ))

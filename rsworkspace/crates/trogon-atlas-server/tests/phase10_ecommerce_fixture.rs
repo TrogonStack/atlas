@@ -898,6 +898,7 @@ async fn fixture_projection_event_model() {
         .get_event_model_projection(Request::new(pb::GetEventModelProjectionRequest {
             id: Some(id(NS, "ecommerce", 1)),
             include_cross_model: false,
+            as_of_changeset: String::new(),
         }))
         .await
         .unwrap()

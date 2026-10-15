@@ -168,6 +168,23 @@ pub struct ProjectionParams {
     pub include_cross_model: bool,
 }
 
+/// Its own type rather than [`ProjectionParams`] so the storyboard tool does
+/// not advertise an as-of field its RPC has no way to honour.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventModelProjectionParams {
+    pub namespace: String,
+    pub slug: String,
+    pub version: u64,
+    #[serde(default)]
+    pub include_cross_model: bool,
+    #[schemars(
+        description = "Changeset id from list_changesets. Returns the model as it was right after that baseline changeset landed. Not allowed with a branch."
+    )]
+    #[serde(default)]
+    pub as_of_changeset: Option<String>,
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SliceProjectionParams {

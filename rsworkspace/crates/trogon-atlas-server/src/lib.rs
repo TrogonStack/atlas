@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod as_of;
 pub mod auth;
 pub mod batch_recovery;
 pub mod change_cursor;

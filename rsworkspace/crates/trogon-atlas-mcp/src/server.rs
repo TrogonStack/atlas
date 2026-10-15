@@ -24,15 +24,16 @@ use crate::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
         BatchMutateParams, CompileTypeLibraryParams, CreateBranchParams, DeleteBranchParams,
         DeleteByQueryParams, DeleteEntityParams, DiffBranchParams, DiffEntitiesParams,
-        DiffManifestsParams, EmptyParams, EntitySpec, ExportNamespaceParams, ExportOpensloParams,
-        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
-        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
-        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams,
-        MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
-        PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
-        ResolveTypeParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
-        SliceProjectionParams, SupersessionChainParams, UpdateBranchParams,
-        ValidateEventModelParams, ValidateProjectParams,
+        DiffManifestsParams, EmptyParams, EntitySpec, EventModelProjectionParams,
+        ExportNamespaceParams, ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams,
+        GetEntityHistoryParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
+        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
+        ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams, MergeBranchParams,
+        MoveNamespaceParams, ProjectionParams, PutEntityJsonParams, PutEntityParams,
+        ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
+        RetargetReferencesParams, RevertChangesetParams, SearchParams, SliceProjectionParams,
+        SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
+        ValidateProjectParams,
     },
 };
 
@@ -1610,7 +1611,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Event-model projection: the model plus every transitively reachable entity. Set include_cross_model=true to follow cross-namespace references.",
+        description = "Event-model projection: the model plus every transitively reachable entity. Set include_cross_model=true to follow cross-namespace references. Set as_of_changeset to read the baseline model as it was right after that changeset.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -1620,11 +1621,12 @@ impl McpServer {
     )]
     async fn get_event_model_projection(
         &self,
-        Parameters(p): Parameters<ProjectionParams>,
+        Parameters(p): Parameters<EventModelProjectionParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let req = pb::GetEventModelProjectionRequest {
             id: Some(validated_id_from(&p.namespace, &p.slug, p.version)?),
             include_cross_model: p.include_cross_model,
+            as_of_changeset: p.as_of_changeset.unwrap_or_default(),
         };
         let mut client = self.client();
         let resp = client
