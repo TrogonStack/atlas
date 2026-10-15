@@ -17,7 +17,7 @@ import protoLoader from "@grpc/proto-loader";
 import express from "express";
 import { rateLimit as expressRateLimit } from "express-rate-limit";
 import protobuf from "protobufjs";
-import { isSafeBranchName, isSafeNamespace } from "../shared/safe-namespace.mjs";
+import { isChangesetId, isSafeBranchName, isSafeNamespace } from "../shared/safe-namespace.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // The studio reads the canonical proto tree directly. We load `service.proto`
@@ -322,6 +322,7 @@ const READ_RPCS = new Set([
   "getEntity",
   "getChangeset",
   "getEntityHistory",
+  "getEventModelProjection",
   "getServerInfo",
   "getTypeLibraryDescriptorSet",
   "listBranches",
@@ -1338,10 +1339,6 @@ app.get(
   }),
 );
 
-// Changeset ids are UUIDv7 in the canonical lowercase form the server mints,
-// so anything else can't name a changeset and is refused before the gRPC call.
-const CHANGESET_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
 /** @param {any} c */
 function changesetView(c) {
   return {
@@ -1375,7 +1372,7 @@ app.get(
     if (rawNamespace.length > NAMESPACE_QUERY_MAX_LENGTH) throw badRequest(`namespace query value too long (max ${NAMESPACE_QUERY_MAX_LENGTH} chars)`);
     if (!isSafeNamespace(rawNamespace)) throw badRequest(`invalid namespace: ${JSON.stringify(rawNamespace)}`);
     const pageToken = String(req.query.pageToken ?? "");
-    if (pageToken && !CHANGESET_ID_RE.test(pageToken)) throw badRequest(`invalid pageToken: ${JSON.stringify(pageToken)}`);
+    if (pageToken && !isChangesetId(pageToken)) throw badRequest(`invalid pageToken: ${JSON.stringify(pageToken)}`);
     const rawPageSize = req.query.pageSize;
     let pageSize;
     if (rawPageSize != null && rawPageSize !== "") {
@@ -1398,7 +1395,7 @@ app.get(
   "/api/changesets/:id",
   handler(async (req) => {
     const id = String(req.params.id ?? "");
-    if (!CHANGESET_ID_RE.test(id)) throw badRequest(`invalid changeset id: ${JSON.stringify(id)}`);
+    if (!isChangesetId(id)) throw badRequest(`invalid changeset id: ${JSON.stringify(id)}`);
     const resp = /** @type {any} */ (await call("getChangeset", { id }));
     return { changeset: resp.changeset ? changesetView(resp.changeset) : null };
   }),
@@ -1558,6 +1555,14 @@ app.get(
   "/api/event-model/:namespace/:slug",
   branchHandler(async (req) => {
     const { ns, slug } = namespaceSlugParams(req);
+    const rawAsOf = String(req.query.asOf ?? "");
+    if (rawAsOf) {
+      if (!isChangesetId(rawAsOf)) throw badRequest(`invalid asOf: ${JSON.stringify(rawAsOf)}`);
+      // The server rewinds baseline history only and refuses a branch
+      // header with asOfChangeset, so the mix is refused here with a 400.
+      if (currentBranch()) throw badRequest("asOf reads baseline history only; drop branch");
+      return eventModelAsOf(ns, slug, rawAsOf);
+    }
     const emResp = /** @type {any} */ (await call("getEntity", {
       kind: 12,
       id: { namespace: ns, slug, version: "1" },
@@ -1708,6 +1713,58 @@ app.get(
     };
   }),
 );
+
+/** @param {any} envelope @returns {string | undefined} */
+function envelopeKey(envelope) {
+  const [field, body] = Object.entries(envelope ?? {}).find(([k]) => k !== "system") ?? [];
+  const kind = field ? ENTITY_KIND_SNAKE[field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)] : undefined;
+  const id = /** @type {any} */ (body)?.id;
+  return kind != null && id ? `${kind}:${id.namespace}/${id.slug}@${id.version}` : undefined;
+}
+
+// The board right after a past changeset. Only GetEventModelProjection can
+// rewind, so the members and halo come from its closure instead of live
+// getEntity reads. The knowledge graph is left out, because a live read
+// would mix the current domain map into a past board.
+/** @param {string} ns @param {string} slug @param {string} asOf */
+async function eventModelAsOf(ns, slug, asOf) {
+  const resp = /** @type {any} */ (await call("getEventModelProjection", {
+    id: { namespace: ns, slug, version: "1" },
+    // Cross-model, so the halo's foreign source events are in the closure.
+    includeCrossModel: true,
+    asOfChangeset: asOf,
+  }));
+  const em = resp.projection?.eventModel;
+  if (!em) {
+    const err = /** @type {HttpError} */ (new Error(`event model not found: ${ns}/${slug}`));
+    err.status = 404;
+    throw err;
+  }
+  if (resp.truncated) logEvent("warn", "as_of_projection_truncated", { namespace: ns, slug, as_of: asOf });
+  /** @type {Map<string, unknown>} */
+  const byKey = new Map();
+  for (const envelope of Object.values(resp.projection.entities ?? {})) {
+    const key = envelopeKey(envelope);
+    if (key) byKey.set(key, envelope);
+  }
+  // Same selection as the live route: the members, then foreign events
+  // that member read models project from.
+  const members = (em.members ?? [])
+    .map((/** @type {any} */ m) => (m.id ? byKey.get(`${kindEnumToNumber(m.kind)}:${m.id.namespace}/${m.id.slug}@${m.id.version}`) : undefined))
+    .filter(Boolean);
+  /** @type {Map<string, unknown>} */
+  const halo = new Map();
+  for (const member of members) {
+    for (const src of /** @type {any} */ (member).readModel?.sourceEvents ?? []) {
+      const id = src.id;
+      if (!id || id.namespace === ns) continue;
+      const key = `${ENTITY_KIND_NUMBER.ENTITY_KIND_EVENT}:${id.namespace}/${id.slug}@${id.version}`;
+      const event = byKey.get(key);
+      if (event) halo.set(key, event);
+    }
+  }
+  return { entities: decodeAnnotations([{ eventModel: em }, ...members, ...halo.values()]) };
+}
 
 // The board as the YAML manifests `trogon-atlas apply` reads, so a saved
 // board can be loaded back into an Atlas.

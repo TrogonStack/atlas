@@ -10,6 +10,7 @@ vi.mock('@/lib/api', () => ({
     branches: vi.fn(),
     branchDiff: vi.fn(),
     changesets: vi.fn(),
+    changeset: vi.fn(),
   },
 }));
 vi.mock('@/lib/realtime', () => ({
@@ -81,6 +82,7 @@ describe('ModelShell selection drawer routing', () => {
     (api.branches as ReturnType<typeof vi.fn>).mockResolvedValue({ branches: [] });
     (api.branchDiff as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: [] });
     (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({ changesets: [], nextPageToken: '' });
+    (api.changeset as ReturnType<typeof vi.fn>).mockResolvedValue({ changeset: null });
   });
   afterEach(cleanup);
 
@@ -260,6 +262,47 @@ describe('ModelShell selection drawer routing', () => {
     expect(JSON.parse(screen.getByTestId('board').getAttribute('data-selections') ?? 'null')).toEqual([
       { type: 'entity', key: 'event:shop/order.placed@1' },
     ]);
+  });
+
+  it('moves to a baseline changeset from history and exits from the as-of tag', async () => {
+    const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
+    const model = buildModel([{ event: { id, title: 'Order placed' } }] as never);
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({
+      changesets: [
+        {
+          id: '0192f000-0000-7000-8000-00000000beef',
+          author: 'acme-agent',
+          at: '2026-01-02T00:00:00Z',
+          message: 'put event shop/order.placed',
+          branch: '',
+          rpc: 'PutEntity',
+          ops: [{ kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', ...id } }],
+        },
+      ],
+      nextPageToken: '',
+    });
+    const onAsOfChange = vi.fn();
+    const { rerender } = rtlRender(
+      <ModelShell model={model} scopedTitle="Shop" historyNamespace="shop" onAsOfChange={onAsOfChange} />,
+      { wrapper: withNuqsTestingAdapter() },
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Namespace history' }));
+    fireEvent.click(await screen.findByRole('button', { name: /PutEntity/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'View board as of this' }));
+    expect(onAsOfChange).toHaveBeenCalledWith('0192f000-0000-7000-8000-00000000beef');
+
+    rerender(
+      <ModelShell
+        model={model}
+        scopedTitle="Shop"
+        historyNamespace="shop"
+        asOf="0192f000-0000-7000-8000-00000000beef"
+        onAsOfChange={onAsOfChange}
+      />,
+    );
+    expect(screen.getByRole('status', { name: 'As of' })).toBeDefined();
+    fireEvent.click(screen.getByRole('link', { name: 'Exit' }));
+    expect(onAsOfChange).toHaveBeenLastCalledWith(undefined);
   });
 
   it('offers no history button without a namespace to read', () => {

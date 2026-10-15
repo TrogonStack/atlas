@@ -86,6 +86,10 @@ export interface ModelShellProps {
   onExportHtml?: () => Promise<void>;
   /** Namespace the History drawer lists. Unscoped shells fall back to a single picked namespace. */
   historyNamespace?: string;
+  /** Baseline changeset the board is read as of; the top bar then marks it read only. */
+  asOf?: string;
+  /** Moves the board to a past changeset, or back to live with `undefined`. Omit where the board cannot rewind. */
+  onAsOfChange?: (changesetId: string | undefined) => void;
 }
 
 // The empty model is structurally invariant and small; hoisted out of
@@ -101,6 +105,8 @@ export function ModelShell({
   snapshot,
   onExportHtml,
   historyNamespace: historyNamespaceProp,
+  asOf,
+  onAsOfChange,
 }: ModelShellProps) {
   const [internalModel, setInternalModel] = useState<Model>(modelProp ?? EMPTY_MODEL);
   const [info, setInfo] = useState<ServerInfo>();
@@ -567,6 +573,8 @@ export function ModelShell({
               }
             : undefined
         }
+        asOf={asOf}
+        onExitAsOf={() => onAsOfChange?.(undefined)}
       />
       <div className="flex min-h-0 flex-1">
         {scoped ? null : (
@@ -686,6 +694,7 @@ export function ModelShell({
             namespace={historyNamespace}
             branch={branch}
             model={model}
+            onViewAsOf={onAsOfChange}
             onClose={() => setHistoryOpen(false)}
             onSelect={(key) => {
               selectAndFocus(key);

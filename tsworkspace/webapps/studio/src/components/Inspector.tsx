@@ -8,7 +8,7 @@ import { TypeLibrarySources } from '@/components/TypeLibraryPanels';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsPanel, TabsTab } from '@/components/ui/tabs';
-import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
+import { readAsOfFromUrl, readBranchFromUrl, withAsOfQuery, withBranchQuery } from '@/lib/branch';
 import { entityContext } from '@/lib/context';
 import { EMPTY_ISSUE_INDEX, type Issue, type IssueIndex, type Severity } from '@/lib/issues';
 import {
@@ -135,7 +135,10 @@ function SeamSection({ entity, model, onSelect }: { entity: Entity; model: Model
                           // has no rendered sticky on the board after
                           // the halo-only-band drop, so an in-page
                           // select would do nothing visible.
-                          window.location.href = withBranchQuery(url, readBranchFromUrl());
+                          window.location.href = withAsOfQuery(
+                            withBranchQuery(url, readBranchFromUrl()),
+                            readAsOfFromUrl(),
+                          );
                         }}
                         title={`Navigate to ${url}`}
                         className="flex w-full items-center justify-between gap-2 rounded-md border border-fuchsia-400 bg-fuchsia-100 px-2 py-1.5 text-left text-xs font-medium text-fuchsia-800 hover:bg-fuchsia-200"

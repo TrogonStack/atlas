@@ -325,6 +325,14 @@ describe('api.eventModel URL construction', () => {
     const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/event-model/my%20ns/my%20slug');
   });
+
+  it('adds ?asOf= for a past changeset', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse({ entities: [] }));
+    await api.eventModel('acme', 'checkout', { asOf: '0192f000-0000-7000-8000-000000000003' });
+    const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/event-model/acme/checkout?asOf=0192f000-0000-7000-8000-000000000003');
+    expect(init.headers).not.toHaveProperty('x-trogon-atlas-branch');
+  });
 });
 
 describe('BUG: timeout and error parsing', () => {

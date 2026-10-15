@@ -384,8 +384,12 @@ export const api = {
   },
   overview: (opts?: FetchOptions) => getJson<{ entities: WireEntityEnvelope[] }>('/api/overview', opts),
   eventModels: (opts?: FetchOptions) => getJson<{ entities: WireEntityEnvelope[] }>('/api/event-models', opts),
-  eventModel: (namespace: string, slug: string, opts?: FetchOptions) =>
-    getJson<{ entities: WireEntityEnvelope[] }>(boardPaths.eventModel(namespace, slug), opts),
+  /** `asOf` reads the board right after that baseline changeset; it cannot be combined with `branch`. */
+  eventModel: (namespace: string, slug: string, opts?: FetchOptions & { asOf?: string }) =>
+    getJson<{ entities: WireEntityEnvelope[] }>(
+      `${boardPaths.eventModel(namespace, slug)}${buildQuery({ asOf: opts?.asOf })}`,
+      opts,
+    ),
   branches: (opts?: Omit<FetchOptions, 'branch'>) => getJson<{ branches: BranchInfo[] }>('/api/branches', opts),
   branchDiff: (name: string, opts?: Omit<FetchOptions, 'branch'>) =>
     getJson<{ entries: BranchDiffEntry[] }>(`/api/branch-diff?name=${encodeURIComponent(name)}`, opts),

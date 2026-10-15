@@ -1,4 +1,5 @@
 import { Camera, ChevronLeft, History, Workflow } from 'lucide-react';
+import { AsOfTag } from '@/components/AsOfTag';
 import { BranchBar } from '@/components/BranchBar';
 import { DownloadYamlButton } from '@/components/DownloadYamlButton';
 import { TopBarMenu } from '@/components/TopBarMenu';
@@ -22,6 +23,8 @@ export function TopBar({
   onSelectBranch,
   onOpenBranchReview,
   onOpenHistory,
+  asOf,
+  onExitAsOf,
 }: {
   info?: ServerInfo;
   realtime: RealtimeStatus;
@@ -40,7 +43,16 @@ export function TopBar({
   onOpenBranchReview?: () => void;
   /** Opens the namespace history drawer. Omit to hide the button. */
   onOpenHistory?: () => void;
+  /** Changeset the board is read as of: live, branch and menu controls give way to a read-only tag. */
+  asOf?: string;
+  onExitAsOf?: () => void;
 }) {
+  const historyButton = onOpenHistory ? (
+    <Button variant="outline" size="sm" aria-label="Namespace history" onClick={onOpenHistory}>
+      <History />
+      <span className="hidden md:inline">History</span>
+    </Button>
+  ) : null;
   return (
     <header className="flex h-12 items-center gap-3 border-b border-border bg-card px-4">
       <div className="flex min-w-0 items-center gap-3">
@@ -77,6 +89,11 @@ export function TopBar({
             <SnapshotBadge snapshot={snapshot} serverVersion={info?.serverVersion} />
             <DownloadYamlButton snapshot={snapshot} />
           </>
+        ) : asOf ? (
+          <>
+            {historyButton}
+            <AsOfTag changesetId={asOf} onExit={() => onExitAsOf?.()} />
+          </>
         ) : (
           <>
             <output
@@ -105,12 +122,7 @@ export function TopBar({
               {realtime.state}
               {realtime.detail ? <span className="sr-only">: {realtime.detail}</span> : null}
             </output>
-            {onOpenHistory ? (
-              <Button variant="outline" size="sm" aria-label="Namespace history" onClick={onOpenHistory}>
-                <History />
-                <span className="hidden md:inline">History</span>
-              </Button>
-            ) : null}
+            {historyButton}
             {onSelectBranch ? (
               <BranchBar branch={branch} onSelectBranch={onSelectBranch} onOpenReview={onOpenBranchReview} />
             ) : null}

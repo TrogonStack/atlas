@@ -38,6 +38,7 @@ export function HistoryPanel({
   model,
   onClose,
   onSelect,
+  onViewAsOf,
 }: {
   namespace: string;
   /** Previewed branch: lists that branch's changesets instead of every changeset. */
@@ -45,6 +46,8 @@ export function HistoryPanel({
   model: Model;
   onClose: () => void;
   onSelect: (key: string) => void;
+  /** Opens the board as of a baseline changeset. Omit where the board cannot rewind. */
+  onViewAsOf?: (changesetId: string) => void;
 }) {
   const [changesets, setChangesets] = useState<ChangesetView[]>([]);
   const [nextPageToken, setNextPageToken] = useState('');
@@ -147,6 +150,14 @@ export function HistoryPanel({
                     );
                   })}
                 </ul>
+              ) : null}
+              {/* The server rewinds baseline history only, so a branch changeset has no as-of view. */}
+              {expanded === c.id && onViewAsOf && !c.branch ? (
+                <div className="px-2 pb-2">
+                  <Button variant="outline" size="sm" onClick={() => onViewAsOf(c.id)}>
+                    View board as of this
+                  </Button>
+                </div>
               ) : null}
             </li>
           ))}

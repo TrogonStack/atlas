@@ -1,6 +1,13 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { NuqsAdapter } from 'nuqs/adapters/react';
+import type { ReactElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventModelPage } from './EventModelPage';
+
+// The page reads ?asOf= through nuqs; the real adapter reads the jsdom URL each test sets.
+function render(ui: ReactElement) {
+  return rtlRender(ui, { wrapper: NuqsAdapter });
+}
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -11,17 +18,12 @@ vi.mock('@/lib/api', () => ({
 
 let capturedOnRefetch: (() => void) | undefined;
 let capturedIssues: IssueIndex | undefined;
+let capturedShell: Record<string, unknown> = {};
 
 vi.mock('@/components/ModelShell', () => ({
-  ModelShell: ({
-    scopedTitle,
-    issues,
-    onRefetch,
-  }: {
-    scopedTitle?: string;
-    issues?: IssueIndex;
-    onRefetch?: () => void;
-  }) => {
+  ModelShell: (props: { scopedTitle?: string; issues?: IssueIndex; onRefetch?: () => void }) => {
+    const { scopedTitle, issues, onRefetch } = props;
+    capturedShell = props;
     capturedOnRefetch = onRefetch;
     capturedIssues = issues;
     return <div data-testid="model-shell">{scopedTitle ?? 'shell'}</div>;
@@ -189,6 +191,66 @@ describe('EventModelPage: validation', () => {
     render(<EventModelPage namespace="registry" slug="changeset-review-flow" />);
     await waitFor(() => {
       expect(screen.getByTestId('model-shell')).toBeDefined();
+    });
+  });
+});
+
+// A past changeset is a read-only board: GetEventModelProjection rewinds it,
+// nothing refetches it, and the validator, which reads the live model, stays out.
+describe('EventModelPage: as of a changeset', () => {
+  const AS_OF = '0192f000-0000-7000-8000-000000000003';
+
+  beforeEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    capturedShell = {};
+    (api.eventModel as ReturnType<typeof vi.fn>).mockResolvedValue({ entities: [] });
+    (api.validate as ReturnType<typeof vi.fn>).mockResolvedValue({ issues: [] });
+  });
+
+  afterEach(() => {
+    cleanup();
+    window.history.replaceState({}, '', '/');
+  });
+
+  it('loads the board as of ?asOf= and freezes it', async () => {
+    window.history.replaceState({}, '', `/em/acme/checkout?asOf=${AS_OF}`);
+    render(<EventModelPage namespace="acme" slug="checkout" />);
+    await waitFor(() => {
+      expect(screen.getByTestId('model-shell')).toBeDefined();
+    });
+    expect(api.eventModel).toHaveBeenCalledWith(
+      'acme',
+      'checkout',
+      expect.objectContaining({ asOf: AS_OF, branch: undefined }),
+    );
+    expect(api.validate).not.toHaveBeenCalled();
+    expect(capturedShell.asOf).toBe(AS_OF);
+    expect(capturedShell.onRefetch).toBeUndefined();
+    expect(capturedShell.onExportHtml).toBeUndefined();
+    expect(capturedIssues?.error).toMatch(/past changeset/);
+  });
+
+  it('moves a live board to a past changeset and drops the branch', async () => {
+    window.history.replaceState({}, '', '/em/acme/checkout?branch=alex/rework');
+    render(<EventModelPage namespace="acme" slug="checkout" />);
+    await waitFor(() => {
+      expect(capturedShell.onRefetch).toBeTypeOf('function');
+    });
+    expect(capturedShell.asOf).toBeUndefined();
+
+    await act(async () => (capturedShell.onAsOfChange as (id: string) => void)(AS_OF));
+    await waitFor(() => {
+      expect(api.eventModel).toHaveBeenLastCalledWith(
+        'acme',
+        'checkout',
+        expect.objectContaining({ asOf: AS_OF, branch: undefined }),
+      );
+    });
+    expect(new URLSearchParams(window.location.search).get('asOf')).toBe(AS_OF);
+    expect(new URLSearchParams(window.location.search).has('branch')).toBe(false);
+    await waitFor(() => {
+      expect(capturedShell.onRefetch).toBeUndefined();
     });
   });
 });

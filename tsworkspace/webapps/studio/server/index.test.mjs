@@ -131,6 +131,7 @@ const fakeClient = {
       changesets: [ACME_CHANGESET],
       nextPageToken: '0192f000-0000-7000-8000-000000000003',
     }),
+  getEventModelProjection: (_req, _meta, _opts, cb) => cb(null, { projection: { entities: {} } }),
   getChangeset: (req, _meta, _opts, cb) =>
     req.id === ACME_CHANGESET.id
       ? cb(null, { changeset: ACME_CHANGESET })
@@ -1197,6 +1198,121 @@ describe('GET /api/changesets/:id', () => {
     const res = await request(app).get('/api/changesets/not-a-uuid');
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty('error');
+  });
+});
+
+describe('GET /api/event-model/:namespace/:slug?asOf=', () => {
+  const AS_OF = '0192f000-0000-7000-8000-000000000003';
+  const placed = { namespace: 'acme', slug: 'order.placed', version: '1' };
+  const summary = { namespace: 'acme', slug: 'order.summary', version: '1' };
+  const shipped = { namespace: 'shipping', slug: 'parcel.shipped', version: '1' };
+  const projection = {
+    projection: {
+      eventModel: {
+        id: { namespace: 'acme', slug: 'checkout', version: '1' },
+        title: 'Checkout',
+        members: [
+          { kind: 'ENTITY_KIND_EVENT', id: placed },
+          { kind: 'ENTITY_KIND_READ_MODEL', id: summary },
+        ],
+      },
+      entities: {
+        'event:acme/order.placed@1': { event: { id: placed, title: 'Order placed' } },
+        'read_model:acme/order.summary@1': { readModel: { id: summary, sourceEvents: [{ id: shipped }] } },
+        'event:shipping/parcel.shipped@1': { event: { id: shipped, title: 'Parcel shipped' } },
+        // Reached from a member, but not a member: the live route leaves it out too.
+        'schema:acme/order-placed-payload@1': { schema: { id: { namespace: 'acme', slug: 'order-placed-payload', version: '1' } } },
+      },
+    },
+    truncated: false,
+  };
+
+  /** @param {(req: any, meta: any, cb: Function) => void} impl */
+  async function withProjection(impl, run) {
+    const original = fakeClient.getEventModelProjection;
+    const originalGetEntity = fakeClient.getEntity;
+    fakeClient.getEventModelProjection = (req, meta, _opts, cb) => impl(req, meta, cb);
+    fakeClient.getEntity = () => {
+      throw new Error('an as-of read must not fall back to live getEntity');
+    };
+    try {
+      return await run();
+    } finally {
+      fakeClient.getEventModelProjection = original;
+      fakeClient.getEntity = originalGetEntity;
+    }
+  }
+
+  it('forwards asOfChangeset to getEventModelProjection on baseline and returns the members and halo', async () => {
+    let received;
+    let branchHeader;
+    const res = await withProjection(
+      (req, meta, cb) => {
+        received = req;
+        branchHeader = meta.get('x-trogon-atlas-branch');
+        cb(null, projection);
+      },
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(200);
+    expect(received).toEqual({
+      id: { namespace: 'acme', slug: 'checkout', version: '1' },
+      includeCrossModel: true,
+      asOfChangeset: AS_OF,
+    });
+    expect(branchHeader).toEqual([]);
+    expect(res.body.entities).toEqual([
+      { eventModel: projection.projection.eventModel },
+      { event: { id: placed, title: 'Order placed' } },
+      { readModel: { id: summary, sourceEvents: [{ id: shipped }] } },
+      { event: { id: shipped, title: 'Parcel shipped' } },
+    ]);
+  });
+
+  it('maps an unknown changeset to 404', async () => {
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(Object.assign(new Error('entity not found'), { code: 5 })),
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when the model did not exist yet at that changeset', async () => {
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(null, { projection: { entities: {} } }),
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it.each([
+    ['asOf is not a UUID', '/api/event-model/acme/checkout?asOf=yesterday'],
+    ['asOf is uppercase', '/api/event-model/acme/checkout?asOf=0192F000-0000-7000-8000-000000000003'],
+    ['asOf comes with ?branch=', `/api/event-model/acme/checkout?asOf=${AS_OF}&branch=alex/retention-rework`],
+  ])('returns 400 when %s', async (_why, url) => {
+    let called = false;
+    const res = await withProjection(
+      (_req, _meta, cb) => {
+        called = true;
+        cb(null, projection);
+      },
+      () => request(app).get(url),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+    expect(called).toBe(false);
+  });
+
+  it('returns 400 when asOf comes with the branch header', async () => {
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(null, projection),
+      () =>
+        request(app)
+          .get(`/api/event-model/acme/checkout?asOf=${AS_OF}`)
+          .set('x-trogon-atlas-branch', 'alex/retention-rework'),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/baseline/);
   });
 });
 

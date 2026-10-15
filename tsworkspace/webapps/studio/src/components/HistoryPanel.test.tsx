@@ -34,9 +34,20 @@ function changeset(id: string, overrides: Partial<ChangesetView> = {}): Changese
   };
 }
 
-function renderPanel(props: { branch?: string; onSelect?: (key: string) => void } = {}) {
+function renderPanel(
+  props: { branch?: string; onSelect?: (key: string) => void; onViewAsOf?: (id: string) => void } = {},
+) {
   const onSelect = props.onSelect ?? vi.fn();
-  render(<HistoryPanel namespace="acme" branch={props.branch} model={model} onClose={vi.fn()} onSelect={onSelect} />);
+  render(
+    <HistoryPanel
+      namespace="acme"
+      branch={props.branch}
+      model={model}
+      onClose={vi.fn()}
+      onSelect={onSelect}
+      onViewAsOf={props.onViewAsOf}
+    />,
+  );
   return { onSelect };
 }
 
@@ -102,6 +113,35 @@ describe('HistoryPanel', () => {
       undefined,
       expect.objectContaining({ branch: 'alex/retention-rework' }),
     );
+  });
+
+  it('offers the as-of view on a baseline changeset only', async () => {
+    changesets.mockResolvedValue({
+      changesets: [
+        changeset('0192f000-0000-7000-8000-00000000beef'),
+        changeset('0192f000-0000-7000-8000-00000000cafe', { rpc: 'MergeBranch', branch: 'alex/retention-rework' }),
+      ],
+      nextPageToken: '',
+    });
+    const onViewAsOf = vi.fn();
+    renderPanel({ onViewAsOf });
+
+    fireEvent.click(await screen.findByRole('button', { name: /MergeBranch/ }));
+    expect(screen.queryByRole('button', { name: 'View board as of this' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /BatchMutate/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'View board as of this' }));
+    expect(onViewAsOf).toHaveBeenCalledWith('0192f000-0000-7000-8000-00000000beef');
+  });
+
+  it('offers no as-of view where the board cannot rewind', async () => {
+    changesets.mockResolvedValue({
+      changesets: [changeset('0192f000-0000-7000-8000-00000000beef')],
+      nextPageToken: '',
+    });
+    renderPanel();
+    fireEvent.click(await screen.findByRole('button', { name: /BatchMutate/ }));
+    expect(screen.queryByRole('button', { name: 'View board as of this' })).toBeNull();
   });
 
   it('shows a failed load instead of an empty list', async () => {

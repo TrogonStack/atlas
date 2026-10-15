@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ModelShell } from '@/components/ModelShell';
 import { api } from '@/lib/api';
-import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
+import { readBranchFromUrl, useAsOfParam, withBranchQuery } from '@/lib/branch';
 import { exportBoardHtml } from '@/lib/export-html';
 import { buildIssueIndex, EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import { buildModel, type Model } from '@/lib/model';
@@ -25,6 +25,7 @@ export function EventModelPage({
   const [model, setModel] = useState<Model>();
   const [issues, setIssues] = useState<IssueIndex>(EMPTY_ISSUE_INDEX);
   const [error, setError] = useState<string>();
+  const [asOf, setAsOf] = useAsOfParam();
 
   // Tied to an `AbortController` so unmount mid-fetch actually aborts
   // the HTTP request, not just hides its result. The 30 s default
@@ -36,13 +37,22 @@ export function EventModelPage({
   // ?branch= change from ModelShell/BranchBar is honored on the next
   // refetch even when this page has not remounted.
   const ctrlRef = useRef<AbortController | undefined>(undefined);
+  const loadedAsOfRef = useRef(asOf);
   const load = useCallback(() => {
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
+    // Another point in time is another board, so the old one must not stay
+    // on screen or mask this load's error. Dropping it also remounts
+    // ModelShell, so its live feed matches the new view.
+    if (loadedAsOfRef.current !== asOf) {
+      loadedAsOfRef.current = asOf;
+      setModel(undefined);
+      setError(undefined);
+    }
     const branch = readBranchFromUrl();
     api
-      .eventModel(namespace, slug, { signal: ctrl.signal, branch })
+      .eventModel(namespace, slug, { signal: ctrl.signal, branch, ...(asOf ? { asOf } : {}) })
       .then((res) => {
         if (ctrl.signal.aborted) return;
         setModel(buildModel(res.entities ?? []));
@@ -57,6 +67,10 @@ export function EventModelPage({
     // must not stop the model from rendering. A failure is carried into the
     // index instead of dropped, so the panel can say "did not run" rather
     // than showing the same empty section a clean model would.
+    if (asOf) {
+      setIssues(buildIssueIndex(undefined, 'validation checks the live model, not a past changeset'));
+      return;
+    }
     api
       .validate({ namespace, slug }, { signal: ctrl.signal, branch })
       .then((res) => {
@@ -67,7 +81,7 @@ export function EventModelPage({
         if (ctrl.signal.aborted) return;
         setIssues(buildIssueIndex(undefined, e instanceof Error ? e.message : String(e)));
       });
-  }, [namespace, slug]);
+  }, [namespace, slug, asOf]);
 
   useEffect(() => {
     load();
@@ -116,11 +130,14 @@ export function EventModelPage({
       backHref={withBranchQuery('/', branch)}
       issues={issues}
       snapshot={snapshot}
-      // A snapshot cannot change, so it gets no refetch and therefore no live feed.
-      onRefetch={snapshot ? undefined : load}
+      // A snapshot or an as-of board cannot change, so it gets no refetch and therefore no live feed.
+      onRefetch={snapshot || asOf ? undefined : load}
       // Read at click time: a branch switch in ModelShell does not re-render this page.
-      onExportHtml={() => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })}
+      // An export reads the live board, so a past board offers none.
+      onExportHtml={asOf ? undefined : () => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })}
       historyNamespace={snapshot ? undefined : namespace}
+      asOf={asOf}
+      onAsOfChange={snapshot ? undefined : setAsOf}
     />
   );
 }
