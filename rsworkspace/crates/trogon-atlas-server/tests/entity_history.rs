@@ -669,6 +669,7 @@ async fn newest_changeset(c: &mut EventModelServiceClient<Channel>) -> String {
         page_token: String::new(),
         page_size: 1,
         branch: String::new(),
+        namespace: String::new(),
     })
     .await
     .unwrap()

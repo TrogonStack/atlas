@@ -747,6 +747,7 @@ impl EventModelServiceImpl {
                     before: cursor.as_deref(),
                     limit,
                     scope: ChangesetScope::Baseline,
+                    namespace: None,
                 })
                 .await
                 .map_err(store_err)?;
