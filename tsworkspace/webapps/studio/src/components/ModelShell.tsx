@@ -15,6 +15,7 @@ import { SequenceBoard } from '@/components/canvas/SequenceBoard';
 import type { FocusRequest } from '@/components/canvas/useFocusNode';
 import { EdgeInspector } from '@/components/EdgeInspector';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { HistoryPanel } from '@/components/HistoryPanel';
 import { Inspector, type InspectorTab } from '@/components/Inspector';
 import { IssuesProvider } from '@/components/IssuesProvider';
 import { KIND_SHORT_TO_CAMEL } from '@/components/ModelShell.kindmap';
@@ -31,7 +32,7 @@ import type { BoardEdgeData } from '@/lib/layout';
 import { buildModel, entityKey, type Model } from '@/lib/model';
 import { layoutBoards } from '@/lib/multiboard';
 import type { RealtimeStatus } from '@/lib/realtime';
-import type { SnapshotStamp } from '@/lib/snapshot';
+import { activeSnapshot, type SnapshotStamp } from '@/lib/snapshot';
 import { invalidateEntityHomes } from '@/lib/useEntityHomes';
 import { isSafeNamespace } from '../../shared/safe-namespace.mjs';
 
@@ -83,6 +84,8 @@ export interface ModelShellProps {
   snapshot?: SnapshotStamp;
   /** Saves the board as one HTML file; omitted where there is no single board to save. */
   onExportHtml?: () => Promise<void>;
+  /** Namespace the History drawer lists. Unscoped shells fall back to a single picked namespace. */
+  historyNamespace?: string;
 }
 
 // The empty model is structurally invariant and small; hoisted out of
@@ -97,6 +100,7 @@ export function ModelShell({
   onRefetch,
   snapshot,
   onExportHtml,
+  historyNamespace: historyNamespaceProp,
 }: ModelShellProps) {
   const [internalModel, setInternalModel] = useState<Model>(modelProp ?? EMPTY_MODEL);
   const [info, setInfo] = useState<ServerInfo>();
@@ -146,6 +150,7 @@ export function ModelShell({
   const [view, setView] = useQueryState('view', viewParser);
   const [error, setError] = useState<string>();
   const [validationOpen, setValidationOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('details');
   const validationPanelId = useId();
   const validationTrigger = useRef<HTMLButtonElement>(null);
@@ -185,6 +190,7 @@ export function ModelShell({
   const selectEntity = useCallback(
     (key: string | undefined, occId?: string, additive?: boolean, instanceUid?: string, momentKey?: string) => {
       setValidationOpen(false);
+      setHistoryOpen(false);
       setInspectorTab('details');
       setSelections((prev) => {
         if (!key) return [];
@@ -227,6 +233,10 @@ export function ModelShell({
   useHotkey('Escape', () => {
     if (validationOpen) {
       closeValidation();
+      return;
+    }
+    if (historyOpen) {
+      setHistoryOpen(false);
       return;
     }
     setSelections((prev) => (prev.length === 0 ? prev : []));
@@ -521,6 +531,10 @@ export function ModelShell({
       : undefined;
   const soleEdge = resolvedCount === 1 && selectedEdges.length === 1 ? selectedEdges[0] : undefined;
   const [reviewOpen, setReviewOpen] = useState(false);
+  // A saved snapshot has no server behind it, so there is no history to list.
+  const historyNamespace = activeSnapshot()
+    ? undefined
+    : (historyNamespaceProp ?? (namespaces.length === 1 ? namespaces[0] : undefined));
 
   return (
     <div className="flex h-screen flex-col">
@@ -541,8 +555,18 @@ export function ModelShell({
         }}
         onOpenBranchReview={() => {
           setValidationOpen(false);
+          setHistoryOpen(false);
           setReviewOpen(true);
         }}
+        onOpenHistory={
+          historyNamespace
+            ? () => {
+                setValidationOpen(false);
+                setReviewOpen(false);
+                setHistoryOpen(true);
+              }
+            : undefined
+        }
       />
       <div className="flex min-h-0 flex-1">
         {scoped ? null : (
@@ -569,6 +593,7 @@ export function ModelShell({
                 triggerRef={validationTrigger}
                 onToggle={() => {
                   setReviewOpen(false);
+                  setHistoryOpen(false);
                   setValidationOpen((open) => !open);
                 }}
               />
@@ -655,6 +680,20 @@ export function ModelShell({
           />
         ) : reviewOpen && branch ? (
           <ConflictInspector branch={branch} entries={branchDiffEntries} onClose={() => setReviewOpen(false)} />
+        ) : historyOpen && historyNamespace ? (
+          <HistoryPanel
+            key={`${historyNamespace}\0${branch ?? ''}`}
+            namespace={historyNamespace}
+            branch={branch}
+            model={model}
+            onClose={() => setHistoryOpen(false)}
+            onSelect={(key) => {
+              selectAndFocus(key);
+              // After selectAndFocus, which resets the tab to 'details'; the
+              // batched update issued last wins, as for validation above.
+              setInspectorTab('history');
+            }}
+          />
         ) : soleEntity ? (
           <Inspector
             model={model}

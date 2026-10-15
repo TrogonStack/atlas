@@ -248,6 +248,30 @@ export interface EntityHistoryPage {
   nextPageToken: string;
 }
 
+/** One entity a changeset wrote. `kind` is the wire op kind (`KIND_PUT` / `KIND_DELETED`). */
+export interface ChangesetOpView {
+  kind: string;
+  /** `entity.kind` is the wire `ENTITY_KIND_*` name. */
+  entity: { kind: string; namespace: string; slug: string; version: string };
+}
+
+/** One mutation RPC's worth of writes, as ListChangesets records it. `branch` is empty on baseline. */
+export interface ChangesetView {
+  id: string;
+  author: string;
+  at: string;
+  message: string;
+  branch: string;
+  rpc: string;
+  ops: ChangesetOpView[];
+}
+
+export interface ChangesetsPage {
+  changesets: ChangesetView[];
+  /** Empty when there are no older changesets. */
+  nextPageToken: string;
+}
+
 export interface ValidateProjectScope {
   projectNamespace?: string;
   projectSlug?: string;
@@ -370,6 +394,10 @@ export const api = {
     pageToken?: string,
     opts?: FetchOptions,
   ) => getJson<EntityHistoryPage>(`/api/entity-history${buildQuery({ ...ref, pageToken })}`, opts),
+  changesets: (namespace: string, pageToken?: string, opts?: FetchOptions) =>
+    getJson<ChangesetsPage>(`/api/changesets${buildQuery({ namespace, pageToken })}`, opts),
+  changeset: (id: string, opts?: Omit<FetchOptions, 'branch'>) =>
+    getJson<{ changeset: ChangesetView | null }>(`/api/changesets/${encodeURIComponent(id)}`, opts),
   validate: (id: { namespace: string; slug: string; version?: string }, opts?: FetchOptions) =>
     getJson<{ issues?: unknown[] }>(boardPaths.validate(id), opts),
   manifests: (namespace: string, slug: string, opts?: FetchOptions) =>

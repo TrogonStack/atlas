@@ -9,6 +9,7 @@ vi.mock('@/lib/api', () => ({
     model: vi.fn(),
     branches: vi.fn(),
     branchDiff: vi.fn(),
+    changesets: vi.fn(),
   },
 }));
 vi.mock('@/lib/realtime', () => ({
@@ -79,6 +80,7 @@ describe('ModelShell selection drawer routing', () => {
     (api.model as ReturnType<typeof vi.fn>).mockResolvedValue({ entities: [] });
     (api.branches as ReturnType<typeof vi.fn>).mockResolvedValue({ branches: [] });
     (api.branchDiff as ReturnType<typeof vi.fn>).mockResolvedValue({ entries: [] });
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({ changesets: [], nextPageToken: '' });
   });
   afterEach(cleanup);
 
@@ -224,5 +226,45 @@ describe('ModelShell selection drawer routing', () => {
     // continuation of the validation jump: it must land back on Details.
     fireEvent.click(screen.getByRole('button', { name: 'Board select order placed' }));
     expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('details');
+  });
+
+  it('opens namespace history from the top bar and jumps to an op on the Inspector History tab', async () => {
+    const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
+    const model = buildModel([{ event: { id, title: 'Order placed' } }] as never);
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({
+      changesets: [
+        {
+          id: '0192f000-0000-7000-8000-00000000beef',
+          author: 'acme-agent',
+          at: '2026-01-02T00:00:00Z',
+          message: 'put event shop/order.placed',
+          branch: '',
+          rpc: 'PutEntity',
+          ops: [{ kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', ...id } }],
+        },
+      ],
+      nextPageToken: '',
+    });
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" historyNamespace="shop" />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+    expect(api.changesets).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Namespace history' }));
+    expect(screen.getByRole('complementary', { name: 'Namespace history' })).toBeDefined();
+    fireEvent.click(await screen.findByRole('button', { name: /PutEntity/ }));
+    fireEvent.click(screen.getByRole('button', { name: /shop\/order\.placed/ }));
+
+    await waitFor(() => expect(screen.getByTestId('inspector').getAttribute('data-tab')).toBe('history'));
+    expect(screen.queryByRole('complementary', { name: 'Namespace history' })).toBeNull();
+    expect(JSON.parse(screen.getByTestId('board').getAttribute('data-selections') ?? 'null')).toEqual([
+      { type: 'entity', key: 'event:shop/order.placed@1' },
+    ]);
+  });
+
+  it('offers no history button without a namespace to read', () => {
+    const model = buildModel([]);
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" />, { wrapper: withNuqsTestingAdapter() });
+    expect(screen.queryByRole('button', { name: 'Namespace history' })).toBeNull();
   });
 });
