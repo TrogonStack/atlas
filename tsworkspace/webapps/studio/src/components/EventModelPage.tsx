@@ -22,11 +22,11 @@ export function EventModelPage({
   /** Set when the page renders a saved snapshot instead of the live store. */
   snapshot?: SnapshotStamp;
 }) {
-  // A loaded board or error is stamped with the view it belongs to, so a
+  // A loaded board, error or validation result is stamped with the view it belongs to, so a
   // render for a different view never shows it, not even for one paint.
   const [loaded, setLoaded] = useState<{ viewKey: string; model: Model }>();
   const [failed, setFailed] = useState<{ viewKey: string; message: string }>();
-  const [issues, setIssues] = useState<IssueIndex>(EMPTY_ISSUE_INDEX);
+  const [stampedIssues, setStampedIssues] = useState<{ viewKey: string; index: IssueIndex }>();
   const [asOf, setAsOf] = useAsOfParam();
   const [incomplete, setIncomplete] = useState(false);
   const viewKey = JSON.stringify([namespace, slug, asOf ?? null]);
@@ -64,18 +64,24 @@ export function EventModelPage({
     // index instead of dropped, so the panel can say "did not run" rather
     // than showing the same empty section a clean model would.
     if (asOf) {
-      setIssues(buildIssueIndex(undefined, 'validation checks the live model, not a past changeset'));
+      setStampedIssues({
+        viewKey,
+        index: buildIssueIndex(undefined, 'validation checks the live model, not a past changeset'),
+      });
       return;
     }
     api
       .validate({ namespace, slug }, { signal: ctrl.signal, branch })
       .then((res) => {
         if (ctrl.signal.aborted) return;
-        setIssues(buildIssueIndex(res.issues));
+        setStampedIssues({ viewKey, index: buildIssueIndex(res.issues) });
       })
       .catch((e) => {
         if (ctrl.signal.aborted) return;
-        setIssues(buildIssueIndex(undefined, e instanceof Error ? e.message : String(e)));
+        setStampedIssues({
+          viewKey,
+          index: buildIssueIndex(undefined, e instanceof Error ? e.message : String(e)),
+        });
       });
   }, [namespace, slug, asOf, viewKey]);
 
@@ -91,6 +97,7 @@ export function EventModelPage({
   const branch = readBranchFromUrl();
   const model = loaded?.viewKey === viewKey ? loaded.model : undefined;
   const error = failed?.viewKey === viewKey ? failed.message : undefined;
+  const issues = stampedIssues?.viewKey === viewKey ? stampedIssues.index : EMPTY_ISSUE_INDEX;
   if (error && !model) {
     return (
       <div className="flex h-screen items-center justify-center p-6">

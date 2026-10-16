@@ -295,4 +295,20 @@ describe('EventModelPage: as of a changeset', () => {
     expect(shellAsOfRenders).toEqual([]);
     expect(screen.queryByTestId('model-shell')).toBeNull();
   });
+
+  it('drops the as-of validation note the moment the board returns to live', async () => {
+    window.history.replaceState({}, '', `/em/acme/checkout?asOf=${AS_OF}`);
+    render(<EventModelPage namespace="acme" slug="checkout" />);
+    await waitFor(() => {
+      expect(capturedIssues?.error).toMatch(/past changeset/);
+    });
+
+    (api.validate as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+    await act(async () => (capturedShell.onAsOfChange as (id: string | undefined) => void)(undefined));
+
+    await waitFor(() => {
+      expect(capturedShell.asOf).toBeUndefined();
+    });
+    expect(capturedIssues?.error).toBeUndefined();
+  });
 });
