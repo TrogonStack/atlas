@@ -1,4 +1,4 @@
-name: Publish Images
+name: Publish
 
 on:
   push:
@@ -16,8 +16,8 @@ jobs:
   runs-on:
     uses: ./.github/workflows/runs-on.yml
 
-  publish:
-    name: Publish (${{ matrix.image }})
+  images:
+    name: Image (${{ matrix.image }})
     needs: runs-on
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
     permissions:
@@ -80,3 +80,40 @@ jobs:
             type=gha,scope=${{ matrix.image }}
             type=gha,scope=${{ matrix.image }}-canary
           cache-to: type=gha,scope=${{ matrix.image }}-canary,mode=max
+
+  charts:
+    name: Chart (${{ matrix.chart }})
+    needs: [runs-on, images]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        chart:
+          - trogon-atlas-server
+          - trogon-atlas-studio
+          - trogon-atlas
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+
+      - name: helm registry login
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_PASSWORD" | mise exec -- helm registry login ghcr.io --username "$REGISTRY_USERNAME" --password-stdin
+
+      - name: publish chart
+        env:
+          CHARTS_REGISTRY: oci://ghcr.io/trogonstack/charts
+          CHART: ${{ matrix.chart }}
+          COMMIT: ${{ github.sha }}
+        run: mise run github:workflows:publish:chart "$CHART" "0.0.0-sha-$COMMIT" "$COMMIT"

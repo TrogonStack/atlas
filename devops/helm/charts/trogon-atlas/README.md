@@ -21,17 +21,17 @@ with JetStream enabled.
 ## Quick start
 
 ```bash
-helm dependency update devops/helm/charts/trogon-atlas
-helm install trogon-atlas devops/helm/charts/trogon-atlas \
+helm install trogon-atlas oci://ghcr.io/trogonstack/charts/trogon-atlas \
+  --version 0.0.0-sha-<commit> \
   --set server.config.natsUrl=nats://my-nats:4222 \
-  --set server.auth.token.value=change-me \
-  --set server.image.tag=canary \
-  --set studio.image.tag=canary
+  --set server.auth.token.value=change-me
 ```
 
-Every push to `main` publishes the images tagged `canary` and with the full
-commit SHA. The image tag otherwise defaults to the chart's `appVersion`,
-which has no published image yet.
+Every push to `main` publishes this chart to `oci://ghcr.io/trogonstack/charts`
+as `0.0.0-sha-<commit>`, with its images pinned to the same commit.
+
+Installing from a checkout instead needs `helm dependency update
+devops/helm/charts/trogon-atlas` first.
 
 `helm dependency update` resolves the `file://` dependencies into
 `charts/*.tgz`; it needs rerunning whenever a subchart's `Chart.yaml`

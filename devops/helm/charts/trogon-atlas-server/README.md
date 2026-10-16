@@ -15,15 +15,14 @@ is just `auth.tokensFile`.
 ## Quick start
 
 ```bash
-helm install trogon-atlas-server devops/helm/charts/trogon-atlas-server \
+helm install trogon-atlas-server oci://ghcr.io/trogonstack/charts/trogon-atlas-server \
+  --version 0.0.0-sha-<commit> \
   --set config.natsUrl=nats://my-nats:4222 \
-  --set auth.token.value=change-me \
-  --set image.tag=canary
+  --set auth.token.value=change-me
 ```
 
-Every push to `main` publishes the images tagged `canary` and with the full
-commit SHA. The image tag otherwise defaults to the chart's `appVersion`,
-which has no published image yet.
+Every push to `main` publishes this chart to `oci://ghcr.io/trogonstack/charts`
+as `0.0.0-sha-<commit>`, with its images pinned to the same commit.
 
 ## Authentication
 
