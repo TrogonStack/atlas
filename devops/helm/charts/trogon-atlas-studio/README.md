@@ -16,9 +16,9 @@ helm install trogon-atlas-studio devops/helm/charts/trogon-atlas-studio \
   --set image.tag=canary
 ```
 
-Only the `canary` tag is published so far, built from every push to `main`.
-The image tag otherwise defaults to the chart's `appVersion`, which has no
-published image yet.
+Every push to `main` publishes the images tagged `canary` and with the full
+commit SHA. The image tag otherwise defaults to the chart's `appVersion`,
+which has no published image yet.
 
 ## Pointing at the server
 
@@ -106,7 +106,8 @@ from `/api/info` and TCP checks to `/-/readiness` and `/-/liveness`.
 | Value | Default | Purpose |
 |---|---|---|
 | `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories |
-| `image.repository` | `atlas/trogon-atlas-studio` | studio image |
+| `image.repository` | `images/trogon-atlas-studio` | studio image |
+| `image.digest` | `""` | pins the image by digest, appended to the tag as `@<digest>` |
 | `server.host` | `""` | server Service name; empty derives `<release>-trogon-atlas-server` |
 | `server.port` | `50069` | the server Service's `private` port |
 | `config.grpcUrl` | `""` | full override of the derived server URL |

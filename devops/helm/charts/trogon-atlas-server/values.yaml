@@ -21,9 +21,11 @@ replicaCount: 1
 acknowledgeSingleWriter: false
 
 image:
-  repository: atlas/trogon-atlas-server
+  repository: images/trogon-atlas-server
   # Defaults to the chart appVersion when empty.
   tag: ""
+  # Pins the image when set, as sha256:<hex>.
+  digest: ""
   pullPolicy: IfNotPresent
 
 # The one serving port, named `private`: callers reach it from inside the
