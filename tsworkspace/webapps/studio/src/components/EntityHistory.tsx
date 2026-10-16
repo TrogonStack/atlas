@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { JsonPane } from '@/components/ConflictInspector';
 import { Button } from '@/components/ui/button';
 import { api, type EntityRevision } from '@/lib/api';
-import { readBranchFromUrl } from '@/lib/branch';
+import { useBranchParam } from '@/lib/branch';
 import type { Entity } from '@/lib/model';
 import { cn } from '@/lib/utils';
 
@@ -21,6 +21,13 @@ function formatAt(at: string): string {
 // Mounted only while the History tab is open (base-ui unmounts inactive
 // panels), so selecting an entity costs no history read until someone asks.
 export function EntityHistory({ entity }: { entity: Entity }) {
+  const [branch] = useBranchParam();
+  // Keying by branch remounts the list when a preview switches, so it drops
+  // the old branch's pages and refetches instead of mixing two histories.
+  return <RevisionList key={branch ?? ''} entity={entity} branch={branch} />;
+}
+
+function RevisionList({ entity, branch }: { entity: Entity; branch: string | undefined }) {
   const [revisions, setRevisions] = useState<EntityRevision[]>([]);
   const [nextPageToken, setNextPageToken] = useState('');
   const [loading, setLoading] = useState(true);
@@ -37,7 +44,7 @@ export function EntityHistory({ entity }: { entity: Entity }) {
     try {
       const page = await api.entityHistory({ kind: entity.kind, ...entity.id }, pageToken, {
         signal: ctrl.signal,
-        branch: readBranchFromUrl(),
+        branch,
       });
       setRevisions((prev) => (pageToken ? [...prev, ...page.revisions] : page.revisions));
       setNextPageToken(page.nextPageToken);
@@ -49,8 +56,9 @@ export function EntityHistory({ entity }: { entity: Entity }) {
     }
   };
 
-  // The Inspector keys this panel by entity, so a new selection starts from
-  // the newest page; unmounting cancels whatever page is in flight.
+  // The Inspector keys this panel by entity and EntityHistory keys it by
+  // branch, so either change starts from the newest page; unmounting cancels
+  // whatever page is in flight.
   useEffect(() => {
     void load();
     return () => abortRef.current?.abort();

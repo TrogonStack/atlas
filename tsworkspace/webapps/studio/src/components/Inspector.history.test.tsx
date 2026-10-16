@@ -1,4 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { withNuqsTestingAdapter } from 'nuqs/adapters/testing';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -11,6 +13,7 @@ vi.mock('@/lib/useEntityHomes', () => ({
 }));
 
 import { api, type EntityRevision } from '@/lib/api';
+import { useBranchParam } from '@/lib/branch';
 import { buildModel, type Entity } from '@/lib/model';
 import { Inspector } from './Inspector';
 
@@ -32,10 +35,28 @@ function revision(changesetId: string, overrides: Partial<EntityRevision> = {}):
   };
 }
 
+// Stands in for the branch bar: it flips `?branch=` while the Inspector stays mounted.
+function WithBranchSwitch({ children }: { children: ReactNode }) {
+  const [, setBranch] = useBranchParam();
+  return (
+    <>
+      <button type="button" onClick={() => setBranch('alex/rework')}>
+        switch branch
+      </button>
+      {children}
+    </>
+  );
+}
+
 function renderInspector() {
   const model = buildModel([{ event: { id, title: 'Order placed by shopper' } }] as never);
   const event = model.entities.find((e) => e.id.slug === 'order.placed') as Entity;
-  render(<Inspector model={model} entity={event} onClose={vi.fn()} onSelect={vi.fn()} />);
+  render(
+    <WithBranchSwitch>
+      <Inspector model={model} entity={event} onClose={vi.fn()} onSelect={vi.fn()} />
+    </WithBranchSwitch>,
+    { wrapper: withNuqsTestingAdapter() },
+  );
 }
 
 beforeEach(() => {
@@ -100,5 +121,31 @@ describe('Inspector: History tab', () => {
     renderInspector();
     fireEvent.click(screen.getByRole('tab', { name: 'History' }));
     expect(await screen.findByText(/deadline exceeded/)).toBeDefined();
+  });
+
+  it('refetches from the newest page when the branch changes while the tab is open', async () => {
+    entityHistory
+      .mockResolvedValueOnce({ revisions: [revision('0192f000-0000-7000-8000-00000000beef')], nextPageToken: '' })
+      .mockResolvedValueOnce({
+        revisions: [revision('0192f000-0000-7000-8000-00000000cafe', { before: null, branch: 'alex/rework' })],
+        nextPageToken: '',
+      });
+    renderInspector();
+    fireEvent.click(screen.getByRole('tab', { name: 'History' }));
+    expect(await screen.findByText('updated')).toBeDefined();
+    expect(entityHistory).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({ branch: undefined }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'switch branch' }));
+    expect(await screen.findByText('created')).toBeDefined();
+    expect(screen.queryByText('updated')).toBeNull();
+    expect(entityHistory).toHaveBeenLastCalledWith(
+      expect.anything(),
+      undefined,
+      expect.objectContaining({ branch: 'alex/rework' }),
+    );
   });
 });
