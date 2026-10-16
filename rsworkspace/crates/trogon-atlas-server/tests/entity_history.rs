@@ -19,10 +19,18 @@ use trogon_atlas_proto::{
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server() -> String {
+    start_server_with_cap(None).await
+}
+
+async fn start_server_with_cap(snapshot_cap: Option<usize>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
+    let mut svc =
+        EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
+    if let Some(cap) = snapshot_cap {
+        svc = svc.with_snapshot_cap(cap);
+    }
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -792,6 +800,51 @@ async fn as_of_projection_shows_the_board_right_after_the_changeset() {
             ("order-placed".to_string(), "Order was placed".to_string()),
         ],
         "an as-of read writes nothing"
+    );
+}
+
+/// The baseline snapshot is capped, so the root can fall outside it. The
+/// live path fetches the root by key; the as-of path must too, or a model
+/// untouched since the target is NOT_FOUND exactly when it is most recent.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_finds_a_root_the_capped_snapshot_omits() {
+    let endpoint = start_server_with_cap(Some(2)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "hist-asof-cap";
+
+    c.put_entity(as_author(
+        put_req(event(ns, "order-placed", "Order placed")),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(event_model(ns, "checkout", &["order-placed"])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    // Enough other entities that a snapshot capped at two cannot hold them
+    // all, whichever the store lists first.
+    for slug in ["aa", "ab", "ac", "ad"] {
+        c.put_entity(as_author(
+            put_req(event("hist-asof-cap-other", slug, slug)),
+            "bob",
+        ))
+        .await
+        .unwrap();
+    }
+
+    let then = c
+        .get_event_model_projection(as_of_req(ns, "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        board(then.projection.as_ref().unwrap()).0,
+        vec!["order-placed".to_string()]
     );
 }
 
