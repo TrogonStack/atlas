@@ -154,6 +154,33 @@ function getEntityHistory(call, callback) {
   callback(null, { revisions: matches ? [ORDER_PLACED_REVISION] : [], nextPageToken: '' });
 }
 
+// The changeset behind ORDER_PLACED_REVISION, so the History panel and the
+// Inspector's History tab describe the same edit.
+export const ORDER_PLACED_CHANGESET = {
+  id: ORDER_PLACED_REVISION.changesetId,
+  author: ORDER_PLACED_REVISION.author,
+  at: ORDER_PLACED_REVISION.at,
+  message: 'put event shop/order.placed',
+  branch: '',
+  rpc: 'PutEntity',
+  operationId: '',
+  ops: [{ kind: 'KIND_PUT', entity: ORDER_PLACED_REVISION.entity }],
+};
+
+function listChangesets(call, callback) {
+  const { namespace, branch } = call.request;
+  const matches = (!namespace || namespace === ORDER_MODEL_ID.namespace) && !branch;
+  callback(null, { changesets: matches ? [ORDER_PLACED_CHANGESET] : [], nextPageToken: '' });
+}
+
+function getChangeset(call, callback) {
+  if (call.request.id === ORDER_PLACED_CHANGESET.id) {
+    callback(null, { changeset: ORDER_PLACED_CHANGESET });
+    return;
+  }
+  callback({ code: grpc.status.NOT_FOUND, details: 'entity not found' });
+}
+
 function listValidationRules(_call, callback) {
   callback(null, { rules: [] });
 }
@@ -283,6 +310,8 @@ export async function startFakeGrpcServer() {
     listBranches,
     diffBranch,
     getEntityHistory,
+    listChangesets,
+    getChangeset,
     listValidationRules,
     listEntityKinds,
     searchEntities,

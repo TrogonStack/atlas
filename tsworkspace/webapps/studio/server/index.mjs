@@ -320,11 +320,13 @@ const READ_RPCS = new Set([
   "diffBranch",
   "exportEventModelManifests",
   "getEntity",
+  "getChangeset",
   "getEntityHistory",
   "getServerInfo",
   "getTypeLibraryDescriptorSet",
   "listBranches",
   "listChanges",
+  "listChangesets",
   "listEntities",
   "listEntitiesByDomain",
   "listEntityKinds",
@@ -1333,6 +1335,72 @@ app.get(
       after: r.after ? decodeAnnotations(r.after) : null,
     }));
     return { revisions, nextPageToken: resp.nextPageToken ?? "" };
+  }),
+);
+
+// Changeset ids are UUIDv7 in the canonical lowercase form the server mints,
+// so anything else can't name a changeset and is refused before the gRPC call.
+const CHANGESET_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** @param {any} c */
+function changesetView(c) {
+  return {
+    id: c.id ?? "",
+    author: c.author ?? "",
+    at: c.at ?? "",
+    message: c.message ?? "",
+    branch: c.branch ?? "",
+    rpc: c.rpc ?? "",
+    ops: (c.ops ?? []).map((/** @type {any} */ op) => ({
+      kind: String(op.kind ?? "KIND_UNSPECIFIED"),
+      entity: {
+        kind: String(op.entity?.kind ?? "ENTITY_KIND_UNSPECIFIED"),
+        namespace: op.entity?.id?.namespace ?? "",
+        slug: op.entity?.id?.slug ?? "",
+        version: op.entity?.id?.version ?? "",
+      },
+    })),
+  };
+}
+
+// A namespace's changesets, newest first, for the History panel.
+// ListChangesets ignores the branch header and filters on its own `branch`
+// field, so a branch preview passes the branch there to list what the branch
+// did; baseline sends none and gets baseline and branch changesets alike.
+app.get(
+  "/api/changesets",
+  branchHandler(async (req) => {
+    const rawNamespace = String(req.query.namespace ?? "");
+    if (!rawNamespace) throw badRequest("namespace is required");
+    if (rawNamespace.length > NAMESPACE_QUERY_MAX_LENGTH) throw badRequest(`namespace query value too long (max ${NAMESPACE_QUERY_MAX_LENGTH} chars)`);
+    if (!isSafeNamespace(rawNamespace)) throw badRequest(`invalid namespace: ${JSON.stringify(rawNamespace)}`);
+    const pageToken = String(req.query.pageToken ?? "");
+    if (pageToken && !CHANGESET_ID_RE.test(pageToken)) throw badRequest(`invalid pageToken: ${JSON.stringify(pageToken)}`);
+    const rawPageSize = req.query.pageSize;
+    let pageSize;
+    if (rawPageSize != null && rawPageSize !== "") {
+      pageSize = Number(rawPageSize);
+      if (!Number.isInteger(pageSize) || pageSize <= 0) throw badRequest("pageSize must be a positive integer");
+      pageSize = Math.min(pageSize, 500);
+    }
+    const branch = currentBranch();
+    const resp = /** @type {any} */ (await call("listChangesets", {
+      namespace: rawNamespace,
+      ...(pageToken ? { pageToken } : {}),
+      ...(pageSize ? { pageSize } : {}),
+      ...(branch ? { branch } : {}),
+    }));
+    return { changesets: (resp.changesets ?? []).map(changesetView), nextPageToken: resp.nextPageToken ?? "" };
+  }),
+);
+
+app.get(
+  "/api/changesets/:id",
+  handler(async (req) => {
+    const id = String(req.params.id ?? "");
+    if (!CHANGESET_ID_RE.test(id)) throw badRequest(`invalid changeset id: ${JSON.stringify(id)}`);
+    const resp = /** @type {any} */ (await call("getChangeset", { id }));
+    return { changeset: resp.changeset ? changesetView(resp.changeset) : null };
   }),
 );
 

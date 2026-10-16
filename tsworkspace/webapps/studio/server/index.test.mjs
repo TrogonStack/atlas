@@ -28,6 +28,17 @@ const upstreamCalls = {
   authorization: null,
 };
 
+const ACME_CHANGESET = {
+  id: '0192f000-0000-7000-8000-000000000003',
+  author: 'acme-agent',
+  at: '2026-01-03T00:00:00Z',
+  message: 'put event acme/order.placed',
+  branch: '',
+  rpc: 'PutEntity',
+  operationId: '',
+  ops: [{ kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', id: { namespace: 'acme', slug: 'order.placed', version: '1' } } }],
+};
+
 const fakeClient = {
   getServerInfo: (_req, _meta, _opts, cb) => cb(null, { schemaVersion: '1', serverVersion: 'test' }),
   listEntityKinds: (_req, _meta, _opts, cb) => cb(null, { kinds: [] }),
@@ -115,6 +126,15 @@ const fakeClient = {
       ],
       nextPageToken: '0192f000-0000-7000-8000-000000000002',
     }),
+  listChangesets: (_req, _meta, _opts, cb) =>
+    cb(null, {
+      changesets: [ACME_CHANGESET],
+      nextPageToken: '0192f000-0000-7000-8000-000000000003',
+    }),
+  getChangeset: (req, _meta, _opts, cb) =>
+    req.id === ACME_CHANGESET.id
+      ? cb(null, { changeset: ACME_CHANGESET })
+      : cb(Object.assign(new Error('entity not found'), { code: 5 })),
 };
 
 vi.mock('@grpc/grpc-js', async (importOriginal) => {
@@ -1082,6 +1102,99 @@ describe('GET /api/entity-history', () => {
     ['pageToken is unsafe', '/api/entity-history?kind=event&namespace=acme&slug=order.placed&pageToken=a%2Fb'],
   ])('returns 400 when %s', async (_why, url) => {
     const res = await request(app).get(url);
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+  });
+});
+
+describe('GET /api/changesets', () => {
+  it('returns changesets newest first with their ops and the next page token', async () => {
+    const res = await request(app).get('/api/changesets?namespace=acme');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      changesets: [
+        {
+          id: '0192f000-0000-7000-8000-000000000003',
+          author: 'acme-agent',
+          at: '2026-01-03T00:00:00Z',
+          message: 'put event acme/order.placed',
+          branch: '',
+          rpc: 'PutEntity',
+          ops: [
+            { kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', namespace: 'acme', slug: 'order.placed', version: '1' } },
+          ],
+        },
+      ],
+      nextPageToken: '0192f000-0000-7000-8000-000000000003',
+    });
+  });
+
+  it('forwards namespace, page token, page size and the previewed branch as the branch filter', async () => {
+    let received;
+    const original = fakeClient.listChangesets;
+    fakeClient.listChangesets = (req, _meta, _opts, cb) => {
+      received = req;
+      cb(null, {});
+    };
+    const res = await request(app).get(
+      '/api/changesets?namespace=acme&pageToken=0192f000-0000-7000-8000-000000000001&pageSize=25&branch=alex/retention-rework',
+    );
+    fakeClient.listChangesets = original;
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ changesets: [], nextPageToken: '' });
+    expect(received).toEqual({
+      namespace: 'acme',
+      pageToken: '0192f000-0000-7000-8000-000000000001',
+      pageSize: 25,
+      branch: 'alex/retention-rework',
+    });
+  });
+
+  it('sends no branch filter on baseline, so branch changesets come back tagged with their branch', async () => {
+    let received;
+    const original = fakeClient.listChangesets;
+    fakeClient.listChangesets = (req, _meta, _opts, cb) => {
+      received = req;
+      cb(null, { changesets: [] });
+    };
+    const res = await request(app).get('/api/changesets?namespace=acme');
+    fakeClient.listChangesets = original;
+    expect(res.status).toBe(200);
+    expect(received).toEqual({ namespace: 'acme' });
+  });
+
+  it.each([
+    ['namespace is missing', '/api/changesets'],
+    ['namespace is unsafe', '/api/changesets?namespace=..'],
+    ['pageToken is not a changeset id', '/api/changesets?namespace=acme&pageToken=a%2Fb'],
+    ['pageToken is uppercase', '/api/changesets?namespace=acme&pageToken=0192F000-0000-7000-8000-000000000001'],
+    ['pageSize is not a positive integer', '/api/changesets?namespace=acme&pageSize=-1'],
+    ['branch is unsafe', '/api/changesets?namespace=acme&branch=..%2Fx'],
+  ])('returns 400 when %s', async (_why, url) => {
+    const res = await request(app).get(url);
+    expect(res.status).toBe(400);
+    expect(res.body).toHaveProperty('error');
+  });
+});
+
+describe('GET /api/changesets/:id', () => {
+  it('returns one changeset in the list shape', async () => {
+    const res = await request(app).get('/api/changesets/0192f000-0000-7000-8000-000000000003');
+    expect(res.status).toBe(200);
+    expect(res.body.changeset).toMatchObject({
+      id: '0192f000-0000-7000-8000-000000000003',
+      rpc: 'PutEntity',
+      ops: [{ kind: 'KIND_PUT', entity: { kind: 'ENTITY_KIND_EVENT', namespace: 'acme', slug: 'order.placed' } }],
+    });
+  });
+
+  it('maps an unknown id to 404', async () => {
+    const res = await request(app).get('/api/changesets/0192f000-0000-7000-8000-0000000000ff');
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 for an id that is not a lowercase hyphenated UUID', async () => {
+    const res = await request(app).get('/api/changesets/not-a-uuid');
     expect(res.status).toBe(400);
     expect(res.body).toHaveProperty('error');
   });

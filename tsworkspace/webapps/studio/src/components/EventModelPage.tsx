@@ -120,6 +120,7 @@ export function EventModelPage({
       onRefetch={snapshot ? undefined : load}
       // Read at click time: a branch switch in ModelShell does not re-render this page.
       onExportHtml={() => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })}
+      historyNamespace={snapshot ? undefined : namespace}
     />
   );
 }
