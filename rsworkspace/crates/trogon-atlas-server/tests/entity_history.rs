@@ -899,6 +899,168 @@ async fn as_of_projection_finds_members_the_capped_snapshot_omits() {
     );
 }
 
+fn model_ref(ns: &str, slug: &str) -> pb::EntityRef {
+    pb::EntityRef {
+        kind: pb::EntityKind::EventModel as i32,
+        id: Some(id(ns, slug)),
+    }
+}
+
+fn model_with(ns: &str, slug: &str, members: Vec<pb::EntityRef>) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id(ns, slug)),
+            title: slug.into(),
+            members,
+            ..Default::default()
+        })),
+    }
+}
+
+fn cross_model_as_of_req(
+    ns: &str,
+    slug: &str,
+    changeset: &str,
+) -> pb::GetEventModelProjectionRequest {
+    pb::GetEventModelProjectionRequest {
+        include_cross_model: true,
+        ..as_of_req(ns, slug, changeset)
+    }
+}
+
+/// Slugs of the event models the board carries besides its root.
+fn model_slugs(projection: &pb::EventModelProjection) -> Vec<String> {
+    let mut slugs: Vec<String> = projection
+        .entities
+        .values()
+        .filter_map(|e| match e.kind.as_ref() {
+            Some(pb::entity::Kind::EventModel(m)) => Some(m.id.as_ref().unwrap().slug.clone()),
+            _ => None,
+        })
+        .collect();
+    slugs.sort();
+    slugs
+}
+
+/// Keys list in kind then namespace order, so with a cap of two the root and
+/// one filler model fill the snapshot and the member falls outside it. The
+/// root being present must not stop the member from being fetched.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_finds_a_member_when_the_root_is_in_the_capped_snapshot() {
+    let endpoint = start_server_with_cap(Some(2)).await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(as_author(
+        put_req(model_with("aaa-asof-root", "filler", vec![])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(model_with("zzz-asof-root", "member", vec![])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(model_with(
+            "aab-asof-root",
+            "checkout",
+            vec![model_ref("zzz-asof-root", "member")],
+        )),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    c.put_entity(as_author(
+        put_req(model_with("zzz-asof-root", "later", vec![])),
+        "bob",
+    ))
+    .await
+    .unwrap();
+
+    let then = c
+        .get_event_model_projection(cross_model_as_of_req("aab-asof-root", "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!then.truncated);
+    assert_eq!(
+        model_slugs(then.projection.as_ref().unwrap()),
+        vec!["member".to_string()]
+    );
+}
+
+/// A model created after the target does not exist at the target, whether the
+/// capped snapshot holds it or not.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_of_a_model_created_later_is_not_found() {
+    for cap in [Some(2), None] {
+        let endpoint = start_server_with_cap(cap).await;
+        let mut c = client(&endpoint).await;
+        let ns = "asof-later-root";
+
+        for slug in ["aa", "ab", "ac"] {
+            c.put_entity(as_author(
+                put_req(event("aaa-asof-later-others", slug, slug)),
+                "alice",
+            ))
+            .await
+            .unwrap();
+        }
+        let target = newest_changeset(&mut c).await;
+        c.put_entity(as_author(
+            put_req(event_model(ns, "checkout", &["aa"])),
+            "bob",
+        ))
+        .await
+        .unwrap();
+
+        let status = c
+            .get_event_model_projection(as_of_req(ns, "checkout", &target))
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::NotFound, "cap {cap:?}");
+    }
+}
+
+/// A member that only came into being after the target stays out of the
+/// board even though the model's members at the target already named it. The
+/// snapshot holds it and not the root, so rewinding drops the first copy and
+/// a refetch would bring a second one back.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_leaves_out_a_member_created_after_the_target() {
+    let endpoint = start_server_with_cap(Some(1)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "aaa-asof-leak";
+
+    let mut dangling = put_req(model_with(
+        "zzz-asof-leak",
+        "checkout",
+        vec![model_ref(ns, "later")],
+    ));
+    dangling.force = true;
+    c.put_entity(as_author(dangling, "alice")).await.unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    c.put_entity(as_author(put_req(model_with(ns, "later", vec![])), "bob"))
+        .await
+        .unwrap();
+
+    let then = c
+        .get_event_model_projection(cross_model_as_of_req("zzz-asof-leak", "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        model_slugs(then.projection.as_ref().unwrap()),
+        Vec::<String>::new()
+    );
+}
+
 /// A branch overlay has its own log, so mixing it with a baseline point in
 /// time would answer neither question.
 #[tokio::test(flavor = "multi_thread")]

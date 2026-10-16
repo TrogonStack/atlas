@@ -732,32 +732,34 @@ impl EventModelServiceImpl {
         }
 
         // The snapshot is capped, so it can omit the root and the members and
-        // halo the board reaches. Fetch them by key and let the pre-images
-        // rewind them with the rest. A key deleted since the target is
-        // restored by its pre-image, so only keys the rewound set still lacks
-        // are fetched. The fetches are bounded; keys left unfetched make the
-        // view incomplete, which the caller reports as truncated.
+        // halo the board reaches. Fetch those by key and let the pre-images
+        // rewind them with the rest. A key the snapshot holds or any newer
+        // changeset touched is never fetched: rewinding restores or drops it,
+        // and a fetch would resurrect what was created after the target. The
+        // fetches are bounded; keys left unfetched make the view incomplete,
+        // which the caller reports as truncated.
         let (root_kind, root_id) = root;
+        let touched: std::collections::HashSet<pb::EntityKey> =
+            pre_images.iter().map(|(key, _)| key.clone()).collect();
         let mut absent: std::collections::HashSet<pb::EntityKey> = std::collections::HashSet::new();
-        let mut wanted: Vec<(pb::EntityKind, pb::Id)> = vec![(root_kind, root_id.clone())];
         let mut fetched = 0usize;
         let mut incomplete = false;
         let rewound = loop {
             let rewound = as_of::rewind(&current, pre_images.clone());
-            if wanted.is_empty() {
-                let em_members = rewound.iter().find_map(|se| match se.entity.kind.as_ref() {
-                    Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(root_id) => {
-                        Some(em.members.clone())
-                    }
-                    _ => None,
-                });
-                if let Some(members) = em_members {
-                    wanted =
-                        graph::closure(&rewound, &members, MAX_PROJECTION_ENTITIES, &self.metrics)
-                            .missing;
+            let mut wanted: Vec<(pb::EntityKind, pb::Id)> = vec![(root_kind, root_id.clone())];
+            let root_members = rewound.iter().find_map(|se| match se.entity.kind.as_ref() {
+                Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(root_id) => {
+                    Some(em.members.clone())
                 }
+                _ => None,
+            });
+            if let Some(members) = root_members {
+                wanted.extend(
+                    graph::closure(&rewound, &members, MAX_PROJECTION_ENTITIES, &self.metrics)
+                        .missing,
+                );
             }
-            let have: std::collections::HashSet<pb::EntityKey> = rewound
+            let held: std::collections::HashSet<pb::EntityKey> = current
                 .iter()
                 .filter_map(|se| {
                     trogon_atlas_store::refs::entity_kind(&se.entity)
@@ -767,13 +769,13 @@ impl EventModelServiceImpl {
                 .collect();
             wanted.retain(|(k, i)| {
                 let key = pb::EntityKey::new(*k, i);
-                !have.contains(&key) && !absent.contains(&key)
+                !held.contains(&key) && !touched.contains(&key) && !absent.contains(&key)
             });
             if wanted.is_empty() {
                 break rewound;
             }
             let mut with_fetched = current.as_ref().clone();
-            for (kind, id) in std::mem::take(&mut wanted) {
+            for (kind, id) in wanted {
                 if fetched >= MAX_PROJECTION_ENTITIES {
                     incomplete = true;
                     break;
