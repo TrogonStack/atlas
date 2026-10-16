@@ -848,6 +848,57 @@ async fn as_of_projection_finds_a_root_the_capped_snapshot_omits() {
     );
 }
 
+/// Members outside the capped snapshot, untouched since the target, are
+/// fetched by key and rewound like the rest, so the board is whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_finds_members_the_capped_snapshot_omits() {
+    let endpoint = start_server_with_cap(Some(2)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "zzz-asof-members";
+
+    for (slug, title) in [
+        ("order-placed", "Order placed"),
+        ("order-paid", "Order paid"),
+    ] {
+        c.put_entity(as_author(put_req(event(ns, slug, title)), "alice"))
+            .await
+            .unwrap();
+    }
+    c.put_entity(as_author(
+        put_req(event_model(ns, "checkout", &["order-placed", "order-paid"])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    for slug in ["aa", "ab", "ac", "ad"] {
+        c.put_entity(as_author(
+            put_req(event("aaa-asof-members-others", slug, slug)),
+            "bob",
+        ))
+        .await
+        .unwrap();
+    }
+
+    let then = c
+        .get_event_model_projection(as_of_req(ns, "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!then.truncated);
+    assert_eq!(
+        board(then.projection.as_ref().unwrap()),
+        (
+            vec!["order-paid".to_string(), "order-placed".to_string()],
+            vec![
+                ("order-paid".to_string(), "Order paid".to_string()),
+                ("order-placed".to_string(), "Order placed".to_string()),
+            ],
+        )
+    );
+}
+
 /// A branch overlay has its own log, so mixing it with a baseline point in
 /// time would answer neither question.
 #[tokio::test(flavor = "multi_thread")]

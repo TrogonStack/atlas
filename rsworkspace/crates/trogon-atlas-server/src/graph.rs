@@ -438,6 +438,10 @@ pub fn entity_lookup(all: &[StoredEntity]) -> HashMap<pb::EntityKey, pb::Entity>
 pub struct Closure {
     pub entities: HashMap<String, pb::Entity>,
     pub truncated: bool,
+    /// Keys the walk reached that `all` does not hold. Against a capped
+    /// snapshot they may still exist in the store; the walk skips them
+    /// without setting `truncated`.
+    pub missing: Vec<(pb::EntityKind, pb::Id)>,
 }
 
 pub fn closure(
@@ -449,6 +453,8 @@ pub fn closure(
     let by_key = entity_lookup(all);
     let mut out: HashMap<String, pb::Entity> = HashMap::new();
     let mut truncated = false;
+    let mut missing: Vec<(pb::EntityKind, pb::Id)> = Vec::new();
+    let mut missing_seen: HashSet<pb::EntityKey> = HashSet::new();
     let mut queue: VecDeque<(pb::EntityKind, pb::Id)> = VecDeque::new();
     for r in roots {
         let Some(id) = r.id.as_ref() else { continue };
@@ -468,6 +474,9 @@ pub fn closure(
         }
         let key = pb::EntityKey::new(k, &id);
         let Some(entity) = by_key.get(&key) else {
+            if missing_seen.insert(key) {
+                missing.push((k, id));
+            }
             continue;
         };
         out.insert(canon, entity.clone());
@@ -475,16 +484,26 @@ pub fn closure(
             match o.to_kind {
                 None => {
                     // Intentionally-untyped slice ref: probe each concrete slice kind.
-                    for probe in [
+                    let probes = [
                         pb::EntityKind::CommandSlice,
                         pb::EntityKind::ReadModelSlice,
                         pb::EntityKind::AutomationSlice,
                         pb::EntityKind::UiSlice,
-                    ] {
+                    ];
+                    let mut found = false;
+                    for probe in probes {
                         let pk = pb::EntityKey::new(probe, &o.to_id);
                         if by_key.contains_key(&pk) {
                             queue.push_back((probe, o.to_id.clone()));
+                            found = true;
                             break;
+                        }
+                    }
+                    if !found {
+                        for probe in probes {
+                            if missing_seen.insert(pb::EntityKey::new(probe, &o.to_id)) {
+                                missing.push((probe, o.to_id.clone()));
+                            }
                         }
                     }
                 }
@@ -501,6 +520,7 @@ pub fn closure(
     Closure {
         entities: out,
         truncated,
+        missing,
     }
 }
 
