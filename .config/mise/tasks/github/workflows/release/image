@@ -16,7 +16,8 @@ fi
 repository="$IMAGES_REGISTRY/$name"
 built="$(crane digest "$repository:$commit")"
 
-if crane ls "$repository" | grep -qxF "$version"; then
+tags="$(crane ls "$repository")"
+if grep -qxF "$version" <<<"$tags"; then
   released="$(crane digest "$repository:$version")"
   if [ "$released" != "$built" ]; then
     echo "$repository:$version already points at $released, not $built" >&2
