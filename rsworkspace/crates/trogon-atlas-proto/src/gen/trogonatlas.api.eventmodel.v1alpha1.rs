@@ -1561,6 +1561,11 @@ pub struct ListChangesetsRequest {
     /// changeset, baseline and branch alike.
     #[prost(string, tag="3")]
     pub branch: ::prost::alloc::string::String,
+    /// Only changesets with at least one op in this namespace. Empty = every
+    /// namespace. A matching changeset comes back whole, including its ops in
+    /// other namespaces.
+    #[prost(string, tag="4")]
+    pub namespace: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListChangesetsResponse {

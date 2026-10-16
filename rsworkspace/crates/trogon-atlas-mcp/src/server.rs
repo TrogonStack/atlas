@@ -2091,6 +2091,7 @@ impl McpServer {
             page_token: p.page_token.unwrap_or_default(),
             page_size,
             branch: p.branch.unwrap_or_default(),
+            namespace: p.namespace.unwrap_or_default(),
         };
         let mut client = self.client();
         let resp = client

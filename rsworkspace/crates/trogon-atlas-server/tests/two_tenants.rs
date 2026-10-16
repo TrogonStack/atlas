@@ -574,6 +574,7 @@ async fn sweep_read_matrix(
                 page_token: String::new(),
                 page_size: 0,
                 branch: String::new(),
+                namespace: String::new(),
             },
             beta_token,
         ))

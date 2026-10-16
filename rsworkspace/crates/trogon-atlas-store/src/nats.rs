@@ -5104,6 +5104,12 @@ impl Store for NatsStore {
                 if !page.scope.admits(record.branch.as_deref()) {
                     continue;
                 }
+                if page
+                    .namespace
+                    .is_some_and(|ns| !crate::store::touches_namespace(&record, ns))
+                {
+                    continue;
+                }
                 out.push(record);
                 if out.len() >= limit {
                     return Ok(out);
