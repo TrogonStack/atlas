@@ -2,7 +2,7 @@
 #MISE description="Add the release version tag to the named image already built for the commit, refusing to move a version tag that points elsewhere"
 set -euo pipefail
 
-: "${IMAGES_REGISTRY:?set IMAGES_REGISTRY, e.g. ghcr.io/trogonstack/images}"
+: "${IMAGES_REGISTRY:?set IMAGES_REGISTRY, e.g. ghcr.io/trogonstack/images/atlas}"
 usage="usage: image <name> <version> <commit>"
 name="${1:?$usage}"
 version="${2:?$usage}"
