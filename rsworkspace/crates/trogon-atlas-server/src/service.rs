@@ -312,6 +312,8 @@ pub struct EventModelServiceImpl {
     /// Uses `tokio::sync::RwLock` so reads and writes are async-aware and
     /// cannot block the runtime (`parking_lot::RwLock` would block the thread).
     snapshot_cache: tokio::sync::RwLock<Option<Arc<Vec<StoredEntity>>>>,
+    /// Entity cap of the baseline snapshot load.
+    snapshot_cap: usize,
     /// Cached `ReverseIndex` co-located with the snapshot. Invalidated in
     /// lockstep with `snapshot_cache` so reference queries do not rebuild
     /// the index from the full snapshot on every call.
@@ -506,6 +508,7 @@ impl EventModelServiceImpl {
             branch_search_cache: Arc::new(crate::search::BranchIndexCache::default()),
             owner_search_cache: Arc::new(crate::search::BranchIndexCache::default()),
             snapshot_cache: tokio::sync::RwLock::new(None),
+            snapshot_cap: MAX_PROJECTION_ENTITIES,
             reverse_index_cache: tokio::sync::RwLock::new(None),
             snapshot_load_lock: tokio::sync::Mutex::new(()),
             inflight_requests: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -552,7 +555,7 @@ impl EventModelServiceImpl {
         // guard (which is `!Send`) across the suspension point.
         let result = {
             use tracing::Instrument as _;
-            graph::load_all(&self.store, None)
+            graph::load_all_with_cap(&self.store, self.snapshot_cap, None)
                 .instrument(tracing::info_span!("snapshot_rebuild"))
                 .await?
         };
@@ -678,6 +681,7 @@ impl EventModelServiceImpl {
         changeset_id: &str,
         vis: &Visibility,
         principal: Option<&crate::auth::Principal>,
+        root: (pb::EntityKind, &pb::Id),
     ) -> Result<Arc<Vec<StoredEntity>>, Status> {
         // Validates the id and turns an unknown one into NOT_FOUND before
         // any walk starts.
@@ -699,7 +703,7 @@ impl EventModelServiceImpl {
         }
         // Snapshot before listing: a write that lands in between is then
         // in `newer` and gets rewound, instead of leaking into the view.
-        let current = self.baseline_snapshot().await?;
+        let mut current = self.baseline_snapshot().await?;
         let lens = self.lens(vis).await?;
         let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
 
@@ -724,6 +728,28 @@ impl EventModelServiceImpl {
                         other => store_err(other),
                     })?;
                 pre_images.push((pb::EntityKey::new(kind, id), revision.before));
+            }
+        }
+
+        // The snapshot is capped, so it can omit the root. Fetch it by key,
+        // as the live path does, and let the pre-images rewind it with the
+        // rest. A root deleted since the target is restored by its pre-image.
+        let (root_kind, root_id) = root;
+        let root_key = pb::EntityKey::new(root_kind, root_id);
+        let in_snapshot = current.iter().any(|se| {
+            trogon_atlas_store::refs::entity_kind(&se.entity)
+                .zip(trogon_atlas_store::refs::entity_id(&se.entity))
+                .is_some_and(|(k, i)| pb::EntityKey::new(k, i) == root_key)
+        });
+        if !in_snapshot {
+            match self.store.get(root_kind, root_id, None).await {
+                Ok(stored) => {
+                    let mut with_root = current.as_ref().clone();
+                    with_root.push(stored);
+                    current = Arc::new(with_root);
+                }
+                Err(trogon_atlas_store::error::StoreError::NotFound) => {}
+                Err(other) => return Err(store_err(other)),
             }
         }
 
@@ -959,6 +985,14 @@ impl EventModelServiceImpl {
 
     pub fn with_jev_analyzer(mut self, analyzer: Arc<crate::jev::JevAnalyzer>) -> Self {
         self.jev_analyzer = Some(analyzer);
+        self
+    }
+
+    /// Lower the baseline snapshot's entity cap so the truncation boundary
+    /// can be reached with a handful of entities in tests.
+    #[must_use]
+    pub fn with_snapshot_cap(mut self, cap: usize) -> Self {
+        self.snapshot_cap = cap;
         self
     }
 
@@ -3683,7 +3717,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             (em, self.snapshot_for(branch.as_deref(), &vis).await?)
         } else {
             let all = self
-                .snapshot_as_of(&req.as_of_changeset, &vis, principal.as_ref())
+                .snapshot_as_of(
+                    &req.as_of_changeset,
+                    &vis,
+                    principal.as_ref(),
+                    (pb::EntityKind::EventModel, id),
+                )
                 .await?;
             // The live row may be gone or newer, so the root comes from the
             // rewound set like everything it references.
