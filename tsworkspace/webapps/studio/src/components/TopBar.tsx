@@ -1,3 +1,4 @@
+import type { Ref } from 'react';
 import { Camera, ChevronLeft, History, Workflow } from 'lucide-react';
 import { BranchBar } from '@/components/BranchBar';
 import { DownloadYamlButton } from '@/components/DownloadYamlButton';
@@ -22,6 +23,7 @@ export function TopBar({
   onSelectBranch,
   onOpenBranchReview,
   onOpenHistory,
+  historyTriggerRef,
 }: {
   info?: ServerInfo;
   realtime: RealtimeStatus;
@@ -40,6 +42,8 @@ export function TopBar({
   onOpenBranchReview?: () => void;
   /** Opens the namespace history drawer. Omit to hide the button. */
   onOpenHistory?: () => void;
+  /** Receives the history button so closing the drawer can return focus to it. */
+  historyTriggerRef?: Ref<HTMLButtonElement>;
 }) {
   return (
     <header className="flex h-12 items-center gap-3 border-b border-border bg-card px-4">
@@ -106,7 +110,13 @@ export function TopBar({
               {realtime.detail ? <span className="sr-only">: {realtime.detail}</span> : null}
             </output>
             {onOpenHistory ? (
-              <Button variant="outline" size="sm" aria-label="Namespace history" onClick={onOpenHistory}>
+              <Button
+                ref={historyTriggerRef}
+                variant="outline"
+                size="sm"
+                aria-label="Namespace history"
+                onClick={onOpenHistory}
+              >
                 <History />
                 <span className="hidden md:inline">History</span>
               </Button>

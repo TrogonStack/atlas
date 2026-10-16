@@ -154,6 +154,11 @@ export function ModelShell({
   const [inspectorTab, setInspectorTab] = useState<InspectorTab>('details');
   const validationPanelId = useId();
   const validationTrigger = useRef<HTMLButtonElement>(null);
+  const historyTrigger = useRef<HTMLButtonElement>(null);
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false);
+    historyTrigger.current?.focus();
+  }, []);
   const closeValidation = useCallback(() => {
     setValidationOpen(false);
     validationTrigger.current?.focus();
@@ -237,7 +242,7 @@ export function ModelShell({
       return;
     }
     if (historyOpen) {
-      setHistoryOpen(false);
+      closeHistory();
       return;
     }
     setSelections((prev) => (prev.length === 0 ? prev : []));
@@ -559,6 +564,7 @@ export function ModelShell({
           setHistoryOpen(false);
           setReviewOpen(true);
         }}
+        historyTriggerRef={historyTrigger}
         onOpenHistory={
           historyNamespace
             ? () => {
@@ -687,7 +693,7 @@ export function ModelShell({
             namespace={historyNamespace}
             branch={branch}
             model={model}
-            onClose={() => setHistoryOpen(false)}
+            onClose={closeHistory}
             onSelect={(key) => {
               selectAndFocus(key);
               // After selectAndFocus, which resets the tab to 'details'; the
