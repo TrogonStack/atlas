@@ -486,6 +486,83 @@ async fn get_event_model_projection_does_not_project_another_owners_model() {
     });
 }
 
+/// An as-of target on another owner's branch must answer like `GetChangeset`
+/// does, so the refusal cannot name that branch.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_does_not_name_another_owners_branch() {
+    let mut c = world().await;
+    let branch = "@acme-writer:xt-asof-hidden";
+    c.create_branch(authed(
+        pb::CreateBranchRequest {
+            name: branch.into(),
+            doc: String::new(),
+        },
+        ACME_TOKEN,
+    ))
+    .await
+    .expect("acme creates its own branch");
+    let mut put = authed(put_req(event_entity("drafted")), ACME_TOKEN);
+    put.metadata_mut().insert(
+        "x-trogon-atlas-branch",
+        MetadataValue::try_from(branch).unwrap(),
+    );
+    c.put_entity(put).await.expect("acme writes on its branch");
+    let target = c
+        .list_changesets(authed(
+            pb::ListChangesetsRequest {
+                page_token: String::new(),
+                page_size: 1,
+                branch: branch.into(),
+                namespace: String::new(),
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .changesets[0]
+        .id
+        .clone();
+
+    let beta_ns = "xt-beta-own";
+    let beta_id = |slug: &str| pb::Id {
+        namespace: beta_ns.into(),
+        slug: slug.into(),
+        version: 1,
+    };
+    c.put_entity(authed(
+        put_req(pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+                id: Some(beta_id("model")),
+                title: "model".into(),
+                ..Default::default()
+            })),
+        }),
+        BETA_TOKEN,
+    ))
+    .await
+    .expect("beta writes its own event model");
+
+    let err = c
+        .get_event_model_projection(authed(
+            pb::GetEventModelProjectionRequest {
+                id: Some(beta_id("model")),
+                include_cross_model: true,
+                as_of_changeset: target,
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .expect_err("a target on acme's branch is refused");
+    assert_eq!(err.code(), Code::NotFound, "{}", err.message());
+    assert!(
+        !err.message().contains("xt-asof-hidden"),
+        "the refusal names acme's branch: {}",
+        err.message()
+    );
+}
+
 /// The manifests are the model and its members in full, so rendering them
 /// for another owner would hand over the whole graph.
 #[tokio::test(flavor = "multi_thread")]

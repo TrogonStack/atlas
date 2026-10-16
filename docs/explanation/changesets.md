@@ -275,7 +275,9 @@ Nothing stores the past as a whole, because the entities bucket keeps one
 revision per key. The server derives it instead:
 
 1. Page the baseline changeset log from newest down to the target.
-2. For each newer changeset, read the revision row of every op.
+2. For each newer changeset, read the revision row of every op in a
+   namespace the caller can read. Ops in other namespaces are skipped,
+   and a changeset with none of the caller's ops is skipped whole.
 3. Start from the current baseline and put back each key's `before`.
    `before` absent means a later changeset created the key, so it is
    removed. When several changesets touched one key, the oldest one's
@@ -284,11 +286,12 @@ revision per key. The server derives it instead:
    as usual. Namespace visibility applies to the result.
 
 The read is baseline only. A branch header is `INVALID_ARGUMENT`, and so is
-a changeset that landed on a branch. An unknown id is `NOT_FOUND`.
+a changeset that landed on a branch. An unknown id is `NOT_FOUND`, and so is
+a changeset on a branch the caller cannot see, the same as `GetChangeset`.
 
 **Cost.** O(changesets since the target × their ops) revision reads, plus
 the log pages to find the target. The walk stops after 1,000 newer
-changesets with `FAILED_PRECONDITION`, so an old target fails fast instead
+changesets in the caller's namespaces with `FAILED_PRECONDITION`, so an old target fails fast instead
 of holding the request open.
 
 **Gap: unattributed writes.** A write that minted no changeset
