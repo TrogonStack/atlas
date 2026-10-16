@@ -2,7 +2,7 @@
 #MISE description="Package the named chart and its file:// subcharts at the given version and app version, and push it unless the OCI registry already has that version"
 set -euo pipefail
 
-: "${CHARTS_REGISTRY:?set CHARTS_REGISTRY, e.g. oci://ghcr.io/trogonstack/charts}"
+: "${CHARTS_REGISTRY:?set CHARTS_REGISTRY, e.g. oci://ghcr.io/trogonstack/charts/atlas}"
 name="${1:?usage: chart <name> <version> <app-version>}"
 export CHART_VERSION="${2:?usage: chart <name> <version> <app-version>}"
 export CHART_APP_VERSION="${3:?usage: chart <name> <version> <app-version>}"

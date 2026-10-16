@@ -21,14 +21,15 @@ with JetStream enabled.
 ## Quick start
 
 ```bash
-helm install trogon-atlas oci://ghcr.io/trogonstack/charts/trogon-atlas \
+helm install trogon-atlas oci://ghcr.io/trogonstack/charts/atlas/trogon-atlas \
   --version 0.0.0-sha-<commit> \
   --set server.config.natsUrl=nats://my-nats:4222 \
   --set server.auth.token.value=change-me
 ```
 
-Every push to `main` publishes this chart to `oci://ghcr.io/trogonstack/charts`
-as `0.0.0-sha-<commit>`, with its images pinned to the same commit.
+Every push to `main` publishes this chart to
+`oci://ghcr.io/trogonstack/charts/atlas` as `0.0.0-sha-<commit>`, with its
+images pinned to the same commit.
 
 Installing from a checkout instead needs `helm dependency update
 devops/helm/charts/trogon-atlas` first.

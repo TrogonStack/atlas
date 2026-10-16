@@ -10,14 +10,15 @@ here is just `auth.token.value`.
 ## Quick start
 
 ```bash
-helm install trogon-atlas-studio oci://ghcr.io/trogonstack/charts/trogon-atlas-studio \
+helm install trogon-atlas-studio oci://ghcr.io/trogonstack/charts/atlas/trogon-atlas-studio \
   --version 0.0.0-sha-<commit> \
   --set server.host=trogon-atlas-server \
   --set auth.token.value=change-me
 ```
 
-Every push to `main` publishes this chart to `oci://ghcr.io/trogonstack/charts`
-as `0.0.0-sha-<commit>`, with its images pinned to the same commit.
+Every push to `main` publishes this chart to
+`oci://ghcr.io/trogonstack/charts/atlas` as `0.0.0-sha-<commit>`, with its
+images pinned to the same commit.
 
 ## Pointing at the server
 
