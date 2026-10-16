@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ModelShell } from '@/components/ModelShell';
 import { api } from '@/lib/api';
-import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
+import { readBranchFromUrl, useAsOfParam, withBranchQuery } from '@/lib/branch';
 import { exportBoardHtml } from '@/lib/export-html';
 import { buildIssueIndex, EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import { buildModel, type Model } from '@/lib/model';
@@ -22,9 +22,14 @@ export function EventModelPage({
   /** Set when the page renders a saved snapshot instead of the live store. */
   snapshot?: SnapshotStamp;
 }) {
-  const [model, setModel] = useState<Model>();
-  const [issues, setIssues] = useState<IssueIndex>(EMPTY_ISSUE_INDEX);
-  const [error, setError] = useState<string>();
+  // A loaded board, error or validation result is stamped with the view it belongs to, so a
+  // render for a different view never shows it, not even for one paint.
+  const [loaded, setLoaded] = useState<{ viewKey: string; model: Model }>();
+  const [failed, setFailed] = useState<{ viewKey: string; message: string }>();
+  const [stampedIssues, setStampedIssues] = useState<{ viewKey: string; index: IssueIndex }>();
+  const [asOf, setAsOf] = useAsOfParam();
+  const [incomplete, setIncomplete] = useState(false);
+  const viewKey = JSON.stringify([namespace, slug, asOf ?? null]);
 
   // Tied to an `AbortController` so unmount mid-fetch actually aborts
   // the HTTP request, not just hides its result. The 30 s default
@@ -42,32 +47,43 @@ export function EventModelPage({
     ctrlRef.current = ctrl;
     const branch = readBranchFromUrl();
     api
-      .eventModel(namespace, slug, { signal: ctrl.signal, branch })
+      .eventModel(namespace, slug, { signal: ctrl.signal, branch, ...(asOf ? { asOf } : {}) })
       .then((res) => {
         if (ctrl.signal.aborted) return;
-        setModel(buildModel(res.entities ?? []));
-        setError(undefined);
+        setLoaded({ viewKey, model: buildModel(res.entities ?? []) });
+        setIncomplete(Boolean(res.incomplete));
+        setFailed(undefined);
       })
       .catch((e) => {
         if (ctrl.signal.aborted) return;
-        setError(e instanceof Error ? e.message : String(e));
+        setFailed({ viewKey, message: e instanceof Error ? e.message : String(e) });
       });
     // Validation rides alongside rather than gating the board: findings are
     // useful the moment they arrive, and a validator that is slow or down
     // must not stop the model from rendering. A failure is carried into the
     // index instead of dropped, so the panel can say "did not run" rather
     // than showing the same empty section a clean model would.
+    if (asOf) {
+      setStampedIssues({
+        viewKey,
+        index: buildIssueIndex(undefined, 'validation checks the live model, not a past changeset'),
+      });
+      return;
+    }
     api
       .validate({ namespace, slug }, { signal: ctrl.signal, branch })
       .then((res) => {
         if (ctrl.signal.aborted) return;
-        setIssues(buildIssueIndex(res.issues));
+        setStampedIssues({ viewKey, index: buildIssueIndex(res.issues) });
       })
       .catch((e) => {
         if (ctrl.signal.aborted) return;
-        setIssues(buildIssueIndex(undefined, e instanceof Error ? e.message : String(e)));
+        setStampedIssues({
+          viewKey,
+          index: buildIssueIndex(undefined, e instanceof Error ? e.message : String(e)),
+        });
       });
-  }, [namespace, slug]);
+  }, [namespace, slug, asOf, viewKey]);
 
   useEffect(() => {
     load();
@@ -79,6 +95,9 @@ export function EventModelPage({
   // A transient refetch failure must not replace an already-rendered
   // board with the error page; the error screen is for the initial load.
   const branch = readBranchFromUrl();
+  const model = loaded?.viewKey === viewKey ? loaded.model : undefined;
+  const error = failed?.viewKey === viewKey ? failed.message : undefined;
+  const issues = stampedIssues?.viewKey === viewKey ? stampedIssues.index : EMPTY_ISSUE_INDEX;
   if (error && !model) {
     return (
       <div className="flex h-screen items-center justify-center p-6">
@@ -116,11 +135,15 @@ export function EventModelPage({
       backHref={withBranchQuery('/', branch)}
       issues={issues}
       snapshot={snapshot}
-      // A snapshot cannot change, so it gets no refetch and therefore no live feed.
-      onRefetch={snapshot ? undefined : load}
+      // A snapshot or an as-of board cannot change, so it gets no refetch and therefore no live feed.
+      onRefetch={snapshot || asOf ? undefined : load}
       // Read at click time: a branch switch in ModelShell does not re-render this page.
-      onExportHtml={() => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })}
+      // An export reads the live board, so a past board offers none.
+      onExportHtml={asOf ? undefined : () => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })}
       historyNamespace={snapshot ? undefined : namespace}
+      asOf={asOf}
+      asOfIncomplete={Boolean(asOf) && incomplete}
+      onAsOfChange={snapshot ? undefined : setAsOf}
     />
   );
 }

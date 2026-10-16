@@ -44,3 +44,14 @@ export function isSafeBranchName(value) {
   if (segments.length > 2) return false;
   return segments.every(isSafeNamespace);
 }
+
+/**
+ * Changeset ids are UUIDv7 in the canonical lowercase form the server mints,
+ * so anything else cannot name a changeset and is refused before any call.
+ *
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function isChangesetId(value) {
+  return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
