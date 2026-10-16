@@ -22,11 +22,14 @@ export function EventModelPage({
   /** Set when the page renders a saved snapshot instead of the live store. */
   snapshot?: SnapshotStamp;
 }) {
-  const [model, setModel] = useState<Model>();
+  // A loaded board or error is stamped with the view it belongs to, so a
+  // render for a different view never shows it, not even for one paint.
+  const [loaded, setLoaded] = useState<{ viewKey: string; model: Model }>();
+  const [failed, setFailed] = useState<{ viewKey: string; message: string }>();
   const [issues, setIssues] = useState<IssueIndex>(EMPTY_ISSUE_INDEX);
-  const [error, setError] = useState<string>();
   const [asOf, setAsOf] = useAsOfParam();
   const [incomplete, setIncomplete] = useState(false);
+  const viewKey = JSON.stringify([namespace, slug, asOf ?? null]);
 
   // Tied to an `AbortController` so unmount mid-fetch actually aborts
   // the HTTP request, not just hides its result. The 30 s default
@@ -38,31 +41,22 @@ export function EventModelPage({
   // ?branch= change from ModelShell/BranchBar is honored on the next
   // refetch even when this page has not remounted.
   const ctrlRef = useRef<AbortController | undefined>(undefined);
-  const loadedAsOfRef = useRef(asOf);
   const load = useCallback(() => {
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
-    // Another point in time is another board, so the old one must not stay
-    // on screen or mask this load's error. Dropping it also remounts
-    // ModelShell, so its live feed matches the new view.
-    if (loadedAsOfRef.current !== asOf) {
-      loadedAsOfRef.current = asOf;
-      setModel(undefined);
-      setError(undefined);
-    }
     const branch = readBranchFromUrl();
     api
       .eventModel(namespace, slug, { signal: ctrl.signal, branch, ...(asOf ? { asOf } : {}) })
       .then((res) => {
         if (ctrl.signal.aborted) return;
-        setModel(buildModel(res.entities ?? []));
+        setLoaded({ viewKey, model: buildModel(res.entities ?? []) });
         setIncomplete(Boolean(res.incomplete));
-        setError(undefined);
+        setFailed(undefined);
       })
       .catch((e) => {
         if (ctrl.signal.aborted) return;
-        setError(e instanceof Error ? e.message : String(e));
+        setFailed({ viewKey, message: e instanceof Error ? e.message : String(e) });
       });
     // Validation rides alongside rather than gating the board: findings are
     // useful the moment they arrive, and a validator that is slow or down
@@ -83,7 +77,7 @@ export function EventModelPage({
         if (ctrl.signal.aborted) return;
         setIssues(buildIssueIndex(undefined, e instanceof Error ? e.message : String(e)));
       });
-  }, [namespace, slug, asOf]);
+  }, [namespace, slug, asOf, viewKey]);
 
   useEffect(() => {
     load();
@@ -95,6 +89,8 @@ export function EventModelPage({
   // A transient refetch failure must not replace an already-rendered
   // board with the error page; the error screen is for the initial load.
   const branch = readBranchFromUrl();
+  const model = loaded?.viewKey === viewKey ? loaded.model : undefined;
+  const error = failed?.viewKey === viewKey ? failed.message : undefined;
   if (error && !model) {
     return (
       <div className="flex h-screen items-center justify-center p-6">

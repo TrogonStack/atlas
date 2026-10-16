@@ -19,11 +19,13 @@ vi.mock('@/lib/api', () => ({
 let capturedOnRefetch: (() => void) | undefined;
 let capturedIssues: IssueIndex | undefined;
 let capturedShell: Record<string, unknown> = {};
+const shellAsOfRenders: unknown[] = [];
 
 vi.mock('@/components/ModelShell', () => ({
   ModelShell: (props: { scopedTitle?: string; issues?: IssueIndex; onRefetch?: () => void }) => {
     const { scopedTitle, issues, onRefetch } = props;
     capturedShell = props;
+    shellAsOfRenders.push((props as { asOf?: unknown }).asOf);
     capturedOnRefetch = onRefetch;
     capturedIssues = issues;
     return <div data-testid="model-shell">{scopedTitle ?? 'shell'}</div>;
@@ -261,5 +263,36 @@ describe('EventModelPage: as of a changeset', () => {
     await waitFor(() => {
       expect(capturedShell.onRefetch).toBeUndefined();
     });
+  });
+
+  it('never renders the previous board against the new as-of while it loads', async () => {
+    render(<EventModelPage namespace="acme" slug="checkout" />);
+    await waitFor(() => {
+      expect(screen.getByTestId('model-shell')).toBeDefined();
+    });
+
+    let resolvePast!: (v: { entities: unknown[] }) => void;
+    (api.eventModel as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<{ entities: unknown[] }>((r) => {
+        resolvePast = r;
+      }),
+    );
+    shellAsOfRenders.length = 0;
+    await act(async () => (capturedShell.onAsOfChange as (id: string) => void)(AS_OF));
+
+    expect(shellAsOfRenders).toEqual([]);
+    expect(screen.queryByTestId('model-shell')).toBeNull();
+    expect(screen.getByText(/Loading acme\/checkout/)).toBeDefined();
+
+    await act(async () => resolvePast({ entities: [] }));
+    expect(screen.getByTestId('model-shell')).toBeDefined();
+    expect(shellAsOfRenders).toEqual([AS_OF]);
+
+    (api.eventModel as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+    shellAsOfRenders.length = 0;
+    await act(async () => (capturedShell.onAsOfChange as (id: string | undefined) => void)(undefined));
+
+    expect(shellAsOfRenders).toEqual([]);
+    expect(screen.queryByTestId('model-shell')).toBeNull();
   });
 });
