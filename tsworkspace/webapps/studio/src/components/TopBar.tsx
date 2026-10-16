@@ -1,3 +1,4 @@
+import type { Ref } from 'react';
 import { Camera, ChevronLeft, History, Workflow } from 'lucide-react';
 import { AsOfTag } from '@/components/AsOfTag';
 import { BranchBar } from '@/components/BranchBar';
@@ -26,6 +27,7 @@ export function TopBar({
   asOf,
   asOfIncomplete,
   onExitAsOf,
+  historyTriggerRef,
 }: {
   info?: ServerInfo;
   realtime: RealtimeStatus;
@@ -48,9 +50,11 @@ export function TopBar({
   asOf?: string;
   asOfIncomplete?: boolean;
   onExitAsOf?: () => void;
+  /** Receives the history button so closing the drawer can return focus to it. */
+  historyTriggerRef?: Ref<HTMLButtonElement>;
 }) {
   const historyButton = onOpenHistory ? (
-    <Button variant="outline" size="sm" aria-label="Namespace history" onClick={onOpenHistory}>
+    <Button ref={historyTriggerRef} variant="outline" size="sm" aria-label="Namespace history" onClick={onOpenHistory}>
       <History />
       <span className="hidden md:inline">History</span>
     </Button>

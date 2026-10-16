@@ -21,9 +21,16 @@ function opLabel(op: ChangesetOpView): string {
   return `${verb} ${kind} ${op.entity.namespace}/${op.entity.slug}@${op.entity.version}`;
 }
 
-// Only an entity on this board can open the Inspector; deletes and entities of
-// other models in the namespace have nothing to select, so they render as text.
-function opModelKey(model: Model, op: ChangesetOpView): string | undefined {
+// Only an entity on this board, written on the branch the board previews, can
+// open the Inspector; deletes, entities of other models in the namespace, and
+// ops from another branch have nothing to select there, so they render as text.
+function opModelKey(
+  model: Model,
+  branch: string | undefined,
+  changeset: ChangesetView,
+  op: ChangesetOpView,
+): string | undefined {
+  if (changeset.branch !== (branch ?? '')) return undefined;
   const kind = wireKind(op.entity.kind);
   if (!kind) return undefined;
   const { namespace, slug, version } = op.entity;
@@ -132,7 +139,7 @@ export function HistoryPanel({
               {expanded === c.id ? (
                 <ul className="space-y-0.5 border-t border-border p-2 font-mono text-[10px]">
                   {c.ops.map((op) => {
-                    const key = opModelKey(model, op);
+                    const key = opModelKey(model, branch, c, op);
                     return (
                       <li key={opLabel(op)}>
                         {key ? (

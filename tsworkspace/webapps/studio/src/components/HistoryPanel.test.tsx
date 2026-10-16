@@ -144,6 +144,37 @@ describe('HistoryPanel', () => {
     expect(screen.queryByRole('button', { name: 'View board as of this' })).toBeNull();
   });
 
+  it('renders ops of another branch as text on baseline, since the Inspector reads baseline', async () => {
+    changesets.mockResolvedValue({
+      changesets: [changeset('0192f000-0000-7000-8000-00000000cafe', { branch: 'alex/retention-rework' })],
+      nextPageToken: '',
+    });
+    renderPanel();
+
+    fireEvent.click(await screen.findByRole('button', { name: /BatchMutate/ }));
+    expect(screen.queryByRole('button', { name: /acme\/order\.placed/ })).toBeNull();
+    expect(screen.getByText(/acme\/order\.placed/)).toBeDefined();
+  });
+
+  it('opens ops of the previewed branch and renders baseline ops as text', async () => {
+    changesets.mockResolvedValue({
+      changesets: [
+        changeset('0192f000-0000-7000-8000-00000000cafe', { branch: 'alex/retention-rework' }),
+        changeset('0192f000-0000-7000-8000-00000000beef', { rpc: 'PutEntity' }),
+      ],
+      nextPageToken: '',
+    });
+    const { onSelect } = renderPanel({ branch: 'alex/retention-rework' });
+
+    fireEvent.click(await screen.findByRole('button', { name: /BatchMutate/ }));
+    fireEvent.click(screen.getByRole('button', { name: /acme\/order\.placed/ }));
+    expect(onSelect).toHaveBeenCalledWith('event:acme/order.placed@1');
+
+    fireEvent.click(screen.getByRole('button', { name: /PutEntity/ }));
+    expect(screen.queryByRole('button', { name: /acme\/order\.placed/ })).toBeNull();
+    expect(screen.getByText(/acme\/order\.placed/)).toBeDefined();
+  });
+
   it('shows a failed load instead of an empty list', async () => {
     changesets.mockRejectedValueOnce(new Error('deadline exceeded'));
     renderPanel();

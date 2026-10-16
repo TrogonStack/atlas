@@ -326,6 +326,21 @@ describe('ModelShell selection drawer routing', () => {
     expect(screen.queryByRole('complementary', { name: 'Namespace history' })).toBeNull();
   });
 
+  it('returns focus to the history button when the drawer closes', async () => {
+    const model = buildModel([]);
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({ changesets: [], nextPageToken: '' });
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" historyNamespace="shop" />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+    const trigger = screen.getByRole('button', { name: 'Namespace history' });
+
+    fireEvent.click(trigger);
+    const close = await screen.findByRole('button', { name: 'Close namespace history' });
+    close.focus();
+    fireEvent.click(close);
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it('offers no history button without a namespace to read', () => {
     const model = buildModel([]);
     rtlRender(<ModelShell model={model} scopedTitle="Shop" />, { wrapper: withNuqsTestingAdapter() });
