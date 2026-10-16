@@ -286,7 +286,8 @@ revision per key. The server derives it instead:
    as usual. Namespace visibility applies to the result.
 
 The read is baseline only. A branch header is `INVALID_ARGUMENT`, and so is
-a changeset that landed on a branch. An unknown id is `NOT_FOUND`.
+a changeset that landed on a branch. An unknown id is `NOT_FOUND`, and so is
+a changeset on a branch the caller cannot see, the same as `GetChangeset`.
 
 **Cost.** O(changesets since the target × their ops) revision reads, plus
 the log pages to find the target. The walk stops after 1,000 newer

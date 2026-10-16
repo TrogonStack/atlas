@@ -677,6 +677,7 @@ impl EventModelServiceImpl {
         &self,
         changeset_id: &str,
         vis: &Visibility,
+        principal: Option<&crate::auth::Principal>,
     ) -> Result<Arc<Vec<StoredEntity>>, Status> {
         // Validates the id and turns an unknown one into NOT_FOUND before
         // any walk starts.
@@ -686,6 +687,11 @@ impl EventModelServiceImpl {
             .await
             .map_err(store_err)?;
         if let Some(branch) = target.branch.as_deref() {
+            // Same answer `GetChangeset` gives, so the error cannot name a
+            // branch this caller may not see.
+            if !Self::branch_visible(principal, branch) {
+                return Err(Status::not_found("entity not found"));
+            }
             return Err(Status::invalid_argument(format!(
                 "changeset {changeset_id} landed on branch {branch}; as_of_changeset reads \
                  baseline history only"
@@ -3653,6 +3659,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         req: Request<pb::GetEventModelProjectionRequest>,
     ) -> Result<Response<pb::GetEventModelProjectionResponse>, Status> {
         let vis = Self::visibility_of(&req);
+        let principal = Self::principal_from_metadata(&req);
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
         let id = require_id(req.id.as_ref(), "")?;
@@ -3675,7 +3682,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             };
             (em, self.snapshot_for(branch.as_deref(), &vis).await?)
         } else {
-            let all = self.snapshot_as_of(&req.as_of_changeset, &vis).await?;
+            let all = self
+                .snapshot_as_of(&req.as_of_changeset, &vis, principal.as_ref())
+                .await?;
             // The live row may be gone or newer, so the root comes from the
             // rewound set like everything it references.
             let em = all
