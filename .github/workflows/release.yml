@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  runs-on:
+    uses: ./.github/workflows/runs-on.yml
+
+  images:
+    name: Image (${{ matrix.image }})
+    needs: runs-on
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - trogon-atlas-server
+          - trogon-atlas-studio
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+        with:
+          cache: false
+
+      - name: crane auth login
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_PASSWORD" | mise exec -- crane auth login ghcr.io --username "$REGISTRY_USERNAME" --password-stdin
+
+      - name: release image
+        env:
+          IMAGES_REGISTRY: ghcr.io/trogonstack/images
+          IMAGE: ${{ matrix.image }}
+          TAG: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: mise run github:workflows:release:image "$IMAGE" "${TAG#v}" "$COMMIT"
+
+  charts:
+    name: Chart (${{ matrix.chart }})
+    needs: [runs-on, images]
+    runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        chart:
+          - trogon-atlas-server
+          - trogon-atlas-studio
+          - trogon-atlas
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+        with:
+          cache: false
+
+      - name: helm registry login
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_PASSWORD" | mise exec -- helm registry login ghcr.io --username "$REGISTRY_USERNAME" --password-stdin
+
+      - name: publish chart
+        env:
+          CHARTS_REGISTRY: oci://ghcr.io/trogonstack/charts
+          CHART: ${{ matrix.chart }}
+          TAG: ${{ github.ref_name }}
+        run: mise run github:workflows:publish:chart "$CHART" "${TAG#v}" "${TAG#v}"
