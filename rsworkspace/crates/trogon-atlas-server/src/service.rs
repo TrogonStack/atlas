@@ -22,7 +22,7 @@ use trogon_atlas_store::{
 };
 
 use crate::{
-    analysis,
+    analysis, as_of,
     conv::{
         entity_id, entity_kind, kind_from_i32, require_id, store_err, validate_branch_name,
         validate_entity_content,
@@ -312,6 +312,8 @@ pub struct EventModelServiceImpl {
     /// Uses `tokio::sync::RwLock` so reads and writes are async-aware and
     /// cannot block the runtime (`parking_lot::RwLock` would block the thread).
     snapshot_cache: tokio::sync::RwLock<Option<Arc<Vec<StoredEntity>>>>,
+    /// Entity cap of the baseline snapshot load.
+    snapshot_cap: usize,
     /// Cached `ReverseIndex` co-located with the snapshot. Invalidated in
     /// lockstep with `snapshot_cache` so reference queries do not rebuild
     /// the index from the full snapshot on every call.
@@ -506,6 +508,7 @@ impl EventModelServiceImpl {
             branch_search_cache: Arc::new(crate::search::BranchIndexCache::default()),
             owner_search_cache: Arc::new(crate::search::BranchIndexCache::default()),
             snapshot_cache: tokio::sync::RwLock::new(None),
+            snapshot_cap: MAX_PROJECTION_ENTITIES,
             reverse_index_cache: tokio::sync::RwLock::new(None),
             snapshot_load_lock: tokio::sync::Mutex::new(()),
             inflight_requests: Arc::new(std::sync::atomic::AtomicI64::new(0)),
@@ -552,7 +555,7 @@ impl EventModelServiceImpl {
         // guard (which is `!Send`) across the suspension point.
         let result = {
             use tracing::Instrument as _;
-            graph::load_all(&self.store, None)
+            graph::load_all_with_cap(&self.store, self.snapshot_cap, None)
                 .instrument(tracing::info_span!("snapshot_rebuild"))
                 .await?
         };
@@ -665,6 +668,195 @@ impl EventModelServiceImpl {
             .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
             .await?;
         self.narrow(Arc::new(result.entities), vis).await
+    }
+
+    /// The caller's view of baseline right after `changeset_id` landed.
+    ///
+    /// Every newer baseline changeset is undone from its revision rows. A
+    /// key a newer changeset touched takes its value from those rows alone,
+    /// so a stale cached snapshot only ever supplies keys that have not
+    /// changed since, and the result does not depend on the cache's age.
+    async fn snapshot_as_of(
+        &self,
+        changeset_id: &str,
+        vis: &Visibility,
+        principal: Option<&crate::auth::Principal>,
+        root: (pb::EntityKind, &pb::Id),
+    ) -> Result<(Arc<Vec<StoredEntity>>, bool), Status> {
+        // Validates the id and turns an unknown one into NOT_FOUND before
+        // any walk starts.
+        let target = self
+            .store
+            .get_changeset(changeset_id)
+            .await
+            .map_err(store_err)?;
+        if let Some(branch) = target.branch.as_deref() {
+            // Same answer `GetChangeset` gives, so the error cannot name a
+            // branch this caller may not see.
+            if !Self::branch_visible(principal, branch) {
+                return Err(Status::not_found("entity not found"));
+            }
+            return Err(Status::invalid_argument(format!(
+                "changeset {changeset_id} landed on branch {branch}; as_of_changeset reads \
+                 baseline history only"
+            )));
+        }
+        // Snapshot before listing: a write that lands in between is then
+        // in `newer` and gets rewound, instead of leaking into the view.
+        let mut current = self.baseline_snapshot().await?;
+        let lens = self.lens(vis).await?;
+        let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
+
+        let mut pre_images: Vec<as_of::PreImage> = Vec::new();
+        for (record_id, ops) in &newer {
+            for op in ops {
+                let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
+                let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
+                let revision = self
+                    .store
+                    .get_entity_revision(kind, id, record_id, None)
+                    .await
+                    .map_err(|e| match e {
+                        trogon_atlas_store::error::StoreError::NotFound => {
+                            Status::failed_precondition(format!(
+                                "changeset {} recorded no revision for {}/{}: it predates \
+                                 revision recording or was written without changeset \
+                                 attribution, so the model as of an older changeset is not recoverable",
+                                record_id, id.namespace, id.slug
+                            ))
+                        }
+                        other => store_err(other),
+                    })?;
+                pre_images.push((pb::EntityKey::new(kind, id), revision.before));
+            }
+        }
+
+        // The snapshot is capped, so it can omit the root and the members and
+        // halo the board reaches. Fetch those by key and let the pre-images
+        // rewind them with the rest. A key the snapshot holds or any newer
+        // changeset touched is never fetched: rewinding restores or drops it,
+        // and a fetch would resurrect what was created after the target. The
+        // fetches are bounded; keys left unfetched make the view incomplete,
+        // which the caller reports as truncated.
+        let (root_kind, root_id) = root;
+        let touched: std::collections::HashSet<pb::EntityKey> =
+            pre_images.iter().map(|(key, _)| key.clone()).collect();
+        let mut absent: std::collections::HashSet<pb::EntityKey> = std::collections::HashSet::new();
+        let mut fetched = 0usize;
+        let mut incomplete = false;
+        let rewound = loop {
+            let rewound = as_of::rewind(&current, pre_images.clone());
+            let mut wanted: Vec<(pb::EntityKind, pb::Id)> = vec![(root_kind, root_id.clone())];
+            let root_members = rewound.iter().find_map(|se| match se.entity.kind.as_ref() {
+                Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(root_id) => {
+                    Some(em.members.clone())
+                }
+                _ => None,
+            });
+            if let Some(members) = root_members {
+                wanted.extend(
+                    graph::closure(&rewound, &members, MAX_PROJECTION_ENTITIES, &self.metrics)
+                        .missing,
+                );
+            }
+            let held: std::collections::HashSet<pb::EntityKey> = current
+                .iter()
+                .filter_map(|se| {
+                    trogon_atlas_store::refs::entity_kind(&se.entity)
+                        .zip(trogon_atlas_store::refs::entity_id(&se.entity))
+                        .map(|(k, i)| pb::EntityKey::new(k, i))
+                })
+                .collect();
+            wanted.retain(|(k, i)| {
+                let key = pb::EntityKey::new(*k, i);
+                !held.contains(&key) && !touched.contains(&key) && !absent.contains(&key)
+            });
+            if wanted.is_empty() {
+                break rewound;
+            }
+            let mut with_fetched = current.as_ref().clone();
+            for (kind, id) in wanted {
+                if fetched >= MAX_PROJECTION_ENTITIES {
+                    incomplete = true;
+                    break;
+                }
+                fetched += 1;
+                match self.store.get(kind, &id, None).await {
+                    Ok(stored) => with_fetched.push(stored),
+                    Err(trogon_atlas_store::error::StoreError::NotFound) => {
+                        absent.insert(pb::EntityKey::new(kind, &id));
+                    }
+                    Err(other) => return Err(store_err(other)),
+                }
+            }
+            current = Arc::new(with_fetched);
+            if incomplete {
+                break as_of::rewind(&current, pre_images.clone());
+            }
+        };
+        // Narrow with the lens the walk used: a namespace admitted only by a
+        // later lookup was never rewound and would show its current state.
+        if lens.is_unrestricted() {
+            return Ok((Arc::new(rewound), incomplete));
+        }
+        Ok((Self::apply_lens(&rewound, &lens), incomplete))
+    }
+
+    /// Baseline changesets newer than `changeset_id`, newest first, with
+    /// `changeset_id` itself excluded, each paired with the ops
+    /// [`as_of::ops_to_rewind`] keeps for `lens`. A changeset left with no
+    /// ops is dropped and does not count toward the rewind cap, so another
+    /// owner's traffic cannot push this caller's target out of reach.
+    async fn baseline_changesets_after(
+        &self,
+        changeset_id: &str,
+        lens: &Lens,
+    ) -> Result<Vec<(String, Vec<ChangesetOp>)>, Status> {
+        let limit = usize::try_from(CHANGESETS_MAX_PAGE_SIZE).unwrap_or(500);
+        let mut newer: Vec<(String, Vec<ChangesetOp>)> = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = self
+                .store
+                .list_changesets(ChangesetPage {
+                    before: cursor.as_deref(),
+                    limit,
+                    scope: ChangesetScope::Baseline,
+                    namespace: None,
+                })
+                .await
+                .map_err(store_err)?;
+            let exhausted = page.len() < limit;
+            cursor = page.last().map(|r| r.id.clone());
+            for record in page {
+                // Ids are UUIDv7, so passing below the target means it is
+                // not on the baseline log.
+                if record.id.as_str() <= changeset_id {
+                    if record.id == changeset_id {
+                        return Ok(newer);
+                    }
+                    return Err(store_err(trogon_atlas_store::error::StoreError::NotFound));
+                }
+                let ops: Vec<ChangesetOp> = as_of::ops_to_rewind(&record, lens)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                if ops.is_empty() {
+                    continue;
+                }
+                if newer.len() >= as_of::MAX_REWIND_CHANGESETS {
+                    return Err(Status::failed_precondition(format!(
+                        "changeset {changeset_id} is more than {} baseline changesets old; \
+                         as_of_changeset rewinds at most that many",
+                        as_of::MAX_REWIND_CHANGESETS
+                    )));
+                }
+                newer.push((record.id, ops));
+            }
+            if exhausted || cursor.is_none() {
+                return Err(store_err(trogon_atlas_store::error::StoreError::NotFound));
+            }
+        }
     }
 
     /// [`snapshot_for`](Self::snapshot_for) plus whether the view hit the
@@ -833,6 +1025,14 @@ impl EventModelServiceImpl {
 
     pub fn with_jev_analyzer(mut self, analyzer: Arc<crate::jev::JevAnalyzer>) -> Self {
         self.jev_analyzer = Some(analyzer);
+        self
+    }
+
+    /// Lower the baseline snapshot's entity cap so the truncation boundary
+    /// can be reached with a handful of entities in tests.
+    #[must_use]
+    pub fn with_snapshot_cap(mut self, cap: usize) -> Self {
+        self.snapshot_cap = cap;
         self
     }
 
@@ -3448,6 +3648,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             mut entities,
             truncated,
+            ..
         } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics);
         // The closure includes the slice itself; the projection ships the
         // slice separately on `slice`.
@@ -3512,6 +3713,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             mut entities,
             truncated,
+            ..
         } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics);
         entities.remove(&trogon_atlas_proto::canonical::id_string(
             pb::EntityKind::Storyboard,
@@ -3533,25 +3735,55 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         req: Request<pb::GetEventModelProjectionRequest>,
     ) -> Result<Response<pb::GetEventModelProjectionResponse>, Status> {
         let vis = Self::visibility_of(&req);
+        let principal = Self::principal_from_metadata(&req);
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
         let id = require_id(req.id.as_ref(), "")?;
+        if !req.as_of_changeset.is_empty() && branch.is_some() {
+            return Err(Status::invalid_argument(
+                "as_of_changeset reads baseline history only; send it without a branch header",
+            ));
+        }
         // The root is fetched by key, so the lensed snapshot below
         // narrows the neighbourhood but never the root itself.
         self.require_visible(&vis, &id.namespace).await?;
-        let stored = self
-            .store
-            .get(pb::EntityKind::EventModel, id, branch.as_deref())
-            .await
-            .map_err(store_err)?;
-        let Some(pb::entity::Kind::EventModel(em)) = stored.entity.kind.clone() else {
-            return Err(Status::internal("event_model entity kind mismatch"));
+        let (em, all, as_of_incomplete) = if req.as_of_changeset.is_empty() {
+            let stored = self
+                .store
+                .get(pb::EntityKind::EventModel, id, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+            let Some(pb::entity::Kind::EventModel(em)) = stored.entity.kind.clone() else {
+                return Err(Status::internal("event_model entity kind mismatch"));
+            };
+            (em, self.snapshot_for(branch.as_deref(), &vis).await?, false)
+        } else {
+            let (all, incomplete) = self
+                .snapshot_as_of(
+                    &req.as_of_changeset,
+                    &vis,
+                    principal.as_ref(),
+                    (pb::EntityKind::EventModel, id),
+                )
+                .await?;
+            // The live row may be gone or newer, so the root comes from the
+            // rewound set like everything it references.
+            let em = all
+                .iter()
+                .find_map(|se| match se.entity.kind.as_ref() {
+                    Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(id) => {
+                        Some(em.clone())
+                    }
+                    _ => None,
+                })
+                .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
+            (em, all, incomplete)
         };
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
         let root_refs: Vec<pb::EntityRef> = em.members.clone();
         let graph::Closure {
             mut entities,
             truncated,
+            ..
         } = graph::closure(&all, &root_refs, MAX_PROJECTION_ENTITIES, &self.metrics);
         if !req.include_cross_model {
             let own_ns = id.namespace.clone();
@@ -3564,7 +3796,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 event_model: Some(em),
                 entities,
             }),
-            truncated,
+            truncated: truncated || as_of_incomplete,
         }))
     }
 
@@ -3593,6 +3825,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             entities,
             truncated,
+            ..
         } = graph::closure(
             &all,
             std::slice::from_ref(&root_ref),

@@ -264,6 +264,52 @@ since its targets are a fixed list read off a recorded changeset rather
 than a query the caller composes. Both are available as MCP tools
 (`get_entity_history`, `revert_changeset`).
 
+## As-of reads: the board after a past changeset
+
+`GetEventModelProjection` takes `as_of_changeset`. With it set, the
+response is the model and its closure as they stood right after that
+changeset landed. The changeset's own writes are in the view; every later
+write is not.
+
+Nothing stores the past as a whole, because the entities bucket keeps one
+revision per key. The server derives it instead:
+
+1. Page the baseline changeset log from newest down to the target.
+2. For each newer changeset, read the revision row of every op in a
+   namespace the caller can read. Ops in other namespaces are skipped,
+   and a changeset with none of the caller's ops is skipped whole.
+3. Start from the current baseline and put back each key's `before`.
+   `before` absent means a later changeset created the key, so it is
+   removed. When several changesets touched one key, the oldest one's
+   `before` wins.
+4. Resolve the event model from that rebuilt set, then walk its closure
+   as usual. Namespace visibility applies to the result.
+
+The read is baseline only. A branch header is `INVALID_ARGUMENT`, and so is
+a changeset that landed on a branch. An unknown id is `NOT_FOUND`, and so is
+a changeset on a branch the caller cannot see, the same as `GetChangeset`.
+
+**Cost.** O(changesets since the target × their ops) revision reads, plus
+the log pages to find the target. The walk stops after 1,000 newer
+changesets in the caller's namespaces with `FAILED_PRECONDITION`, so an old target fails fast instead
+of holding the request open.
+
+**Gap: unattributed writes.** A write that minted no changeset
+(`trogon-atlas-server import`, direct `Store` use) left no revision row and
+no place in the log. It cannot be rewound, so its effect shows through in
+every as-of view. A newer changeset with a missing revision row (for
+example one whose batch recovery reported the key as `superseded`) makes
+the read `FAILED_PRECONDITION` rather than return a board that never
+existed.
+
+```text
+# The board as it was right after this changeset.
+GetEventModelProjection(id: {namespace: "acme", slug: "checkout", version: 1},
+                        as_of_changeset: <changeset id>)
+```
+
+The MCP tool `get_event_model_projection` takes the same `as_of_changeset`.
+
 ## Cost, and when to move off this
 
 `list_changesets` scans the bucket's keyspace per page, keeping at most

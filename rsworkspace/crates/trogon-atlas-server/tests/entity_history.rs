@@ -19,10 +19,18 @@ use trogon_atlas_proto::{
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server() -> String {
+    start_server_with_cap(None).await
+}
+
+async fn start_server_with_cap(snapshot_cap: Option<usize>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
-    let svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
+    let mut svc =
+        EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
+    if let Some(cap) = snapshot_cap {
+        svc = svc.with_snapshot_cap(cap);
+    }
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -632,4 +640,483 @@ async fn history_of_an_unwritten_entity_is_empty() {
 
     let revisions = history(&mut c, "hist-none", "never-written").await;
     assert_eq!(revisions, [] as [trogon_atlas_proto::EntityRevision; 0]);
+}
+
+fn event_model(ns: &str, slug: &str, members: &[&str]) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id(ns, slug)),
+            title: "Checkout".into(),
+            members: members.iter().map(|m| entity_ref(ns, m)).collect(),
+            ..Default::default()
+        })),
+    }
+}
+
+fn delete_req(ns: &str, slug: &str) -> pb::DeleteEntityRequest {
+    pb::DeleteEntityRequest {
+        operation_id: String::new(),
+        kind: pb::EntityKind::Event as i32,
+        id: Some(id(ns, slug)),
+        mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+        if_match: String::new(),
+    }
+}
+
+fn as_of_req(ns: &str, slug: &str, changeset: &str) -> pb::GetEventModelProjectionRequest {
+    pb::GetEventModelProjectionRequest {
+        id: Some(id(ns, slug)),
+        include_cross_model: false,
+        as_of_changeset: changeset.into(),
+    }
+}
+
+async fn newest_changeset(c: &mut EventModelServiceClient<Channel>) -> String {
+    c.list_changesets(pb::ListChangesetsRequest {
+        page_token: String::new(),
+        page_size: 1,
+        branch: String::new(),
+        namespace: String::new(),
+    })
+    .await
+    .unwrap()
+    .into_inner()
+    .changesets[0]
+        .id
+        .clone()
+}
+
+/// Member slugs and event titles, sorted, so the assertion ignores map order.
+fn board(projection: &pb::EventModelProjection) -> (Vec<String>, Vec<(String, String)>) {
+    let mut members: Vec<String> = projection
+        .event_model
+        .as_ref()
+        .unwrap()
+        .members
+        .iter()
+        .map(|m| m.id.as_ref().unwrap().slug.clone())
+        .collect();
+    members.sort();
+    let mut events: Vec<(String, String)> = projection
+        .entities
+        .values()
+        .filter_map(|e| match e.kind.as_ref() {
+            Some(pb::entity::Kind::Event(ev)) => {
+                Some((ev.id.as_ref().unwrap().slug.clone(), ev.title.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    events.sort();
+    (members, events)
+}
+
+/// Edit, delete and create after the target all unwind, and the target's own
+/// writes stay applied because the read is "right after" it.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_shows_the_board_right_after_the_changeset() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    let ns = "hist-asof";
+
+    for (slug, title) in [
+        ("order-placed", "Order placed"),
+        ("cart-emptied", "Cart emptied"),
+    ] {
+        c.put_entity(as_author(put_req(event(ns, slug, title)), "alice"))
+            .await
+            .unwrap();
+    }
+    c.put_entity(as_author(
+        put_req(event_model(
+            ns,
+            "checkout",
+            &["order-placed", "cart-emptied"],
+        )),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    c.put_entity(as_author(
+        put_req(event(ns, "order-placed", "Order was placed")),
+        "bob",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(event_model(ns, "checkout", &["order-placed"])),
+        "bob",
+    ))
+    .await
+    .unwrap();
+    c.delete_entity(as_author(delete_req(ns, "cart-emptied"), "bob"))
+        .await
+        .unwrap();
+    c.put_entity(as_author(
+        put_req(event(ns, "coupon-applied", "Coupon applied")),
+        "bob",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(event_model(
+            ns,
+            "checkout",
+            &["order-placed", "coupon-applied"],
+        )),
+        "bob",
+    ))
+    .await
+    .unwrap();
+
+    let then = c
+        .get_event_model_projection(as_of_req(ns, "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        board(then.projection.as_ref().unwrap()),
+        (
+            vec!["cart-emptied".to_string(), "order-placed".to_string()],
+            vec![
+                ("cart-emptied".to_string(), "Cart emptied".to_string()),
+                ("order-placed".to_string(), "Order placed".to_string()),
+            ],
+        )
+    );
+
+    let now = c
+        .get_event_model_projection(as_of_req(ns, "checkout", ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        board(now.projection.as_ref().unwrap()).1,
+        vec![
+            ("coupon-applied".to_string(), "Coupon applied".to_string()),
+            ("order-placed".to_string(), "Order was placed".to_string()),
+        ],
+        "an as-of read writes nothing"
+    );
+}
+
+/// The baseline snapshot is capped, so the root can fall outside it. The
+/// live path fetches the root by key; the as-of path must too, or a model
+/// untouched since the target is NOT_FOUND exactly when it is most recent.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_finds_a_root_the_capped_snapshot_omits() {
+    let endpoint = start_server_with_cap(Some(2)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "hist-asof-cap";
+
+    c.put_entity(as_author(
+        put_req(event(ns, "order-placed", "Order placed")),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(event_model(ns, "checkout", &["order-placed"])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    // Enough other entities that a snapshot capped at two cannot hold them
+    // all, whichever the store lists first.
+    for slug in ["aa", "ab", "ac", "ad"] {
+        c.put_entity(as_author(
+            put_req(event("hist-asof-cap-other", slug, slug)),
+            "bob",
+        ))
+        .await
+        .unwrap();
+    }
+
+    let then = c
+        .get_event_model_projection(as_of_req(ns, "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        board(then.projection.as_ref().unwrap()).0,
+        vec!["order-placed".to_string()]
+    );
+}
+
+/// Members outside the capped snapshot, untouched since the target, are
+/// fetched by key and rewound like the rest, so the board is whole.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_finds_members_the_capped_snapshot_omits() {
+    let endpoint = start_server_with_cap(Some(2)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "zzz-asof-members";
+
+    for (slug, title) in [
+        ("order-placed", "Order placed"),
+        ("order-paid", "Order paid"),
+    ] {
+        c.put_entity(as_author(put_req(event(ns, slug, title)), "alice"))
+            .await
+            .unwrap();
+    }
+    c.put_entity(as_author(
+        put_req(event_model(ns, "checkout", &["order-placed", "order-paid"])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    for slug in ["aa", "ab", "ac", "ad"] {
+        c.put_entity(as_author(
+            put_req(event("aaa-asof-members-others", slug, slug)),
+            "bob",
+        ))
+        .await
+        .unwrap();
+    }
+
+    let then = c
+        .get_event_model_projection(as_of_req(ns, "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!then.truncated);
+    assert_eq!(
+        board(then.projection.as_ref().unwrap()),
+        (
+            vec!["order-paid".to_string(), "order-placed".to_string()],
+            vec![
+                ("order-paid".to_string(), "Order paid".to_string()),
+                ("order-placed".to_string(), "Order placed".to_string()),
+            ],
+        )
+    );
+}
+
+fn model_ref(ns: &str, slug: &str) -> pb::EntityRef {
+    pb::EntityRef {
+        kind: pb::EntityKind::EventModel as i32,
+        id: Some(id(ns, slug)),
+    }
+}
+
+fn model_with(ns: &str, slug: &str, members: Vec<pb::EntityRef>) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id(ns, slug)),
+            title: slug.into(),
+            members,
+            ..Default::default()
+        })),
+    }
+}
+
+fn cross_model_as_of_req(
+    ns: &str,
+    slug: &str,
+    changeset: &str,
+) -> pb::GetEventModelProjectionRequest {
+    pb::GetEventModelProjectionRequest {
+        include_cross_model: true,
+        ..as_of_req(ns, slug, changeset)
+    }
+}
+
+/// Slugs of the event models the board carries besides its root.
+fn model_slugs(projection: &pb::EventModelProjection) -> Vec<String> {
+    let mut slugs: Vec<String> = projection
+        .entities
+        .values()
+        .filter_map(|e| match e.kind.as_ref() {
+            Some(pb::entity::Kind::EventModel(m)) => Some(m.id.as_ref().unwrap().slug.clone()),
+            _ => None,
+        })
+        .collect();
+    slugs.sort();
+    slugs
+}
+
+/// Keys list in kind then namespace order, so with a cap of two the root and
+/// one filler model fill the snapshot and the member falls outside it. The
+/// root being present must not stop the member from being fetched.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_finds_a_member_when_the_root_is_in_the_capped_snapshot() {
+    let endpoint = start_server_with_cap(Some(2)).await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(as_author(
+        put_req(model_with("aaa-asof-root", "filler", vec![])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(model_with("zzz-asof-root", "member", vec![])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(model_with(
+            "aab-asof-root",
+            "checkout",
+            vec![model_ref("zzz-asof-root", "member")],
+        )),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    c.put_entity(as_author(
+        put_req(model_with("zzz-asof-root", "later", vec![])),
+        "bob",
+    ))
+    .await
+    .unwrap();
+
+    let then = c
+        .get_event_model_projection(cross_model_as_of_req("aab-asof-root", "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!then.truncated);
+    assert_eq!(
+        model_slugs(then.projection.as_ref().unwrap()),
+        vec!["member".to_string()]
+    );
+}
+
+/// A model created after the target does not exist at the target, whether the
+/// capped snapshot holds it or not.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_of_a_model_created_later_is_not_found() {
+    for cap in [Some(2), None] {
+        let endpoint = start_server_with_cap(cap).await;
+        let mut c = client(&endpoint).await;
+        let ns = "asof-later-root";
+
+        for slug in ["aa", "ab", "ac"] {
+            c.put_entity(as_author(
+                put_req(event("aaa-asof-later-others", slug, slug)),
+                "alice",
+            ))
+            .await
+            .unwrap();
+        }
+        let target = newest_changeset(&mut c).await;
+        c.put_entity(as_author(
+            put_req(event_model(ns, "checkout", &["aa"])),
+            "bob",
+        ))
+        .await
+        .unwrap();
+
+        let status = c
+            .get_event_model_projection(as_of_req(ns, "checkout", &target))
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::NotFound, "cap {cap:?}");
+    }
+}
+
+/// A member that only came into being after the target stays out of the
+/// board even though the model's members at the target already named it. The
+/// snapshot holds it and not the root, so rewinding drops the first copy and
+/// a refetch would bring a second one back.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_leaves_out_a_member_created_after_the_target() {
+    let endpoint = start_server_with_cap(Some(1)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "aaa-asof-leak";
+
+    let mut dangling = put_req(model_with(
+        "zzz-asof-leak",
+        "checkout",
+        vec![model_ref(ns, "later")],
+    ));
+    dangling.force = true;
+    c.put_entity(as_author(dangling, "alice")).await.unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    c.put_entity(as_author(put_req(model_with(ns, "later", vec![])), "bob"))
+        .await
+        .unwrap();
+
+    let then = c
+        .get_event_model_projection(cross_model_as_of_req("zzz-asof-leak", "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        model_slugs(then.projection.as_ref().unwrap()),
+        Vec::<String>::new()
+    );
+}
+
+/// A branch overlay has its own log, so mixing it with a baseline point in
+/// time would answer neither question.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_rejects_a_branch_header() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(as_author(
+        put_req(event_model("hist-asof-branch", "checkout", &[])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+    c.create_branch(tonic::Request::new(pb::CreateBranchRequest {
+        name: "hist-asof-work".into(),
+        doc: String::new(),
+    }))
+    .await
+    .unwrap();
+
+    let status = c
+        .get_event_model_projection(on_branch(
+            tonic::Request::new(as_of_req("hist-asof-branch", "checkout", &target)),
+            "hist-asof-work",
+        ))
+        .await
+        .expect_err("as-of is baseline only");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_projection_of_an_unknown_changeset_is_not_found() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(as_author(
+        put_req(event_model("hist-asof-unknown", "checkout", &[])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+
+    let status = c
+        .get_event_model_projection(as_of_req(
+            "hist-asof-unknown",
+            "checkout",
+            &uuid::Uuid::now_v7().to_string(),
+        ))
+        .await
+        .expect_err("a changeset that was never recorded has no point in time");
+    assert_eq!(status.code(), tonic::Code::NotFound);
+
+    let status = c
+        .get_event_model_projection(as_of_req("hist-asof-unknown", "checkout", "not-a-uuid"))
+        .await
+        .expect_err("a malformed id is the caller's mistake");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
 }

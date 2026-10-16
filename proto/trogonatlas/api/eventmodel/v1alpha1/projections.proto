@@ -73,6 +73,12 @@ message GetEventModelProjectionRequest {
   // other models. If false, references outside this model appear in the
   // map only by Id (as empty Entity placeholders).
   bool include_cross_model = 2;
+  // Read-only view of the model right after this changeset landed. Baseline
+  // only: the request must not carry a branch header, and the id must name a
+  // baseline changeset. The server rewinds every newer baseline changeset
+  // from its recorded pre-images, so a write that recorded no changeset
+  // cannot be rewound. Empty reads the current model.
+  string as_of_changeset = 3;
 }
 
 message GetEventModelProjectionResponse {
