@@ -21,14 +21,19 @@ vi.mock('@/components/canvas/Board', () => ({
     focus,
     selections,
     onSelect,
+    onSelectEdge,
   }: {
     focus?: { key: string; n: number };
     selections: unknown[];
     onSelect: (key: string) => void;
+    onSelectEdge?: (edge: { id: string; data: unknown }, additive?: boolean) => void;
   }) => (
     <div data-testid="board" data-focus={JSON.stringify(focus)} data-selections={JSON.stringify(selections)}>
       <button type="button" onClick={() => onSelect('event:shop/order.placed@1')}>
         Board select order placed
+      </button>
+      <button type="button" onClick={() => onSelectEdge?.({ id: 'edge-1', data: {} })}>
+        Board select edge
       </button>
     </div>
   ),
@@ -303,6 +308,22 @@ describe('ModelShell selection drawer routing', () => {
     expect(screen.getByRole('status', { name: 'As of' })).toBeDefined();
     fireEvent.click(screen.getByRole('link', { name: 'Exit' }));
     expect(onAsOfChange).toHaveBeenLastCalledWith(undefined);
+  });
+
+  it('closes namespace history when an edge is selected so its inspector shows', async () => {
+    const id = { namespace: 'shop', slug: 'order.placed', version: '1' };
+    const model = buildModel([{ event: { id, title: 'Order placed' } }] as never);
+    (api.changesets as ReturnType<typeof vi.fn>).mockResolvedValue({ changesets: [], nextPageToken: '' });
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" historyNamespace="shop" />, {
+      wrapper: withNuqsTestingAdapter(),
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Namespace history' }));
+    expect(screen.getByRole('complementary', { name: 'Namespace history' })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Board select edge' }));
+
+    await waitFor(() => expect(screen.getByTestId('edge-inspector')).toBeDefined());
+    expect(screen.queryByRole('complementary', { name: 'Namespace history' })).toBeNull();
   });
 
   it('offers no history button without a namespace to read', () => {

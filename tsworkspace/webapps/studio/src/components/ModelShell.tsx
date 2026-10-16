@@ -221,6 +221,7 @@ export function ModelShell({
   );
   const selectEdge = useCallback((edge: SelectedEdge, additive?: boolean) => {
     setValidationOpen(false);
+    setHistoryOpen(false);
     setSelections((prev) => {
       const entry: Selection = { type: 'edge', id: edge.id, data: edge.data };
       if (!additive) {
