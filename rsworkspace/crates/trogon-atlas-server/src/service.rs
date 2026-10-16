@@ -682,7 +682,7 @@ impl EventModelServiceImpl {
         vis: &Visibility,
         principal: Option<&crate::auth::Principal>,
         root: (pb::EntityKind, &pb::Id),
-    ) -> Result<Arc<Vec<StoredEntity>>, Status> {
+    ) -> Result<(Arc<Vec<StoredEntity>>, bool), Status> {
         // Validates the id and turns an unknown one into NOT_FOUND before
         // any walk starts.
         let target = self
@@ -731,35 +731,73 @@ impl EventModelServiceImpl {
             }
         }
 
-        // The snapshot is capped, so it can omit the root. Fetch it by key,
-        // as the live path does, and let the pre-images rewind it with the
-        // rest. A root deleted since the target is restored by its pre-image.
+        // The snapshot is capped, so it can omit the root and the members and
+        // halo the board reaches. Fetch them by key and let the pre-images
+        // rewind them with the rest. A key deleted since the target is
+        // restored by its pre-image, so only keys the rewound set still lacks
+        // are fetched. The fetches are bounded; keys left unfetched make the
+        // view incomplete, which the caller reports as truncated.
         let (root_kind, root_id) = root;
-        let root_key = pb::EntityKey::new(root_kind, root_id);
-        let in_snapshot = current.iter().any(|se| {
-            trogon_atlas_store::refs::entity_kind(&se.entity)
-                .zip(trogon_atlas_store::refs::entity_id(&se.entity))
-                .is_some_and(|(k, i)| pb::EntityKey::new(k, i) == root_key)
-        });
-        if !in_snapshot {
-            match self.store.get(root_kind, root_id, None).await {
-                Ok(stored) => {
-                    let mut with_root = current.as_ref().clone();
-                    with_root.push(stored);
-                    current = Arc::new(with_root);
+        let mut absent: std::collections::HashSet<pb::EntityKey> = std::collections::HashSet::new();
+        let mut wanted: Vec<(pb::EntityKind, pb::Id)> = vec![(root_kind, root_id.clone())];
+        let mut fetched = 0usize;
+        let mut incomplete = false;
+        let rewound = loop {
+            let rewound = as_of::rewind(&current, pre_images.clone());
+            if wanted.is_empty() {
+                let em_members = rewound.iter().find_map(|se| match se.entity.kind.as_ref() {
+                    Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(root_id) => {
+                        Some(em.members.clone())
+                    }
+                    _ => None,
+                });
+                if let Some(members) = em_members {
+                    wanted =
+                        graph::closure(&rewound, &members, MAX_PROJECTION_ENTITIES, &self.metrics)
+                            .missing;
                 }
-                Err(trogon_atlas_store::error::StoreError::NotFound) => {}
-                Err(other) => return Err(store_err(other)),
             }
-        }
-
-        let rewound = as_of::rewind(&current, pre_images);
+            let have: std::collections::HashSet<pb::EntityKey> = rewound
+                .iter()
+                .filter_map(|se| {
+                    trogon_atlas_store::refs::entity_kind(&se.entity)
+                        .zip(trogon_atlas_store::refs::entity_id(&se.entity))
+                        .map(|(k, i)| pb::EntityKey::new(k, i))
+                })
+                .collect();
+            wanted.retain(|(k, i)| {
+                let key = pb::EntityKey::new(*k, i);
+                !have.contains(&key) && !absent.contains(&key)
+            });
+            if wanted.is_empty() {
+                break rewound;
+            }
+            let mut with_fetched = current.as_ref().clone();
+            for (kind, id) in std::mem::take(&mut wanted) {
+                if fetched >= MAX_PROJECTION_ENTITIES {
+                    incomplete = true;
+                    break;
+                }
+                fetched += 1;
+                match self.store.get(kind, &id, None).await {
+                    Ok(stored) => with_fetched.push(stored),
+                    Err(trogon_atlas_store::error::StoreError::NotFound) => {
+                        absent.insert(pb::EntityKey::new(kind, &id));
+                    }
+                    Err(other) => return Err(store_err(other)),
+                }
+            }
+            current = Arc::new(with_fetched);
+            if incomplete {
+                break as_of::rewind(&current, pre_images.clone());
+            }
+        };
         // Narrow with the lens the walk used: a namespace admitted only by a
         // later lookup was never rewound and would show its current state.
         if lens.is_unrestricted() {
-            return Ok(Arc::new(rewound));
+            return Ok((Arc::new(rewound), incomplete));
         }
-        Ok(Self::apply_lens(&rewound, &lens))
+        Ok((Self::apply_lens(&rewound, &lens), incomplete))
     }
 
     /// Baseline changesets newer than `changeset_id`, newest first, with
@@ -3608,6 +3646,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             mut entities,
             truncated,
+            ..
         } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics);
         // The closure includes the slice itself; the projection ships the
         // slice separately on `slice`.
@@ -3672,6 +3711,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             mut entities,
             truncated,
+            ..
         } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics);
         entities.remove(&trogon_atlas_proto::canonical::id_string(
             pb::EntityKind::Storyboard,
@@ -3705,7 +3745,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // The root is fetched by key, so the lensed snapshot below
         // narrows the neighbourhood but never the root itself.
         self.require_visible(&vis, &id.namespace).await?;
-        let (em, all) = if req.as_of_changeset.is_empty() {
+        let (em, all, as_of_incomplete) = if req.as_of_changeset.is_empty() {
             let stored = self
                 .store
                 .get(pb::EntityKind::EventModel, id, branch.as_deref())
@@ -3714,9 +3754,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let Some(pb::entity::Kind::EventModel(em)) = stored.entity.kind.clone() else {
                 return Err(Status::internal("event_model entity kind mismatch"));
             };
-            (em, self.snapshot_for(branch.as_deref(), &vis).await?)
+            (em, self.snapshot_for(branch.as_deref(), &vis).await?, false)
         } else {
-            let all = self
+            let (all, incomplete) = self
                 .snapshot_as_of(
                     &req.as_of_changeset,
                     &vis,
@@ -3735,12 +3775,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     _ => None,
                 })
                 .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
-            (em, all)
+            (em, all, incomplete)
         };
         let root_refs: Vec<pb::EntityRef> = em.members.clone();
         let graph::Closure {
             mut entities,
             truncated,
+            ..
         } = graph::closure(&all, &root_refs, MAX_PROJECTION_ENTITIES, &self.metrics);
         if !req.include_cross_model {
             let own_ns = id.namespace.clone();
@@ -3753,7 +3794,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 event_model: Some(em),
                 entities,
             }),
-            truncated,
+            truncated: truncated || as_of_incomplete,
         }))
     }
 
@@ -3782,6 +3823,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let graph::Closure {
             entities,
             truncated,
+            ..
         } = graph::closure(
             &all,
             std::slice::from_ref(&root_ref),
