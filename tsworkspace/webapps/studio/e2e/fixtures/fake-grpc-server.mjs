@@ -134,6 +134,26 @@ function diffBranch(call, callback) {
   callback(null, { entries: [DIFF_ENTRY] });
 }
 
+// One edit to the fixture event, so the Inspector's History tab has a
+// before/after pair to render. Every other ref has no recorded history.
+export const ORDER_PLACED_REVISION = {
+  changesetId: '0192f000-0000-7000-8000-000000000001',
+  author: 'acme-agent',
+  at: '2026-01-02T00:00:00Z',
+  rpc: 'PutEntity',
+  branch: '',
+  entity: { kind: 'ENTITY_KIND_EVENT', id: ORDER_PLACED_EVENT.event.id },
+  kind: 'KIND_PUT',
+  before: { event: { ...ORDER_PLACED_EVENT.event, doc: 'Emitted at checkout.' } },
+  after: ORDER_PLACED_EVENT,
+};
+
+function getEntityHistory(call, callback) {
+  const id = call.request.ref?.id;
+  const matches = id?.namespace === ORDER_MODEL_ID.namespace && id?.slug === ORDER_PLACED_EVENT.event.id.slug;
+  callback(null, { revisions: matches ? [ORDER_PLACED_REVISION] : [], nextPageToken: '' });
+}
+
 function listValidationRules(_call, callback) {
   callback(null, { rules: [] });
 }
@@ -262,6 +282,7 @@ export async function startFakeGrpcServer() {
     listNamespaces,
     listBranches,
     diffBranch,
+    getEntityHistory,
     listValidationRules,
     listEntityKinds,
     searchEntities,

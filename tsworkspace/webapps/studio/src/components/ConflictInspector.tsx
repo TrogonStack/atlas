@@ -43,7 +43,7 @@ function entryKey(entry: BranchDiffEntry, i: number): string {
   return id?.namespace && id?.slug ? `${entry.ref?.kind}:${id.namespace}/${id.slug}@${id.version ?? ''}` : String(i);
 }
 
-function JsonPane({ title, value }: { title: string; value: unknown }) {
+export function JsonPane({ title, value }: { title: string; value: unknown }) {
   return (
     <div className="min-w-0 flex-1">
       <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</div>
