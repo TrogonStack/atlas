@@ -694,23 +694,17 @@ impl EventModelServiceImpl {
         // Snapshot before listing: a write that lands in between is then
         // in `newer` and gets rewound, instead of leaking into the view.
         let current = self.baseline_snapshot().await?;
-        let newer = self.baseline_changesets_after(changeset_id).await?;
+        let lens = self.lens(vis).await?;
+        let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
 
         let mut pre_images: Vec<as_of::PreImage> = Vec::new();
-        for record in &newer {
-            // Two ops on one key share one folded revision row.
-            let mut seen: std::collections::HashSet<pb::EntityKey> =
-                std::collections::HashSet::new();
-            for op in &record.ops {
+        for (record_id, ops) in &newer {
+            for op in ops {
                 let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
                 let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
-                let key = pb::EntityKey::new(kind, id);
-                if !seen.insert(key.clone()) {
-                    continue;
-                }
                 let revision = self
                     .store
-                    .get_entity_revision(kind, id, &record.id, None)
+                    .get_entity_revision(kind, id, record_id, None)
                     .await
                     .map_err(|e| match e {
                         trogon_atlas_store::error::StoreError::NotFound => {
@@ -718,27 +712,36 @@ impl EventModelServiceImpl {
                                 "changeset {} recorded no revision for {}/{}: it predates \
                                  revision recording or was written without changeset \
                                  attribution, so the model as of an older changeset is not recoverable",
-                                record.id, id.namespace, id.slug
+                                record_id, id.namespace, id.slug
                             ))
                         }
                         other => store_err(other),
                     })?;
-                pre_images.push((key, revision.before));
+                pre_images.push((pb::EntityKey::new(kind, id), revision.before));
             }
         }
 
         let rewound = as_of::rewind(&current, pre_images);
-        self.narrow(Arc::new(rewound), vis).await
+        // Narrow with the lens the walk used: a namespace admitted only by a
+        // later lookup was never rewound and would show its current state.
+        if lens.is_unrestricted() {
+            return Ok(Arc::new(rewound));
+        }
+        Ok(Self::apply_lens(&rewound, &lens))
     }
 
     /// Baseline changesets newer than `changeset_id`, newest first, with
-    /// `changeset_id` itself excluded.
+    /// `changeset_id` itself excluded, each paired with the ops
+    /// [`as_of::ops_to_rewind`] keeps for `lens`. A changeset left with no
+    /// ops is dropped and does not count toward the rewind cap, so another
+    /// owner's traffic cannot push this caller's target out of reach.
     async fn baseline_changesets_after(
         &self,
         changeset_id: &str,
-    ) -> Result<Vec<ChangesetRecord>, Status> {
+        lens: &Lens,
+    ) -> Result<Vec<(String, Vec<ChangesetOp>)>, Status> {
         let limit = usize::try_from(CHANGESETS_MAX_PAGE_SIZE).unwrap_or(500);
-        let mut newer: Vec<ChangesetRecord> = Vec::new();
+        let mut newer: Vec<(String, Vec<ChangesetOp>)> = Vec::new();
         let mut cursor: Option<String> = None;
         loop {
             let page = self
@@ -762,6 +765,13 @@ impl EventModelServiceImpl {
                     }
                     return Err(store_err(trogon_atlas_store::error::StoreError::NotFound));
                 }
+                let ops: Vec<ChangesetOp> = as_of::ops_to_rewind(&record, lens)
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                if ops.is_empty() {
+                    continue;
+                }
                 if newer.len() >= as_of::MAX_REWIND_CHANGESETS {
                     return Err(Status::failed_precondition(format!(
                         "changeset {changeset_id} is more than {} baseline changesets old; \
@@ -769,7 +779,7 @@ impl EventModelServiceImpl {
                         as_of::MAX_REWIND_CHANGESETS
                     )));
                 }
-                newer.push(record);
+                newer.push((record.id, ops));
             }
             if exhausted || cursor.is_none() {
                 return Err(store_err(trogon_atlas_store::error::StoreError::NotFound));
