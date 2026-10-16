@@ -1269,6 +1269,25 @@ describe('GET /api/event-model/:namespace/:slug?asOf=', () => {
     ]);
   });
 
+  it('flags a truncated closure that dropped a halo event', async () => {
+    const { 'event:shipping/parcel.shipped@1': _dropped, ...kept } = projection.projection.entities;
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(null, { projection: { ...projection.projection, entities: kept }, truncated: true }),
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.incomplete).toBe(true);
+  });
+
+  it('does not flag a truncated closure that kept every member and halo event', async () => {
+    const res = await withProjection(
+      (_req, _meta, cb) => cb(null, { ...projection, truncated: true }),
+      () => request(app).get(`/api/event-model/acme/checkout?asOf=${AS_OF}`),
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.incomplete).toBeUndefined();
+  });
+
   it('maps an unknown changeset to 404', async () => {
     const res = await withProjection(
       (_req, _meta, cb) => cb(Object.assign(new Error('entity not found'), { code: 5 })),

@@ -19,7 +19,15 @@ function formatAt(at: string): string {
       });
 }
 
-export function AsOfTag({ changesetId, onExit }: { changesetId: string; onExit: () => void }) {
+export function AsOfTag({
+  changesetId,
+  incomplete,
+  onExit,
+}: {
+  changesetId: string;
+  incomplete?: boolean;
+  onExit: () => void;
+}) {
   const [at, setAt] = useState<string>();
 
   useEffect(() => {
@@ -50,6 +58,14 @@ export function AsOfTag({ changesetId, onExit }: { changesetId: string; onExit: 
         <span className="shrink-0 rounded bg-amber-200 px-1 text-[9px] font-bold uppercase tracking-wide">
           read only
         </span>
+        {incomplete ? (
+          <span
+            title="The server clipped this past board at its entity limit, so some members or events are missing."
+            className="shrink-0 rounded bg-amber-300 px-1 text-[9px] font-bold uppercase tracking-wide"
+          >
+            partial
+          </span>
+        ) : null}
       </output>
       <a
         href={withAsOfQuery(`${pathname}${search}${hash}`, undefined)}

@@ -1749,11 +1749,13 @@ async function eventModelAsOf(ns, slug, asOf) {
   }
   // Same selection as the live route: the members, then foreign events
   // that member read models project from.
-  const members = (em.members ?? [])
-    .map((/** @type {any} */ m) => (m.id ? byKey.get(`${kindEnumToNumber(m.kind)}:${m.id.namespace}/${m.id.slug}@${m.id.version}`) : undefined))
+  const memberRefs = (em.members ?? []).filter((/** @type {any} */ m) => m.id);
+  const members = memberRefs
+    .map((/** @type {any} */ m) => byKey.get(`${kindEnumToNumber(m.kind)}:${m.id.namespace}/${m.id.slug}@${m.id.version}`))
     .filter(Boolean);
   /** @type {Map<string, unknown>} */
   const halo = new Map();
+  let haloMissing = false;
   for (const member of members) {
     for (const src of /** @type {any} */ (member).readModel?.sourceEvents ?? []) {
       const id = src.id;
@@ -1761,9 +1763,15 @@ async function eventModelAsOf(ns, slug, asOf) {
       const key = `${ENTITY_KIND_NUMBER.ENTITY_KIND_EVENT}:${id.namespace}/${id.slug}@${id.version}`;
       const event = byKey.get(key);
       if (event) halo.set(key, event);
+      else haloMissing = true;
     }
   }
-  return { entities: decodeAnnotations([{ eventModel: em }, ...members, ...halo.values()]) };
+  const entities = decodeAnnotations([{ eventModel: em }, ...members, ...halo.values()]);
+  // Live reads each member and halo event by id, but there is no as-of read by
+  // id, so a clipped closure can only be flagged. Clipping deep refs alone
+  // leaves the board whole, so only a missing member or halo event counts.
+  if (resp.truncated && (members.length < memberRefs.length || haloMissing)) return { entities, incomplete: true };
+  return { entities };
 }
 
 // The board as the YAML manifests `trogon-atlas apply` reads, so a saved

@@ -231,6 +231,15 @@ describe('EventModelPage: as of a changeset', () => {
     expect(capturedIssues?.error).toMatch(/past changeset/);
   });
 
+  it('marks the as-of board partial when the server clipped it', async () => {
+    (api.eventModel as ReturnType<typeof vi.fn>).mockResolvedValue({ entities: [], incomplete: true });
+    window.history.replaceState({}, '', `/em/acme/checkout?asOf=${AS_OF}`);
+    render(<EventModelPage namespace="acme" slug="checkout" />);
+    await waitFor(() => {
+      expect(capturedShell.asOfIncomplete).toBe(true);
+    });
+  });
+
   it('moves a live board to a past changeset and drops the branch', async () => {
     window.history.replaceState({}, '', '/em/acme/checkout?branch=alex/rework');
     render(<EventModelPage namespace="acme" slug="checkout" />);

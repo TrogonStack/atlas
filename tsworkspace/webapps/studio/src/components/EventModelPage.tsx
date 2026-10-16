@@ -26,6 +26,7 @@ export function EventModelPage({
   const [issues, setIssues] = useState<IssueIndex>(EMPTY_ISSUE_INDEX);
   const [error, setError] = useState<string>();
   const [asOf, setAsOf] = useAsOfParam();
+  const [incomplete, setIncomplete] = useState(false);
 
   // Tied to an `AbortController` so unmount mid-fetch actually aborts
   // the HTTP request, not just hides its result. The 30 s default
@@ -56,6 +57,7 @@ export function EventModelPage({
       .then((res) => {
         if (ctrl.signal.aborted) return;
         setModel(buildModel(res.entities ?? []));
+        setIncomplete(Boolean(res.incomplete));
         setError(undefined);
       })
       .catch((e) => {
@@ -137,6 +139,7 @@ export function EventModelPage({
       onExportHtml={asOf ? undefined : () => exportBoardHtml({ namespace, slug, branch: readBranchFromUrl(), title })}
       historyNamespace={snapshot ? undefined : namespace}
       asOf={asOf}
+      asOfIncomplete={Boolean(asOf) && incomplete}
       onAsOfChange={snapshot ? undefined : setAsOf}
     />
   );

@@ -24,6 +24,7 @@ export function TopBar({
   onOpenBranchReview,
   onOpenHistory,
   asOf,
+  asOfIncomplete,
   onExitAsOf,
 }: {
   info?: ServerInfo;
@@ -45,6 +46,7 @@ export function TopBar({
   onOpenHistory?: () => void;
   /** Changeset the board is read as of: live, branch and menu controls give way to a read-only tag. */
   asOf?: string;
+  asOfIncomplete?: boolean;
   onExitAsOf?: () => void;
 }) {
   const historyButton = onOpenHistory ? (
@@ -92,7 +94,7 @@ export function TopBar({
         ) : asOf ? (
           <>
             {historyButton}
-            <AsOfTag changesetId={asOf} onExit={() => onExitAsOf?.()} />
+            <AsOfTag changesetId={asOf} incomplete={asOfIncomplete} onExit={() => onExitAsOf?.()} />
           </>
         ) : (
           <>

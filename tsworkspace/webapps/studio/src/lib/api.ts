@@ -385,8 +385,9 @@ export const api = {
   overview: (opts?: FetchOptions) => getJson<{ entities: WireEntityEnvelope[] }>('/api/overview', opts),
   eventModels: (opts?: FetchOptions) => getJson<{ entities: WireEntityEnvelope[] }>('/api/event-models', opts),
   /** `asOf` reads the board right after that baseline changeset; it cannot be combined with `branch`. */
+  /** `incomplete` marks an as-of board whose rewound closure was clipped before every member and halo event. */
   eventModel: (namespace: string, slug: string, opts?: FetchOptions & { asOf?: string }) =>
-    getJson<{ entities: WireEntityEnvelope[] }>(
+    getJson<{ entities: WireEntityEnvelope[]; incomplete?: boolean }>(
       `${boardPaths.eventModel(namespace, slug)}${buildQuery({ asOf: opts?.asOf })}`,
       opts,
     ),

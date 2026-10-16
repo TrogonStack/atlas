@@ -75,6 +75,14 @@ describe('TopBar as of a changeset', () => {
     expect(await screen.findByText('as of changeset 0192f000')).toBeDefined();
   });
 
+  it('marks a clipped past board as partial', () => {
+    changeset.mockReturnValue(new Promise(() => {}));
+    render(
+      <TopBar realtime={{ state: 'live' }} onRefresh={vi.fn()} asOf={AS_OF} asOfIncomplete onExitAsOf={vi.fn()} />,
+    );
+    expect(screen.getByRole('status', { name: 'As of' }).textContent).toContain('partial');
+  });
+
   it('exits through a link to the same board without asOf', () => {
     changeset.mockReturnValue(new Promise(() => {}));
     const { onExitAsOf } = renderBar();
