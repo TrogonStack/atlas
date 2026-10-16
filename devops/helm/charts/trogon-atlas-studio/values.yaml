@@ -14,7 +14,7 @@ serviceAccount:
 replicaCount: 1
 
 image:
-  repository: images/trogon-atlas-studio
+  repository: images/atlas/trogon-atlas-studio
   tag: ""
   # Pins the image when set, as sha256:<hex>.
   digest: ""

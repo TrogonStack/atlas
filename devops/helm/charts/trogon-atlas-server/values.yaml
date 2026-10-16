@@ -21,7 +21,7 @@ replicaCount: 1
 acknowledgeSingleWriter: false
 
 image:
-  repository: images/trogon-atlas-server
+  repository: images/atlas/trogon-atlas-server
   # Defaults to the chart appVersion when empty.
   tag: ""
   # Pins the image when set, as sha256:<hex>.

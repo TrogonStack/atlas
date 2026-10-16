@@ -60,7 +60,7 @@ jobs:
           DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/trogonstack/images/${{ matrix.image }}
+          images: ghcr.io/trogonstack/images/atlas/${{ matrix.image }}
           tags: |
             type=raw,value=canary
             type=sha,format=long,prefix=

@@ -158,7 +158,7 @@ Not done by the server, deliberately: a daemon holding push credentials is a dif
 | Value | Default | Purpose |
 |---|---|---|
 | `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories |
-| `image.repository` | `images/trogon-atlas-server` | server image |
+| `image.repository` | `images/atlas/trogon-atlas-server` | server image |
 | `image.digest` | `""` | pins the image by digest, appended to the tag as `@<digest>` |
 | `service.port` | `50069` | the `private` port serving gRPC, MCP, and the probes |
 | `replicaCount` | `1` | must stay 1; the server is single-writer |

@@ -106,7 +106,7 @@ from `/api/info` and TCP checks to `/-/readiness` and `/-/liveness`.
 | Value | Default | Purpose |
 |---|---|---|
 | `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories |
-| `image.repository` | `images/trogon-atlas-studio` | studio image |
+| `image.repository` | `images/atlas/trogon-atlas-studio` | studio image |
 | `image.digest` | `""` | pins the image by digest, appended to the tag as `@<digest>` |
 | `server.host` | `""` | server Service name; empty derives `<release>-trogon-atlas-server` |
 | `server.port` | `50069` | the server Service's `private` port |
