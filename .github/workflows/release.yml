@@ -50,8 +50,7 @@ jobs:
           IMAGES_REGISTRY: ghcr.io/trogonstack/images/atlas
           IMAGE: ${{ matrix.image }}
           TAG: ${{ github.ref_name }}
-          COMMIT: ${{ github.sha }}
-        run: mise run github:workflows:release:image "$IMAGE" "${TAG#v}" "$COMMIT"
+        run: mise run github:workflows:release:image "$IMAGE" "${TAG#v}" "$(git rev-parse 'HEAD^{commit}')"
 
   charts:
     name: Charts
