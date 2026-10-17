@@ -29,9 +29,9 @@ helm install trogon-atlas devops/helm/charts/trogon-atlas \
   --set studio.image.tag=canary
 ```
 
-Only the `canary` tag is published so far, built from every push to `main`.
-The image tag otherwise defaults to the chart's `appVersion`, which has no
-published image yet.
+Every push to `main` publishes the images tagged `canary` and with the full
+commit SHA. The image tag otherwise defaults to the chart's `appVersion`,
+which has no published image yet.
 
 `helm dependency update` resolves the `file://` dependencies into
 `charts/*.tgz`; it needs rerunning whenever a subchart's `Chart.yaml`

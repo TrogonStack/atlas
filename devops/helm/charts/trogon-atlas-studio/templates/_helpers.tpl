@@ -79,11 +79,14 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "trogon-atlas-studio.image" -}}
 {{- $registry := .root.Values.global.imageRegistry }}
 {{- $tag := default .root.Chart.AppVersion .image.tag }}
+{{- $ref := printf "%s:%s" .image.repository $tag }}
 {{- if $registry }}
-{{- printf "%s/%s:%s" $registry .image.repository $tag }}
-{{- else }}
-{{- printf "%s:%s" .image.repository $tag }}
+{{- $ref = printf "%s/%s" $registry $ref }}
 {{- end }}
+{{- with .image.digest }}
+{{- $ref = printf "%s@%s" $ref . }}
+{{- end }}
+{{- $ref }}
 {{- end }}
 
 {{- define "trogon-atlas-studio.grpcUrl" -}}

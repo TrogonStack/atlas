@@ -21,9 +21,9 @@ helm install trogon-atlas-server devops/helm/charts/trogon-atlas-server \
   --set image.tag=canary
 ```
 
-Only the `canary` tag is published so far, built from every push to `main`.
-The image tag otherwise defaults to the chart's `appVersion`, which has no
-published image yet.
+Every push to `main` publishes the images tagged `canary` and with the full
+commit SHA. The image tag otherwise defaults to the chart's `appVersion`,
+which has no published image yet.
 
 ## Authentication
 
@@ -158,7 +158,8 @@ Not done by the server, deliberately: a daemon holding push credentials is a dif
 | Value | Default | Purpose |
 |---|---|---|
 | `global.imageRegistry` | `ghcr.io/trogonstack` | prepended to image repositories |
-| `image.repository` | `atlas/trogon-atlas-server` | server image |
+| `image.repository` | `images/atlas/trogon-atlas-server` | server image |
+| `image.digest` | `""` | pins the image by digest, appended to the tag as `@<digest>` |
 | `service.port` | `50069` | the `private` port serving gRPC, MCP, and the probes |
 | `replicaCount` | `1` | must stay 1; the server is single-writer |
 | `acknowledgeSingleWriter` | `false` | override the `replicaCount > 1` refusal |
