@@ -3,10 +3,12 @@
   "bootstrap-sha": "82f754d173a120f2d225f1feecfb779aae6162db",
   "packages": {
     "devops/helm/charts/trogon-atlas-server": {
-      "release-type": "helm"
+      "release-type": "helm",
+      "initial-version": "1.0.2"
     },
     "devops/helm/charts/trogon-atlas-studio": {
-      "release-type": "helm"
+      "release-type": "helm",
+      "initial-version": "1.0.1"
     }
   }
 }
