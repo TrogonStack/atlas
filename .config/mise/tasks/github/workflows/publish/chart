@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+#MISE description="Package the named chart and its file:// subcharts at the given version and app version, and push it unless the OCI registry already has that version"
+set -euo pipefail
+
+: "${CHARTS_REGISTRY:?set CHARTS_REGISTRY, e.g. oci://ghcr.io/trogonstack/charts/atlas}"
+name="${1:?usage: chart <name> <version> <app-version>}"
+export CHART_VERSION="${2:?usage: chart <name> <version> <app-version>}"
+export CHART_APP_VERSION="${3:?usage: chart <name> <version> <app-version>}"
+
+if lookup="$(helm show chart "$CHARTS_REGISTRY/$name" --version "$CHART_VERSION" 2>&1 >/dev/null)"; then
+  echo "skipping $name $CHART_VERSION (already published)" >&2
+  exit 0
+fi
+# GHCR answers "denied" for a package that does not exist yet; any other
+# failure could hide a published version, and pushing would overwrite it.
+if ! grep -qE ': not found$|: denied: ' <<<"$lookup"; then
+  echo "$lookup" >&2
+  exit 1
+fi
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+cp -R "$MISE_PROJECT_ROOT/devops/helm/charts" "$work/charts"
+chart="$work/charts/$name"
+
+stamp() {
+  yq -i '.version = strenv(CHART_VERSION) | .appVersion = strenv(CHART_APP_VERSION)' "$1/Chart.yaml"
+}
+
+stamp "$chart"
+while IFS= read -r dependency; do
+  stamp "$chart/$dependency"
+done < <(yq '.dependencies[] | select(.repository == "file://*") | .repository | sub("^file://", "")' "$chart/Chart.yaml")
+
+if yq -e '.dependencies' "$chart/Chart.yaml" >/dev/null 2>&1; then
+  yq -i '(.dependencies[] | select(.repository == "file://*") | .version) = strenv(CHART_VERSION)' "$chart/Chart.yaml"
+  helm dependency build "$chart" >/dev/null
+fi
+
+echo "publishing $name $CHART_VERSION" >&2
+helm package "$chart" --destination "$work" >/dev/null
+helm push "$work/$name-$CHART_VERSION.tgz" "$CHARTS_REGISTRY"

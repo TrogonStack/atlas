@@ -3,3 +3,4 @@ chart-dirs:
 validate-maintainers: false
 validate-chart-schema: false
 validate-yaml: false
+check-version-increment: false

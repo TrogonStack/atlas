@@ -10,15 +10,15 @@ here is just `auth.token.value`.
 ## Quick start
 
 ```bash
-helm install trogon-atlas-studio devops/helm/charts/trogon-atlas-studio \
+helm install trogon-atlas-studio oci://ghcr.io/trogonstack/charts/atlas/trogon-atlas-studio \
+  --version 0.0.0-sha-<commit> \
   --set server.host=trogon-atlas-server \
-  --set auth.token.value=change-me \
-  --set image.tag=canary
+  --set auth.token.value=change-me
 ```
 
-Every push to `main` publishes the images tagged `canary` and with the full
-commit SHA. The image tag otherwise defaults to the chart's `appVersion`,
-which has no published image yet.
+Every push to `main` publishes this chart to
+`oci://ghcr.io/trogonstack/charts/atlas` as `0.0.0-sha-<commit>`, with its
+images pinned to the same commit.
 
 ## Pointing at the server
 
