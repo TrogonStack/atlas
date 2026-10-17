@@ -1,4 +1,4 @@
 {
-  "devops/helm/charts/trogon-atlas-server": "1.0.2",
-  "devops/helm/charts/trogon-atlas-studio": "1.0.1"
+  "devops/helm/charts/trogon-atlas-server": "0.1.0",
+  "devops/helm/charts/trogon-atlas-studio": "0.1.0"
 }
