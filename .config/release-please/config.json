@@ -1,0 +1,11 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    "devops/helm/charts/trogon-atlas-server": {
+      "release-type": "helm"
+    },
+    "devops/helm/charts/trogon-atlas-studio": {
+      "release-type": "helm"
+    }
+  }
+}

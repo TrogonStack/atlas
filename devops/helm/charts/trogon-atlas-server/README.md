@@ -16,14 +16,24 @@ is just `auth.tokensFile`.
 
 ```bash
 helm install trogon-atlas-server oci://ghcr.io/trogonstack/charts/atlas/trogon-atlas-server \
-  --version 0.0.0-sha-<commit> \
+  --version <chart-version> \
   --set config.natsUrl=nats://my-nats:4222 \
   --set auth.token.value=change-me
 ```
 
-Every push to `main` publishes this chart to
-`oci://ghcr.io/trogonstack/charts/atlas` as `0.0.0-sha-<commit>`, with its
-images pinned to the same commit.
+## Versions
+
+This chart is published to `oci://ghcr.io/trogonstack/charts/atlas`. Its
+version changes only when the chart changes and is independent of the Atlas
+version; release-please proposes each bump from the conventional commits that
+touch the chart. A release publishes the `version` committed in `Chart.yaml`
+once the default image exists, and never replaces a published version.
+
+Every push to `main` also publishes a dev build as `0.0.0-sha-<commit>`, with
+its images pinned to the same commit.
+
+The committed `appVersion` is the default image tag. Set `image.tag` or
+`image.digest` to run another image.
 
 ## Authentication
 

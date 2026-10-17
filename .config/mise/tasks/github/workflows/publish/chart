@@ -1,11 +1,26 @@
 #!/usr/bin/env bash
-#MISE description="Package the named chart and its file:// subcharts at the given version and app version, and push it unless the OCI registry already has that version"
+#MISE description="Package the named chart and push it unless the OCI registry already has that version; with a version and app version, stamp them on the chart and its file:// subcharts first, otherwise publish the committed chart as is"
 set -euo pipefail
 
 : "${CHARTS_REGISTRY:?set CHARTS_REGISTRY, e.g. oci://ghcr.io/trogonstack/charts/atlas}"
-name="${1:?usage: chart <name> <version> <app-version>}"
-export CHART_VERSION="${2:?usage: chart <name> <version> <app-version>}"
-export CHART_APP_VERSION="${3:?usage: chart <name> <version> <app-version>}"
+usage="usage: chart <name> [<version> <app-version>]"
+name="${1:?$usage}"
+case "$#" in
+  1)
+    stamped=false
+    CHART_VERSION="$(yq '.version' "$MISE_PROJECT_ROOT/devops/helm/charts/$name/Chart.yaml")"
+    ;;
+  3)
+    stamped=true
+    CHART_VERSION="$2"
+    export CHART_APP_VERSION="$3"
+    ;;
+  *)
+    echo "$usage" >&2
+    exit 1
+    ;;
+esac
+export CHART_VERSION
 
 if lookup="$(helm show chart "$CHARTS_REGISTRY/$name" --version "$CHART_VERSION" 2>&1 >/dev/null)"; then
   echo "skipping $name $CHART_VERSION (already published)" >&2
@@ -27,13 +42,18 @@ stamp() {
   yq -i '.version = strenv(CHART_VERSION) | .appVersion = strenv(CHART_APP_VERSION)' "$1/Chart.yaml"
 }
 
-stamp "$chart"
-while IFS= read -r dependency; do
-  stamp "$chart/$dependency"
-done < <(yq '.dependencies[] | select(.repository == "file://*") | .repository | sub("^file://", "")' "$chart/Chart.yaml")
+if "$stamped"; then
+  stamp "$chart"
+  while IFS= read -r dependency; do
+    stamp "$chart/$dependency"
+  done < <(yq '.dependencies[] | select(.repository == "file://*") | .repository | sub("^file://", "")' "$chart/Chart.yaml")
+
+  if yq -e '.dependencies' "$chart/Chart.yaml" >/dev/null 2>&1; then
+    yq -i '(.dependencies[] | select(.repository == "file://*") | .version) = strenv(CHART_VERSION)' "$chart/Chart.yaml"
+  fi
+fi
 
 if yq -e '.dependencies' "$chart/Chart.yaml" >/dev/null 2>&1; then
-  yq -i '(.dependencies[] | select(.repository == "file://*") | .version) = strenv(CHART_VERSION)' "$chart/Chart.yaml"
   helm dependency build "$chart" >/dev/null
 fi
 
