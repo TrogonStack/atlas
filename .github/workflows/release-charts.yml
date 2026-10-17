@@ -1,0 +1,59 @@
+name: Release charts
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner label for the chart jobs
+        type: string
+        required: true
+      ref:
+        description: Ref to read the committed chart versions from
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  charts:
+    name: Release (${{ matrix.chart }})
+    runs-on: ${{ inputs.runs-on }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        chart:
+          - trogon-atlas-server
+          - trogon-atlas-studio
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Install mise
+        uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+        with:
+          cache: false
+
+      - name: helm registry login
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_PASSWORD" | mise exec -- helm registry login ghcr.io --username "$REGISTRY_USERNAME" --password-stdin
+
+      - name: crane auth login
+        env:
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$REGISTRY_PASSWORD" | mise exec -- crane auth login ghcr.io --username "$REGISTRY_USERNAME" --password-stdin
+
+      - name: release chart
+        env:
+          CHARTS_REGISTRY: oci://ghcr.io/trogonstack/charts/atlas
+          IMAGES_REGISTRY: ghcr.io/trogonstack/images/atlas
+          CHART: ${{ matrix.chart }}
+        run: mise run github:workflows:release:chart "$CHART"

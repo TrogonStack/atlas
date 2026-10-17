@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#MISE description="Publish the committed version of the named chart once the image it defaults to exists, skipping with a warning until they do"
+set -euo pipefail
+
+: "${IMAGES_REGISTRY:?set IMAGES_REGISTRY, e.g. ghcr.io/trogonstack/images/atlas}"
+name="${1:?usage: chart <name>}"
+
+image="$IMAGES_REGISTRY/$(yq '.name + ":" + .appVersion' "$MISE_PROJECT_ROOT/devops/helm/charts/$name/Chart.yaml")"
+
+if ! lookup="$(crane manifest "$image" 2>&1 >/dev/null)"; then
+  if grep -qE 'MANIFEST_UNKNOWN|NAME_UNKNOWN|DENIED' <<<"$lookup"; then
+    echo "::warning title=$name not released::$image does not exist yet, the chart is published by a later run once the image is released"
+    exit 0
+  fi
+  echo "$lookup" >&2
+  exit 1
+fi
+
+exec mise run github:workflows:publish:chart "$name"

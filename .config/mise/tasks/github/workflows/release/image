@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#MISE description="Add the release version tag to the named image already built for the commit, refusing to move a version tag that points elsewhere"
+set -euo pipefail
+
+: "${IMAGES_REGISTRY:?set IMAGES_REGISTRY, e.g. ghcr.io/trogonstack/images/atlas}"
+usage="usage: image <name> <version> <commit>"
+name="${1:?$usage}"
+version="${2:?$usage}"
+commit="${3:?$usage}"
+
+if ! [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "$version is not a SemVer version without build metadata" >&2
+  exit 1
+fi
+
+repository="$IMAGES_REGISTRY/$name"
+built="$(crane digest "$repository:$commit")"
+
+tags="$(crane ls "$repository")"
+if grep -qxF "$version" <<<"$tags"; then
+  released="$(crane digest "$repository:$version")"
+  if [ "$released" != "$built" ]; then
+    echo "$repository:$version already points at $released, not $built" >&2
+    exit 1
+  fi
+  echo "skipping $name $version (already released)" >&2
+  exit 0
+fi
+
+echo "releasing $name $version from $commit" >&2
+crane tag "$repository:$commit" "$version"

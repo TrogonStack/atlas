@@ -11,14 +11,24 @@ here is just `auth.token.value`.
 
 ```bash
 helm install trogon-atlas-studio oci://ghcr.io/trogonstack/charts/atlas/trogon-atlas-studio \
-  --version 0.0.0-sha-<commit> \
+  --version <chart-version> \
   --set server.host=trogon-atlas-server \
   --set auth.token.value=change-me
 ```
 
-Every push to `main` publishes this chart to
-`oci://ghcr.io/trogonstack/charts/atlas` as `0.0.0-sha-<commit>`, with its
-images pinned to the same commit.
+## Versions
+
+This chart is published to `oci://ghcr.io/trogonstack/charts/atlas`. Its
+version changes only when the chart changes and is independent of the Atlas
+version; release-please proposes each bump from the conventional commits that
+touch the chart. A release publishes the `version` committed in `Chart.yaml`
+once the default image exists, and never replaces a published version.
+
+Every push to `main` also publishes a dev build as `0.0.0-sha-<commit>`, with
+its images pinned to the same commit.
+
+The committed `appVersion` is the default image tag. Set `image.tag` or
+`image.digest` to run another image.
 
 ## Pointing at the server
 
