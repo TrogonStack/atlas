@@ -27,6 +27,5 @@ jobs:
           default-pool-name: github
           pools-json: |
             {
-              "github": "ubuntu-latest",
-              "blacksmith": "blacksmith-4vcpu-ubuntu-2404"
+              "github": "ubuntu-latest"
             }
