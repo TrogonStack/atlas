@@ -5,6 +5,8 @@ metadata:
   namespace: acme-storefront
 spec:
   doc: Running item count per cart.
+  key:
+  - cart_id
   schema:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
@@ -14,8 +16,12 @@ spec:
     - name: item_count
       type:
         int: {}
-  key:
-  - cart_id
+    - name: product_id
+      type:
+        uuid: {}
+    - name: quantity
+      type:
+        int: {}
   sourceEvents:
   - id:
       namespace: acme-storefront
@@ -30,14 +36,29 @@ metadata:
   namespace: acme-storefront
 spec:
   doc: 'Worker feed: orders awaiting payment capture.'
+  key:
+  - order_id
   schema:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
     - name: order_id
       type:
         uuid: {}
-  key:
-  - order_id
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - name: cart_id
+      type:
+        uuid: {}
+    - name: placed_at
+      type:
+        timestamp: {}
+    - name: status
+      type:
+        string: {}
   sourceEvents:
   - id:
       namespace: acme-storefront
@@ -52,6 +73,8 @@ metadata:
   namespace: acme-storefront
 spec:
   doc: 'Worker feed: paid orders awaiting carrier dispatch.'
+  key:
+  - order_id
   schema:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
@@ -64,8 +87,12 @@ spec:
     - name: seller_id
       type:
         uuid: {}
-  key:
-  - order_id
+    - name: paid_at
+      type:
+        timestamp: {}
+    - name: status
+      type:
+        string: {}
   sourceEvents:
   - id:
       namespace: acme-storefront
@@ -80,6 +107,8 @@ metadata:
   namespace: acme-storefront
 spec:
   doc: Current status of an order for the shopper-facing tracking page.
+  key:
+  - order_id
   schema:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
@@ -89,8 +118,24 @@ spec:
     - name: status
       type:
         string: {}
-  key:
-  - order_id
+    - name: cart_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - name: placed_at
+      type:
+        timestamp: {}
+    - name: paid_at
+      type:
+        timestamp: {}
+    - name: fulfilled_at
+      type:
+        timestamp: {}
   sourceEvents:
   - id:
       namespace: acme-storefront

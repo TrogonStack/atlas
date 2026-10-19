@@ -40,6 +40,12 @@ spec:
     - name: cart_id
       type:
         uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
     - name: placed_at
       type:
         timestamp: {}
@@ -61,6 +67,12 @@ spec:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
     - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
       type:
         uuid: {}
     - name: paid_at

@@ -19,6 +19,12 @@ spec:
             namespace: acme-storefront
             slug: storefront-checkout
             version: '1'
+    readModel:
+      readModel:
+        id:
+          namespace: acme-storefront
+          slug: cart-summary
+          version: '1'
   outcome:
     events:
     - event:
@@ -39,6 +45,14 @@ spec:
       namespace: acme-storefront
       slug: place-order-slice
       version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: pending-payments-rms
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: order-status-placed-rms
+      version: '1'
   title: Checkout
 ---
 apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
@@ -47,7 +61,7 @@ metadata:
   name: fulfillment-flow
   namespace: acme-storefront
 spec:
-  doc: A placed order is captured, dispatched, and confirmed delivered.
+  doc: A placed order is captured, dispatched, and confirmed delivered. It starts from the pending-payments queue that checkout-flow populated.
   entry:
     automation:
       processor:
@@ -72,15 +86,15 @@ spec:
   slices:
   - id:
       namespace: acme-storefront
-      slug: pending-payments-rms
-      version: '1'
-  - id:
-      namespace: acme-storefront
       slug: capture-payment-auto
       version: '1'
   - id:
       namespace: acme-storefront
       slug: capture-payment-slice
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: order-status-paid-rms
       version: '1'
   - id:
       namespace: acme-storefront
@@ -96,7 +110,7 @@ spec:
       version: '1'
   - id:
       namespace: acme-storefront
-      slug: order-status-rms
+      slug: order-status-fulfilled-rms
       version: '1'
   - id:
       namespace: acme-storefront
