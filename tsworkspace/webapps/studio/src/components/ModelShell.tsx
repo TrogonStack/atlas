@@ -410,6 +410,8 @@ export function ModelShell({
 
   // A merged or deleted branch can outlive its URL. Fall back to baseline so
   // neither the board nor a copied fix prompt targets a branch that is gone.
+  const setBranchRef = useRef(setBranch);
+  setBranchRef.current = setBranch;
   useEffect(() => {
     if (!branch) return;
     const ctrl = new AbortController();
@@ -419,11 +421,11 @@ export function ModelShell({
         if (ctrl.signal.aborted) return;
         if ((res.branches ?? []).some((b) => b.name === branch)) return;
         setMissingBranch(branch);
-        setBranch(undefined);
+        setBranchRef.current(undefined);
       })
       .catch(() => {});
     return () => ctrl.abort();
-  }, [branch, setBranch]);
+  }, [branch]);
 
   // Scoped shells own the model via the caller. When ?branch= changes the
   // badges update above, but the caller's model must also reload so the

@@ -316,4 +316,19 @@ describe('ModelShell', () => {
     expect(screen.queryByText(/no longer exists/)).toBeNull();
     expect(screen.getByRole('button', { name: /^Branch: demo/ })).toBeDefined();
   });
+
+  it('checks the URL branch once across re-renders', async () => {
+    (api.branches as ReturnType<typeof vi.fn>).mockResolvedValue({
+      branches: [{ name: 'demo', doc: '', createdAt: '', deltaCount: 1 }],
+    });
+    const wrapper = withNuqsTestingAdapter({ searchParams: '?branch=demo' });
+    const view = rtlRender(<ModelShell model={buildModel([])} scopedTitle="Shop" />, { wrapper });
+    await waitFor(() => {
+      expect(api.branches).toHaveBeenCalledTimes(1);
+    });
+    view.rerender(<ModelShell model={buildModel([])} scopedTitle="Shop" />);
+    view.rerender(<ModelShell model={buildModel([])} scopedTitle="Shop" />);
+    await act(async () => {});
+    expect(api.branches).toHaveBeenCalledTimes(1);
+  });
 });
