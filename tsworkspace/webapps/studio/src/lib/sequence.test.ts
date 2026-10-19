@@ -573,3 +573,47 @@ describe('buildSequence: automation and same-moment packing', () => {
     expect(betweenEvents).toHaveLength(0);
   });
 });
+
+const twoVersionModel = (ns: string) => {
+  const slice = (slug: string, version: string, ui: string, command: string, event: string) => ({
+    commandSlice: {
+      id: { namespace: ns, slug, version },
+      title: `${slug} v${version}`,
+      persona: { persona: { id: id(ns, 'buyer') } },
+      ui: { ui: { id: id(ns, ui) } },
+      command: { command: { id: id(ns, command) } },
+      emittedEvents: [{ event: { id: id(ns, event) } }],
+    },
+  });
+  return [
+    { persona: { id: id(ns, 'buyer'), title: 'Buyer' } },
+    { ui: { id: id(ns, 'home'), title: 'Home' } },
+    { ui: { id: id(ns, 'old-page'), title: 'Old page' } },
+    { ui: { id: id(ns, 'detail'), title: 'Detail' } },
+    { command: { id: id(ns, 'open-item'), title: 'open-item' } },
+    { command: { id: id(ns, 'buy'), title: 'buy' } },
+    { event: { id: id(ns, 'item.opened'), title: 'item.opened' } },
+    { event: { id: id(ns, 'item.bought'), title: 'item.bought' } },
+    slice('s1', '2', 'home', 'open-item', 'item.opened'),
+    slice('s1', '1', 'old-page', 'open-item', 'item.opened'),
+    slice('s2', '1', 'detail', 'buy', 'item.bought'),
+    {
+      storyboard: {
+        id: id(ns, 'sb'),
+        title: 'flow',
+        slices: [{ id: id(ns, 's1') }, { id: id(ns, 's2') }],
+      },
+    },
+  ];
+};
+
+describe('buildSequence: a slice loaded at two versions', () => {
+  it('draws the highest version, whatever the load order', () => {
+    const { nodes } = buildSequence(buildModel(twoVersionModel('shop') as never));
+    const titles = nodes
+      .filter((n) => n.type === 'seqSliceHeader')
+      .map((n) => (n.data as { entity: { title: string } }).entity.title);
+    expect(titles).toContain('s1 v2');
+    expect(titles).not.toContain('s1 v1');
+  });
+});
