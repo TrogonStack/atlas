@@ -27,3 +27,8 @@ Documentation is a valid first implementation of a workflow. Extend the
 recorded procedure as repairs reveal repeated steps, then move deterministic
 steps into maintained, tested tools. Do not leave the only reusable knowledge
 in a chat, memory entry, session note, or temporary script.
+
+## Pull request titles
+
+The SemConv check accepts only `feat`, `fix` and `chore`. Title documentation
+changes `chore(docs): <subject>`, not `docs: <subject>`.
