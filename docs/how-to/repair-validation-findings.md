@@ -113,8 +113,8 @@ If a contract needs a new version, follow the
 ## Preview and apply the guarded change
 
 For a related set of edits, use `batch_mutate_json`. The outer MCP argument
-is `request_json`, a JSON-encoded string containing a proto3 JSON
-`BatchMutateRequest`. Inside that request, use `validateOnly: true` for the
+is `request_json`, a proto3 JSON `BatchMutateRequest` object (a JSON-encoded
+string is also accepted). Inside that request, use `validateOnly: true` for the
 preview and `ifMatch` on each existing-entity put. Each `entity` is an
 `Entity` wrapper, such as `{ "storyboard": <complete revised definition> }`.
 Use `createOnly: true` for an intentional new entity.

@@ -142,6 +142,26 @@ async fn mcp_put_entity_json_with_operation_id_is_applied_and_retrievable_via_ge
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn mcp_put_entity_json_accepts_the_entity_as_a_json_object() {
+    let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
+
+    let entity: serde_json::Value =
+        serde_json::from_str(&event_json("mcp-obj", "created", 1, "Created")).unwrap();
+    let put_result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("put_entity_json").with_arguments(args_obj(&[
+                ("entity_json", entity),
+                ("create_only", serde_json::json!(true)),
+            ])),
+        )
+        .await
+        .unwrap();
+    assert!(!put_result.is_error.unwrap_or(false), "{put_result:?}");
+
+    mcp_service.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn mcp_get_operation_reports_unspecified_for_an_id_never_claimed() {
     let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
 

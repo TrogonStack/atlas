@@ -583,13 +583,40 @@ pub struct PutEntityParams {
     pub operation_id: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(transparent)]
+pub struct JsonPayload(serde_json::Value);
+
+impl schemars::JsonSchema for JsonPayload {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "JsonPayload".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({ "type": ["object", "string"] })
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+}
+
+impl JsonPayload {
+    pub fn to_json_text(&self) -> String {
+        match &self.0 {
+            serde_json::Value::String(text) => text.clone(),
+            other => other.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PutEntityJsonParams {
     #[schemars(
-        description = "proto3 JSON of an Entity message, e.g. {\"event\": {\"id\": {\"namespace\": \"shop\", \"slug\": \"order-placed\", \"version\": 1}, \"title\": \"Order placed\"}}"
+        description = "proto3 JSON of an Entity message as a JSON object (a JSON-encoded string is also accepted), e.g. {\"event\": {\"id\": {\"namespace\": \"shop\", \"slug\": \"order-placed\", \"version\": 1}, \"title\": \"Order placed\"}}"
     )]
-    pub entity_json: String,
+    pub entity_json: JsonPayload,
     #[serde(default)]
     pub create_only: bool,
     #[serde(default)]
@@ -611,8 +638,10 @@ pub struct PutEntityJsonParams {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BatchMutateJsonParams {
-    #[schemars(description = "proto3 JSON of a BatchMutateRequest message")]
-    pub request_json: String,
+    #[schemars(
+        description = "proto3 JSON of a BatchMutateRequest message as a JSON object (a JSON-encoded string is also accepted)"
+    )]
+    pub request_json: JsonPayload,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -974,6 +1003,57 @@ mod deny_unknown_params_tests {
             "page_size": 10
         }));
         assert!(ok.is_ok(), "{ok:?}");
+    }
+
+    #[test]
+    fn put_entity_json_accepts_an_object_or_a_json_string() {
+        let entity = serde_json::json!({"event": {"title": "Order placed"}});
+        let from_object = serde_json::from_value::<PutEntityJsonParams>(
+            serde_json::json!({ "entity_json": entity }),
+        )
+        .unwrap();
+        let from_string = serde_json::from_value::<PutEntityJsonParams>(
+            serde_json::json!({ "entity_json": entity.to_string() }),
+        )
+        .unwrap();
+        let parse = |p: &PutEntityJsonParams| {
+            serde_json::from_str::<serde_json::Value>(&p.entity_json.to_json_text()).unwrap()
+        };
+        assert_eq!(parse(&from_object), entity);
+        assert_eq!(parse(&from_string), entity);
+    }
+
+    #[test]
+    fn batch_mutate_json_accepts_an_object_or_a_json_string() {
+        let request = serde_json::json!({"validateOnly": true, "ops": []});
+        let from_object = serde_json::from_value::<BatchMutateJsonParams>(
+            serde_json::json!({ "request_json": request }),
+        )
+        .unwrap();
+        let from_string = serde_json::from_value::<BatchMutateJsonParams>(
+            serde_json::json!({ "request_json": request.to_string() }),
+        )
+        .unwrap();
+        let parse = |p: &BatchMutateJsonParams| {
+            serde_json::from_str::<serde_json::Value>(&p.request_json.to_json_text()).unwrap()
+        };
+        assert_eq!(parse(&from_object), request);
+        assert_eq!(parse(&from_string), request);
+    }
+
+    #[test]
+    fn json_payload_arguments_advertise_object_and_string() {
+        for (schema, field) in [
+            (schemars::schema_for!(PutEntityJsonParams), "entity_json"),
+            (schemars::schema_for!(BatchMutateJsonParams), "request_json"),
+        ] {
+            let types = &schema.as_value()["properties"][field]["type"];
+            assert_eq!(
+                *types,
+                serde_json::json!(["object", "string"]),
+                "{schema:?}"
+            );
+        }
     }
 
     #[test]
