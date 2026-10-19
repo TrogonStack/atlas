@@ -56,29 +56,10 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     groups:
-      vite:
-        patterns:
-          - "vite"
-          - "@vitejs/*"
-          - "vitest"
-          - "@vitest/*"
-      react:
-        patterns:
-          - "react"
-          - "react-dom"
-          - "@types/react"
-          - "@types/react-dom"
-      tailwind:
-        patterns:
-          - "tailwindcss"
-          - "@tailwindcss/*"
-      testing-library:
-        patterns:
-          - "@testing-library/*"
-      npm-minor-patch:
-        update-types:
-          - "minor"
-          - "patch"
+      npm-development:
+        dependency-type: "development"
+      npm-production:
+        dependency-type: "production"
 
   - package-ecosystem: "docker"
     directories:
