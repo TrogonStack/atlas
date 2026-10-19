@@ -650,31 +650,31 @@ pub struct ListValidationRulesResponse {
     #[prost(message, repeated, tag="1")]
     pub rules: ::prost::alloc::vec::Vec<ValidationRule>,
 }
-/// Validate every EventModel in a project (or in the entire store) in one
+/// Validate every EventModel in a project, a domain or a namespace in one
 /// pass, instead of N round trips through ValidateEventModel. The
 /// validator already has the full entity store in memory per call;
 /// looping per-model is pure waste.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ValidateProjectRequest {
-    /// Scope by Project.id (if your store carries Projects) or by
-    /// Domain.id (legacy). One of the two must be set. ENTITY_KIND_UNSPECIFIED
-    /// for the full store works only on small dev stores; large stores
-    /// should always scope.
-    #[prost(oneof="validate_project_request::Scope", tags="1, 2")]
+    /// Scope by Project.id (if your store carries Projects), by Domain.id
+    /// (legacy) or by namespace. Exactly one must be set.
+    #[prost(oneof="validate_project_request::Scope", tags="1, 2, 3")]
     pub scope: ::core::option::Option<validate_project_request::Scope>,
 }
 /// Nested message and enum types in `ValidateProjectRequest`.
 pub mod validate_project_request {
-    /// Scope by Project.id (if your store carries Projects) or by
-    /// Domain.id (legacy). One of the two must be set. ENTITY_KIND_UNSPECIFIED
-    /// for the full store works only on small dev stores; large stores
-    /// should always scope.
+    /// Scope by Project.id (if your store carries Projects), by Domain.id
+    /// (legacy) or by namespace. Exactly one must be set.
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Scope {
         #[prost(message, tag="1")]
         ProjectId(super::super::super::super::r#type::v1alpha1::Id),
         #[prost(message, tag="2")]
         DomainId(super::super::super::super::r#type::v1alpha1::Id),
+        /// Every EventModel whose id carries this namespace, whether or not a
+        /// Domain claims it.
+        #[prost(string, tag="3")]
+        Namespace(::prost::alloc::string::String),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

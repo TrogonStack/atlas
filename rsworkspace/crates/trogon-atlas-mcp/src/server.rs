@@ -2288,7 +2288,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Validate every EventModel in a project (or domain) in one call instead of N. Returns per-model issue lists plus aggregate Error/Warning/Info counts. Scope by project_namespace+project_slug OR by domain_namespace+domain_slug -- set exactly one.",
+        description = "Validate every EventModel in a project, domain or namespace in one call instead of N. Returns per-model issue lists plus aggregate Error/Warning/Info counts. Scope by project_namespace+project_slug, by domain_namespace+domain_slug, OR by namespace -- set exactly one.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2302,13 +2302,27 @@ impl McpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         let has_project = p.project_namespace.is_some() || p.project_slug.is_some();
         let has_domain = p.domain_namespace.is_some() || p.domain_slug.is_some();
-        if has_project && has_domain {
+        let has_namespace = p.namespace.is_some();
+        if [has_project, has_domain, has_namespace]
+            .into_iter()
+            .filter(|set| *set)
+            .count()
+            > 1
+        {
             return Err(rmcp::ErrorData::invalid_params(
-                "scope is exclusive: set project_namespace+project_slug OR domain_namespace+domain_slug, not both",
+                "scope is exclusive: set project_namespace+project_slug, domain_namespace+domain_slug OR namespace, not several",
                 None,
             ));
         }
-        let scope = if let (Some(ns), Some(slug)) =
+        let scope = if let Some(ns) = p.namespace.as_ref() {
+            if ns.is_empty() {
+                return Err(rmcp::ErrorData::invalid_params(
+                    "namespace must not be empty",
+                    None,
+                ));
+            }
+            pb::validate_project_request::Scope::Namespace(ns.clone())
+        } else if let (Some(ns), Some(slug)) =
             (p.project_namespace.as_ref(), p.project_slug.as_ref())
         {
             let version = p.project_version.ok_or_else(|| {
@@ -2341,7 +2355,7 @@ impl McpServer {
             pb::validate_project_request::Scope::DomainId(validated_id_from(ns, slug, version)?)
         } else {
             return Err(rmcp::ErrorData::invalid_params(
-                "scope is required: set project_namespace+project_slug OR domain_namespace+domain_slug",
+                "scope is required: set project_namespace+project_slug, domain_namespace+domain_slug OR namespace",
                 None,
             ));
         };

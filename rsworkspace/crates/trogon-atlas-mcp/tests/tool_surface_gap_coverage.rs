@@ -802,6 +802,51 @@ async fn mcp_batch_mutate_binpb_variant() {
     mcp_service.cancel().await.unwrap();
 }
 
+// validate_project: a namespace alone scopes the call to every EventModel in it.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_validate_project_accepts_a_namespace_scope() {
+    let (client, _mcp_service, grpc_endpoint) = start_mcp_client().await;
+    let mut grpc = trogon_atlas_client::client::connect(&grpc_endpoint, None, 30)
+        .await
+        .unwrap();
+
+    for (ns, slug) in [("vpns-a", "checkout"), ("vpns-b", "billing")] {
+        grpc.put_entity(put_req(
+            pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+                    id: Some(pb::Id {
+                        namespace: ns.into(),
+                        slug: slug.into(),
+                        version: 1,
+                    }),
+                    title: slug.into(),
+                    ..Default::default()
+                })),
+            },
+            true,
+        ))
+        .await
+        .unwrap();
+    }
+
+    let result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("validate_project").with_arguments(args_obj(
+                &[
+                    ("namespace", serde_json::json!("vpns-a")),
+                    ("json", serde_json::json!(true)),
+                ],
+            )),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error.unwrap_or(false), "{result:?}");
+    let text = format!("{result:?}");
+    assert!(text.contains("checkout"), "{text}");
+    assert!(!text.contains("billing"), "{text}");
+}
+
 // validate_project: scope by project_namespace+project_slug; scope by
 // domain_namespace+domain_slug; and the invalid_params rejection when
 // neither scope is set.

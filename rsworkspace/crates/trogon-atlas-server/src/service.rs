@@ -5979,8 +5979,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
         let scope = req.scope.ok_or_else(|| {
-            Status::invalid_argument("scope is required (project_id or domain_id)")
+            Status::invalid_argument("scope is required (project_id, domain_id or namespace)")
         })?;
+        if matches!(&scope, Scope::Namespace(ns) if ns.is_empty()) {
+            return Err(Status::invalid_argument("namespace must not be empty"));
+        }
 
         let all = self.snapshot_for(branch.as_deref(), &vis).await?;
 
@@ -5997,6 +6000,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 s.insert((id.namespace.clone(), id.slug.clone()));
                 s
             }
+            Scope::Namespace(_) => std::collections::HashSet::new(),
             Scope::ProjectId(pid) => all
                 .iter()
                 .filter_map(|se| match se.entity.kind.as_ref()? {
@@ -6019,10 +6023,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 continue;
             };
             let Some(id) = em.id.as_ref() else { continue };
-            let owning = bc_domain.get(&id.namespace);
-            let in_scope = match owning {
-                Some(did) => scoped_domains.contains(did),
-                None => false,
+            let in_scope = match &scope {
+                Scope::Namespace(ns) => id.namespace == *ns,
+                _ => bc_domain
+                    .get(&id.namespace)
+                    .is_some_and(|did| scoped_domains.contains(did)),
             };
             if !in_scope {
                 continue;
