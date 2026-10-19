@@ -8,6 +8,7 @@ use crate::graph;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowSourceRole {
     Direct,
+    Trigger,
     Auxiliary,
 }
 
@@ -334,7 +335,9 @@ fn candidate_sources<'a>(
         for f in &up.fields {
             if f.name.to_ascii_lowercase() == target {
                 match up.source_role {
-                    FlowSourceRole::Direct => direct.push((up.entity_ref.clone(), f)),
+                    FlowSourceRole::Direct | FlowSourceRole::Trigger => {
+                        direct.push((up.entity_ref.clone(), f));
+                    }
                     FlowSourceRole::Auxiliary => auxiliary.push((up.entity_ref.clone(), f)),
                 }
             }
@@ -482,13 +485,72 @@ fn read_model_to_flow(
             }
         }
     }
-    let downstream = endpoint_for(pb::EntityKind::ReadModel, read_model_id, by_key)
-        .into_iter()
-        .collect();
+    let mut downstream: Vec<FlowEndpoint> =
+        endpoint_for(pb::EntityKind::ReadModel, read_model_id, by_key)
+            .into_iter()
+            .collect();
+    let (delete_only_events, all_delete) = delete_only_sources(read_model_id, by_key);
+    if all_delete {
+        upstream.retain(|endpoint| endpoint.source_role == FlowSourceRole::Direct);
+        for endpoint in &mut downstream {
+            let key = read_model_key(&endpoint.entity_ref, by_key);
+            if !key.is_empty() {
+                endpoint.fields.retain(|f| key.contains(&f.name));
+            }
+        }
+    }
+    for endpoint in &mut upstream {
+        let is_delete_only = endpoint.entity_ref.kind == pb::EntityKind::Event as i32
+            && endpoint
+                .entity_ref
+                .id
+                .as_ref()
+                .is_some_and(|id| delete_only_events.contains(&pb::IdKey::new(id)));
+        if is_delete_only {
+            endpoint.source_role = FlowSourceRole::Trigger;
+        }
+    }
     Some(FlowLink {
         upstream,
         downstream,
     })
+}
+
+fn delete_only_sources(
+    read_model_id: &pb::Id,
+    by_key: &HashMap<pb::EntityKey, pb::Entity>,
+) -> (HashSet<pb::IdKey>, bool) {
+    let mut deleting: HashSet<pb::IdKey> = HashSet::new();
+    let mut other: HashSet<pb::IdKey> = HashSet::new();
+    let mut slices = 0usize;
+    let mut deletes = 0usize;
+    for entity in by_key.values() {
+        let Some(pb::entity::Kind::ReadModelSlice(rs)) = entity.kind.as_ref() else {
+            continue;
+        };
+        let targets = rs
+            .read_model
+            .as_ref()
+            .and_then(|re| re.read_model.as_ref()?.id.as_ref())
+            == Some(read_model_id);
+        if !targets {
+            continue;
+        }
+        slices += 1;
+        let is_delete = rs.projection_role == pb::ProjectionRole::Delete as i32;
+        if is_delete {
+            deletes += 1;
+        }
+        let bucket = if is_delete { &mut deleting } else { &mut other };
+        bucket.extend(
+            rs.source_events
+                .iter()
+                .filter_map(|ee| ee.event.as_ref()?.id.as_ref())
+                .map(pb::IdKey::new),
+        );
+    }
+    deleting.retain(|id| !other.contains(id));
+    (deleting, slices > 0 && slices == deletes)
 }
 
 fn resolve_slice_ref(
@@ -587,13 +649,25 @@ fn slice_to_flow(
                     }
                 }
             }
-            let downstream: Vec<FlowEndpoint> = rs
+            let mut downstream: Vec<FlowEndpoint> = rs
                 .read_model
                 .as_ref()
                 .and_then(|re| re.read_model.as_ref()?.id.clone())
                 .and_then(|id| endpoint_for(pb::EntityKind::ReadModel, &id, by_key))
                 .into_iter()
                 .collect();
+            if rs.projection_role == pb::ProjectionRole::Delete as i32 {
+                upstream.retain(|endpoint| endpoint.source_role == FlowSourceRole::Direct);
+                for endpoint in &mut upstream {
+                    endpoint.source_role = FlowSourceRole::Trigger;
+                }
+                for endpoint in &mut downstream {
+                    let key = read_model_key(&endpoint.entity_ref, by_key);
+                    if !key.is_empty() {
+                        endpoint.fields.retain(|f| key.contains(&f.name));
+                    }
+                }
+            }
             FlowLink {
                 upstream,
                 downstream,
@@ -624,12 +698,20 @@ fn slice_to_flow(
                 .iter()
                 .filter_map(|re| re.read_model.as_ref()?.id.clone())
                 .filter_map(|id| endpoint_for(pb::EntityKind::ReadModel, &id, by_key))
+                .map(|endpoint| FlowEndpoint {
+                    source_role: FlowSourceRole::Auxiliary,
+                    ..endpoint
+                })
                 .collect();
             let downstream: Vec<FlowEndpoint> = us
                 .ui
                 .as_ref()
                 .and_then(|ue| ue.ui.as_ref()?.id.clone())
                 .and_then(|id| endpoint_for(pb::EntityKind::Ui, &id, by_key))
+                .map(|endpoint| FlowEndpoint {
+                    source_role: FlowSourceRole::Auxiliary,
+                    ..endpoint
+                })
                 .into_iter()
                 .collect();
             FlowLink {
@@ -638,6 +720,22 @@ fn slice_to_flow(
             }
         }
         _ => FlowLink::default(),
+    }
+}
+
+fn read_model_key(
+    entity_ref: &pb::EntityRef,
+    by_key: &HashMap<pb::EntityKey, pb::Entity>,
+) -> Vec<String> {
+    let Some(id) = entity_ref.id.as_ref() else {
+        return Vec::new();
+    };
+    match by_key
+        .get(&pb::EntityKey::new(pb::EntityKind::ReadModel, id))
+        .and_then(|entity| entity.kind.as_ref())
+    {
+        Some(pb::entity::Kind::ReadModel(rm)) => rm.key.clone(),
+        _ => Vec::new(),
     }
 }
 
@@ -981,6 +1079,322 @@ mod tests {
         ];
         let (gaps, score) =
             check_completeness(&scope(pb::EntityKind::ReadModelSlice, "orders-slice"), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    fn keyed(mut entity: pb::Entity, key: &[&str]) -> pb::Entity {
+        if let Some(pb::entity::Kind::ReadModel(rm)) = entity.kind.as_mut() {
+            rm.key = key.iter().map(|k| (*k).to_string()).collect();
+        }
+        entity
+    }
+
+    fn with_role(mut entity: pb::Entity, role: pb::ProjectionRole) -> pb::Entity {
+        if let Some(pb::entity::Kind::ReadModelSlice(rs)) = entity.kind.as_mut() {
+            rs.projection_role = role as i32;
+        }
+        entity
+    }
+
+    fn ui_with_slice(slice: &str, read_model: &str, ui: &str) -> Vec<StoredEntity> {
+        vec![
+            stored(pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                    id: Some(id(ui)),
+                    ..Default::default()
+                })),
+            }),
+            stored(pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::UiSlice(pb::UiSlice {
+                    id: Some(id(slice)),
+                    source_read_models: vec![pb::ReadModelEdge {
+                        read_model: Some(pb::ReadModelRef {
+                            id: Some(id(read_model)),
+                        }),
+                        ..Default::default()
+                    }],
+                    ui: Some(pb::UiEdge {
+                        ui: Some(pb::UiRef { id: Some(id(ui)) }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+            }),
+        ]
+    }
+
+    #[test]
+    fn delete_projection_only_requires_key_fields() {
+        let all = vec![
+            stored(swimlane("cart", Vec::new())),
+            stored(event(
+                "cart-checked-out",
+                "cart",
+                vec![field("cart_id", string_kind())],
+            )),
+            stored(keyed(
+                read_model(
+                    "open-carts",
+                    vec![
+                        field("cart_id", string_kind()),
+                        field("item_count", int_kind()),
+                        field("total_cents", int_kind()),
+                    ],
+                    vec!["cart-checked-out"],
+                ),
+                &["cart_id"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ];
+        let (gaps, score) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn delete_projection_key_in_event_and_lane_state_is_not_ambiguous() {
+        let all = vec![
+            stored(swimlane("cart", vec![field("cart_id", string_kind())])),
+            stored(event(
+                "cart-checked-out",
+                "cart",
+                vec![
+                    field("cart_id", string_kind()),
+                    field("note", string_kind()),
+                ],
+            )),
+            stored(keyed(
+                read_model(
+                    "open-carts",
+                    vec![
+                        field("cart_id", string_kind()),
+                        field("item_count", int_kind()),
+                    ],
+                    vec!["cart-checked-out"],
+                ),
+                &["cart_id"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ];
+        let (gaps, score) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn delete_projection_missing_key_in_event_is_reported() {
+        let all = vec![
+            stored(swimlane("cart", Vec::new())),
+            stored(event(
+                "cart-checked-out",
+                "cart",
+                vec![field("note", string_kind())],
+            )),
+            stored(keyed(
+                read_model(
+                    "open-carts",
+                    vec![field("cart_id", string_kind())],
+                    vec!["cart-checked-out"],
+                ),
+                &["cart_id"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ];
+        let (gaps, _) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
+    }
+
+    #[test]
+    fn keyless_delete_projection_keeps_the_normal_requirement() {
+        let all = vec![
+            stored(swimlane("cart", Vec::new())),
+            stored(event(
+                "cart-checked-out",
+                "cart",
+                vec![field("cart_id", string_kind())],
+            )),
+            stored(read_model(
+                "open-carts",
+                vec![
+                    field("cart_id", string_kind()),
+                    field("item_count", int_kind()),
+                ],
+                vec!["cart-checked-out"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ];
+        let (gaps, _) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
+        assert_eq!(
+            count(&gaps, pb::completeness_gap::Kind::UndeclaredFields),
+            0
+        );
+    }
+
+    fn delete_scenario(
+        lane_state: Vec<pb::FieldSpec>,
+        event_fields: Vec<pb::FieldSpec>,
+    ) -> Vec<StoredEntity> {
+        vec![
+            stored(swimlane("cart", lane_state)),
+            stored(event("cart-checked-out", "cart", event_fields)),
+            stored(keyed(
+                read_model(
+                    "open-carts",
+                    vec![
+                        field("cart_id", string_kind()),
+                        field("item_count", int_kind()),
+                    ],
+                    vec!["cart-checked-out"],
+                ),
+                &["cart_id"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ]
+    }
+
+    #[test]
+    fn delete_projection_does_not_source_key_from_lane_state() {
+        let all = delete_scenario(
+            vec![field("cart_id", string_kind())],
+            vec![field("note", string_kind())],
+        );
+        let (gaps, _) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
+        assert!(gaps.iter().any(|g| g.field_path == "cart_id"), "{gaps:?}");
+    }
+
+    #[test]
+    fn delete_projection_in_event_model_scope_only_requires_key() {
+        let mut all = delete_scenario(
+            Vec::new(),
+            vec![
+                field("cart_id", string_kind()),
+                field("note", string_kind()),
+            ],
+        );
+        all.push(stored(event_model(
+            "carting",
+            vec![
+                (pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+                (pb::EntityKind::ReadModel, "open-carts"),
+            ],
+        )));
+        let (gaps, score) = check_completeness(&event_model_scope("carting"), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn event_used_by_upsert_and_delete_keeps_full_requirement_in_event_model_scope() {
+        let mut all = delete_scenario(
+            Vec::new(),
+            vec![
+                field("cart_id", string_kind()),
+                field("note", string_kind()),
+            ],
+        );
+        all.push(stored(with_role(
+            read_model_slice("carts-upsert", vec!["cart-checked-out"], "open-carts"),
+            pb::ProjectionRole::Upsert,
+        )));
+        all.push(stored(event_model(
+            "carting",
+            vec![
+                (pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+                (pb::EntityKind::ReadModelSlice, "carts-upsert"),
+                (pb::EntityKind::ReadModel, "open-carts"),
+            ],
+        )));
+        let (gaps, _) = check_completeness(&event_model_scope("carting"), &all);
+        assert!(
+            gaps.iter().any(|g| g.field_path == "item_count"),
+            "{gaps:?}"
+        );
+    }
+
+    #[test]
+    fn upsert_projection_still_requires_every_field() {
+        let all = vec![
+            stored(swimlane("cart", Vec::new())),
+            stored(event(
+                "cart-checked-out",
+                "cart",
+                vec![field("cart_id", string_kind())],
+            )),
+            stored(keyed(
+                read_model(
+                    "open-carts",
+                    vec![
+                        field("cart_id", string_kind()),
+                        field("item_count", int_kind()),
+                    ],
+                    vec!["cart-checked-out"],
+                ),
+                &["cart_id"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Upsert,
+            )),
+        ];
+        let (gaps, _) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
+    }
+
+    #[test]
+    fn ui_slice_passes_read_model_fields_through() {
+        let mut all = vec![stored(read_model(
+            "order-summary",
+            vec![
+                field("order_id", string_kind()),
+                field("total_cents", int_kind()),
+            ],
+            Vec::new(),
+        ))];
+        all.extend(ui_with_slice(
+            "show-order-summary",
+            "order-summary",
+            "order-page",
+        ));
+        let (gaps, score) =
+            check_completeness(&scope(pb::EntityKind::UiSlice, "show-order-summary"), &all);
         assert!(gaps.is_empty(), "{gaps:?}");
         assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
     }

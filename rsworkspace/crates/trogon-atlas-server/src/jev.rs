@@ -349,7 +349,7 @@ fn endpoint_evidence<'a>(
         title,
         doc,
         source_role: match endpoint.source_role {
-            FlowSourceRole::Direct => "direct",
+            FlowSourceRole::Direct | FlowSourceRole::Trigger => "direct",
             FlowSourceRole::Auxiliary => "auxiliary",
         },
         fields: endpoint.fields.iter().map(field_evidence).collect(),
@@ -485,7 +485,7 @@ fn prepare(scope: &pb::AnalysisScope, all: &[StoredEntity]) -> Result<Prepared, 
                 let direct_exact: Vec<_> = candidates
                     .iter()
                     .filter(|(endpoint, candidate)| {
-                        endpoint.source_role == FlowSourceRole::Direct
+                        endpoint.source_role != FlowSourceRole::Auxiliary
                             && candidate.name.eq_ignore_ascii_case(&field.name)
                     })
                     .collect();
