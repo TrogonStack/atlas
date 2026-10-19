@@ -3,11 +3,11 @@
 set -euo pipefail
 
 if [[ -z "${DOCKER_HOST:-}" ]] && command -v docker >/dev/null 2>&1; then
-	context_host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)"
-	if [[ "$context_host" == unix:* ]]; then
-		socket_path="$(sed -E 's#^unix:/*##' <<<"$context_host")"
-		export DOCKER_HOST="unix:///${socket_path}"
-	fi
+  context_host="$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || true)"
+  if [[ "$context_host" == unix:* ]]; then
+    socket_path="$(sed -E 's#^unix:/*##' <<<"$context_host")"
+    export DOCKER_HOST="unix:///${socket_path}"
+  fi
 fi
 
 cd "$MISE_PROJECT_ROOT/rsworkspace"
