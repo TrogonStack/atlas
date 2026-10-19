@@ -5979,8 +5979,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
         let scope = req.scope.ok_or_else(|| {
-            Status::invalid_argument("scope is required (project_id or domain_id)")
+            Status::invalid_argument("scope is required (project_id, domain_id or namespace)")
         })?;
+        if matches!(&scope, Scope::Namespace(ns) if ns.is_empty()) {
+            return Err(Status::invalid_argument("namespace must not be empty"));
+        }
 
         let all = self.snapshot_for(branch.as_deref(), &vis).await?;
 
@@ -5997,6 +6000,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 s.insert((id.namespace.clone(), id.slug.clone()));
                 s
             }
+            Scope::Namespace(_) => std::collections::HashSet::new(),
             Scope::ProjectId(pid) => all
                 .iter()
                 .filter_map(|se| match se.entity.kind.as_ref()? {
@@ -6019,10 +6023,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 continue;
             };
             let Some(id) = em.id.as_ref() else { continue };
-            let owning = bc_domain.get(&id.namespace);
-            let in_scope = match owning {
-                Some(did) => scoped_domains.contains(did),
-                None => false,
+            let in_scope = match &scope {
+                Scope::Namespace(ns) => id.namespace == *ns,
+                _ => bc_domain
+                    .get(&id.namespace)
+                    .is_some_and(|did| scoped_domains.contains(did)),
             };
             if !in_scope {
                 continue;
@@ -6659,9 +6664,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             return Ok(Response::new(pb::MergeBranchResponse {
                 status: pb::merge_branch_response::Status::Conflicts as i32,
                 conflicts,
-                validation: Vec::new(),
-                applied_count: 0,
-                operation_receipt: None,
+                ..Default::default()
             }));
         }
 
@@ -6679,6 +6682,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 )
             })
             .collect();
+        let landed = LandedCounts::of(landable.iter().map(|e| e.status));
 
         let mut ops: Vec<trogon_atlas_store::store::BranchLandOp> =
             Vec::with_capacity(landable.len());
@@ -6838,18 +6842,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if has_error {
                 return Ok(Response::new(pb::MergeBranchResponse {
                     status: pb::merge_branch_response::Status::Invalid as i32,
-                    conflicts: Vec::new(),
                     validation: validation_issues,
-                    applied_count: 0,
-                    operation_receipt: None,
+                    ..landed.into_response()
                 }));
             }
             return Ok(Response::new(pb::MergeBranchResponse {
                 status: pb::merge_branch_response::Status::Validated as i32,
-                conflicts: Vec::new(),
-                validation: Vec::new(),
-                applied_count: u32::try_from(landable.len()).unwrap_or(u32::MAX),
-                operation_receipt: None,
+                validation: validation_issues,
+                ..landed.into_response()
             }));
         }
 
@@ -6905,6 +6905,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     validation: validation_issues,
                     applied_count: 0,
                     operation_receipt: None,
+                    ..landed.into_response()
                 }));
             }
         }
@@ -6953,13 +6954,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         // caller's proof the merge is settled.
                         return Ok(Response::new(pb::MergeBranchResponse {
                             status: pb::merge_branch_response::Status::Applied as i32,
-                            conflicts: Vec::new(),
-                            validation: Vec::new(),
-                            applied_count: 0,
                             operation_receipt: Some(operation_receipts::replay_receipt(
                                 &req.operation_id,
                                 &record,
                             )),
+                            ..Default::default()
                         }));
                     }
                 }
@@ -6983,12 +6982,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
             return Ok(Response::new(pb::MergeBranchResponse {
                 status: pb::merge_branch_response::Status::Applied as i32,
-                conflicts: Vec::new(),
-                validation: Vec::new(),
-                applied_count: 0,
                 operation_receipt: claim_key
                     .as_ref()
                     .map(|_| operation_receipts::fresh_receipt(&req.operation_id, "")),
+                ..Default::default()
             }));
         }
 
@@ -7047,12 +7044,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         Ok(Response::new(pb::MergeBranchResponse {
             status: pb::merge_branch_response::Status::Applied as i32,
-            conflicts: Vec::new(),
-            validation: Vec::new(),
-            applied_count: u32::try_from(ops.len()).unwrap_or(u32::MAX),
             operation_receipt: claim_key
                 .as_ref()
                 .map(|_| operation_receipts::fresh_receipt(&req.operation_id, &merge_changeset_id)),
+            ..landed.into_response()
         }))
     }
 
@@ -7518,6 +7513,43 @@ fn branch_info_to_pb(info: trogon_atlas_store::store::BranchInfo) -> pb::BranchI
 fn branch_diff_entry_status(raw: i32) -> pb::branch_diff_entry::Status {
     pb::branch_diff_entry::Status::try_from(raw)
         .unwrap_or(pb::branch_diff_entry::Status::Unspecified)
+}
+
+/// How many entries a merge lands, split by diff class.
+#[derive(Default)]
+struct LandedCounts {
+    added: u32,
+    changed: u32,
+    deleted: u32,
+}
+
+impl LandedCounts {
+    fn of(statuses: impl IntoIterator<Item = i32>) -> Self {
+        let mut counts = Self::default();
+        for status in statuses {
+            let slot = match branch_diff_entry_status(status) {
+                pb::branch_diff_entry::Status::Added => &mut counts.added,
+                pb::branch_diff_entry::Status::Changed => &mut counts.changed,
+                pb::branch_diff_entry::Status::Deleted => &mut counts.deleted,
+                _ => continue,
+            };
+            *slot = slot.saturating_add(1);
+        }
+        counts
+    }
+
+    fn into_response(self) -> pb::MergeBranchResponse {
+        pb::MergeBranchResponse {
+            applied_count: self
+                .added
+                .saturating_add(self.changed)
+                .saturating_add(self.deleted),
+            added_count: self.added,
+            changed_count: self.changed,
+            deleted_count: self.deleted,
+            ..Default::default()
+        }
+    }
 }
 
 /// True for any of the four conflict classes (see

@@ -129,6 +129,11 @@ Detection alone is half a design; this section is the other half.
    merge gate always runs the dry-run overlay validation, even for
    "clean" merges.
 
+A dry run reports the same gate without landing anything: the landable
+entries split into added, changed and deleted, and every finding the merged
+world carries, errors and non-blocking ones alike. A reviewer reads one
+result instead of a diff and a separate validation call.
+
 **Resolution happens on the branch, never inside the merge.** Merge is
 all-or-nothing: it either lands everything or reports conflicts and
 changes nothing. Resolving is ordinary branch work, not a special mode:

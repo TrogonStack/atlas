@@ -77,6 +77,68 @@ async fn validate_project_domain_scope_returns_empty_on_empty_store() {
     assert_eq!(resp.total_errors, 0);
 }
 
+fn make_event_model(ns: &str, slug: &str) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id(ns, slug, 1)),
+            title: slug.into(),
+            ..Default::default()
+        })),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn validate_project_namespace_scope_covers_only_that_namespace() {
+    let svc = svc().await;
+    for (ns, slug) in [
+        ("vp-ns-a", "checkout"),
+        ("vp-ns-a", "refunds"),
+        ("vp-ns-b", "billing"),
+    ] {
+        svc.put_entity(Request::new(pb::PutEntityRequest {
+            operation_id: String::new(),
+            entity: Some(make_event_model(ns, slug)),
+            create_only: true,
+            if_match: String::new(),
+            validate_only: false,
+            force: false,
+        }))
+        .await
+        .unwrap();
+    }
+
+    let resp = svc
+        .validate_project(Request::new(pb::ValidateProjectRequest {
+            scope: Some(pb::validate_project_request::Scope::Namespace(
+                "vp-ns-a".into(),
+            )),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut validated: Vec<String> = resp
+        .reports
+        .iter()
+        .filter_map(|r| r.event_model_id.as_ref())
+        .map(|i| format!("{}/{}", i.namespace, i.slug))
+        .collect();
+    validated.sort();
+    assert_eq!(validated, ["vp-ns-a/checkout", "vp-ns-a/refunds"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn validate_project_rejects_an_empty_namespace_scope() {
+    let svc = svc().await;
+    let err = svc
+        .validate_project(Request::new(pb::ValidateProjectRequest {
+            scope: Some(pb::validate_project_request::Scope::Namespace(String::new())),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+}
+
 // ===== list_entities_by_domain tests =====
 
 #[tokio::test(flavor = "multi_thread")]

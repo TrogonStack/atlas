@@ -327,6 +327,8 @@ struct ValidateProjectParamsDe {
     #[serde(default)]
     domain_version: Option<u64>,
     #[serde(default)]
+    namespace: Option<String>,
+    #[serde(default)]
     json: Option<bool>,
 }
 
@@ -345,6 +347,9 @@ pub struct ValidateProjectParams {
     pub domain_slug: Option<String>,
     /// Required (>0) when domain_namespace+domain_slug are set. Omitted must not become 0.
     pub domain_version: Option<u64>,
+    /// Validate every EventModel in this namespace. Exclusive with the project and domain scopes.
+    #[serde(default)]
+    pub namespace: Option<String>,
     #[serde(default)]
     pub json: Option<bool>,
 }
@@ -362,9 +367,15 @@ impl TryFrom<ValidateProjectParamsDe> for ValidateProjectParams {
     fn try_from(raw: ValidateProjectParamsDe) -> Result<Self, Self::Error> {
         let has_project = raw.project_namespace.is_some() || raw.project_slug.is_some();
         let has_domain = raw.domain_namespace.is_some() || raw.domain_slug.is_some();
-        if has_project && has_domain {
+        let has_namespace = raw.namespace.is_some();
+        if [has_project, has_domain, has_namespace]
+            .into_iter()
+            .filter(|set| *set)
+            .count()
+            > 1
+        {
             return Err(
-                "scope is exclusive: set project_namespace+project_slug OR domain_namespace+domain_slug, not both",
+                "scope is exclusive: set project_namespace+project_slug, domain_namespace+domain_slug OR namespace, not several",
             );
         }
         if has_project {
@@ -398,6 +409,7 @@ impl TryFrom<ValidateProjectParamsDe> for ValidateProjectParams {
             domain_namespace: raw.domain_namespace,
             domain_slug: raw.domain_slug,
             domain_version: raw.domain_version,
+            namespace: raw.namespace,
             json: raw.json,
         })
     }
@@ -1111,6 +1123,26 @@ mod deny_unknown_params_tests {
             parsed.is_err(),
             "both project and domain scope must be rejected at the schema boundary; got {parsed:?}"
         );
+    }
+
+    #[test]
+    fn validate_project_params_accept_a_namespace_scope() {
+        let parsed = serde_json::from_value::<ValidateProjectParams>(serde_json::json!({
+            "namespace": "acme"
+        }))
+        .unwrap();
+        assert_eq!(parsed.namespace.as_deref(), Some("acme"));
+    }
+
+    #[test]
+    fn validate_project_params_reject_a_namespace_beside_another_scope() {
+        let parsed = serde_json::from_value::<ValidateProjectParams>(serde_json::json!({
+            "namespace": "acme",
+            "domain_namespace": "acme",
+            "domain_slug": "commerce",
+            "domain_version": 1
+        }));
+        assert!(parsed.is_err(), "got {parsed:?}");
     }
 
     // Server DeleteByQuery rejects max_deletes=0 (FailedPrecondition); the MCP

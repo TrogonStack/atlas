@@ -71,18 +71,19 @@ message ListValidationRulesResponse {
   repeated ValidationRule rules = 1;
 }
 
-// Validate every EventModel in a project (or in the entire store) in one
+// Validate every EventModel in a project, a domain or a namespace in one
 // pass, instead of N round trips through ValidateEventModel. The
 // validator already has the full entity store in memory per call;
 // looping per-model is pure waste.
 message ValidateProjectRequest {
-  // Scope by Project.id (if your store carries Projects) or by
-  // Domain.id (legacy). One of the two must be set. ENTITY_KIND_UNSPECIFIED
-  // for the full store works only on small dev stores; large stores
-  // should always scope.
+  // Scope by Project.id (if your store carries Projects), by Domain.id
+  // (legacy) or by namespace. Exactly one must be set.
   oneof scope {
     trogonatlas.type.v1alpha1.Id project_id = 1;
     trogonatlas.type.v1alpha1.Id domain_id = 2;
+    // Every EventModel whose id carries this namespace, whether or not a
+    // Domain claims it.
+    string namespace = 3;
   }
 }
 

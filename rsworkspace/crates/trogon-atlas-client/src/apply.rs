@@ -228,6 +228,7 @@ pub fn issue_to_json(issue: &pb::ValidationIssue) -> Value {
         Some(pb::canonical::id_string(kind, id))
     });
     json!({
+        "severity": severity_name(issue),
         "code": issue.code,
         "message": issue.message,
         "subject": subject,
@@ -380,13 +381,17 @@ pub fn render_diff(plan: &[PlannedChange], types: &TranscodePool) -> Result<(Str
     Ok((out, changed))
 }
 
-pub fn format_issue(issue: &pb::ValidationIssue) -> String {
-    let severity = match pb::validation_issue::Severity::try_from(issue.severity) {
+fn severity_name(issue: &pb::ValidationIssue) -> &'static str {
+    match pb::validation_issue::Severity::try_from(issue.severity) {
         Ok(pb::validation_issue::Severity::Error) => "error",
         Ok(pb::validation_issue::Severity::Warning) => "warning",
         Ok(pb::validation_issue::Severity::Info) => "info",
         _ => "issue",
-    };
+    }
+}
+
+pub fn format_issue(issue: &pb::ValidationIssue) -> String {
+    let severity = severity_name(issue);
     let subject = issue
         .subject
         .as_ref()
@@ -499,11 +504,13 @@ mod tests {
             issues: vec![pb::ValidationIssue {
                 code: "ENTITY_REFERENCED".into(),
                 message: "entity is referenced".into(),
+                severity: pb::validation_issue::Severity::Error as i32,
                 ..Default::default()
             }],
         };
         let json = rejected.to_json();
         assert_eq!(json["failed"], "event:shop/order.placed@1");
         assert_eq!(json["issues"][0]["code"], "ENTITY_REFERENCED");
+        assert_eq!(json["issues"][0]["severity"], "error");
     }
 }

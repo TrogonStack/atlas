@@ -41,6 +41,17 @@ JSON view is easier to consume). The previous behavior, embedding
 Rust's `Debug` output alongside the binpb, was removed because that
 format is not wire-stable.
 
+Mutating entity tools (`put_entity`, `put_entity_json`, `batch_mutate`,
+`batch_mutate_json`, `delete_entity`, `delete_by_query`,
+`retarget_references`, `revert_changeset`, `apply_manifests`) add the scope
+the write landed in, because a branch write keeps no durable receipt:
+
+```json
+{ "scope": "branch", "branch": "acme-del", "binpb_base64": "..." }
+```
+
+`scope` is `baseline` and `branch` is `null` when no branch applies.
+
 ## Error contract
 
 Internal helpers (`descriptor_for`, `message_from_json`,
