@@ -83,11 +83,6 @@ spec:
     kind: ENTITY_KIND_COMMAND_SLICE
   - id:
       namespace: acme-reviews
-      slug: orders-delivered-unreviewed-upsert-rms
-      version: '1'
-    kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-reviews
       slug: orders-delivered-unreviewed-delete-rms
       version: '1'
     kind: ENTITY_KIND_READ_MODEL_SLICE

@@ -4,7 +4,7 @@ metadata:
   name: review-eligibility-grant
   namespace: acme-reviews
 spec:
-  doc: A delivered order clears the no-review window and becomes reviewable.
+  doc: A delivered order clears the no-review window and becomes reviewable. It starts from the delivered-unreviewed queue that the storefront fulfillment event populates, so that projection is upstream preparation and not a step here.
   entry:
     automation:
       processor:
@@ -27,10 +27,6 @@ spec:
           slug: review-eligibility.granted
           version: '1'
   slices:
-  - id:
-      namespace: acme-reviews
-      slug: orders-delivered-unreviewed-upsert-rms
-      version: '1'
   - id:
       namespace: acme-reviews
       slug: grant-eligibility-auto
@@ -70,6 +66,12 @@ spec:
             namespace: acme-reviews
             slug: review-form
             version: '1'
+    readModel:
+      readModel:
+        id:
+          namespace: acme-reviews
+          slug: eligible-reviews
+          version: '1'
   outcome:
     events:
     - event:

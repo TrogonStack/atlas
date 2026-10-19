@@ -15,5 +15,8 @@ metadata:
   namespace: acme-storefront
 spec:
   doc: Internal operator who answers order-status questions.
+  metadata:
+  - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.OrphanAnnotation
+    doc: Reserved for the support console. Its order lookup flow is not modeled yet.
   role: operator
   title: Support Agent

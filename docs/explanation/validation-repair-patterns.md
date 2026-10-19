@@ -157,3 +157,78 @@ would change behavior, verification, and limits. Link to existing schema
 or fixture definitions when useful, and distinguish historical results
 from current validation. Amend an existing pattern when the new case
 refines its applicability rather than copying the same procedure.
+
+## Example manifests held to the validator
+
+### Findings on unmodified main
+
+The manifests under `examples/manifests/` were only checked against the
+manifest schema, so they drifted from the validator and taught patterns it
+rejects. `example_manifests_validate` in `trogon-atlas-server` now applies all
+three namespaces to an ephemeral store and requires every model to validate
+with no warning or error.
+
+On unmodified main the three models reported these findings.
+
+| Model | Errors | Warnings |
+| --- | --- | --- |
+| `acme-storefront` | 12 | 2 |
+| `acme-reviews` | 7 | 2 |
+| `acme-customer-data-deletion` | 0 | 1 |
+
+### Decisions
+
+- **System-recorded timestamp.** `EVENT_FIELD_UNSOURCED` on
+  `order.placed.placed_at` and `review.submitted.submitted_at` is a real gap.
+  The command now declares the field with a `DerivedFieldAnnotation`, the
+  way `capture-payment.paid_at` already did.
+- **Fields a downstream view needs travel with the events.**
+  `READ_MODEL_FIELD_UNSOURCED` on `fulfillment-queue.buyer_id` and
+  `seller_id` was repaired by carrying both from `place-order` through
+  `order.placed`, `pending-payments`, `capture-payment` and `order.paid`.
+  Dropping the fields would have removed what the dispatch automation hands
+  to `mark-fulfilled`.
+- **A view must carry every field of each source event.**
+  `RM_SOURCE_EVENT_FIELD_NOT_PROJECTED` is repaired by adding the missing
+  fields, including swimlane state such as `status`.
+- **One projection per emitter.** A read model fed by several events
+  (`order-status`) cannot sit in one slice: `PROJECTION_BEFORE_EMITTER` and
+  `PROJECTION_NOT_ADJACENT` both fire. It is now one read-model slice per
+  source event, each placed right after the command slice that emits it.
+- **A queue filled in an earlier storyboard.** `pending-payments-rms` moved
+  into `checkout-flow` after `place-order-slice`. `fulfillment-flow` still
+  enters on that queue. This is the same-context sibling of the
+  [upstream subscription pattern](#upstream-subscription-at-a-local-storyboard-entry):
+  there the emitter lives in another bounded context, here in another
+  storyboard of the same model, so the projection can follow its emitter
+  instead of leaving the model.
+- **Seed catches up with the recorded acme-reviews repair.** The upstream
+  fulfillment projection left the storyboard and the model membership, and
+  the storyboard doc says why. The projection slice itself is deleted from
+  the seed because no storyboard, model, scenario, or test references it.
+- **Each example declares its Project.** `DOMAIN_MISSING_PROJECT` only shows
+  in project-scoped validation. Each namespace now has a Project of the same
+  name that its Domain points to, and the test validates every Project.
+- **Contexts touch through subscriptions only.**
+  `CROSS_MODEL_BOUNDARY_VIOLATION` on the grant command slice scenario was
+  repaired by dropping the `given` that named an `acme-storefront` event. The
+  automation slice scenario already starts from the subscribed queue.
+- **Entry read model.** `STORYBOARD_MISSING_ENTRY` is repaired by naming the
+  read model the entry observer sees: `cart-summary`, `eligible-reviews` and
+  `pending-deletions`.
+- **Declared intent.** `ORPHAN_NOT_FLAGGED` on `support-agent` and
+  `UI_USED_AS_INPUT_AND_OUTPUT` on `review-form` are kept and annotated
+  (`OrphanAnnotation`, `MixedSurfaceAnnotation`) because the persona is
+  reserved for a flow not modeled yet and the form is prefilled from the row
+  it submits against.
+
+### Rule observations, not changed here
+
+- `RM_SOURCE_EVENT_FIELD_NOT_PROJECTED` cannot express a view that keeps a
+  count and ignores the event payload: `cart-summary` now also holds the last
+  `product_id` and `quantity`.
+- `STORYBOARD_MISSING_ENTRY` asks for an observed read model even when the
+  flow starts at a UI that has nothing to display yet, as in `checkout-flow`.
+- `trogon-atlas fmt --check` already reports
+  `acme-customer-data-deletion/read-model.yaml` as unformatted on main. That
+  file is left alone.

@@ -188,11 +188,6 @@ spec:
     kind: ENTITY_KIND_READ_MODEL_SLICE
   - id:
       namespace: acme-storefront
-      slug: order-status-rms
-      version: '1'
-    kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-storefront
       slug: capture-payment-auto
       version: '1'
     kind: ENTITY_KIND_AUTOMATION_SLICE
@@ -216,4 +211,19 @@ spec:
       slug: fulfillment-flow
       version: '1'
     kind: ENTITY_KIND_STORYBOARD
+  - id:
+      namespace: acme-storefront
+      slug: order-status-placed-rms
+      version: '1'
+    kind: ENTITY_KIND_READ_MODEL_SLICE
+  - id:
+      namespace: acme-storefront
+      slug: order-status-paid-rms
+      version: '1'
+    kind: ENTITY_KIND_READ_MODEL_SLICE
+  - id:
+      namespace: acme-storefront
+      slug: order-status-fulfilled-rms
+      version: '1'
+    kind: ENTITY_KIND_READ_MODEL_SLICE
   title: Acme Storefront

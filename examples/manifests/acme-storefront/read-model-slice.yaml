@@ -67,10 +67,10 @@ spec:
 apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
 kind: ReadModelSlice
 metadata:
-  name: order-status-rms
+  name: order-status-placed-rms
   namespace: acme-storefront
 spec:
-  doc: Each lifecycle event updates the shopper-facing status.
+  doc: Status row on placement.
   projectionRole: PROJECTION_ROLE_UPSERT
   readModel:
     readModel:
@@ -84,14 +84,48 @@ spec:
         namespace: acme-storefront
         slug: order.placed
         version: '1'
+  title: 'Projection: order placed'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: order-status-paid-rms
+  namespace: acme-storefront
+spec:
+  doc: Status row on payment.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-storefront
+        slug: order-status
+        version: '1'
+  sourceEvents:
   - event:
       id:
         namespace: acme-storefront
         slug: order.paid
         version: '1'
+  title: 'Projection: order paid'
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: order-status-fulfilled-rms
+  namespace: acme-storefront
+spec:
+  doc: Status row on delivery.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-storefront
+        slug: order-status
+        version: '1'
+  sourceEvents:
   - event:
       id:
         namespace: acme-storefront
         slug: order.fulfilled
         version: '1'
-  title: 'Projection: order status'
+  title: 'Projection: order fulfilled'

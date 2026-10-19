@@ -40,6 +40,19 @@ spec:
     - name: cart_id
       type:
         uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - metadata:
+      - '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation
+        doc: now() when the order is recorded
+        kind: KIND_TIMESTAMP
+      name: placed_at
+      type:
+        timestamp: {}
   swimlane:
     id:
       namespace: acme-storefront
@@ -58,6 +71,12 @@ spec:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
     - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
       type:
         uuid: {}
     - metadata:

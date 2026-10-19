@@ -5,4 +5,9 @@ metadata:
   namespace: acme-storefront
 spec:
   doc: Buying, paying for, and fulfilling physical goods sold through the Acme storefront.
+  project:
+    id:
+      namespace: acme-storefront
+      slug: acme-storefront
+      version: '1'
   title: Retail Commerce

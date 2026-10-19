@@ -188,6 +188,13 @@ manifest replay can overwrite unrelated live changes. Preview the selected
 seed manifests with `trogon-atlas apply --dry-run` in the same branch and endpoint.
 That check verifies manifest admissibility, not full scoped validation.
 
+When the seed itself is the thing to repair, edit the YAML, run
+`trogon-atlas fmt -w` on the touched files, and run
+`cargo test -p trogon-atlas-server --test example_manifests_validate`. That
+test applies every example namespace to an ephemeral store and lists each
+warning or error by code and subject, so it doubles as the before and after
+record. Finish with `mise run manifests:verify -- bootstrap`.
+
 ## Keep the result available to the next session
 
 Before cleanup or handoff, save a descriptive run record in a directory
