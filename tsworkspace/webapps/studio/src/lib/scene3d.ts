@@ -273,13 +273,20 @@ export function resolveFocus(
 
 /**
  * Whether a tag shows under this focus, how much it counts when names
- * compete for room, and whether it belongs to the selection itself.
+ * compete for room, whether it belongs to the selection itself, and whether
+ * it fades with the nodes it names. Ghost tags are guides, not names, so
+ * they never fade.
  */
-export function tagState(tag: SceneTag, focus: SceneFocus): { visible: boolean; priority: number; selected: boolean } {
-  const lit = (tag.related ?? []).some((k) => focus.litKeys.has(k));
-  const selected = (tag.related ?? []).some((k) => focus.keys.has(k));
-  if (tag.onlyWhenLit && !lit) return { visible: false, priority: tag.priority, selected: false };
-  return { visible: true, priority: tag.priority + (selected ? 20 : lit ? 10 : 0), selected };
+export function tagState(
+  tag: SceneTag,
+  focus: SceneFocus,
+): { visible: boolean; priority: number; selected: boolean; dim: boolean } {
+  const related = tag.related ?? [];
+  const lit = related.some((k) => focus.litKeys.has(k));
+  const selected = related.some((k) => focus.keys.has(k));
+  if (tag.onlyWhenLit && !lit) return { visible: false, priority: tag.priority, selected: false, dim: false };
+  const dim = focus.dimNodes && !lit && related.length > 0 && tag.tone !== 'ghost';
+  return { visible: true, priority: tag.priority + (selected ? 20 : lit ? 10 : 0), selected, dim };
 }
 
 export interface ScreenBox {

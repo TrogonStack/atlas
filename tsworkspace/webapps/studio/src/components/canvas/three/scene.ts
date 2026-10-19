@@ -516,8 +516,9 @@ export class GraphScene {
     for (const t of this.tags) {
       const state = focus
         ? tagState(t.tag, focus)
-        : { visible: !t.tag.onlyWhenLit, priority: t.tag.priority, selected: false };
+        : { visible: !t.tag.onlyWhenLit, priority: t.tag.priority, selected: false, dim: false };
       t.element.style.outline = state.selected ? `2px solid ${FOCUS}` : '';
+      t.element.style.opacity = state.dim ? '0.35' : '';
       if (!state.visible) {
         t.object.visible = false;
         continue;

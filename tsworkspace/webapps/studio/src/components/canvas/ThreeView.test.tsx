@@ -1,13 +1,17 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const state = vi.hoisted(() => ({ webgl: true, loads: 0 }));
+const state = vi.hoisted(() => ({ webgl: true, loads: 0, towerLoads: 0 }));
 
 vi.mock('@/lib/webgl', () => ({ hasWebGL: () => state.webgl }));
 // The factory runs only when ThreeView imports the board, so `loads` counts real loads of the 3D code.
 vi.mock('@/components/canvas/three/LaneMeshBoard', () => {
   state.loads += 1;
   return { default: () => <div data-testid="lane-mesh-board" /> };
+});
+vi.mock('@/components/canvas/three/StreamTowersBoard', () => {
+  state.towerLoads += 1;
+  return { default: () => <div data-testid="stream-towers-board" /> };
 });
 
 import { buildModel } from '@/lib/model';
@@ -27,6 +31,7 @@ describe('ThreeView', () => {
     expect(screen.getByText('This view needs WebGL')).toBeDefined();
     await new Promise((r) => setTimeout(r, 20));
     expect(state.loads).toBe(0);
+    expect(state.towerLoads).toBe(0);
     expect(screen.queryByTestId('lane-mesh-board')).toBeNull();
   });
 
@@ -35,6 +40,15 @@ describe('ThreeView', () => {
     expect(screen.getByText('Loading the 3D view')).toBeDefined();
     expect(await screen.findByTestId('lane-mesh-board')).toBeDefined();
     expect(state.loads).toBe(1);
+    // Each 3D view is its own chunk: opening the lane mesh does not load the towers.
+    expect(state.towerLoads).toBe(0);
     expect(screen.queryByText('Loading the 3D view')).toBeNull();
+  });
+
+  it('shows the towers board for the towers view', async () => {
+    render(<ThreeView view="towers" {...props} />);
+    expect(await screen.findByTestId('stream-towers-board')).toBeDefined();
+    expect(state.towerLoads).toBe(1);
+    expect(screen.queryByTestId('lane-mesh-board')).toBeNull();
   });
 });

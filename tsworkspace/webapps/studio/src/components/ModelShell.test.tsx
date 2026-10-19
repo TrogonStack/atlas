@@ -162,7 +162,7 @@ describe('ModelShell', () => {
     expect(screen.queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
   });
 
-  it('hides the Lane mesh tab on a saved snapshot, which carries no 3D code', async () => {
+  it('hides the 3D tabs on a saved snapshot, which carries no 3D code', async () => {
     render(
       <ModelShell
         model={buildModel(storefrontEntities() as never)}
@@ -174,6 +174,27 @@ describe('ModelShell', () => {
       expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
     });
     expect(screen.queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
+    expect(screen.queryByRole('tab', { name: 'Stream towers' })).toBeNull();
+  });
+
+  it('offers the Stream towers tab when a swimlane holds events, and opens it', async () => {
+    render(<ModelShell model={buildModel(storefrontEntities() as never)} scopedTitle="Storefront" />);
+    const tab = await screen.findByRole('tab', { name: 'Stream towers' });
+    fireEvent.click(tab);
+    expect(await screen.findByTestId('three-view-towers')).toBeDefined();
+  });
+
+  it('hides the Stream towers tab when no swimlane holds an event', async () => {
+    const id = (slug: string) => ({ namespace: 'shop', slug, version: '1' });
+    const model = buildModel([
+      { swimlane: { id: id('order'), title: 'Order' } },
+      { event: { id: id('order.placed'), title: 'Order placed' } },
+    ] as never);
+    render(<ModelShell model={model} scopedTitle="Shop" />);
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
+    });
+    expect(screen.queryByRole('tab', { name: 'Stream towers' })).toBeNull();
   });
 
   describe('Waterfall tab', () => {
