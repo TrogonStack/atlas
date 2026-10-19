@@ -22,6 +22,7 @@ import { KIND_SHORT_TO_CAMEL } from '@/components/ModelShell.kindmap';
 import { MultiInspector } from '@/components/MultiInspector';
 import { Sidebar } from '@/components/Sidebar';
 import { TopBar } from '@/components/TopBar';
+import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import { ValidationInspector } from '@/components/ValidationInspector';
 import { ValidationSummary } from '@/components/ValidationSummary';
@@ -115,6 +116,7 @@ export function ModelShell({
   const [info, setInfo] = useState<ServerInfo>();
   const scoped = Boolean(modelProp);
   const [branch, setBranch] = useBranchParam();
+  const [missingBranch, setMissingBranch] = useState<string>();
   const [branchDiffEntries, setBranchDiffEntries] = useState<BranchDiffEntry[]>([]);
   const branchLookup = useMemo(() => branchStatusLookup(branchDiffEntries), [branchDiffEntries]);
   // ?ns= is owned by this shell only in non-scoped mode; scoped mode is
@@ -406,6 +408,25 @@ export function ModelShell({
     return () => branchDiffAbortRef.current?.abort();
   }, [branch, loadBranchDiff]);
 
+  // A merged or deleted branch can outlive its URL. Fall back to baseline so
+  // neither the board nor a copied fix prompt targets a branch that is gone.
+  const setBranchRef = useRef(setBranch);
+  setBranchRef.current = setBranch;
+  useEffect(() => {
+    if (!branch) return;
+    const ctrl = new AbortController();
+    api
+      .branches({ signal: ctrl.signal })
+      .then((res) => {
+        if (ctrl.signal.aborted) return;
+        if ((res.branches ?? []).some((b) => b.name === branch)) return;
+        setMissingBranch(branch);
+        setBranchRef.current(undefined);
+      })
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [branch]);
+
   // Scoped shells own the model via the caller. When ?branch= changes the
   // badges update above, but the caller's model must also reload so the
   // board shows the branch overlay rather than a stale baseline snapshot.
@@ -564,6 +585,7 @@ export function ModelShell({
         onExportHtml={onExportHtml}
         branch={branch}
         onSelectBranch={(next) => {
+          setMissingBranch(undefined);
           setBranch(next);
           setReviewOpen(false);
           setValidationOpen(false);
@@ -587,6 +609,16 @@ export function ModelShell({
         asOfIncomplete={asOfIncomplete}
         onExitAsOf={() => onAsOfChange?.(undefined)}
       />
+      {missingBranch ? (
+        <output className="flex items-center gap-2 border-b border-amber-300 bg-amber-100 px-4 py-1.5 text-xs text-amber-900">
+          <span className="min-w-0 truncate">
+            Branch <span className="font-mono">{missingBranch}</span> no longer exists; showing baseline.
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setMissingBranch(undefined)}>
+            Dismiss
+          </Button>
+        </output>
+      ) : null}
       <div className="flex min-h-0 flex-1">
         {scoped ? null : (
           <Sidebar

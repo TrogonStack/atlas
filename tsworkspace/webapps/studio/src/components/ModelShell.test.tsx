@@ -289,4 +289,46 @@ describe('ModelShell', () => {
     });
     vi.useRealTimers();
   });
+
+  it('falls back to baseline with a banner when the URL branch no longer exists', async () => {
+    (api.branches as ReturnType<typeof vi.fn>).mockResolvedValue({
+      branches: [{ name: 'other', doc: '', createdAt: '', deltaCount: 0 }],
+    });
+    rtlRender(<ModelShell model={buildModel([])} scopedTitle="Shop" />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: '?branch=demo' }),
+    });
+    expect(await screen.findByText(/no longer exists; showing baseline/)).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Branch: baseline' })).toBeDefined();
+    });
+  });
+
+  it('keeps the URL branch when it still exists', async () => {
+    (api.branches as ReturnType<typeof vi.fn>).mockResolvedValue({
+      branches: [{ name: 'demo', doc: '', createdAt: '', deltaCount: 1 }],
+    });
+    rtlRender(<ModelShell model={buildModel([])} scopedTitle="Shop" />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: '?branch=demo' }),
+    });
+    await waitFor(() => {
+      expect(api.branches).toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/no longer exists/)).toBeNull();
+    expect(screen.getByRole('button', { name: /^Branch: demo/ })).toBeDefined();
+  });
+
+  it('checks the URL branch once across re-renders', async () => {
+    (api.branches as ReturnType<typeof vi.fn>).mockResolvedValue({
+      branches: [{ name: 'demo', doc: '', createdAt: '', deltaCount: 1 }],
+    });
+    const wrapper = withNuqsTestingAdapter({ searchParams: '?branch=demo' });
+    const view = rtlRender(<ModelShell model={buildModel([])} scopedTitle="Shop" />, { wrapper });
+    await waitFor(() => {
+      expect(api.branches).toHaveBeenCalledTimes(1);
+    });
+    view.rerender(<ModelShell model={buildModel([])} scopedTitle="Shop" />);
+    view.rerender(<ModelShell model={buildModel([])} scopedTitle="Shop" />);
+    await act(async () => {});
+    expect(api.branches).toHaveBeenCalledTimes(1);
+  });
 });

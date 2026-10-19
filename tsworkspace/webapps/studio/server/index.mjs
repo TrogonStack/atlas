@@ -545,8 +545,8 @@ function valueToJs(v) {
   return null;
 }
 
-/** @param {string} typeUrl @param {unknown} value */
-function decodeAnyValue(typeUrl, value) {
+/** @param {string} typeUrl @param {unknown} value @param {number} [depth] */
+function decodeAnyValue(typeUrl, value, depth = 0) {
   try {
     const fqn = typeUrl.split("/").pop() ?? "";
     const type = protoRoot.lookupType(fqn);
@@ -558,7 +558,7 @@ function decodeAnyValue(typeUrl, value) {
       return { "@type": typeUrl, value: structToJs(type.toObject(msg)) };
     }
     const obj = type.toObject(msg, { longs: String, enums: String });
-    return { "@type": typeUrl, ...obj };
+    return { "@type": typeUrl, .../** @type {Record<string, unknown>} */ (decodeAnnotations(obj, depth + 1)) };
   } catch (err) {
     logEvent("warn", "decode_any_value_failed", {
       typeUrl,
@@ -575,7 +575,7 @@ function decodeAnnotations(node, depth = 0) {
   if (depth >= DECODE_ANNOTATIONS_MAX_DEPTH) return node;
   if (Array.isArray(node)) {
     return node.map((item) => {
-      const decoded = maybeDecodeAny(item);
+      const decoded = maybeDecodeAny(item, depth + 1);
       return decoded ?? decodeAnnotations(item, depth + 1);
     });
   }
@@ -583,18 +583,18 @@ function decodeAnnotations(node, depth = 0) {
   /** @type {Record<string, unknown>} */
   const out = {};
   for (const [k, v] of Object.entries(/** @type {Record<string, unknown>} */ (node))) {
-    const decoded = maybeDecodeAny(v);
+    const decoded = maybeDecodeAny(v, depth + 1);
     out[k] = decoded ?? decodeAnnotations(v, depth + 1);
   }
   return out;
 }
 
-/** @param {unknown} item */
-function maybeDecodeAny(item) {
+/** @param {unknown} item @param {number} [depth] */
+function maybeDecodeAny(item, depth = 0) {
   if (!item || typeof item !== "object" || Array.isArray(item)) return null;
   const url = /** @type {any} */ (item).typeUrl ?? /** @type {any} */ (item).type_url;
   if (typeof url !== "string" || !url.startsWith("type.googleapis.com/")) return null;
-  return decodeAnyValue(url, /** @type {any} */ (item).value);
+  return decodeAnyValue(url, /** @type {any} */ (item).value, depth);
 }
 
 /** @type {Record<number, number>} */
@@ -2077,7 +2077,7 @@ app.use((/** @type {AppRequest} */ _req, /** @type {Res} */ res) => {
 
 markLive();
 
-export { app, beginShutdown, call, checkUpstream };
+export { app, beginShutdown, call, checkUpstream, decodeAnnotations };
 
 if (process.env.NODE_ENV !== "test") {
   // Crash loudly rather than silently: an unhandled rejection that reaches
