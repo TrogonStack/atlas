@@ -605,7 +605,9 @@ fn slice_to_flow(
                 }
                 for endpoint in &mut downstream {
                     let key = read_model_key(&endpoint.entity_ref, by_key);
-                    endpoint.fields.retain(|f| key.contains(&f.name));
+                    if !key.is_empty() {
+                        endpoint.fields.retain(|f| key.contains(&f.name));
+                    }
                 }
             }
             FlowLink {
@@ -1163,6 +1165,39 @@ mod tests {
             &all,
         );
         assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
+    }
+
+    #[test]
+    fn keyless_delete_projection_keeps_the_normal_requirement() {
+        let all = vec![
+            stored(swimlane("cart", Vec::new())),
+            stored(event(
+                "cart-checked-out",
+                "cart",
+                vec![field("cart_id", string_kind())],
+            )),
+            stored(read_model(
+                "open-carts",
+                vec![
+                    field("cart_id", string_kind()),
+                    field("item_count", int_kind()),
+                ],
+                vec!["cart-checked-out"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ];
+        let (gaps, _) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
+        assert_eq!(
+            count(&gaps, pb::completeness_gap::Kind::UndeclaredFields),
+            0
+        );
     }
 
     #[test]
