@@ -485,13 +485,72 @@ fn read_model_to_flow(
             }
         }
     }
-    let downstream = endpoint_for(pb::EntityKind::ReadModel, read_model_id, by_key)
-        .into_iter()
-        .collect();
+    let mut downstream: Vec<FlowEndpoint> =
+        endpoint_for(pb::EntityKind::ReadModel, read_model_id, by_key)
+            .into_iter()
+            .collect();
+    let (delete_only_events, all_delete) = delete_only_sources(read_model_id, by_key);
+    if all_delete {
+        upstream.retain(|endpoint| endpoint.source_role == FlowSourceRole::Direct);
+        for endpoint in &mut downstream {
+            let key = read_model_key(&endpoint.entity_ref, by_key);
+            if !key.is_empty() {
+                endpoint.fields.retain(|f| key.contains(&f.name));
+            }
+        }
+    }
+    for endpoint in &mut upstream {
+        let is_delete_only = endpoint.entity_ref.kind == pb::EntityKind::Event as i32
+            && endpoint
+                .entity_ref
+                .id
+                .as_ref()
+                .is_some_and(|id| delete_only_events.contains(&pb::IdKey::new(id)));
+        if is_delete_only {
+            endpoint.source_role = FlowSourceRole::Trigger;
+        }
+    }
     Some(FlowLink {
         upstream,
         downstream,
     })
+}
+
+fn delete_only_sources(
+    read_model_id: &pb::Id,
+    by_key: &HashMap<pb::EntityKey, pb::Entity>,
+) -> (HashSet<pb::IdKey>, bool) {
+    let mut deleting: HashSet<pb::IdKey> = HashSet::new();
+    let mut other: HashSet<pb::IdKey> = HashSet::new();
+    let mut slices = 0usize;
+    let mut deletes = 0usize;
+    for entity in by_key.values() {
+        let Some(pb::entity::Kind::ReadModelSlice(rs)) = entity.kind.as_ref() else {
+            continue;
+        };
+        let targets = rs
+            .read_model
+            .as_ref()
+            .and_then(|re| re.read_model.as_ref()?.id.as_ref())
+            == Some(read_model_id);
+        if !targets {
+            continue;
+        }
+        slices += 1;
+        let is_delete = rs.projection_role == pb::ProjectionRole::Delete as i32;
+        if is_delete {
+            deletes += 1;
+        }
+        let bucket = if is_delete { &mut deleting } else { &mut other };
+        bucket.extend(
+            rs.source_events
+                .iter()
+                .filter_map(|ee| ee.event.as_ref()?.id.as_ref())
+                .map(pb::IdKey::new),
+        );
+    }
+    deleting.retain(|id| !other.contains(id));
+    (deleting, slices > 0 && slices == deletes)
 }
 
 fn resolve_slice_ref(
@@ -598,10 +657,9 @@ fn slice_to_flow(
                 .into_iter()
                 .collect();
             if rs.projection_role == pb::ProjectionRole::Delete as i32 {
+                upstream.retain(|endpoint| endpoint.source_role == FlowSourceRole::Direct);
                 for endpoint in &mut upstream {
-                    if endpoint.source_role == FlowSourceRole::Direct {
-                        endpoint.source_role = FlowSourceRole::Trigger;
-                    }
+                    endpoint.source_role = FlowSourceRole::Trigger;
                 }
                 for endpoint in &mut downstream {
                     let key = read_model_key(&endpoint.entity_ref, by_key);
@@ -1197,6 +1255,94 @@ mod tests {
         assert_eq!(
             count(&gaps, pb::completeness_gap::Kind::UndeclaredFields),
             0
+        );
+    }
+
+    fn delete_scenario(
+        lane_state: Vec<pb::FieldSpec>,
+        event_fields: Vec<pb::FieldSpec>,
+    ) -> Vec<StoredEntity> {
+        vec![
+            stored(swimlane("cart", lane_state)),
+            stored(event("cart-checked-out", "cart", event_fields)),
+            stored(keyed(
+                read_model(
+                    "open-carts",
+                    vec![
+                        field("cart_id", string_kind()),
+                        field("item_count", int_kind()),
+                    ],
+                    vec!["cart-checked-out"],
+                ),
+                &["cart_id"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ]
+    }
+
+    #[test]
+    fn delete_projection_does_not_source_key_from_lane_state() {
+        let all = delete_scenario(
+            vec![field("cart_id", string_kind())],
+            vec![field("note", string_kind())],
+        );
+        let (gaps, _) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
+        assert!(gaps.iter().any(|g| g.field_path == "cart_id"), "{gaps:?}");
+    }
+
+    #[test]
+    fn delete_projection_in_event_model_scope_only_requires_key() {
+        let mut all = delete_scenario(
+            Vec::new(),
+            vec![
+                field("cart_id", string_kind()),
+                field("note", string_kind()),
+            ],
+        );
+        all.push(stored(event_model(
+            "carting",
+            vec![
+                (pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+                (pb::EntityKind::ReadModel, "open-carts"),
+            ],
+        )));
+        let (gaps, score) = check_completeness(&event_model_scope("carting"), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn event_used_by_upsert_and_delete_keeps_full_requirement_in_event_model_scope() {
+        let mut all = delete_scenario(
+            Vec::new(),
+            vec![
+                field("cart_id", string_kind()),
+                field("note", string_kind()),
+            ],
+        );
+        all.push(stored(with_role(
+            read_model_slice("carts-upsert", vec!["cart-checked-out"], "open-carts"),
+            pb::ProjectionRole::Upsert,
+        )));
+        all.push(stored(event_model(
+            "carting",
+            vec![
+                (pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+                (pb::EntityKind::ReadModelSlice, "carts-upsert"),
+                (pb::EntityKind::ReadModel, "open-carts"),
+            ],
+        )));
+        let (gaps, _) = check_completeness(&event_model_scope("carting"), &all);
+        assert!(
+            gaps.iter().any(|g| g.field_path == "item_count"),
+            "{gaps:?}"
         );
     }
 
