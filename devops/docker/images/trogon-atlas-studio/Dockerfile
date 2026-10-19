@@ -6,7 +6,7 @@
 # pnpm workspace at /mnt/tsworkspace, so the install resolves against the
 # workspace lockfile. `pnpm deploy` then produces a self-contained studio
 # tree with production deps only.
-FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a AS build
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS build
 ARG BUILDARCH
 ARG PNPM_VERSION=10.3.0
 ARG PNPM_LINUXSTATIC_X64_SHA256=13319046c28ab9cf18838aea7a06afcba20156c90ee3f164b9e0d11360b0bbd9
@@ -33,7 +33,7 @@ RUN --mount=type=bind,source=tsworkspace,target=/mnt/tsworkspace \
 RUN pnpm --filter trogon-atlas-studio run build \
  && pnpm --filter trogon-atlas-studio deploy --legacy --prod /app
 
-FROM node:26-alpine@sha256:143494b1da2945f061539253adc65e4f1569ddf07da2d384c022c791a9d90a4a
+FROM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5
 WORKDIR /app
 RUN apk upgrade --no-cache \
  && addgroup -g 101 -S studio && adduser -S -u 100 -G studio studio \
