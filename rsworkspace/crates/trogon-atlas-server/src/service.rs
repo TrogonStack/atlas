@@ -6905,7 +6905,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     validation: validation_issues,
                     applied_count: 0,
                     operation_receipt: None,
-                    ..Default::default()
+                    ..landed.into_response()
                 }));
             }
         }

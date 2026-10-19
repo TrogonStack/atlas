@@ -1945,6 +1945,11 @@ async fn merge_branch_invalid_via_dangling_reference() {
         .iter()
         .any(|i| i.code == "TERM_DANGLING_ENTITY"
             && i.severity == pb::validation_issue::Severity::Error as i32));
+    assert_eq!(resp.applied_count, 0);
+    assert_eq!(
+        (resp.added_count, resp.changed_count, resp.deleted_count),
+        (1, 0, 0)
+    );
 
     // Nothing persisted.
     let err = c
