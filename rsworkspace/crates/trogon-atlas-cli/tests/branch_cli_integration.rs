@@ -206,6 +206,35 @@ spec: { title: On branch }
         "{:?}",
         merged.stdout
     );
+    assert!(
+        merged.stdout.contains("1 added, 0 changed, 0 deleted"),
+        "{:?}",
+        merged.stdout
+    );
+    assert!(
+        merged
+            .stdout
+            .contains("validation after merge: 0 errors, 0 warnings, 0 info"),
+        "{:?}",
+        merged.stdout
+    );
+
+    let as_json = trogon_atlas(
+        &endpoint,
+        &[
+            "--format",
+            "json",
+            "branch",
+            "merge",
+            "cli-dry",
+            "--dry-run",
+        ],
+    );
+    let doc: serde_json::Value = serde_json::from_str(&as_json.stdout).unwrap();
+    assert_eq!(doc["data"]["added_count"], 1, "{doc}");
+    assert_eq!(doc["data"]["changed_count"], 0, "{doc}");
+    assert_eq!(doc["data"]["deleted_count"], 0, "{doc}");
+    assert_eq!(doc["data"]["validation_summary"]["errors"], 0, "{doc}");
 
     // Dry run must not persist: baseline still lacks the entity.
     let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)

@@ -1033,11 +1033,23 @@ message MergeBranchResponse {
   }
   Status status = 1;
   repeated trogonatlas.catalog.v1alpha1.BranchDiffEntry conflicts = 2;
+  // Post-merge validation findings. STATUS_INVALID carries the findings that
+  // blocked the merge. A dry run that reports STATUS_VALIDATED also carries
+  // its Warning and Info findings, so a reviewer sees what the merge leaves
+  // behind without a separate validation call.
   repeated ValidationIssue validation = 3;
-  // Number of non-CONVERGED entries actually landed on baseline.
+  // Number of non-CONVERGED entries actually landed on baseline, or that a
+  // dry run would land.
   uint32 applied_count = 4;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 5;
+  // The landed (or, on a dry run, landable) entries split by diff class.
+  // Together they sum to applied_count when the merge reached the landing
+  // step (STATUS_APPLIED, STATUS_VALIDATED, or a dry run's STATUS_INVALID);
+  // all zero for STATUS_CONFLICTS and for an operation_id replay.
+  uint32 added_count = 6;
+  uint32 changed_count = 7;
+  uint32 deleted_count = 8;
 }
 
 message UpdateBranchRequest {

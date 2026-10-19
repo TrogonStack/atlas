@@ -251,7 +251,8 @@ enum BranchCmd {
     Merge {
         name: String,
         /// Run full conflict detection and post-merge validation without
-        /// persisting anything, even on success.
+        /// persisting anything, even on success. Prints how many entities
+        /// would be added, changed and deleted, and the post-merge findings.
         #[arg(long)]
         dry_run: bool,
         /// Keep the branch (now empty of deltas) after a successful merge
@@ -970,19 +971,42 @@ async fn run(
                         if text {
                             println!("{name} merged ({} entities applied)", resp.applied_count);
                         }
-                        let data =
-                            json!({"status": "applied", "applied_count": resp.applied_count});
+                        let counts = branch::MergeCounts::of(&resp);
+                        let data = json!({
+                            "status": "applied",
+                            "applied_count": resp.applied_count,
+                            "added_count": counts.added,
+                            "changed_count": counts.changed,
+                            "deleted_count": counts.deleted,
+                        });
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Validated => {
+                        let counts = branch::MergeCounts::of(&resp);
+                        let severities = branch::SeverityCounts::of(&resp.validation);
                         if text {
                             println!(
-                                "{name} would merge cleanly ({} entities, dry run)",
+                                "{name} would merge cleanly (dry run): {} entities ({counts})",
                                 resp.applied_count
                             );
+                            println!("validation after merge: {severities}");
+                            for issue in &resp.validation {
+                                println!("{}", apply::format_issue(issue));
+                            }
                         }
-                        let data =
-                            json!({"status": "validated", "applied_count": resp.applied_count});
+                        let data = json!({
+                            "status": "validated",
+                            "applied_count": resp.applied_count,
+                            "added_count": counts.added,
+                            "changed_count": counts.changed,
+                            "deleted_count": counts.deleted,
+                            "validation_summary": {
+                                "errors": severities.errors,
+                                "warnings": severities.warnings,
+                                "info": severities.infos,
+                            },
+                            "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
+                        });
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Conflicts => {

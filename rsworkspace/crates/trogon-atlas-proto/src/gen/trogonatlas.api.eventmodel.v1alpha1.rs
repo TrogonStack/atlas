@@ -2131,14 +2131,29 @@ pub struct MergeBranchResponse {
     pub status: i32,
     #[prost(message, repeated, tag="2")]
     pub conflicts: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::BranchDiffEntry>,
+    /// Post-merge validation findings. STATUS_INVALID carries the findings that
+    /// blocked the merge. A dry run that reports STATUS_VALIDATED also carries
+    /// its Warning and Info findings, so a reviewer sees what the merge leaves
+    /// behind without a separate validation call.
     #[prost(message, repeated, tag="3")]
     pub validation: ::prost::alloc::vec::Vec<ValidationIssue>,
-    /// Number of non-CONVERGED entries actually landed on baseline.
+    /// Number of non-CONVERGED entries actually landed on baseline, or that a
+    /// dry run would land.
     #[prost(uint32, tag="4")]
     pub applied_count: u32,
     /// Set only when the request carried an operation_id.
     #[prost(message, optional, tag="5")]
     pub operation_receipt: ::core::option::Option<super::super::super::catalog::v1alpha1::OperationReceipt>,
+    /// The landed (or, on a dry run, landable) entries split by diff class.
+    /// Together they sum to applied_count when the merge reached the landing
+    /// step (STATUS_APPLIED, STATUS_VALIDATED, or a dry run's STATUS_INVALID);
+    /// all zero for STATUS_CONFLICTS and for an operation_id replay.
+    #[prost(uint32, tag="6")]
+    pub added_count: u32,
+    #[prost(uint32, tag="7")]
+    pub changed_count: u32,
+    #[prost(uint32, tag="8")]
+    pub deleted_count: u32,
 }
 /// Nested message and enum types in `MergeBranchResponse`.
 pub mod merge_branch_response {

@@ -1702,6 +1702,115 @@ async fn merge_branch_dry_run_validates_without_persisting() {
     assert_eq!(branch.delta_count, 1);
 }
 
+/// A reviewer reads one dry-run result instead of running `DiffBranch` and a
+/// validation call beside it: the landable entries arrive split by class,
+/// and the post-merge findings arrive even when none of them blocks.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_branch_dry_run_splits_counts_by_class_and_reports_findings() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+
+    c.put_entity(put_req(event("p2split", "to-change", 1, "Before"), false))
+        .await
+        .unwrap();
+    c.put_entity(put_req(event("p2split", "to-delete", 1, "Doomed"), false))
+        .await
+        .unwrap();
+    c.create_branch(pb::CreateBranchRequest {
+        name: "split-branch".into(),
+        doc: String::new(),
+    })
+    .await
+    .unwrap();
+    c.put_entity(with_branch(
+        put_req(
+            pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Domain(pb::Domain {
+                    id: Some(id("p2split", "to-add", 1)),
+                    title: "Fresh".into(),
+                    ..Default::default()
+                })),
+            },
+            false,
+        ),
+        "split-branch",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(with_branch(
+        put_req(event("p2split", "to-change", 1, "After"), false),
+        "split-branch",
+    ))
+    .await
+    .unwrap();
+    c.delete_entity(with_branch(
+        pb::DeleteEntityRequest {
+            operation_id: String::new(),
+            kind: pb::EntityKind::Event as i32,
+            id: Some(id("p2split", "to-delete", 1)),
+            if_match: String::new(),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+        },
+        "split-branch",
+    ))
+    .await
+    .unwrap();
+
+    let resp = c
+        .merge_branch(pb::MergeBranchRequest {
+            operation_id: String::new(),
+            name: "split-branch".into(),
+            dry_run: true,
+            keep_branch: false,
+            auto_merge: false,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        resp.status,
+        pb::merge_branch_response::Status::Validated as i32
+    );
+    assert_eq!(
+        (
+            resp.added_count,
+            resp.changed_count,
+            resp.deleted_count,
+            resp.applied_count
+        ),
+        (1, 1, 1, 3)
+    );
+    assert!(
+        !resp.validation.is_empty(),
+        "a dry run must report the findings the merge leaves behind"
+    );
+    assert!(resp
+        .validation
+        .iter()
+        .all(|i| i.severity != pb::validation_issue::Severity::Error as i32));
+
+    let applied = c
+        .merge_branch(pb::MergeBranchRequest {
+            operation_id: String::new(),
+            name: "split-branch".into(),
+            dry_run: false,
+            keep_branch: false,
+            auto_merge: false,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        (
+            applied.added_count,
+            applied.changed_count,
+            applied.deleted_count
+        ),
+        (1, 1, 1)
+    );
+}
+
 /// The dry-run overlay path (`req.dry_run` branch inside `merge_branch`)
 /// must build a `MutationOp::Delete` for landable entries whose diff status
 /// is `Deleted`, not just `MutationOp::Put` for adds/changes: validate a

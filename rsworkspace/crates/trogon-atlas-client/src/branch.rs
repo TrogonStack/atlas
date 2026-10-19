@@ -109,6 +109,67 @@ pub struct MergeOptions {
     pub auto_merge: bool,
 }
 
+/// How many entries a merge lands, split by diff class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MergeCounts {
+    pub added: u32,
+    pub changed: u32,
+    pub deleted: u32,
+}
+
+impl MergeCounts {
+    pub fn of(resp: &pb::MergeBranchResponse) -> Self {
+        Self {
+            added: resp.added_count,
+            changed: resp.changed_count,
+            deleted: resp.deleted_count,
+        }
+    }
+}
+
+impl std::fmt::Display for MergeCounts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} added, {} changed, {} deleted",
+            self.added, self.changed, self.deleted
+        )
+    }
+}
+
+/// Validation findings grouped by severity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SeverityCounts {
+    pub errors: usize,
+    pub warnings: usize,
+    pub infos: usize,
+}
+
+impl SeverityCounts {
+    pub fn of(issues: &[pb::ValidationIssue]) -> Self {
+        let mut counts = Self::default();
+        for issue in issues {
+            match pb::validation_issue::Severity::try_from(issue.severity) {
+                Ok(pb::validation_issue::Severity::Error) => counts.errors += 1,
+                Ok(pb::validation_issue::Severity::Warning) => counts.warnings += 1,
+                Ok(pb::validation_issue::Severity::Info) => counts.infos += 1,
+                _ => {}
+            }
+        }
+        counts
+    }
+}
+
+impl std::fmt::Display for SeverityCounts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} errors, {} warnings, {} info",
+            self.errors, self.warnings, self.infos
+        )
+    }
+}
+
 /// Merge a branch onto baseline. All-or-nothing: any conflict (see
 /// `resp.conflicts`) or post-merge validation Error (see `resp.validation`)
 /// persists nothing. `operation_id` is dropped when `options.dry_run` is
@@ -332,6 +393,47 @@ mod tests {
                 ..Default::default()
             })),
         }
+    }
+
+    fn issue(severity: pb::validation_issue::Severity) -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            severity: severity as i32,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn severity_counts_group_findings_and_ignore_unspecified() {
+        use pb::validation_issue::Severity;
+        let counts = SeverityCounts::of(&[
+            issue(Severity::Warning),
+            issue(Severity::Info),
+            issue(Severity::Warning),
+            issue(Severity::Unspecified),
+        ]);
+        assert_eq!(
+            counts,
+            SeverityCounts {
+                errors: 0,
+                warnings: 2,
+                infos: 1
+            }
+        );
+        assert_eq!(counts.to_string(), "0 errors, 2 warnings, 1 info");
+    }
+
+    #[test]
+    fn merge_counts_read_the_per_class_fields() {
+        let resp = pb::MergeBranchResponse {
+            added_count: 1,
+            changed_count: 2,
+            deleted_count: 3,
+            ..Default::default()
+        };
+        assert_eq!(
+            MergeCounts::of(&resp).to_string(),
+            "1 added, 2 changed, 3 deleted"
+        );
     }
 
     #[test]
