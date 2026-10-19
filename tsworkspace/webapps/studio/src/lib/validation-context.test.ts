@@ -120,10 +120,6 @@ describe('validationFixPrompt', () => {
         }),
         expect.objectContaining({ identity: 'commandSlice:shop/place-order-slice@1' }),
         expect.objectContaining({
-          identity: 'command:shop/place-order@1',
-          raw: expect.objectContaining({ doc: 'Place the order exactly once.' }),
-        }),
-        expect.objectContaining({
           identity: 'event:shop/ordered@1',
           raw: expect.objectContaining({
             schema: expect.objectContaining({ fields: [{ name: 'order_id' }] }),
@@ -137,8 +133,9 @@ describe('validationFixPrompt', () => {
     );
     expect(snapshot(prompt, 'References to fetch')).toEqual({
       notLoaded: ['event:payments/payment-confirmed@3'],
-      loadedButOmitted: [],
+      loadedButOmitted: ['command:shop/place-order@1'],
     });
+    expect(prompt).not.toContain('Place the order exactly once.');
     expect(prompt).not.toContain('unrelated');
   });
 
@@ -166,8 +163,67 @@ describe('validationFixPrompt', () => {
 
     const prompt = validationFixPrompt(model, finding());
 
-    expect(prompt).toContain('commandSlice:shop/unrelated-slice@1');
+    expect(snapshot(prompt, 'Relevant loaded storyboards')).toEqual([
+      expect.objectContaining({
+        orderedSlices: expect.arrayContaining(['slice:shop/unrelated-slice@1']),
+      }),
+    ]);
     expect(prompt).not.toContain('storyboard:shop/unrelated-story@1');
+  });
+
+  it('lists distant storyboard slices as ids to fetch instead of embedding their definitions', () => {
+    const distant = Array.from({ length: 12 }, (_, index) => id(`distant-${index}`));
+    const model = buildModel([
+      ...temporalModel().entities.map((entity) => ({ [entity.kind]: entity.raw })),
+      ...distant.map((slice) => ({ commandSlice: { id: slice, doc: `Distant slice ${slice.slug}.` } })),
+    ]);
+    const storyboard = model.byKey.get('storyboard:shop/checkout@1');
+    if (!storyboard) throw new Error('Expected checkout storyboard');
+    storyboard.raw.slices = [...(storyboard.raw.slices as unknown[]), ...distant.map((slice) => ({ id: slice }))];
+
+    const prompt = validationFixPrompt(model, finding());
+
+    const definitions = snapshot(prompt, 'Loaded subject and related definitions') as { identity: string }[];
+    expect(definitions.map((definition) => definition.identity)).not.toContain('commandSlice:shop/distant-0@1');
+    expect(prompt).not.toContain('Distant slice');
+    const [board] = snapshot(prompt, 'Relevant loaded storyboards') as { orderedSlices: string[] }[];
+    expect(board?.orderedSlices).toHaveLength(15);
+    const fetch = snapshot(prompt, 'References to fetch') as { loadedButOmitted: string[] };
+    expect(fetch.loadedButOmitted).toEqual(
+      expect.arrayContaining(distant.map((slice) => `slice:shop/${slice.slug}@1`)),
+    );
+  });
+
+  it('keeps the subject and its direct references but not references of references', () => {
+    const model = buildModel([
+      { event: { id: id('ordered'), doc: 'Direct event.' } },
+      {
+        readModel: {
+          id: id('orders'),
+          doc: 'Direct read model.',
+          sourceEvents: [{ id: id('ordered') }, { id: id('far') }],
+        },
+      },
+      { persona: { id: id('buyer'), doc: 'Direct persona.' } },
+      { event: { id: id('far'), doc: 'Two hops away.' } },
+      {
+        readModelSlice: {
+          id: id('project-orders'),
+          sourceEvents: [{ event: { id: id('ordered') } }],
+          readModel: { readModel: { id: id('orders') } },
+          persona: { id: id('buyer') },
+        },
+      },
+    ]);
+    const prompt = validationFixPrompt(model, finding());
+    const definitions = snapshot(prompt, 'Loaded subject and related definitions') as { identity: string }[];
+
+    expect(definitions.map((definition) => definition.identity).sort()).toEqual([
+      'event:shop/ordered@1',
+      'persona:shop/buyer@1',
+      'readModel:shop/orders@1',
+      'readModelSlice:shop/project-orders@1',
+    ]);
   });
 
   it('handles a model-wide finding using the baseline and root membership without dumping every member', () => {

@@ -134,17 +134,19 @@ export function validationFixPrompt(
       )
     ) {
       include(storyboard);
-      for (const ref of storyboardSlices(storyboard)) {
-        remember(ref);
-        for (const slice of resolve(model, ref)) include(slice);
-      }
+      for (const ref of storyboardSlices(storyboard)) remember(ref);
     }
   }
 
   if (issue.subject || moment) {
-    for (let depth = 0; depth < 2; depth += 1) {
-      const refs = [...referenced.values()];
-      for (const ref of refs) for (const entity of resolve(model, ref)) include(entity);
+    const hopSources = [issue.subject ? model.byKey.get(identity(issue.subject)) : undefined, moment];
+    for (const source of hopSources) {
+      if (!source) continue;
+      const slicesOfStoryboard = source.kind === 'storyboard';
+      for (const ref of refsByKey.get(source.key) ?? []) {
+        if (slicesOfStoryboard && ref.kind === 'slice') continue;
+        for (const entity of resolve(model, ref)) include(entity);
+      }
     }
   } else {
     for (const entity of model.byKind.get('eventModel') ?? []) include(entity);
@@ -162,7 +164,7 @@ export function validationFixPrompt(
     'Fix this validation finding in the Atlas project using the `trogon-atlas` CLI or the `trogon-atlas-mcp` MCP tools.',
     'Re-read the current model and validation results in the specified branch and scope before editing. The snapshot below may be stale or incomplete.',
     'Fetch referenced definitions that are missing or omitted, including their exact pinned versions. Apply a targeted repair that preserves intended behavior, event causality, and existing contracts. Do not merely suppress the rule, downgrade its severity, or delete valid behavior to hide the finding.',
-    'For temporal findings, inspect the full ordered storyboard, its slice definitions, and the source and emitted events before deciding whether to change ordering, references, or modeling. Do not assume an event missing from this snapshot does not exist.',
+    'For temporal findings, inspect the full ordered storyboard, fetch the definitions of the slices and events it lists that bear on the finding, and check the source and emitted events before deciding whether to change ordering, references, or modeling. Do not assume an event missing from this snapshot does not exist.',
     'Apply the repair, rerun validation for the affected scope, and report the entities changed, the reason for the repair, and the validation results, including any remaining findings. If the model lacks enough information to choose a behavior-preserving repair, explain the specific ambiguity instead of inventing domain behavior.',
     '',
     '## Scope',
@@ -207,7 +209,7 @@ export function validationFixPrompt(
     '',
     '## References to fetch',
     json({ notLoaded: missing, loadedButOmitted: omitted }),
-    'This is a focused snapshot, not the entire model. Follow relevant references in the raw definitions and fetch any additional current definitions needed for the repair. An empty reference list does not prove the model is complete.',
+    'This is a focused snapshot of the subject and its direct references, not the entire model. Follow relevant references in the raw definitions and fetch any additional current definitions needed for the repair. An empty reference list does not prove the model is complete.',
   ]
     .filter((line) => line !== '')
     .join('\n\n');
