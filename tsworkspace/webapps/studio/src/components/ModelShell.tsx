@@ -30,7 +30,7 @@ import { api, type BranchDiffEntry, type ServerInfo } from '@/lib/api';
 import { branchStatusLookup, useBranchParam } from '@/lib/branch';
 import { EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import type { BoardEdgeData } from '@/lib/layout';
-import { buildModel, entityKey, type Model } from '@/lib/model';
+import { buildModel, entityKey, hasStreamEvents, type Model } from '@/lib/model';
 import { layoutBoards } from '@/lib/multiboard';
 import type { RealtimeStatus } from '@/lib/realtime';
 import { activeSnapshot, type SnapshotStamp } from '@/lib/snapshot';
@@ -47,7 +47,7 @@ function edgeIdentity(data: BoardEdgeData): string {
 // swaps this module for a stub by its resolved path.
 const ThreeView = lazy(() => import('@/components/canvas/ThreeView').then((m) => ({ default: m.ThreeView })));
 
-const VIEWS = ['board', 'sequence', 'ui', 'plan', 'domain', 'lanes'] as const;
+const VIEWS = ['board', 'sequence', 'ui', 'plan', 'domain', 'lanes', 'towers'] as const;
 type View = (typeof VIEWS)[number];
 const VIEW_LABELS: Record<View, string> = {
   board: 'Board',
@@ -56,6 +56,7 @@ const VIEW_LABELS: Record<View, string> = {
   plan: 'Plan',
   domain: 'Domain',
   lanes: 'Lane mesh',
+  towers: 'Stream towers',
 };
 function isView(value: unknown): value is View {
   return (VIEWS as readonly unknown[]).includes(value);
@@ -549,6 +550,7 @@ export function ModelShell({
       return model.entities.some((e) => e.kind === 'domain' || e.kind === 'subdomain' || e.kind === 'boundedContext');
     // A saved board is one inlined runtime file without three.js, so it has no 3D views.
     if (v === 'lanes') return !snapshot && model.slices.length > 0;
+    if (v === 'towers') return !snapshot && hasStreamEvents(model);
     return true;
   });
   // Deep links to a hidden view (?view=ui on a UI-less EM) render the
