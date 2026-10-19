@@ -254,6 +254,80 @@ spec: { title: On branch }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trogon_atlas_branch_merge_dry_run_invalid_reports_counts_and_findings() {
+    let endpoint = start_server().await;
+
+    let created = trogon_atlas(&endpoint, &["branch", "create", "cli-inv"]);
+    assert!(created.status.success(), "{:?}", created.stderr);
+
+    let dir = tempfile_dir();
+    let manifest_path = dir.path().join("invalid.yaml");
+    std::fs::write(
+        &manifest_path,
+        r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Term
+metadata: { namespace: cli-inv-ns, name: ghost-term }
+spec:
+  title: Ghost
+  embodiedBy:
+  - kind: ENTITY_KIND_EVENT
+    id: { namespace: cli-inv-ns, slug: does-not-exist, version: '1' }
+",
+    )
+    .unwrap();
+    let applied = trogon_atlas_branched(
+        &endpoint,
+        "cli-inv",
+        &["apply", "-f", manifest_path.to_str().unwrap()],
+    );
+    assert!(applied.status.success(), "{:?}", applied.stderr);
+
+    let merged = trogon_atlas(&endpoint, &["branch", "merge", "cli-inv", "--dry-run"]);
+    assert_eq!(merged.status.code(), Some(1), "{:?}", merged.stderr);
+    assert!(
+        merged
+            .stderr
+            .contains("would have landed: 1 added, 0 changed, 0 deleted"),
+        "{:?}",
+        merged.stderr
+    );
+    assert!(
+        merged.stderr.contains("validation after merge: 1 errors"),
+        "{:?}",
+        merged.stderr
+    );
+    assert!(
+        merged.stderr.contains("TERM_DANGLING_ENTITY"),
+        "{:?}",
+        merged.stderr
+    );
+
+    let as_json = trogon_atlas(
+        &endpoint,
+        &[
+            "--format",
+            "json",
+            "branch",
+            "merge",
+            "cli-inv",
+            "--dry-run",
+        ],
+    );
+    let doc: serde_json::Value = serde_json::from_str(&as_json.stdout).unwrap();
+    assert_eq!(doc["data"]["status"], "invalid", "{doc}");
+    assert_eq!(doc["data"]["added_count"], 1, "{doc}");
+    assert_eq!(doc["data"]["validation_summary"]["errors"], 1, "{doc}");
+    let finding = doc["data"]["validation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["code"] == "TERM_DANGLING_ENTITY")
+        .unwrap_or_else(|| panic!("{doc}"));
+    assert_eq!(finding["severity"], "error", "{doc}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trogon_atlas_branch_merge_clean_exits_0() {
     let endpoint = start_server().await;
 

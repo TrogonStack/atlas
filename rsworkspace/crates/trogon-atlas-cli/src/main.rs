@@ -1019,14 +1019,26 @@ async fn run(
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Invalid => {
+                        let counts = branch::MergeCounts::of(&resp);
+                        let severities = branch::SeverityCounts::of(&resp.validation);
                         if text {
                             eprintln!("{name} would leave baseline invalid, nothing merged:");
+                            eprintln!("would have landed: {counts}");
+                            eprintln!("validation after merge: {severities}");
                             for issue in &resp.validation {
                                 eprintln!("{}", apply::format_issue(issue));
                             }
                         }
                         let data = json!({
                             "status": "invalid",
+                            "added_count": counts.added,
+                            "changed_count": counts.changed,
+                            "deleted_count": counts.deleted,
+                            "validation_summary": {
+                                "errors": severities.errors,
+                                "warnings": severities.warnings,
+                                "info": severities.infos,
+                            },
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
