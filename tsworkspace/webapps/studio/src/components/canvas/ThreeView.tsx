@@ -12,8 +12,9 @@ import type { Model } from '@/lib/model';
 import { hasWebGL } from '@/lib/webgl';
 
 const LaneMeshBoard = lazy(() => import('@/components/canvas/three/LaneMeshBoard'));
+const StreamTowersBoard = lazy(() => import('@/components/canvas/three/StreamTowersBoard'));
 
-export type ThreeViewName = 'lanes';
+export type ThreeViewName = 'lanes' | 'towers';
 
 export interface ThreeBoardProps {
   model: Model;
@@ -48,7 +49,7 @@ export function ThreeView({ view, ...props }: ThreeBoardProps & { view: ThreeVie
         </div>
       }
     >
-      {view === 'lanes' ? <LaneMeshBoard {...props} /> : null}
+      {view === 'lanes' ? <LaneMeshBoard {...props} /> : <StreamTowersBoard {...props} />}
     </Suspense>
   );
 }
