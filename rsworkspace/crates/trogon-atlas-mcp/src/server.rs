@@ -1802,19 +1802,20 @@ impl McpServer {
         &self,
         Parameters(p): Parameters<PutEntityJsonParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if p.entity_json.len() > MAX_JSON_BYTES {
+        let entity_json = p.entity_json.to_json_text();
+        if entity_json.len() > MAX_JSON_BYTES {
             return Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "entity_json exceeds the 4 MiB limit ({} bytes)",
-                    p.entity_json.len()
+                    entity_json.len()
                 ),
                 None,
             ));
         }
         let mut client = self.client();
-        let entity: pb::Entity = tenant_types_for(&mut client, &json_type_scope(&p.entity_json))
+        let entity: pb::Entity = tenant_types_for(&mut client, &json_type_scope(&entity_json))
             .await?
-            .message_from_json("trogonatlas.eventmodel.v1alpha1.Entity", &p.entity_json)
+            .message_from_json("trogonatlas.eventmodel.v1alpha1.Entity", &entity_json)
             .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
         let operation_id = resolve_operation_id(p.operation_id, p.validate_only)?;
         let req = pb::PutEntityRequest {
@@ -1849,22 +1850,23 @@ impl McpServer {
         &self,
         Parameters(p): Parameters<BatchMutateJsonParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        if p.request_json.len() > MAX_JSON_BYTES {
+        let request_json = p.request_json.to_json_text();
+        if request_json.len() > MAX_JSON_BYTES {
             return Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "request_json exceeds the 4 MiB limit ({} bytes)",
-                    p.request_json.len()
+                    request_json.len()
                 ),
                 None,
             ));
         }
         let mut client = self.client();
         let req: pb::BatchMutateRequest =
-            tenant_types_for(&mut client, &json_type_scope(&p.request_json))
+            tenant_types_for(&mut client, &json_type_scope(&request_json))
                 .await?
                 .message_from_json(
                     "trogonatlas.api.eventmodel.v1alpha1.BatchMutateRequest",
-                    &p.request_json,
+                    &request_json,
                 )
                 .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
         self.ensure_can_mutate(&mut client, req.validate_only)
