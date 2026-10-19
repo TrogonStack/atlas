@@ -4447,21 +4447,27 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
         });
         // Storyboard hygiene: an honest entry (what is observed, by whom) and
         // an outcome (the terminal facts) are what make sub-workflows chain.
-        if sb
-            .entry
-            .as_ref()
-            .and_then(|e| e.read_model.as_ref())
-            .is_none()
-        {
+        let missing_entry = match sb.entry.as_ref() {
+            None => Some((
+                "declares no entry; say which read model is observed and by whom (human persona+ui or automation processor)",
+                "entry",
+            )),
+            Some(entry) if entry.read_model.is_none() => Some((
+                "entry names an observer but no read model it observes; say which read model is observed",
+                "entry.read_model",
+            )),
+            Some(_) => None,
+        };
+        if let Some((detail, subject_field)) = missing_entry {
             issues.push(pb::ValidationIssue {
                 severity: pb::validation_issue::Severity::Warning as i32,
                 code: "STORYBOARD_MISSING_ENTRY".into(),
                 message: format!(
-                    "storyboard {}/{}@{} declares no entry; say which read model is observed and by whom (human persona+ui or automation processor)",
+                    "storyboard {}/{}@{} {detail}",
                     sb_ref_id.namespace, sb_ref_id.slug, sb_ref_id.version,
                 ),
                 subject: sb_subject.clone(),
-                subject_field: "entry".into(),
+                subject_field: subject_field.into(),
                 ..Default::default()
             });
         }
@@ -10776,6 +10782,37 @@ mod previously_untested_rules {
     }
 
     #[test]
+    fn storyboard_entry_without_read_model_names_the_read_model() {
+        let ns = "sb";
+        let mut sb = sb_missing_entry_and_outcome(ns, "story");
+        if let Some(pb::entity::Kind::Storyboard(s)) = sb.kind.as_mut() {
+            s.entry = Some(pb::StoryboardEntry {
+                read_model: None,
+                observer: Some(pb::storyboard_entry::Observer::Human(
+                    pb::storyboard_entry::HumanObserver::default(),
+                )),
+            });
+        }
+        let issues = validate_model(&model_with_storyboard_member(ns, "story"), &[stored(sb)]);
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "STORYBOARD_MISSING_ENTRY")
+            .collect();
+        assert_eq!(hits.len(), 1, "{issues:?}");
+        assert_eq!(hits[0].subject_field, "entry.read_model");
+        assert!(
+            hits[0].message.contains("no read model"),
+            "{}",
+            hits[0].message
+        );
+        assert!(
+            !hits[0].message.contains("declares no entry"),
+            "{}",
+            hits[0].message
+        );
+    }
+
+    #[test]
     fn storyboard_missing_entry_warns() {
         let ns = "sb";
         let sb = sb_missing_entry_and_outcome(ns, "story");
@@ -10787,6 +10824,16 @@ mod previously_untested_rules {
                 .count(),
             1,
             "{issues:?}",
+        );
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "STORYBOARD_MISSING_ENTRY")
+            .collect();
+        assert_eq!(hits[0].subject_field, "entry");
+        assert!(
+            hits[0].message.contains("declares no entry"),
+            "{}",
+            hits[0].message
         );
     }
 
