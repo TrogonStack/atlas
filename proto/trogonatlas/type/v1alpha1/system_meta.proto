@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package trogonatlas.type.v1alpha1;
 
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+
 // System-owned incarnation identity, mirroring Kubernetes metadata.uid
 // (Decision #26). The Id (namespace/slug@version) is the DECLARED identity
 // that refs and manifests use; `uid` identifies this stored INCARNATION:
@@ -12,4 +14,6 @@ package trogonatlas.type.v1alpha1;
 message SystemMeta {
   string uid = 1;          // UUIDv7, time-sortable incarnation id
   string created_at = 2;   // RFC 3339, set once at creation
+  // Removed occurrences cannot be reused while this incarnation exists.
+  repeated ConnectionId retired_connection_ids = 3;
 }

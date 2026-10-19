@@ -75,6 +75,14 @@ pub struct Id {
     #[prost(uint64, tag="3")]
     pub version: u64,
 }
+/// Stable occurrence identity, scoped to the exact owning entity version.
+/// Values are non-nil lowercase hyphenated UUIDs. Reordering and annotation
+/// edits preserve identity; changing the connection endpoint requires a new ID.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConnectionId {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
 /// System-owned incarnation identity, mirroring Kubernetes metadata.uid
 /// (Decision #26). The Id (namespace/slug@version) is the DECLARED identity
 /// that refs and manifests use; `uid` identifies this stored INCARNATION:
@@ -82,7 +90,7 @@ pub struct Id {
 /// uid on delete+recreate of the same name, making silent re-keying
 /// detectable and giving external state management a durable handle.
 /// Client-provided values are ignored; the server owns this block.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SystemMeta {
     /// UUIDv7, time-sortable incarnation id
     #[prost(string, tag="1")]
@@ -90,5 +98,8 @@ pub struct SystemMeta {
     /// RFC 3339, set once at creation
     #[prost(string, tag="2")]
     pub created_at: ::prost::alloc::string::String,
+    /// Removed occurrences cannot be reused while this incarnation exists.
+    #[prost(message, repeated, tag="3")]
+    pub retired_connection_ids: ::prost::alloc::vec::Vec<ConnectionId>,
 }
 // @@protoc_insertion_point(module)

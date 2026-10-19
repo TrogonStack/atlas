@@ -90,6 +90,17 @@ a write was refused. The decision lives in `trogon-atlas-client::compat` so
 every surface applies the same rules; the revision constants live next to
 `SCHEMA_VERSION` in `trogon-atlas-proto`.
 
+## Stable connection identity
+
+Contract revision 9 requires clients and servers to preserve explicit connection
+IDs. Older writers can drop those fields, and older servers can discard them,
+so both mutation compatibility floors are revision 9. Existing stored entities
+remain readable; the next supported write assigns IDs to legacy connections.
+Once assigned, updates preserve an occurrence ID through reordering and content
+annotations. Replacing its role or endpoint requires a new ID. Removed IDs are
+retired for that stored entity incarnation, and connection references also pin
+the owner's system UID so delete and recreate cannot revive a stale reference.
+
 ## Supported combinations
 
 | Client vs server | Mutations |

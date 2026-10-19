@@ -6936,6 +6936,7 @@ mod transition_tests {
                     next: next
                         .iter()
                         .map(|n| pb::swimlane::transition::Next {
+                            connection_id: None,
                             event: Some(pb::EventRef { id: Some(id(n)) }),
                             doc: "guard".into(),
                             metadata: Vec::new(),
@@ -11038,6 +11039,7 @@ mod previously_untested_rules {
                 doc: String::new(),
                 design_ref: String::new(),
                 transitions: vec![pb::ui::Transition {
+                    connection_id: None,
                     to: Some(pb::UiRef {
                         id: Some(id(ns, "ghost", 1)),
                     }),

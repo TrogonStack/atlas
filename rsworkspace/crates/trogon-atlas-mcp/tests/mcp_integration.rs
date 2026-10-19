@@ -320,6 +320,7 @@ fn make_command_slice(ns: &str, slice_slug: &str, event_slug: &str) -> pb::Entit
             ui: None,
             command: None,
             emitted_events: vec![pb::EventEdge {
+                connection_id: None,
                 event: Some(pb::EventRef {
                     id: Some(id(ns, event_slug, 1)),
                 }),

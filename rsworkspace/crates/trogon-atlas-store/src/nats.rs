@@ -76,6 +76,23 @@ use crate::{
     },
 };
 
+fn prepare_entity(previous: Option<&Entity>, entity: &Entity) -> StoreResult<Entity> {
+    trogon_atlas_core::connection_persistence::prepare_entity(previous, entity)
+        .map_err(|error| StoreError::InvalidArgument(error.to_string()))
+}
+
+fn unchanged_entity(previous: &Entity, prepared: &Entity) -> bool {
+    trogon_atlas_core::semantically_equal(previous, prepared)
+        && previous
+            .system
+            .as_ref()
+            .map(|system| &system.retired_connection_ids)
+            == prepared
+                .system
+                .as_ref()
+                .map(|system| &system.retired_connection_ids)
+}
+
 const DEFAULT_KV_BUCKET: &str = "trogon-atlas-entities";
 const DEFAULT_BRANCHES_KV_BUCKET: &str = "trogon-atlas-branches";
 const DEFAULT_CHANGESETS_KV_BUCKET: &str = "trogon-atlas-changesets";
@@ -1007,9 +1024,10 @@ impl NatsStore {
                 }
                 None => (None, None),
             };
+            let prepared = prepare_entity(prev.as_ref(), entity)?;
             if !force {
                 if let (Some(prev_entity), Some(rev)) = (prev.as_ref(), revision) {
-                    if trogon_atlas_core::semantically_equal(prev_entity, entity) {
+                    if unchanged_entity(prev_entity, &prepared) {
                         return Ok(WroteOver {
                             written: Written {
                                 etag: rev.to_string(),
@@ -1021,7 +1039,7 @@ impl NatsStore {
                     }
                 }
             }
-            let stamped = crate::store::stamp_system(prev.as_ref(), entity);
+            let stamped = prepared;
             let bytes = encode_entity(&stamped);
 
             let cas_result = match revision {
@@ -1069,7 +1087,7 @@ impl NatsStore {
                             entity: stamped,
                         },
                         before: prev,
-                    })
+                    });
                 }
                 Err(StoreError::EtagMismatch { .. }) if attempt + 1 < CAS_MAX_ATTEMPTS => {
                     // Exponential backoff with jitter derived from SystemTime
@@ -2689,7 +2707,7 @@ impl Store for NatsStore {
                     if prev_entity.is_some() {
                         return Err(StoreError::AlreadyExists);
                     }
-                    let stamped = crate::store::stamp_system(None, entity);
+                    let stamped = prepare_entity(None, entity)?;
                     let (base_entity, base_etag) = match base {
                         Some((e, etag)) => (Some(e), etag),
                         None => (None, String::new()),
@@ -2717,7 +2735,7 @@ impl Store for NatsStore {
             return Ok(wrote.written);
         }
         let key = entity_key(kind, &id);
-        let stamped = crate::store::stamp_system(None, entity);
+        let stamped = prepare_entity(None, entity)?;
         let bytes = encode_entity(&stamped);
         let rev = match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.create(&key, bytes.clone()))
             .await
@@ -2854,14 +2872,15 @@ impl Store for NatsStore {
                 kind,
                 &id,
                 |prev_entity, _prev_etag, base| {
+                    let prepared = prepare_entity(prev_entity.as_ref(), entity)?;
                     if !force {
                         if let Some(prev) = prev_entity.as_ref() {
-                            if trogon_atlas_core::semantically_equal(prev, entity) {
+                            if unchanged_entity(prev, &prepared) {
                                 return Ok(None);
                             }
                         }
                     }
-                    let stamped = crate::store::stamp_system(prev_entity.as_ref(), entity);
+                    let stamped = prepared;
                     let (base_entity, base_etag) = match base {
                         Some((e, etag)) => (Some(e), etag),
                         None => (None, String::new()),
@@ -2948,10 +2967,11 @@ impl Store for NatsStore {
                             found,
                         });
                     }
-                    if !force && trogon_atlas_core::semantically_equal(&prev, entity) {
+                    let prepared = prepare_entity(Some(&prev), entity)?;
+                    if !force && unchanged_entity(&prev, &prepared) {
                         return Ok(None);
                     }
-                    let stamped = crate::store::stamp_system(Some(&prev), entity);
+                    let stamped = prepared;
                     let (base_entity, base_etag) = match base {
                         Some((e, etag)) => (Some(e), etag),
                         None => (None, String::new()),
@@ -3011,11 +3031,12 @@ impl Store for NatsStore {
             // can distinguish "key vanished" from a generic backend error.
             _ => return Err(StoreError::NotFound),
         };
+        let prepared = prepare_entity(prev.as_ref(), entity)?;
         // Same no-op semantics as `put`: the etag guard must still hold,
         // and a semantically identical row is not rewritten.
         if !force {
             if let (Some(prev_entity), Some(rev)) = (prev.as_ref(), prev_revision) {
-                if rev == expected && trogon_atlas_core::semantically_equal(prev_entity, entity) {
+                if rev == expected && unchanged_entity(prev_entity, &prepared) {
                     return Ok(Written {
                         etag: rev.to_string(),
                         wrote: false,
@@ -3024,7 +3045,7 @@ impl Store for NatsStore {
                 }
             }
         }
-        let stamped = crate::store::stamp_system(prev.as_ref(), entity);
+        let stamped = prepared;
         let bytes = encode_entity(&stamped);
         let rev = match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.update(&key, bytes, expected))
             .await
@@ -3716,7 +3737,10 @@ impl Store for NatsStore {
                         Err(e) => break 'create Err(e),
                     };
                     let key = entity_key(*kind, &id);
-                    let stamped = crate::store::stamp_system(None, entity);
+                    let stamped = match prepare_entity(None, entity) {
+                        Ok(prepared) => prepared,
+                        Err(error) => break 'create Err(error),
+                    };
                     let bytes = encode_entity(&stamped);
                     match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.create(&key, bytes.clone()))
                         .await
@@ -3841,7 +3865,7 @@ impl Store for NatsStore {
                                     break 'update Err(StoreError::EtagMismatch {
                                         expected: exp.clone(),
                                         found: String::new(),
-                                    })
+                                    });
                                 }
                             };
                             let entry = match kv_entry_timeout(&self.kv, key.clone()).await {
@@ -3866,16 +3890,15 @@ impl Store for NatsStore {
                                 }
                                 _ => break 'update Err(StoreError::NotFound),
                             };
+                            let prepared = match prepare_entity(prev.as_ref(), entity) {
+                                Ok(prepared) => prepared,
+                                Err(error) => break 'update Err(error),
+                            };
                             // Same no-op semantics as the unconditional path:
                             // the etag guard must still hold.
                             if !force {
                                 if let (Some(prev_entity), Some(rev)) = (prev.as_ref(), prev_rev) {
-                                    if rev == expected
-                                        && trogon_atlas_core::semantically_equal(
-                                            prev_entity,
-                                            entity,
-                                        )
-                                    {
+                                    if rev == expected && unchanged_entity(prev_entity, &prepared) {
                                         break 'update Ok((
                                             MutationOutcome::Noop {
                                                 etag: rev.to_string(),
@@ -3892,7 +3915,7 @@ impl Store for NatsStore {
                                     }
                                 }
                             }
-                            let stamped = crate::store::stamp_system(prev.as_ref(), entity);
+                            let stamped = prepared;
                             let bytes = encode_entity(&stamped);
                             match tokio::time::timeout(
                                 KV_OP_TIMEOUT,
@@ -3952,7 +3975,7 @@ impl Store for NatsStore {
                                 break 'delete Err(StoreError::EtagMismatch {
                                     expected: exp.clone(),
                                     found: current.to_string(),
-                                })
+                                });
                             }
                         };
                         if exp_rev != current {
@@ -4666,13 +4689,17 @@ impl Store for NatsStore {
                         Err(e) => break 'put Err(e),
                     };
                     let key = entity_key(*kind, &id);
-                    // Verbatim write: `ours` is stored exactly as
-                    // authored on the branch, including its `system`
-                    // stamp. No `stamp_system` call here -- that is the
-                    // whole point of a merge landing (identity
-                    // preserved, no re-stamping; see
-                    // docs/explanation/branching.md).
-                    let bytes = encode_entity(ours);
+                    let before = baseline_before(*kind, &id);
+                    let prepared = match trogon_atlas_core::connection_persistence::prepare_landing(
+                        before.as_ref(),
+                        ours,
+                    ) {
+                        Ok(prepared) => prepared,
+                        Err(error) => {
+                            break 'put Err(StoreError::InvalidArgument(error.to_string()));
+                        }
+                    };
+                    let bytes = encode_entity(&prepared);
                     let cas_result = match expected_baseline_etag {
                         Some(exp) => match exp.parse::<u64>() {
                             Ok(rev) => tokio::time::timeout(
@@ -4716,13 +4743,13 @@ impl Store for NatsStore {
                         Ok(rev) => Ok((
                             MutationOutcome::Wrote {
                                 etag: rev.to_string(),
-                                entity: (**ours).clone(),
+                                entity: prepared.clone(),
                             },
                             Revision {
                                 kind: *kind,
                                 change: ChangeKind::Put,
                                 before: baseline_before(*kind, &id),
-                                after: Some((**ours).clone()),
+                                after: Some(prepared),
                                 id,
                             },
                         )),
@@ -4741,7 +4768,7 @@ impl Store for NatsStore {
                             break 'delete Err(StoreError::EtagMismatch {
                                 expected: expected_baseline_etag.clone(),
                                 found: String::new(),
-                            })
+                            });
                         }
                     };
                     let bytes = Bytes::new();
@@ -4919,10 +4946,21 @@ impl Store for NatsStore {
                         })?;
                 }
                 Some((base_entity, base_etag)) => {
+                    let ours = delta
+                        .ours
+                        .as_ref()
+                        .map(|ours| {
+                            trogon_atlas_core::connection_persistence::prepare_landing(
+                                Some(base_entity),
+                                ours,
+                            )
+                            .map_err(|error| StoreError::InvalidArgument(error.to_string()))
+                        })
+                        .transpose()?;
                     let updated = trogon_atlas_proto::BranchDelta {
                         base: Some(base_entity.clone()),
                         base_etag: base_etag.clone(),
-                        ours: delta.ours,
+                        ours,
                         tombstone: delta.tombstone,
                     };
                     let bytes = encode_branch_delta(&updated);
@@ -4965,10 +5003,15 @@ impl Store for NatsStore {
                 Some(be) => {
                     let baseline_entity = decode_entity(&be.value)?;
                     let baseline_etag = be.revision.to_string();
+                    let ours = trogon_atlas_core::connection_persistence::prepare_landing(
+                        delta.ours.as_ref(),
+                        &baseline_entity,
+                    )
+                    .map_err(|error| StoreError::InvalidArgument(error.to_string()))?;
                     let updated = trogon_atlas_proto::BranchDelta {
                         base: Some(baseline_entity.clone()),
                         base_etag: baseline_etag,
-                        ours: Some(baseline_entity),
+                        ours: Some(ours),
                         tombstone: false,
                     };
                     let bytes = encode_branch_delta(&updated);
@@ -5009,10 +5052,18 @@ impl Store for NatsStore {
             Some(be) => (Some(decode_entity(&be.value)?), be.revision.to_string()),
             None => (None, String::new()),
         };
+        let ours = delta
+            .ours
+            .as_ref()
+            .map(|ours| {
+                trogon_atlas_core::connection_persistence::prepare_landing(new_base.as_ref(), ours)
+                    .map_err(|error| StoreError::InvalidArgument(error.to_string()))
+            })
+            .transpose()?;
         let updated = trogon_atlas_proto::BranchDelta {
             base: new_base,
             base_etag: new_base_etag,
-            ours: delta.ours,
+            ours,
             tombstone: delta.tombstone,
         };
         let bytes = encode_branch_delta(&updated);
@@ -5279,7 +5330,7 @@ fn decode_entity_revision(bytes: &[u8]) -> StoreResult<EntityRevisionRecord> {
         other => {
             return Err(StoreError::Backend(format!(
                 "unknown EntityRevision.kind value {other}"
-            )))
+            )));
         }
     };
     Ok(EntityRevisionRecord {
@@ -5337,7 +5388,7 @@ fn decode_changeset(bytes: &[u8]) -> StoreResult<ChangesetRecord> {
             other => {
                 return Err(StoreError::Backend(format!(
                     "unknown ChangesetOp.kind value {other}"
-                )))
+                )));
             }
         };
         ops.push(ChangesetOp { kind, entity_ref });

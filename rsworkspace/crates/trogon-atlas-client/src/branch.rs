@@ -467,6 +467,7 @@ mod tests {
             ours: Some(event(
                 "Same",
                 Some(pb::SystemMeta {
+                    retired_connection_ids: Vec::new(),
                     uid: "branch-uid".into(),
                     created_at: "2026-01-01T00:00:00Z".into(),
                 }),
@@ -474,6 +475,7 @@ mod tests {
             theirs: Some(event(
                 "Same",
                 Some(pb::SystemMeta {
+                    retired_connection_ids: Vec::new(),
                     uid: "baseline-uid".into(),
                     created_at: "2026-02-01T00:00:00Z".into(),
                 }),

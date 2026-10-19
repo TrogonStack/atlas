@@ -34,6 +34,7 @@ import {
   asId,
   commandsWithMultipleIssuers,
   commandsWithoutEmittedEvents,
+  type ConnectionId,
   type EdgeRef,
   type Entity,
   type EntityId,
@@ -147,6 +148,7 @@ export interface BoardEdgeData extends Record<string, unknown> {
   relation: string;
   doc: string;
   metadata: unknown[];
+  connectionId?: ConnectionId;
   source: Entity;
   target: Entity;
   slice?: Entity;
@@ -1061,7 +1063,9 @@ function buildEdges(occs: OccurrenceMap, _model: Model, slices: Slice[], rmLinks
     opts: { animated?: boolean; relation?: string; edge?: EdgeRef; slice?: Entity } = {},
   ): void => {
     if (!a || !b || a.id === b.id) return;
-    const id = `${a.id}->${b.id}`;
+    const occurrence = opts.edge?.connectionId?.value;
+    const owner = opts.slice?.key ?? '';
+    const id = `${a.id}->${b.id}${occurrence ? `:${owner}:${occurrence}` : ''}`;
     if (seenEdges.has(id)) return;
     seenEdges.add(id);
     const sourceHandle = OUT[a.entity.kind] ?? 'bs';
@@ -1077,6 +1081,7 @@ function buildEdges(occs: OccurrenceMap, _model: Model, slices: Slice[], rmLinks
         relation: opts.relation ?? '',
         doc: opts.edge?.doc ?? '',
         metadata: opts.edge?.metadata ?? [],
+        connectionId: opts.edge?.connectionId,
         source: a.entity,
         target: b.entity,
         slice: opts.slice,

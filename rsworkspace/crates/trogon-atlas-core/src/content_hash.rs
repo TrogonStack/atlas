@@ -398,6 +398,7 @@ mod tests {
         let a = event("T");
         let mut b = event("T");
         b.system = Some(pb::SystemMeta {
+            retired_connection_ids: Vec::new(),
             uid: "u".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
         });
@@ -675,6 +676,7 @@ mod tests {
             prop_oneof![
                 Just(None),
                 bounded_text().prop_map(|uid| Some(pb::SystemMeta {
+                    retired_connection_ids: Vec::new(),
                     uid,
                     created_at: "2026-01-01T00:00:00Z".into(),
                 })),

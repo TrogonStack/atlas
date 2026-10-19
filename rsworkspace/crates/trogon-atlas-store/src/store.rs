@@ -34,7 +34,8 @@ pub struct BranchDeltaEntry {
 /// rather than silently overwritten).
 #[derive(Debug, Clone)]
 pub enum BranchLandOp {
-    /// Write `ours` to baseline verbatim -- no `system` re-stamping. Used
+    /// Land a trusted branch value while preserving incarnation identity and
+    /// combining baseline and branch retired connection IDs. Used
     /// for ADDED/CHANGED entries (and CONFLICT_DELETE_EDIT resolved via
     /// take-ours, if ever surfaced that way).
     Put {
@@ -446,6 +447,13 @@ pub struct ChangesetPage<'a> {
 /// - `delete`: removes the row. `expected_etag = None` is an unconditional
 ///   delete; a `Some(etag)` fails with `EtagMismatch` if the stored etag
 ///   differs. Returns `NotFound` if no row exists.
+///
+/// Connection-bearing writes normalize IDs against the entity actually replaced
+/// before semantic no-op detection. Use
+/// `trogon_atlas_core::connection_persistence::prepare_entity` for ordinary
+/// writes and `prepare_landing` for trusted branch landings. Persist the returned
+/// backend-owned retirement ledger atomically with the entity; never accept a
+/// caller-provided ledger. Retired IDs cannot be reused in that incarnation.
 ///
 /// ## Error mapping
 ///
