@@ -633,6 +633,49 @@ impl McpServer {
         self.client.clone()
     }
 
+    /// The scope this server's writes land in, named in every mutating
+    /// response because a branch write leaves no durable receipt to check.
+    fn scope_fields(&self) -> (&'static str, Option<&str>) {
+        match self.options.branch.as_deref() {
+            Some(branch) => ("branch", Some(branch)),
+            None => ("baseline", None),
+        }
+    }
+
+    fn scoped_envelope<M: Message>(&self, msg: &M) -> CallToolResult {
+        let (scope, branch) = self.scope_fields();
+        let body = serde_json::json!({
+            "scope": scope,
+            "branch": branch,
+            "binpb_base64": encode_b64(msg),
+        })
+        .to_string();
+        CallToolResult::success(vec![ContentBlock::text(body)])
+    }
+
+    fn scoped_response<M: Message>(
+        &self,
+        message_name: &str,
+        msg: &M,
+        want_json: bool,
+    ) -> CallToolResult {
+        let mut result = ok_response(message_name, msg, want_json);
+        let (scope, branch) = self.scope_fields();
+        let body = result
+            .content
+            .first()
+            .and_then(|block| block.as_text())
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok());
+        if let Some(serde_json::Value::Object(mut fields)) = body {
+            fields.insert("scope".into(), scope.into());
+            fields.insert("branch".into(), branch.into());
+            result.content = vec![ContentBlock::text(
+                serde_json::Value::Object(fields).to_string(),
+            )];
+        }
+        result
+    }
+
     async fn ensure_can_mutate(
         &self,
         client: &mut Client,
@@ -1555,7 +1598,7 @@ impl McpServer {
             .await
             .map_err(tool_err("retarget_references"))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        Ok(self.scoped_envelope(&resp))
     }
 
     #[tool(
@@ -1747,7 +1790,7 @@ impl McpServer {
             .map_err(tool_err("put_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        Ok(self.scoped_envelope(&resp))
     }
 
     #[tool(
@@ -1834,7 +1877,7 @@ impl McpServer {
             .map_err(tool_err("put_entity_json"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        Ok(self.scoped_envelope(&resp))
     }
 
     #[tool(
@@ -1879,7 +1922,7 @@ impl McpServer {
         if resp.status == pb::batch_mutate_response::Status::Failed as i32 {
             return Err(McpError::from(batch_mutate_failure(&resp)).into());
         }
-        Ok(ok_envelope(&resp))
+        Ok(self.scoped_envelope(&resp))
     }
 
     #[tool(
@@ -1914,7 +1957,7 @@ impl McpServer {
             .map_err(tool_err("delete_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        Ok(self.scoped_envelope(&resp))
     }
 
     #[tool(
@@ -2042,7 +2085,7 @@ impl McpServer {
             let err: rmcp::ErrorData = McpError::from(batch_mutate_failure(&resp)).into();
             return Err(attach_operation_id(err, &operation_id));
         }
-        Ok(ok_envelope(&resp))
+        Ok(self.scoped_envelope(&resp))
     }
 
     #[tool(
@@ -2185,7 +2228,7 @@ impl McpServer {
             .map_err(tool_err("revert_changeset"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_envelope(&resp))
+        Ok(self.scoped_envelope(&resp))
     }
 
     #[tool(
@@ -2361,7 +2404,7 @@ impl McpServer {
             .await
             .map_err(tool_err("delete_by_query"))?
             .into_inner();
-        Ok(ok_response(
+        Ok(self.scoped_response(
             "trogonatlas.api.eventmodel.v1alpha1.DeleteByQueryResponse",
             &resp,
             p.json.unwrap_or(false),
@@ -2530,7 +2573,10 @@ impl McpServer {
         .map_err(|e| {
             attach_operation_id(rmcp::ErrorData::from(McpError::from(e)), &operation_id)
         })?;
+        let (scope, branch) = self.scope_fields();
         let body = serde_json::json!({
+            "scope": scope,
+            "branch": branch,
             "lines": outcome.lines,
             "issues": outcome.issues.iter().map(trogon_atlas_client::apply::format_issue).collect::<Vec<_>>(),
             "operation_id": (!operation_id.is_empty()).then_some(operation_id.as_str()),

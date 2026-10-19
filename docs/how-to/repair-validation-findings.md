@@ -147,6 +147,7 @@ errors and `isError` before reading that envelope.
 | `get_entity_json` | `{ "etag": "...", "json": { ... } }` with an object-valued entity. |
 | `validate_event_model` with `json: true` | `{ "json": "..." }` with a JSON-encoded response string. |
 | Reference tools, `get_impact`, `batch_mutate_json` | `{ "binpb_base64": "..." }` with the protobuf response. |
+| `put_entity`, `delete_entity`, `batch_mutate`, `batch_mutate_json` | `{ "scope": "branch" or "baseline", "branch": "..." or null, "binpb_base64": "..." }`. Use `scope` and `branch` to confirm which store took the write. |
 
 The JSON response helper can fall back to `binpb_base64` if reflection
 rendering fails. Decode binary responses using the matching RPC response
