@@ -633,12 +633,20 @@ fn slice_to_flow(
                 .iter()
                 .filter_map(|re| re.read_model.as_ref()?.id.clone())
                 .filter_map(|id| endpoint_for(pb::EntityKind::ReadModel, &id, by_key))
+                .map(|endpoint| FlowEndpoint {
+                    source_role: FlowSourceRole::Auxiliary,
+                    ..endpoint
+                })
                 .collect();
             let downstream: Vec<FlowEndpoint> = us
                 .ui
                 .as_ref()
                 .and_then(|ue| ue.ui.as_ref()?.id.clone())
                 .and_then(|id| endpoint_for(pb::EntityKind::Ui, &id, by_key))
+                .map(|endpoint| FlowEndpoint {
+                    source_role: FlowSourceRole::Auxiliary,
+                    ..endpoint
+                })
                 .into_iter()
                 .collect();
             FlowLink {
@@ -1024,6 +1032,35 @@ mod tests {
         entity
     }
 
+    fn ui_with_slice(slice: &str, read_model: &str, ui: &str) -> Vec<StoredEntity> {
+        vec![
+            stored(pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                    id: Some(id(ui)),
+                    ..Default::default()
+                })),
+            }),
+            stored(pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::UiSlice(pb::UiSlice {
+                    id: Some(id(slice)),
+                    source_read_models: vec![pb::ReadModelEdge {
+                        read_model: Some(pb::ReadModelRef {
+                            id: Some(id(read_model)),
+                        }),
+                        ..Default::default()
+                    }],
+                    ui: Some(pb::UiEdge {
+                        ui: Some(pb::UiRef { id: Some(id(ui)) }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+            }),
+        ]
+    }
+
     #[test]
     fn delete_projection_only_requires_key_fields() {
         let all = vec![
@@ -1088,6 +1125,27 @@ mod tests {
             &all,
         );
         assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
+    }
+
+    #[test]
+    fn ui_slice_passes_read_model_fields_through() {
+        let mut all = vec![stored(read_model(
+            "order-summary",
+            vec![
+                field("order_id", string_kind()),
+                field("total_cents", int_kind()),
+            ],
+            Vec::new(),
+        ))];
+        all.extend(ui_with_slice(
+            "show-order-summary",
+            "order-summary",
+            "order-page",
+        ));
+        let (gaps, score) =
+            check_completeness(&scope(pb::EntityKind::UiSlice, "show-order-summary"), &all);
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
     }
 
     #[test]
