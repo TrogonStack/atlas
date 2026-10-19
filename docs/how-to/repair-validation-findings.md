@@ -37,6 +37,12 @@ clarification. A new rule or unclear result can require inspection of its
 validator implementation; the catalog and tool contracts are the starting
 point.
 
+To survey a whole namespace instead, run `validate_project` with `namespace`
+set to it and `json: true`: every EventModel in the namespace is validated in
+one call. Filter its findings on a code to list what needs work, for example
+`SLICE_NO_SCENARIOS` (Info) for the slices that still lack a given/when/then
+scenario.
+
 ## Discover the full dependency context
 
 Use existing model tools before searching exports manually:

@@ -523,6 +523,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("SCENARIO_MISSING_REF", Error, "Scenario step missing entity reference",
           "Each Given/When/Then step must point at a concrete entity (event / command / read model).",
           Unspecified, "", "scenarios"),
+        r("SLICE_NO_SCENARIOS", Info, "Slice has no given/when/then scenario",
+          "A command, read model or automation slice the model includes declares no scenarios, so nothing specifies its behavior. Informational: filter validate_project findings on this code to list the slices still to specify.",
+          Unspecified, "scenarios", "scenarios"),
         r("SCENARIO_DANGLING_REF", Error, "Scenario step references missing entity",
           "A Given/When/Then step points at an entity that is not in the store.",
           Unspecified, "", "scenarios"),
@@ -632,6 +635,7 @@ mod catalog_drift_tests {
         "SCREEN_NAMESPACE_IS_CONTEXT",
         "SEAM_WITHOUT_RELATIONSHIP",
         "SLICE_NOT_IN_STORYBOARD",
+        "SLICE_NO_SCENARIOS",
         "SLICE_STALE_REF",
         "SLI_CONNECTION_UNRESOLVED",
         "SLI_CORRELATION_UNSOURCED",
@@ -4793,6 +4797,57 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             subject_field: "members".into(),
             ..Default::default()
         });
+    }
+
+    for m in &model.members {
+        let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
+            continue;
+        };
+        if !matches!(
+            k,
+            pb::EntityKind::CommandSlice
+                | pb::EntityKind::ReadModelSlice
+                | pb::EntityKind::AutomationSlice
+        ) {
+            continue;
+        }
+        let Some(se) = all.iter().find(|se| {
+            matches!(
+                (entity_kind(&se.entity), entity_id(&se.entity)),
+                (Some(sk), Some(sid))
+                    if sk == k
+                        && sid.namespace == id.namespace
+                        && sid.slug == id.slug
+                        && sid.version == id.version
+            )
+        }) else {
+            continue;
+        };
+        let scenario_count = match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::CommandSlice(s)) => s.scenarios.len(),
+            Some(pb::entity::Kind::ReadModelSlice(s)) => s.scenarios.len(),
+            Some(pb::entity::Kind::AutomationSlice(s)) => s.scenarios.len(),
+            _ => continue,
+        };
+        if scenario_count == 0 {
+            issues.push(pb::ValidationIssue {
+                severity: pb::validation_issue::Severity::Info as i32,
+                code: "SLICE_NO_SCENARIOS".into(),
+                message: format!(
+                    "{}:{}/{}@{} has no given/when/then scenarios",
+                    pb::canonical::kind_short(k),
+                    id.namespace,
+                    id.slug,
+                    id.version,
+                ),
+                subject: Some(pb::EntityRef {
+                    kind: m.kind,
+                    id: Some(id.clone()),
+                }),
+                subject_field: "scenarios".into(),
+                ..Default::default()
+            });
+        }
     }
 
     // A storyboard walking a slice the EventModel has not claimed is a
@@ -9045,6 +9100,62 @@ mod slice_stale_ref_tests {
             }],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn slice_without_scenarios_is_reported_as_info() {
+        let all = vec![
+            stored(ui_v("composer", 1)),
+            stored(command_v("post", 1)),
+            stored(event_v("posted", 1)),
+            stored(command_slice_pinning(
+                "post-slice",
+                id_v("composer", 1),
+                id_v("post", 1),
+                vec![id_v("posted", 1)],
+            )),
+        ];
+        let issues = validate_model(&model_with_slice("post-slice"), &all);
+        let found: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "SLICE_NO_SCENARIOS")
+            .collect();
+        assert_eq!(found.len(), 1, "{issues:?}");
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+        assert_eq!(
+            found[0].subject.as_ref().and_then(|s| s.id.as_ref()),
+            Some(&id_v("post-slice", 1))
+        );
+    }
+
+    #[test]
+    fn slice_with_a_scenario_is_not_reported() {
+        let mut slice = command_slice_pinning(
+            "post-slice",
+            id_v("composer", 1),
+            id_v("post", 1),
+            vec![id_v("posted", 1)],
+        );
+        if let Some(pb::entity::Kind::CommandSlice(s)) = slice.kind.as_mut() {
+            s.scenarios.push(pb::CommandScenario {
+                title: "posts".into(),
+                ..Default::default()
+            });
+        }
+        let all = vec![
+            stored(ui_v("composer", 1)),
+            stored(command_v("post", 1)),
+            stored(event_v("posted", 1)),
+            stored(slice),
+        ];
+        let issues = validate_model(&model_with_slice("post-slice"), &all);
+        assert!(
+            !issues.iter().any(|i| i.code == "SLICE_NO_SCENARIOS"),
+            "{issues:?}",
+        );
     }
 
     #[test]
