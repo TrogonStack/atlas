@@ -8,6 +8,7 @@ use crate::graph;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowSourceRole {
     Direct,
+    Trigger,
     Auxiliary,
 }
 
@@ -334,7 +335,9 @@ fn candidate_sources<'a>(
         for f in &up.fields {
             if f.name.to_ascii_lowercase() == target {
                 match up.source_role {
-                    FlowSourceRole::Direct => direct.push((up.entity_ref.clone(), f)),
+                    FlowSourceRole::Direct | FlowSourceRole::Trigger => {
+                        direct.push((up.entity_ref.clone(), f));
+                    }
                     FlowSourceRole::Auxiliary => auxiliary.push((up.entity_ref.clone(), f)),
                 }
             }
@@ -596,7 +599,9 @@ fn slice_to_flow(
                 .collect();
             if rs.projection_role == pb::ProjectionRole::Delete as i32 {
                 for endpoint in &mut upstream {
-                    endpoint.source_role = FlowSourceRole::Auxiliary;
+                    if endpoint.source_role == FlowSourceRole::Direct {
+                        endpoint.source_role = FlowSourceRole::Trigger;
+                    }
                 }
                 for endpoint in &mut downstream {
                     let key = read_model_key(&endpoint.entity_ref, by_key);
@@ -1093,6 +1098,71 @@ mod tests {
         );
         assert!(gaps.is_empty(), "{gaps:?}");
         assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn delete_projection_key_in_event_and_lane_state_is_not_ambiguous() {
+        let all = vec![
+            stored(swimlane("cart", vec![field("cart_id", string_kind())])),
+            stored(event(
+                "cart-checked-out",
+                "cart",
+                vec![
+                    field("cart_id", string_kind()),
+                    field("note", string_kind()),
+                ],
+            )),
+            stored(keyed(
+                read_model(
+                    "open-carts",
+                    vec![
+                        field("cart_id", string_kind()),
+                        field("item_count", int_kind()),
+                    ],
+                    vec!["cart-checked-out"],
+                ),
+                &["cart_id"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ];
+        let (gaps, score) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!((score - 1.0).abs() < f32::EPSILON, "score = {score}");
+    }
+
+    #[test]
+    fn delete_projection_missing_key_in_event_is_reported() {
+        let all = vec![
+            stored(swimlane("cart", Vec::new())),
+            stored(event(
+                "cart-checked-out",
+                "cart",
+                vec![field("note", string_kind())],
+            )),
+            stored(keyed(
+                read_model(
+                    "open-carts",
+                    vec![field("cart_id", string_kind())],
+                    vec!["cart-checked-out"],
+                ),
+                &["cart_id"],
+            )),
+            stored(with_role(
+                read_model_slice("carts-on-checkout", vec!["cart-checked-out"], "open-carts"),
+                pb::ProjectionRole::Delete,
+            )),
+        ];
+        let (gaps, _) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "carts-on-checkout"),
+            &all,
+        );
+        assert_eq!(count(&gaps, pb::completeness_gap::Kind::MissingSource), 1);
     }
 
     #[test]
