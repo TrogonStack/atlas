@@ -19,6 +19,12 @@ spec:
             namespace: acme-customer-data-deletion
             slug: deletion-request-form
             version: '1'
+    readModel:
+      readModel:
+        id:
+          namespace: acme-customer-data-deletion
+          slug: pending-deletions
+          version: '1'
   outcome:
     events:
     - event:
