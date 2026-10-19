@@ -5,6 +5,8 @@ metadata:
   namespace: acme-reviews
 spec:
   doc: 'Worker feed: delivered orders without a review-eligibility grant yet.'
+  key:
+  - order_id
   schema:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
@@ -17,8 +19,15 @@ spec:
     - name: seller_id
       type:
         uuid: {}
-  key:
-  - order_id
+    - name: fulfilled_at
+      type:
+        timestamp: {}
+    - name: granted_at
+      type:
+        timestamp: {}
+    - name: status
+      type:
+        string: {}
   sourceEvents:
   - id:
       namespace: acme-storefront
@@ -37,6 +46,8 @@ metadata:
   namespace: acme-reviews
 spec:
   doc: Orders the reviewer-facing form can still collect a review for.
+  key:
+  - order_id
   schema:
     '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
     fields:
@@ -52,8 +63,18 @@ spec:
     - name: granted_at
       type:
         timestamp: {}
-  key:
-  - order_id
+    - name: status
+      type:
+        string: {}
+    - name: rating
+      type:
+        int: {}
+    - name: comment
+      type:
+        string: {}
+    - name: submitted_at
+      type:
+        timestamp: {}
   sourceEvents:
   - id:
       namespace: acme-reviews
