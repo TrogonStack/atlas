@@ -5,4 +5,9 @@ metadata:
   namespace: acme-customer-data-deletion
 spec:
   doc: Honoring an account owner's request to delete the personal data Acme holds about them.
+  project:
+    id:
+      namespace: acme-customer-data-deletion
+      slug: acme-customer-data-deletion
+      version: '1'
   title: Customer Privacy

@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Project
+metadata:
+  name: acme-reviews
+  namespace: acme-reviews
+spec:
+  doc: Review eligibility and submission for delivered storefront orders.
+  title: Acme Reviews

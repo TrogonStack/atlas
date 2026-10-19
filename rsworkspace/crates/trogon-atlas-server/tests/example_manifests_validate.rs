@@ -101,3 +101,35 @@ async fn example_models_raise_no_errors_or_warnings() {
         findings.join("\n")
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn example_projects_raise_no_errors_or_warnings() {
+    let svc = seed_all_examples().await;
+    let mut findings = Vec::new();
+    for (ns, _) in NAMESPACES {
+        let resp = svc
+            .validate_project(Request::new(pb::ValidateProjectRequest {
+                scope: Some(pb::validate_project_request::Scope::ProjectId(pb::Id {
+                    namespace: ns.into(),
+                    slug: ns.into(),
+                    version: 1,
+                })),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!resp.reports.is_empty(), "{ns} project reported no models");
+        for report in resp.reports {
+            for i in report.issues {
+                if i.severity >= pb::validation_issue::Severity::Warning as i32 {
+                    findings.push(format!("{ns} {} {:?} :: {}", i.code, i.subject, i.message));
+                }
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "example projects must validate cleanly:\n{}",
+        findings.join("\n")
+    );
+}

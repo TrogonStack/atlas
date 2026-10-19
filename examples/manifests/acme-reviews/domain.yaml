@@ -5,4 +5,9 @@ metadata:
   namespace: acme-reviews
 spec:
   doc: Keeping buyer confidence high after a sale closes, including seller reputation.
+  project:
+    id:
+      namespace: acme-reviews
+      slug: acme-reviews
+      version: '1'
   title: Customer Trust

@@ -204,7 +204,11 @@ On unmodified main the three models reported these findings.
   instead of leaving the model.
 - **Seed catches up with the recorded acme-reviews repair.** The upstream
   fulfillment projection left the storyboard and the model membership, and
-  the storyboard doc says why.
+  the storyboard doc says why. The projection slice itself is deleted from
+  the seed because no storyboard, model, scenario, or test references it.
+- **Each example declares its Project.** `DOMAIN_MISSING_PROJECT` only shows
+  in project-scoped validation. Each namespace now has a Project of the same
+  name that its Domain points to, and the test validates every Project.
 - **Contexts touch through subscriptions only.**
   `CROSS_MODEL_BOUNDARY_VIOLATION` on the grant command slice scenario was
   repaired by dropping the `given` that named an `acme-storefront` event. The

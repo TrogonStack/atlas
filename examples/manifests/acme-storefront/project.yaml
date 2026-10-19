@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Project
+metadata:
+  name: acme-storefront
+  namespace: acme-storefront
+spec:
+  doc: The Acme storefront, from cart and checkout to payment and fulfillment.
+  title: Acme Storefront
