@@ -32,6 +32,7 @@ import {
   asId,
   type Entity,
   instanceUidOf,
+  latestSliceBySlug,
   type Model,
   orderedSlices,
   type SliceView,
@@ -99,7 +100,7 @@ export function buildSequence(model: Model): { nodes: Node[]; edges: Edge[] } {
   const resolve = (kind: Entity['kind'], ref: { id: { namespace: string; slug: string } } | undefined) =>
     ref ? bySlug.get(slugKey(kind, ref.id)) : undefined;
 
-  const sliceBySlug = new Map(model.slices.map((s) => [`${s.entity.id.namespace}/${s.entity.id.slug}`, s]));
+  const sliceBySlug = latestSliceBySlug(model);
   const claimed = new Set<string>();
 
   const buildChunk = (storyboard: Entity | undefined, slices: SliceView[]): Chunk => {
