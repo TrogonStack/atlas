@@ -9,7 +9,7 @@
 
 import type { Node } from '@xyflow/react';
 import { flagOf, type PxBox, pxBox, strokeOf } from './lanemesh';
-import type { LaneData, SliceHeaderData, StickyData } from './layout';
+import type { BoardEdgeData, LaneData, SliceHeaderData, StickyData } from './layout';
 import { isSeamEdge, type Model } from './model';
 import { layoutBoards, namespaceOf } from './multiboard';
 import { add, type Body, distance, linkPorts, normalize, scale, type Vec3, vec } from './ports';
@@ -215,6 +215,7 @@ export function buildTowers(model: Model): SceneSpec {
       color: strokeOf(e),
       radius: isSeamEdge(e.id) ? 0.8 : 0.55,
       kind: 'edge',
+      edge: e.data as BoardEdgeData,
     };
   });
 
