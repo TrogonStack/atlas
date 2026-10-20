@@ -123,8 +123,15 @@ storyboard entry (`UI_NO_PERSONA`, Error).
 - A slice may only project events its read model declares
   (`RM_SLICE_EVENT_NOT_DECLARED`, Error). Each declared event needs a slice
   in a storyboard that projects it (`RM_EVENT_NOT_PROJECTED`, Error).
-- A read model serves one consumer. Two automation slices that observe
-  one read model are an error (`READ_MODEL_MULTIPLE_AUTOMATIONS`).
+- Add a read model only for a different shape: other fields, key or
+  source events. Screens and automations that read the same data share
+  one read model.
+- Two automation slices that observe one read model are an error
+  (`READ_MODEL_MULTIPLE_AUTOMATIONS`) unless the read model declares a
+  `SharedConsumersAnnotation` whose `doc` names the consumers. See
+  `examples/manifests/acme-customer-data-deletion/read-model.yaml`.
+- A command's decision state comes from its stream (the given events).
+  Do not add a read model for it.
 
 ## 7. Add the storyboard
 
