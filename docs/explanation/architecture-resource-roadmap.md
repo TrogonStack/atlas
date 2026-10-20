@@ -57,12 +57,24 @@ Retained opaque formats and selectors do not imply semantic format validation,
 a source connector or another format compiler. Deployment and production-scale
 evidence remain distinct from the linked local tests.
 
+## Next resource slice: DataProduct
+
+The [DataProduct contract proposal](../reference/data-product-contracts.md)
+defines input and output ports, exact output contracts, selected access paths
+and declared lineage. Its [acceptance criteria](../reference/data-product-acceptance.md)
+connect those declarations to existing ReadModels, Channel observations,
+DataStore attachments and Specification response messages.
+
+The contract and fixture are design references. DataProduct schema, runtime
+admission, native authoring and Studio review support remain pending. Port
+membership and access declarations do not introduce producing behavior.
+
 ## Follow-on contracts
 
 Team and Person need exact-version versus family responsibility, retained
 directory data and a clear
-separation from authorization principals. DataProduct needs ReadModel output
-ports, lineage and selected access paths tied to the same output.
+separation from authorization principals. DataProduct responsibility will use
+that shared ownership layer rather than a competing owner list.
 
 Those resources also need per-relation cycle rules, cross-namespace permissions
 and deletion/copy/merge semantics. They should extend the connected fixture as
