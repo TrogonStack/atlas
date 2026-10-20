@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 use trogon_atlas_core::{Epoch, NamespaceId, NamespaceName, OwnerId, WriterRole};
-use trogon_atlas_proto::{Entity, EntityKind, EntityRef, Id};
+use trogon_atlas_proto::{Entity, EntityKey, EntityKind, EntityRef, Id};
 
 use crate::error::{StoreError, StoreResult};
 
@@ -627,6 +629,33 @@ pub trait Store: Send + Sync {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> StoreResult<Vec<StoredEntity>>;
+
+    /// Requested targets explicitly referenced by entities in the merged view.
+    ///
+    /// Resolve all targets in one complete scan, without list() truncation.
+    /// Implementations must fail closed on scan errors or time limits. Callers using
+    /// this as a mutation guard hold the writer lease and mutation lock throughout.
+    /// Untyped slice references use the graph's first-existing-kind precedence.
+    /// Implicit schema ownership by type libraries is checked separately.
+    async fn referenced_targets(
+        &self,
+        targets: &[EntityKey],
+        branch: Option<&str>,
+    ) -> StoreResult<HashSet<EntityKey>>;
+
+    /// Whether any entity in the merged view explicitly references this exact target.
+    async fn has_incoming_reference(
+        &self,
+        kind: EntityKind,
+        id: &Id,
+        branch: Option<&str>,
+    ) -> StoreResult<bool> {
+        let target = EntityKey::new(kind, id);
+        Ok(self
+            .referenced_targets(std::slice::from_ref(&target), branch)
+            .await?
+            .contains(&target))
+    }
 
     /// Append a change record. Returns the assigned sequence number.
     ///

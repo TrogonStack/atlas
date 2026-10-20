@@ -718,6 +718,8 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
         K::AlertPolicy(x) => x.supersedes.as_ref(),
         K::AlertNotificationTarget(x) => x.supersedes.as_ref(),
         K::TypeLibrary(x) => x.supersedes.as_ref(),
+        K::Channel(x) => x.supersedes.as_ref(),
+        K::DataStore(x) => x.supersedes.as_ref(),
     }
 }
 

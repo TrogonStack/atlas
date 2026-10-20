@@ -31,6 +31,8 @@ const ALL_KINDS: EntityKind[] = [
   'serviceLevelObjective',
   'alertPolicy',
   'alertNotificationTarget',
+  'channel',
+  'dataStore',
   'typeLibrary',
 ];
 

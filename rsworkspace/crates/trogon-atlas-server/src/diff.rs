@@ -52,6 +52,8 @@ fn kind_name(e: &pb::Entity) -> &'static str {
         Some(K::AlertPolicy(_)) => "AlertPolicy",
         Some(K::AlertNotificationTarget(_)) => "AlertNotificationTarget",
         Some(K::TypeLibrary(_)) => "TypeLibrary",
+        Some(K::Channel(_)) => "Channel",
+        Some(K::DataStore(_)) => "DataStore",
         None => "<empty>",
     }
 }
@@ -568,8 +570,175 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
             };
             scalar(ops, "dependencies", &deps(x), &deps(y));
         }
+        (Some(K::Channel(x)), Some(K::Channel(y))) => {
+            scalar(ops, "title", &x.title, &y.title);
+            scalar(ops, "doc", &x.doc, &y.doc);
+            diff_id_ref(
+                ops,
+                "supersedes",
+                x.supersedes.as_ref(),
+                y.supersedes.as_ref(),
+            );
+            let mut before = x.clone();
+            let mut after = y.clone();
+            before.metadata.clear();
+            after.metadata.clear();
+            resource_fields(
+                ops,
+                "Channel",
+                &before,
+                &after,
+                &[
+                    ("address", "address"),
+                    ("protocols", "protocols"),
+                    ("delivery_guarantee", "deliveryGuarantee"),
+                    ("broker", "broker"),
+                    ("bindings", "bindings"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
+        (Some(K::DataStore(x)), Some(K::DataStore(y))) => {
+            scalar(ops, "title", &x.title, &y.title);
+            scalar(ops, "doc", &x.doc, &y.doc);
+            diff_id_ref(
+                ops,
+                "supersedes",
+                x.supersedes.as_ref(),
+                y.supersedes.as_ref(),
+            );
+            let mut before = x.clone();
+            let mut after = y.clone();
+            before.metadata.clear();
+            after.metadata.clear();
+            resource_fields(
+                ops,
+                "DataStore",
+                &before,
+                &after,
+                &[
+                    ("store_class", "storeClass"),
+                    ("technology", "technology"),
+                    ("purpose", "purpose"),
+                    ("authoritative", "authoritative"),
+                    ("access_mode", "accessMode"),
+                    ("classification", "classification"),
+                    ("residency", "residency"),
+                    ("retention", "retention"),
+                    ("attachments", "attachments"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
         _ => {}
     }
+}
+
+fn resource_fields<M: prost::Message + PartialEq>(
+    ops: &mut Vec<pb::DiffOp>,
+    name: &str,
+    a: &M,
+    b: &M,
+    fields: &[(&str, &str)],
+) {
+    if a == b {
+        return;
+    }
+    let render = |message: &M| {
+        trogon_atlas_core::transcode::TranscodePool::builtin()?
+            .message_json_value(&format!("trogonatlas.eventmodel.v1alpha1.{name}"), message)
+    };
+    match (render(a), render(b)) {
+        (Ok(before), Ok(after)) => {
+            for (path, key) in fields {
+                let value = |body: &serde_json::Value| {
+                    if *key == "broker" {
+                        let broker: serde_json::Map<String, serde_json::Value> =
+                            ["component", "externalSystem"]
+                                .into_iter()
+                                .filter_map(|key| {
+                                    body.get(key).map(|value| (key.into(), value.clone()))
+                                })
+                                .collect();
+                        if broker.is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::Value::Object(broker)
+                        }
+                    } else {
+                        body.get(*key).cloned().unwrap_or(serde_json::Value::Null)
+                    }
+                };
+                scalar(
+                    ops,
+                    path,
+                    &sorted_json(value(&before)),
+                    &sorted_json(value(&after)),
+                );
+            }
+        }
+        (before, after) => {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            let render_result = |message: &M,
+                                 result: Result<
+                serde_json::Value,
+                trogon_atlas_core::transcode::TranscodeError,
+            >| {
+                sorted_json(match result {
+                    Ok(value) => value,
+                    Err(error) => serde_json::json!({
+                        "@type": format!("type.googleapis.com/trogonatlas.eventmodel.v1alpha1.{name}"),
+                        "valueBase64": STANDARD.encode(message.encode_to_vec()),
+                        "transcodeError": error.to_string(),
+                    }),
+                })
+            };
+            ops.push(pb::DiffOp {
+                kind: pb::DiffOpKind::Changed as i32,
+                path: "resource".into(),
+                before: render_result(a, before),
+                after: render_result(b, after),
+                doc: "canonical resource rendering failed".into(),
+                ..Default::default()
+            });
+        }
+    }
+}
+
+fn resource_metadata(ops: &mut Vec<pb::DiffOp>, a: &[prost_types::Any], b: &[prost_types::Any]) {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    if a == b {
+        return;
+    }
+    let render = |values: &[prost_types::Any]| {
+        serde_json::Value::Array(
+            values
+                .iter()
+                .map(|value| {
+                    trogon_atlas_core::transcode::TranscodePool::builtin()
+                        .and_then(|pool| pool.message_json_value("google.protobuf.Any", value))
+                        .unwrap_or_else(|error| {
+                            serde_json::json!({
+                                "@type": value.type_url,
+                                "valueBase64": STANDARD.encode(&value.value),
+                                "transcodeError": error.to_string(),
+                            })
+                        })
+                })
+                .collect(),
+        )
+    };
+    scalar(
+        ops,
+        "metadata",
+        &sorted_json(render(a)),
+        &sorted_json(render(b)),
+    );
+}
+
+fn sorted_json(mut value: serde_json::Value) -> String {
+    value.sort_all_objects();
+    value.to_string()
 }
 
 fn connection_kind_label(conn: Option<&trogon_atlas_proto::Connection>) -> &'static str {
@@ -1264,5 +1433,153 @@ mod tests {
             ops.is_empty(),
             "expected no ops for identical schema entities"
         );
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    fn json(text: &str) -> serde_json::Value {
+        match serde_json::from_str(text) {
+            Ok(value) => value,
+            Err(error) => panic!("diff value must be JSON: {error}: {text}"),
+        }
+    }
+
+    #[test]
+    fn resource_enum_diff_uses_proto_json_names() {
+        let before = pb::Entity {
+            kind: Some(pb::entity::Kind::Channel(pb::Channel::default())),
+            ..Default::default()
+        };
+        let after = pb::Entity {
+            kind: Some(pb::entity::Kind::Channel(pb::Channel {
+                delivery_guarantee: Some(pb::channel::DeliveryGuarantee::AtLeastOnce as i32),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let ops = diff_entities(&before, &after);
+        assert_eq!(ops[0].before, "null");
+        assert_eq!(json(&ops[0].after), "DELIVERY_GUARANTEE_AT_LEAST_ONCE");
+    }
+
+    #[test]
+    fn resource_map_diff_is_sorted_proto_json() {
+        let before = pb::Entity {
+            kind: Some(pb::entity::Kind::Channel(pb::Channel::default())),
+            ..Default::default()
+        };
+        let after = pb::Entity {
+            kind: Some(pb::entity::Kind::Channel(pb::Channel {
+                bindings: vec![pb::ChannelBinding {
+                    parameter_values: [
+                        ("zone".into(), "west".into()),
+                        ("account".into(), "shop".into()),
+                    ]
+                    .into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let ops = diff_entities(&before, &after);
+        assert_eq!(
+            ops[0].after,
+            r#"[{"parameterValues":{"account":"shop","zone":"west"}}]"#
+        );
+    }
+
+    #[test]
+    fn resource_metadata_diff_decodes_known_any_and_retains_unknown_payloads() {
+        use prost::Message;
+        let before = pb::Entity {
+            kind: Some(pb::entity::Kind::DataStore(pb::DataStore::default())),
+            ..Default::default()
+        };
+        let mut after = pb::Entity {
+            kind: Some(pb::entity::Kind::DataStore(pb::DataStore {
+                metadata: vec![prost_types::Any {
+                    type_url:
+                        "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.OrphanAnnotation"
+                            .into(),
+                    value: pb::OrphanAnnotation {
+                        doc: "Awaiting consumer".into(),
+                    }
+                    .encode_to_vec(),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let ops = diff_entities(&before, &after);
+        assert_eq!(json(&ops[0].after)[0]["doc"], "Awaiting consumer");
+        if let Some(pb::entity::Kind::DataStore(resource)) = after.kind.as_mut() {
+            resource.metadata = vec![prost_types::Any {
+                type_url: "type.googleapis.com/tenant.Unknown".into(),
+                value: vec![1],
+            }];
+        }
+        let mut changed = after.clone();
+        if let Some(pb::entity::Kind::DataStore(resource)) = changed.kind.as_mut() {
+            resource.metadata[0].value = vec![2];
+        }
+        let ops = diff_entities(&after, &changed);
+        assert_eq!(ops.len(), 1);
+        let prior = json(&ops[0].before);
+        let next = json(&ops[0].after);
+        assert_eq!(prior[0]["@type"], "type.googleapis.com/tenant.Unknown");
+        assert_eq!(prior[0]["valueBase64"], "AQ==");
+        assert_eq!(next[0]["valueBase64"], "Ag==");
+        assert!(prior[0]["transcodeError"].is_string());
+    }
+
+    #[test]
+    fn storage_diff_preserves_false_claim_presence() {
+        let before = pb::Entity {
+            kind: Some(pb::entity::Kind::DataStore(pb::DataStore::default())),
+            ..Default::default()
+        };
+        let after = pb::Entity {
+            kind: Some(pb::entity::Kind::DataStore(pb::DataStore {
+                authoritative: Some(false),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let ops = diff_entities(&before, &after);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].path, "authoritative");
+        assert_eq!(ops[0].before, "null");
+        assert_eq!(ops[0].after, "false");
+    }
+
+    #[test]
+    fn channel_diff_reports_binding_parameter_changes() {
+        let before = pb::Entity {
+            kind: Some(pb::entity::Kind::Channel(pb::Channel {
+                bindings: vec![pb::ChannelBinding {
+                    parameter_values: std::collections::HashMap::from([(
+                        "region".into(),
+                        "east".into(),
+                    )]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert_eq!(diff_entities(&before, &before).len(), 0);
+        let mut after = before.clone();
+        if let Some(pb::entity::Kind::Channel(channel)) = after.kind.as_mut() {
+            channel.bindings[0]
+                .parameter_values
+                .insert("region".into(), "west".into());
+        }
+        let ops = diff_entities(&before, &after);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].path, "bindings");
     }
 }

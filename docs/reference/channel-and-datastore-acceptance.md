@@ -1,11 +1,11 @@
 # Channel and DataStore acceptance fixture
 
-Status: proposed acceptance specification for the
-[resource contracts](channel-and-datastore-contracts.md). This is a logical
-fixture, not a manifest accepted by the current server. Implementation must
-materialize it through supported writes and retain the returned entity
-incarnations and occurrence IDs. Passing documentation checks does not satisfy
-runtime acceptance.
+Status: acceptance contract for the
+[resource contracts](channel-and-datastore-contracts.md). The tables are logical
+fixture notation rather than literal manifest syntax. The executable
+[backend fixture](../../rsworkspace/crates/trogon-atlas-server/tests/architecture_fixture.rs)
+materializes the connected graph through supported writes and retains returned
+keys, incarnation UIDs, association IDs and checked snapshot identity.
 
 ## Read context and identifiers
 
@@ -101,6 +101,10 @@ unauthorized callers must not receive hidden entity data through diagnostics.
 | Remove the resource's last binding or attachment | Reject; deleting the resource is a separate explicit operation. |
 | Change an association target while retaining its association ID | Reject; replace the occurrence through the identity contract. |
 | Safely delete a selected AutomationSlice or attached ReadModel | Report the inbound dependency and refuse the deletion. Explicit forced deletion preserves the architecture resource and surfaces its unresolved reference; it does not retarget it. |
+| Safely delete an unreferenced entity while foreign namespaces exceed the resource scan budget | Permit deletion without scanning foreign resources into the caller's reference index. |
+| Delete or preview deletion while unrestricted visible resources exceed the scan budget | Permit forced and unreferenced guarded deletes, individually and in batches; visible referrer reporting may be incomplete, while referenced targets remain protected by the complete safety scan. |
+| Guard a batch with multiple delete targets | Check the target set in one complete reference scan and preserve the earliest failing operation and hidden-referrer privacy. |
+| Safely delete a target with only hidden referrers, individually or in a guarded batch | Refuse deletion, including batch preview, without exposing hidden owner keys, titles or relationship details. |
 | Remove a selected observation through an otherwise accepted guarded edit | Preserve the Channel and diagnose its unresolved binding. An attempt to write that resource with the same unresolved binding fails validation. |
 | Retarget a selected source or its paired Processor | A changed behavioral occurrence gets a fresh ID. Existing Channel bindings do not follow it and require explicit repair. |
 | Delete and recreate the AutomationSlice at the same exact key | Its new UID prevents old Channel observation references from resolving. |
@@ -108,6 +112,9 @@ unauthorized callers must not receive hidden entity data through diagnostics.
 | Create `order-feed@2` | Existing DataStore attachments remain on `order-feed@1`. |
 | Copy the Channel to a new exact owner | Association ownership changes; references to bindings on the original owner do not select the copy. External observation targets remain pinned unless an explicit clone map changes them. |
 | Modify on a branch, preview and land | Reorder preserves IDs and preview makes no durable changes. Land obeys the same identity and reference rules against the current baseline. Conflicts require resolution before application. |
+| Land an accepted behavioral edit or forced target deletion that leaves an unchanged resource unresolved | Preview and landing succeed under the target edit's rules. Preserve the resource for inspection and report its unresolved anchor through validation. |
+| Land a new or edited resource whose anchor does not resolve | Reject without publishing the resource. Unchanged unresolved declarations do not relax admission for selected resource writes. |
+| Validate a retained resource whose anchors are omitted from a capped projection | Resolve exact authorized anchors from the selected branch view. Diagnose genuinely removed or inaccessible anchors without disclosing hidden entity details. |
 | Remove an association on baseline while a branch edits the resource | Apply the connection-identity branch-base rules. Removed IDs cannot silently revive during landing; explicit resolution preserves unaffected occurrences and renews restored ones. |
 | Target a readable entity in another namespace | Allow only with authorization to write the resource and read every referenced owner and resolved endpoint. No write permission to the target namespace is granted or required by the attachment alone. |
 | Target an unreadable namespace | Reject the new association without disclosing the hidden target or its graph. |
@@ -127,6 +134,7 @@ These variations validate resource metadata without contacting infrastructure.
 | Omit both a required placeholder value and its default | Reject; no empty or inferred value is manufactured. |
 | Supply parameter values when the Channel has no address | Reject; an address-free Channel with empty parameter values remains valid. |
 | Omit delivery guarantee and DataStore authoritative claim | Preserve absence as unknown. An explicit `authoritative: false` remains present and false after a round trip. |
+| Compare resource declarations | Render stable proto JSON with named enums and sorted object keys; preserve absent versus false claims and retain undecodable metadata's type and payload. |
 | Declare transport guarantee `EXACTLY_ONCE` | Preserve the transport claim without inferring exactly-once command handling. |
 | Supply an invalid protocol token or unknown native enum number | Reject without silently coercing it to a supported value. |
 | Omit store class or use `OTHER` without a nonblank name | Reject. Known store classes reject an additional custom name. |
@@ -145,3 +153,38 @@ Retain the exact fixture version, returned keys/UIDs/IDs, checked snapshot and
 branch context, query requests/results and mutation outcomes. Evidence must
 identify which cases actually ran. No source importer, external infrastructure
 or fitness runtime result is implied by passing this fixture.
+
+## Executable coverage
+
+- [Resource API and authorization tests](../../rsworkspace/crates/trogon-atlas-server/tests/architecture_resources.rs)
+  cover field failures, exact anchors, optional false, guarded batches,
+  supersession, namespace authorization, capped-snapshot references/impact,
+  safe deletion, recreation and branch preview/landing.
+- [Mutation path regressions](../../rsworkspace/crates/trogon-atlas-server/tests/resource_retargeting.rs)
+  cover retarget uniqueness and identity, revert and structural-resolution
+  admission, and receipt replay after a forced target deletion.
+- [Landing lifecycle regressions](../../rsworkspace/crates/trogon-atlas-server/tests/resource_landing_lifecycle.rs)
+  distinguish permitted unresolved declarations from invalid selected resource
+  writes. [Validation context regressions](../../rsworkspace/crates/trogon-atlas-server/tests/architecture_validation_context.rs)
+  exercise exact anchor resolution outside the model projection.
+- [Deletion scope regressions](../../rsworkspace/crates/trogon-atlas-server/tests/resource_delete_scope.rs)
+  cover unrestricted and foreign resource volume, hidden dependencies, batch preview/apply and
+  diagnostic privacy. [Store reference guard tests](../../rsworkspace/crates/trogon-atlas-store/tests/reference_guards.rs)
+  cover multi-target scans, merged branch references and untyped slice resolution
+  precedence.
+- [Resource diff tests](../../rsworkspace/crates/trogon-atlas-server/src/diff.rs)
+  cover canonical values, map ordering, metadata rendering and claim presence.
+- [Core association tests](../../rsworkspace/crates/trogon-atlas-core/tests/resource_connections.rs)
+  cover association identity, repeated observation selection, copying and pinned
+  references.
+- [MCP transport tests](../../rsworkspace/crates/trogon-atlas-mcp/tests/mcp_integration.rs)
+  and [CLI integration tests](../../rsworkspace/crates/trogon-atlas-cli/tests/export_cli_integration.rs)
+  exercise resource authoring and reading through their public surfaces.
+- [Studio component tests](../../tsworkspace/webapps/studio/src/components/ArchitectureResourceDetails.test.tsx)
+  cover declarations, exact selectors, repeated observations and optional claim
+  presence. These are component tests, not a deployed-browser acceptance run.
+
+The executable backend fixture verifies the returned snapshot identity and
+round-trips the complete connected model through export and client manifest
+parsing. Tests record their own checked identities; this reference does not pin
+a transient test database or report those values as deployed state.

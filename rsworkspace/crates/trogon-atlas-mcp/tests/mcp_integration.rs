@@ -1414,3 +1414,135 @@ async fn json_tools_spell_schemas_with_tenant_types() {
 
     mcp_service.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn architecture_resources_roundtrip_through_mcp_dispatch() {
+    let (client, service, endpoint) = start_mcp_client().await;
+    let mut grpc = grpc_client(&endpoint).await;
+    let ns = "mcp-architecture";
+    let entities = [
+        pb::entity::Kind::ReadModel(pb::ReadModel {
+            id: Some(id(ns, "order-feed", 2)),
+            title: "Order feed".into(),
+            ..Default::default()
+        }),
+        pb::entity::Kind::Processor(pb::Processor {
+            id: Some(id(ns, "order-intake", 1)),
+            title: "Order intake".into(),
+            ..Default::default()
+        }),
+        pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+            id: Some(id(ns, "observe-orders", 3)),
+            title: "Observe orders".into(),
+            source_read_models: vec![pb::ReadModelEdge {
+                read_model: Some(pb::ReadModelRef {
+                    id: Some(id(ns, "order-feed", 2)),
+                }),
+                ..Default::default()
+            }],
+            processor: Some(pb::ProcessorEdge {
+                processor: Some(pb::ProcessorRef {
+                    id: Some(id(ns, "order-intake", 1)),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    ];
+    let mut owner = None;
+    for kind in entities {
+        owner = grpc
+            .put_entity(pb::PutEntityRequest {
+                entity: Some(pb::Entity {
+                    kind: Some(kind),
+                    ..Default::default()
+                }),
+                create_only: true,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .entity;
+    }
+    let owner = owner.unwrap();
+    let Some(pb::entity::Kind::AutomationSlice(slice)) = &owner.kind else {
+        panic!("expected observation owner")
+    };
+    let source_id = &slice.source_read_models[0]
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value;
+    let selector = serde_json::json!({
+        "owner": {"kind": "ENTITY_KIND_AUTOMATION_SLICE", "id": {"namespace": ns, "slug": "observe-orders", "version": "3"}},
+        "ownerUid": owner.system.as_ref().unwrap().uid,
+        "id": {"value": source_id}
+    });
+    let resources = [
+        (
+            "channel",
+            "channel",
+            "delivery",
+            serde_json::json!({
+                "channel": {
+                    "id": {"namespace": ns, "slug": "delivery", "version": "1"},
+                    "title": "Order delivery",
+                    "bindings": [{"observation": selector}]
+                }
+            }),
+        ),
+        (
+            "data_store",
+            "dataStore",
+            "cache",
+            serde_json::json!({
+                "dataStore": {
+                    "id": {"namespace": ns, "slug": "cache", "version": "1"},
+                    "title": "Order cache", "storeClass": {"known": "KNOWN_CACHE"},
+                    "authoritative": false,
+                    "attachments": [{"readModel": {"id": {"namespace": ns, "slug": "order-feed", "version": "2"}}}]
+                }
+            }),
+        ),
+    ];
+    for (kind, body, slug, resource) in resources {
+        call_ok(
+            &client,
+            "put_entity_json",
+            put_entity_json_args(&resource.to_string()),
+        )
+        .await;
+        let got = call_ok(
+            &client,
+            "get_entity_json",
+            args_obj(&[
+                ("kind", serde_json::json!(kind)),
+                ("namespace", serde_json::json!(ns)),
+                ("slug", serde_json::json!(slug)),
+                ("version", serde_json::json!(1)),
+            ]),
+        )
+        .await;
+        let response = call_tool_result_text(&got);
+        let entity = &response["json"];
+        assert_ne!(entity["system"]["uid"].as_str().unwrap(), "");
+        let row = &entity[body];
+        if kind == "channel" {
+            let binding = &row["bindings"][0];
+            let binding_id = binding["connectionId"]["value"].as_str().unwrap();
+            assert_ne!(binding_id, "");
+            assert_ne!(binding_id, source_id);
+            assert_eq!(binding["observation"], selector);
+        } else {
+            assert_eq!(row["authoritative"], false);
+            let attachment = &row["attachments"][0];
+            assert_ne!(attachment["connectionId"]["value"].as_str().unwrap(), "");
+            assert_eq!(
+                attachment["readModel"],
+                resource[body]["attachments"][0]["readModel"]
+            );
+        }
+    }
+    service.cancel().await.unwrap();
+}

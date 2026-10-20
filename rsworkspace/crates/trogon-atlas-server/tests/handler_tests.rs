@@ -531,6 +531,16 @@ async fn extract_subgraph_happy_path_returns_event_model() {
 struct FailingBatchStore {
     inner: NatsStore,
     failure: fn() -> StoreError,
+    fail_batches: bool,
+    resource_scan_gate: Option<Arc<ResourceScanGate>>,
+    reference_scans: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Default)]
+struct ResourceScanGate {
+    armed: std::sync::atomic::AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl FailingBatchStore {
@@ -543,6 +553,9 @@ impl FailingBatchStore {
         Self {
             inner: nats.store().await,
             failure,
+            fail_batches: true,
+            resource_scan_gate: None,
+            reference_scans: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -678,13 +691,32 @@ impl Store for FailingBatchStore {
         self.inner.delete(kind, id, expected_etag, ctx).await
     }
 
+    async fn referenced_targets(
+        &self,
+        targets: &[pb::EntityKey],
+        branch: Option<&str>,
+    ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
+        self.reference_scans
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.referenced_targets(targets, branch).await
+    }
+
     async fn list(
         &self,
         filter: ListFilter<'_>,
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<Vec<StoredEntity>> {
-        self.inner.list(filter, limit, branch).await
+        let resource_scan = filter.kinds.contains(&pb::EntityKind::Channel)
+            || filter.kinds.contains(&pb::EntityKind::DataStore);
+        let rows = self.inner.list(filter, limit, branch).await?;
+        if let Some(gate) = &self.resource_scan_gate {
+            if resource_scan && gate.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
+        }
+        Ok(rows)
     }
 
     async fn record_change(
@@ -710,10 +742,14 @@ impl Store for FailingBatchStore {
 
     async fn batch_apply(
         &self,
-        _ops: &[MutationOp],
-        _ctx: WriteContext<'_>,
+        ops: &[MutationOp],
+        ctx: WriteContext<'_>,
     ) -> trogon_atlas_store::StoreResult<Vec<MutationOutcome>> {
-        Err((self.failure)())
+        if self.fail_batches {
+            Err((self.failure)())
+        } else {
+            self.inner.batch_apply(ops, ctx).await
+        }
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ChangeRecord> {
@@ -3758,5 +3794,190 @@ async fn search_index_live_updates_after_warmup_reflect_put_and_delete() {
     assert!(
         gone,
         "live index update via search_apply_delete must remove the entity from search results"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_reverse_index_does_not_cache_scan_invalidated_by_concurrent_write() {
+    use trogon_atlas_server::auth::{Principal, PrincipalKind, Role};
+
+    fn owned<T>(body: T) -> Request<T> {
+        let mut request = Request::new(body);
+        request.extensions_mut().insert(Principal {
+            name: Arc::from("owner-reader"),
+            role: Role::Writer,
+            kind: PrincipalKind::User,
+            is_anonymous: false,
+            namespaces: trogon_atlas_server::scope::NamespaceScope::unrestricted(),
+            parent: Some(trogon_atlas_core::OwnerId::parse("acme").unwrap()),
+        });
+        request
+    }
+
+    let gate = Arc::new(ResourceScanGate::default());
+    let mut backend = FailingBatchStore::new().await;
+    backend.resource_scan_gate = Some(gate.clone());
+    let service = Arc::new(
+        EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default()).unwrap(),
+    );
+    let namespace = service
+        .register_namespace(Request::new(pb::RegisterNamespaceRequest {
+            name: "commerce".into(),
+            parent: "acme".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let target = id(&namespace, "ready", 1);
+    service
+        .put_entity(owned(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                    id: Some(target.clone()),
+                    title: "Ready orders".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    gate.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let query = pb::GetReferencesRequest {
+        kind: pb::EntityKind::ReadModel as i32,
+        id: Some(target.clone()),
+        ..Default::default()
+    };
+    let pending_service = service.clone();
+    let pending_query = query.clone();
+    let pending = tokio::spawn(async move {
+        pending_service
+            .get_incoming_references(owned(pending_query))
+            .await
+            .unwrap()
+            .into_inner()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered.notified())
+        .await
+        .unwrap();
+    service
+        .put_entity(owned(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::DataStore(pb::DataStore {
+                    id: Some(id(&namespace, "cache", 1)),
+                    title: "Order cache".into(),
+                    store_class: Some(pb::StoreClass {
+                        kind: Some(pb::store_class::Kind::Known(
+                            pb::store_class::Known::Cache as i32,
+                        )),
+                    }),
+                    attachments: vec![pb::ReadModelAttachment {
+                        read_model: Some(pb::ReadModelRef { id: Some(target) }),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    gate.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(10), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    let references = service
+        .get_incoming_references(owned(query))
+        .await
+        .unwrap()
+        .into_inner()
+        .references;
+    assert_eq!(
+        references.len(),
+        1,
+        "the completed old scan must not replace the invalidated cache"
+    );
+    let owner = references[0].from.as_ref().unwrap();
+    assert_eq!(owner.kind, pb::EntityKind::DataStore as i32);
+    assert_eq!(owner.id, Some(id(&namespace, "cache", 1)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_delete_checks_all_targets_in_one_reference_scan() {
+    let mut backend = FailingBatchStore::new().await;
+    backend.fail_batches = false;
+    let backend = Arc::new(backend);
+    for slug in ["one", "two", "three"] {
+        backend
+            .create(
+                pb::EntityKind::Event,
+                &make_event("public", slug, 1),
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+    }
+    let service =
+        EventModelServiceImpl::try_new(backend.clone(), ServerMetrics::default()).unwrap();
+    for validate_only in [true, false] {
+        backend
+            .reference_scans
+            .store(0, std::sync::atomic::Ordering::SeqCst);
+        let response = service
+            .batch_mutate(Request::new(pb::BatchMutateRequest {
+                validate_only,
+                ops: ["one", "two", "three"]
+                    .into_iter()
+                    .map(|slug| pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                            kind: pb::EntityKind::Event as i32,
+                            id: Some(id("public", slug, 1)),
+                            ..Default::default()
+                        })),
+                    })
+                    .collect(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            response.status,
+            if validate_only {
+                pb::batch_mutate_response::Status::Validated
+            } else {
+                pb::batch_mutate_response::Status::Applied
+            } as i32,
+            "{response:?}"
+        );
+        assert_eq!(
+            backend
+                .reference_scans
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+    backend
+        .reference_scans
+        .store(0, std::sync::atomic::Ordering::SeqCst);
+    service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            validate_only: true,
+            ops: vec![],
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        backend
+            .reference_scans
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
     );
 }

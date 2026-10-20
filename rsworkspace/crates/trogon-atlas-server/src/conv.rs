@@ -309,6 +309,8 @@ pub fn entity_kind(entity: &pb::Entity) -> Result<pb::EntityKind, Status> {
         Some(K::AlertPolicy(_)) => Ok(pb::EntityKind::AlertPolicy),
         Some(K::AlertNotificationTarget(_)) => Ok(pb::EntityKind::AlertNotificationTarget),
         Some(K::TypeLibrary(_)) => Ok(pb::EntityKind::TypeLibrary),
+        Some(K::Channel(_)) => Ok(pb::EntityKind::Channel),
+        Some(K::DataStore(_)) => Ok(pb::EntityKind::DataStore),
         None => Err(Status::invalid_argument("entity.kind oneof is required")),
     }
 }
@@ -345,6 +347,8 @@ pub fn entity_id(entity: &pb::Entity) -> Result<&pb::Id, Status> {
         Some(K::AlertPolicy(x)) => x.id.as_ref(),
         Some(K::AlertNotificationTarget(x)) => x.id.as_ref(),
         Some(K::TypeLibrary(x)) => x.id.as_ref(),
+        Some(K::Channel(x)) => x.id.as_ref(),
+        Some(K::DataStore(x)) => x.id.as_ref(),
         None => return Err(Status::invalid_argument("entity.kind oneof is required")),
     };
     let id = id.ok_or_else(|| Status::invalid_argument("entity.id is required"))?;
@@ -424,6 +428,8 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
             (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len())
         }
         Some(K::TypeLibrary(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
+        Some(K::Channel(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
+        Some(K::DataStore(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
         None => return Ok(()),
     };
 

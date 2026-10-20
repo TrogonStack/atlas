@@ -73,6 +73,28 @@ describe('Inspector', () => {
     expect(screen.getByText('orders/placed')).toBeDefined();
   });
 
+  it('renders descriptive storage resource details without an execution timeline', () => {
+    const model = buildModel([
+      {
+        dataStore: {
+          id: mkId('orders', 'archive'),
+          title: 'Order archive',
+          storeClass: { known: 'KNOWN_OBJECT_STORE' },
+          authoritative: false,
+          attachments: [
+            { connectionId: { value: 'archive-attachment' }, readModel: { id: mkId('orders', 'summary') } },
+          ],
+        },
+      },
+    ]);
+    const entity = mustFind(model.byKind.get('dataStore')?.[0]);
+    render(<Inspector model={model} entity={entity} onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByText('Storage declaration')).toBeDefined();
+    expect(screen.getByText('No')).toBeDefined();
+    expect(screen.getByText('archive-attachment')).toBeDefined();
+    expect(screen.queryByText('Timeline')).toBeNull();
+  });
+
   it('renders the doc section when doc is present', () => {
     const model = baseModel();
     const event = mustFind(model.entities.find((e) => e.id.slug === 'placed'));

@@ -2990,6 +2990,9 @@ mod tests {
             ("readmodel", pb::EntityKind::ReadModel),
             ("command_slice", pb::EntityKind::CommandSlice),
             ("event_model", pb::EntityKind::EventModel),
+            ("Channel", pb::EntityKind::Channel),
+            ("data_store", pb::EntityKind::DataStore),
+            ("DataStore", pb::EntityKind::DataStore),
         ] {
             assert_eq!(parse_kind(s).unwrap(), expected, "kind {s}");
         }

@@ -29,7 +29,7 @@ Look up exact behavior:
 - [Reliability validation rules](reference/reliability-rules.md)
 - [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)
 
-Proposed resource contracts, pending schema and runtime implementation:
+Resource contracts and acceptance:
 
 - [Channel and DataStore contracts](reference/channel-and-datastore-contracts.md)
 - [Channel and DataStore acceptance fixture](reference/channel-and-datastore-acceptance.md)

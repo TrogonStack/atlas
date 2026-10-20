@@ -12,6 +12,9 @@ import "trogonatlas/type/v1alpha1/id.proto";
 // EventExample/CommandExample/ReadModelExample, inside TypeRef, etc.).
 // Where a connection between entities can carry data (slice endpoints,
 // storyboard entry/outcome), the schema uses Edge messages instead.
+message ChannelRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message DataStoreRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
 message EventRef      { trogonatlas.type.v1alpha1.Id id = 1; }
 
 message CommandRef    { trogonatlas.type.v1alpha1.Id id = 1; }
@@ -83,4 +86,6 @@ enum EntityKind {
   ENTITY_KIND_ALERT_POLICY = 27;
   ENTITY_KIND_ALERT_NOTIFICATION_TARGET = 28;
   ENTITY_KIND_TYPE_LIBRARY = 29;
+  ENTITY_KIND_CHANNEL = 30;
+  ENTITY_KIND_DATA_STORE = 31;
 }

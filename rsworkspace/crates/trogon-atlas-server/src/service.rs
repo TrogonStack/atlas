@@ -1,3 +1,6 @@
+#[path = "architecture_admission.rs"]
+mod architecture_admission;
+
 use std::{
     collections::{BTreeMap, HashMap},
     pin::Pin,
@@ -917,11 +920,23 @@ impl EventModelServiceImpl {
                 }
             }
             let snap = self.snapshot(vis).await?;
-            let idx = Arc::new(graph::ReverseIndex::build(&snap));
-            self.owner_reverse_index_cache
-                .write()
-                .await
-                .insert(owner.clone(), (lens, idx.clone()));
+            let complete = self
+                .architecture_reference_snapshot(&snap, None, vis)
+                .await?;
+            let idx = Arc::new(graph::ReverseIndex::build(&complete));
+            let mut indexes = self.owner_reverse_index_cache.write().await;
+            if let Some((cached, current)) = indexes.get(owner) {
+                if cached == &lens {
+                    return Ok(current.clone());
+                }
+            }
+            let snapshots = self.owner_snapshot_cache.read().await;
+            if snapshots
+                .get(owner)
+                .is_some_and(|(cached, current)| cached == &lens && Arc::ptr_eq(current, &snap))
+            {
+                indexes.insert(owner.clone(), (lens, idx.clone()));
+            }
             return Ok(idx);
         }
         if let Some(idx) = self.reverse_index_cache.read().await.clone() {
@@ -929,14 +944,25 @@ impl EventModelServiceImpl {
         }
         // Load the snapshot first (which may itself be cached).
         let snap = self.snapshot(vis).await?;
+        let complete = self
+            .architecture_reference_snapshot(&snap, None, vis)
+            .await?;
         // Re-check after acquiring write lock: another task may have built the
         // index while we were loading the snapshot.
         let mut guard = self.reverse_index_cache.write().await;
         if let Some(idx) = guard.clone() {
             return Ok(idx);
         }
-        let idx = Arc::new(graph::ReverseIndex::build(&snap));
-        *guard = Some(idx.clone());
+        let idx = Arc::new(graph::ReverseIndex::build(&complete));
+        if self
+            .snapshot_cache
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &snap))
+        {
+            *guard = Some(idx.clone());
+        }
         Ok(idx)
     }
 
@@ -953,7 +979,29 @@ impl EventModelServiceImpl {
             return self.reverse_index(vis).await;
         };
         let snap = self.snapshot_for(Some(branch), vis).await?;
-        Ok(Arc::new(graph::ReverseIndex::build(&snap)))
+        let complete = self
+            .architecture_reference_snapshot(&snap, Some(branch), vis)
+            .await?;
+        Ok(Arc::new(graph::ReverseIndex::build(&complete)))
+    }
+
+    async fn delete_reporting_index(
+        &self,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<Arc<graph::ReverseIndex>, Status> {
+        match self.reverse_index_for(branch, vis).await {
+            Ok(index) => Ok(index),
+            Err(status)
+                if status.code() == tonic::Code::ResourceExhausted
+                    && status.message()
+                        == "architecture reference scan exceeds its entity budget" =>
+            {
+                let snapshot = self.snapshot_for(branch, vis).await?;
+                Ok(Arc::new(graph::ReverseIndex::build(&snapshot)))
+            }
+            Err(status) => Err(status),
+        }
     }
 
     /// Refuses ops that remove a type library an entity schema would still
@@ -3387,7 +3435,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         );
         let offset = parse_page_token(&req.page_token)?;
 
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let snapshot = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let all = self
+            .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
+            .await?;
         let mut all_nodes = graph::impact(&all, kind, &id, max_depth, true);
 
         if !req.filter_kinds.is_empty() {
@@ -3557,6 +3608,22 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
+        let metas: Vec<OpMetaLike> = staged
+            .iter()
+            .map(|(kind, entity)| {
+                let id = entity_id(entity).cloned().unwrap_or_default();
+                OpMetaLike {
+                    kind: *kind,
+                    id,
+                    is_put: true,
+                    entity: Some(entity.clone()),
+                }
+            })
+            .collect();
+
+        self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
+            .await?;
+
         let staged_count = u32::try_from(staged.len()).unwrap_or(u32::MAX);
 
         if req.dry_run || staged.is_empty() {
@@ -3576,19 +3643,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 entity: entity.clone(),
                 if_match: None,
                 force: false,
-            })
-            .collect();
-
-        let metas: Vec<OpMetaLike> = staged
-            .iter()
-            .map(|(kind, entity)| {
-                let id = entity_id(entity).cloned().unwrap_or_default();
-                OpMetaLike {
-                    kind: *kind,
-                    id,
-                    is_put: true,
-                    entity: Some(entity.clone()),
-                }
             })
             .collect();
 
@@ -4056,6 +4110,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         if req.validate_only {
+            self.validate_architecture_write(&entity, branch.as_deref(), &vis)
+                .await?;
             let previous = match self.store.get(kind, &id, branch.as_deref()).await {
                 Ok(stored) => Some(stored.entity),
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
@@ -4076,6 +4132,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let _guard = self.lock_mutations().await;
+
         for admission in type_library.iter().chain(&schema_types) {
             self.type_libraries
                 .confirm(&*self.store, admission, branch.as_deref())
@@ -4146,6 +4203,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             }
         };
+
+        if let Err(status) = self
+            .validate_architecture_write(&entity, branch.as_deref(), &vis)
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
 
         let mut changeset = PendingChangeset::mint("PutEntity", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
@@ -4414,30 +4481,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
-        // Referrer scan must match the client's write scope: baseline for
-        // baseline deletes, merged branch view for branch deletes. Using the
-        // baseline-only index here would let a branch-only referrer silently
-        // lose its target (GetIncomingReferences already uses the branch
-        // index; deletes must agree).
-        let index = self.reverse_index_for(branch.as_deref(), &vis).await?;
-        let referrers: Vec<pb::Reference> = index.incoming(kind, &id).to_vec();
-
-        // The gate below must see referrers in every tenant, not just this
-        // caller's own, or a bound caller can delete an entity another
-        // tenant still depends on and silently break that tenant's
-        // reference. Scanning the unrestricted index for the existence
-        // check alone -- never for the `referrers` field above, which stays
-        // scoped to what this caller can see -- closes that hole without
-        // telling a bound caller anything about another tenant's data.
-        let is_referenced = if vis.is_unrestricted() {
-            !referrers.is_empty()
-        } else {
-            let unrestricted = Visibility::unrestricted(vis.principal().into());
-            let global_index = self
-                .reverse_index_for(branch.as_deref(), &unrestricted)
-                .await?;
-            !global_index.incoming(kind, &id).is_empty()
-        };
+        let is_referenced = matches!(mode, pb::delete_entity_request::Mode::FailIfReferenced)
+            && self
+                .store
+                .has_incoming_reference(kind, &id, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+        let index = self.delete_reporting_index(branch.as_deref(), &vis).await?;
+        let referrers = index.incoming(kind, &id).to_vec();
 
         match mode {
             pb::delete_entity_request::Mode::DryRun => {
@@ -4700,6 +4751,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // back, so nothing may interleave with it, and concurrent batches
         // must not interleave with each other.
         let _guard = self.lock_mutations().await;
+        if dry_run {
+            self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                .await?;
+        }
         for admission in &type_library_admissions {
             self.type_libraries
                 .confirm(&*self.store, admission, branch.as_deref())
@@ -4785,18 +4840,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
-        // A batch delete defaults to the same FAIL_IF_REFERENCED contract as
-        // the standalone delete_entity RPC: embedding a DeleteEntityRequest
-        // in a batch op must not silently relax it. Checked once, up front,
-        // under the mutation lock, so a dry-run batch reports the same
-        // outcome a real apply would reach -- and so this also runs for the
-        // non-dry-run branch below, which has no referrer check of its own.
-        //
-        // The same scan also feeds `per_op_referrers`: the standalone
-        // delete_entity RPC always returns its referrers on success (FORCE
-        // included) so the caller knows what else now points at nothing;
-        // a batch delete result should carry the same awareness instead of
-        // the empty list `build_op_results` used to hand back unconditionally.
+        // Safety includes hidden referrers; response details remain visibility-scoped.
         let delete_modes: Vec<Option<pb::delete_entity_request::Mode>> = req
             .ops
             .iter()
@@ -4811,20 +4855,46 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let mut per_op_referrers: Vec<Vec<pb::Reference>> =
             std::iter::repeat_with(Vec::new).take(metas.len()).collect();
         if delete_modes.iter().any(Option::is_some) {
-            let index = self.reverse_index_for(branch.as_deref(), &vis).await?;
-            for (i, mode) in delete_modes.iter().enumerate() {
-                let Some(mode) = mode else { continue };
-                let Some(meta) = metas.get(i) else { continue };
-                let referrers = index.incoming(meta.kind, &meta.id).to_vec();
+            let guarded_targets: Vec<pb::EntityKey> = delete_modes
+                .iter()
+                .zip(&metas)
+                .filter(|(mode, _)| {
+                    matches!(
+                        mode,
+                        Some(
+                            pb::delete_entity_request::Mode::FailIfReferenced
+                                | pb::delete_entity_request::Mode::Unspecified
+                        )
+                    )
+                })
+                .map(|(_, meta)| pb::EntityKey::new(meta.kind, &meta.id))
+                .collect();
+            let referenced = if guarded_targets.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                self.store
+                    .referenced_targets(&guarded_targets, branch.as_deref())
+                    .await
+                    .map_err(store_err)?
+            };
+            for (i, meta) in metas.iter().enumerate() {
                 if matches!(
-                    mode,
-                    pb::delete_entity_request::Mode::FailIfReferenced
-                        | pb::delete_entity_request::Mode::Unspecified
-                ) && !referrers.is_empty()
+                    delete_modes[i],
+                    Some(
+                        pb::delete_entity_request::Mode::FailIfReferenced
+                            | pb::delete_entity_request::Mode::Unspecified
+                    )
+                ) && referenced.contains(&pb::EntityKey::new(meta.kind, &meta.id))
                 {
                     return Ok(Response::new(Self::batch_referenced_response(&metas, i)));
                 }
-                per_op_referrers[i] = referrers;
+            }
+            let index = self.delete_reporting_index(branch.as_deref(), &vis).await?;
+            for (i, mode) in delete_modes.iter().enumerate() {
+                if mode.is_some() {
+                    let meta = &metas[i];
+                    per_op_referrers[i] = index.incoming(meta.kind, &meta.id).to_vec();
+                }
             }
         }
 
@@ -5019,6 +5089,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     }
                 }
             };
+
+            if let Err(status) = self
+                .validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
 
             let mut changeset = PendingChangeset::mint("BatchMutate", &author, branch.as_deref())
                 .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
@@ -5498,7 +5578,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         req: Request<pb::RevertChangesetRequest>,
     ) -> Result<Response<pb::RevertChangesetResponse>, Status> {
         // A changeset has no owner, so a revert cannot be bounded to one.
-        Self::refuse_unpartitioned(&Self::visibility_of(&req), "reverting a changeset")?;
+        let vis = Self::visibility_of(&req);
+        Self::refuse_unpartitioned(&vis, "reverting a changeset")?;
         let author = Self::author_from_metadata(&req);
         let branch = Self::branch_from_metadata(&req)?;
         let principal = Self::principal_from_metadata(&req);
@@ -5608,6 +5689,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             })
             .collect();
 
+        if req.dry_run {
+            self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                .await?;
+        }
+
         let attempt = if req.operation_id.is_empty() {
             None
         } else {
@@ -5678,6 +5764,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let _guard = self.lock_mutations().await;
+        if let Err(status) = self
+            .validate_architecture_writes(&metas, branch.as_deref(), &vis)
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
         let mut changeset = PendingChangeset::mint("RevertChangeset", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
             .with_operation_key(claim_key.as_deref());
@@ -6016,8 +6111,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let all = self.snapshot_for(branch.as_deref(), &vis).await?;
 
+        let architecture_context = self
+            .architecture_validation_context(&all, branch.as_deref(), &vis)
+            .await?;
         // Project-level hygiene runs once for the whole call.
-        let mut store_issues = validation::validate_store(all.as_ref());
+        let mut store_issues =
+            validation::validate_store_with_architecture_context(&all, &architecture_context);
 
         // Resolve which Domain(s) belong to the scope, then iterate
         // every stored EventModel whose namespace traces back to one of
@@ -6808,6 +6907,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
+        // Accepted anchor edits may leave unchanged resource declarations unresolved.
+        self.validate_architecture_landing(&op_metas, &ops, &vis)
+            .await?;
+
         if req.dry_run {
             // Full detection already ran above; validate the post-merge
             // world via an in-memory overlay without persisting anything.
@@ -6858,7 +6961,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
                 Err(error) => return Err(store_err(error)),
             };
-            let validation_issues = validation::validate_store(&post_world);
+            let validation_issues = validation::validate_store_hygiene(&post_world);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
@@ -6927,7 +7030,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     projected.push(se);
                 }
             }
-            let validation_issues = validation::validate_store(&projected);
+            let validation_issues = validation::validate_store_hygiene(&projected);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
@@ -7190,6 +7293,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::ResolveBranchEntryRequest>,
     ) -> Result<Response<pb::ResolveBranchEntryResponse>, Status> {
+        let vis = Self::visibility_of(&req);
         let author = Self::author_from_metadata(&req);
         let principal = Self::principal_from_metadata(&req);
         let req = req.into_inner();
@@ -7211,6 +7315,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .ok_or_else(|| Status::invalid_argument("ref is required"))?;
         let kind = kind_from_i32(entity_ref.kind, "ref.kind")?;
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
+        if matches!(kind, pb::EntityKind::Channel | pb::EntityKind::DataStore) {
+            self.authorize_write(
+                principal.as_ref(),
+                Some(&req.name),
+                &WriteTargets::of(&id.namespace),
+            )
+            .await?;
+        }
         let resolution = pb::resolve_branch_entry_request::Resolution::try_from(req.resolution)
             .map_err(|_| Status::invalid_argument("unknown resolution"))?;
         if matches!(
@@ -7318,6 +7430,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 &merged,
             )
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if let Err(status) = self
+                .validate_architecture_selection(&merged, fork, &req.name, &vis)
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
             let changeset =
                 PendingChangeset::mint("ResolveBranchEntry", &author, Some(req.name.as_str()))
                     .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))

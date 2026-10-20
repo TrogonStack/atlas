@@ -1,10 +1,11 @@
 # Channel and DataStore contracts
 
-Status: proposed first-release contract. Channel and DataStore are not yet
-entity kinds in the protobuf schema, backend, CLI, MCP or Studio. Field names
-below describe the intended model; they do not reserve protobuf tags, RPCs or
-wire encodings. Implementation must add schema support, authorized reference
-indexing, validation, persistence and client support together.
+Status: native Channel and DataStore support is implemented in the schema,
+backend, CLI/MCP authoring and Studio review surfaces. The protobuf definitions
+in [architecture.proto](../../proto/trogonatlas/eventmodel/v1alpha1/architecture.proto)
+are the wire contract. This reference defines their field and lifecycle rules;
+[acceptance coverage](channel-and-datastore-acceptance.md) distinguishes logical
+fixture requirements from executed tests.
 
 ## Behavioral anchors
 
@@ -85,7 +86,7 @@ values are supplied by each binding or by the parameter's default.
 
 | ChannelBinding field | Contract |
 | --- | --- |
-| `connection_id` | Required in persisted state; proposed Channel-owned association occurrence ID. Omitted on addition for server assignment. |
+| `connection_id` | Required in persisted state; Channel-owned association occurrence ID. Omitted on addition for server assignment. |
 | `observation` | Required existing `ConnectionRef`, restricted as specified below. |
 | `parameter_values` | Map from declared `ParameterName` to string value, validated against the address declaration. Empty when no address is declared. |
 | `doc` | Optional binding-specific Markdown. |
@@ -143,7 +144,7 @@ text is valid. Classification does not specify personal-data erasure behavior.
 
 | ReadModelAttachment field | Contract |
 | --- | --- |
-| `connection_id` | Required in persisted state; proposed DataStore-owned association occurrence ID. Omitted on addition for server assignment. |
+| `connection_id` | Required in persisted state; DataStore-owned association occurrence ID. Omitted on addition for server assignment. |
 | `read_model` | Required exact `ReadModelRef`; must resolve. |
 | `doc` | Optional attachment-specific Markdown. |
 
@@ -160,11 +161,9 @@ A binding's `connection_id` identifies the Channel-owned association; its
 `observation.id` identifies the AutomationSlice-owned behavioral occurrence.
 These values are not interchangeable.
 
-The intended association identity is the exact resource owner, its
-server-owned incarnation UID and its local `ConnectionId`. Implementation
-must extend occurrence traversal, reference resolution, indexes and mutation
-validation for the new shapes. The existing resolver does not already support
-these proposed entity kinds.
+Association identity is the exact resource owner, its server-owned incarnation
+UID and its local `ConnectionId`. Occurrence traversal, reference resolution,
+indexes and mutation validation support these association records.
 
 Apply existing connection-ID admission rules: IDs are unique across the owner;
 omitted IDs request server generation. A new owner may accept caller-supplied
@@ -226,15 +225,49 @@ mutation and validation rules still apply to the target edit itself. Reference
 validation must expose those failures through existing diagnostic and impact
 surfaces. This contract adds no automatic garbage collection.
 
+Branch preview and landing apply the same distinction. New or edited resource
+declarations must resolve their anchors. An unchanged resource may remain
+unresolved when a permitted target deletion or behavioral edit lands; its
+diagnostic state does not veto that operation.
+
+Resource diagnostics resolve exact authorized anchors in the selected branch
+view. Absence from a capped model projection does not establish that a target
+is missing. A removed or inaccessible target remains unresolved; validation
+does not restore it from another branch or reveal inaccessible entity details.
+
 ## First-release boundary
 
 The implementation scope is native authoring, persistence, exact reference
 queries and validation of these resources. It does not depend on a
 Specification entity or a source overlay. Message contract catalogs, schema
 format parsing, nested/routed Channels, field-level transport mapping, API
-operation exposure, source-version mapping, import, synchronization and export
-formats are deferred. Existing generic export behavior is not a promise that
-it already supports new entity kinds.
+operation exposure, source-version mapping, and source-specific import,
+synchronization and export formats are deferred. Native manifest export and
+reapplication support Channel and DataStore, including their association IDs
+and exact references.
 
 Transport delivery, broker configuration, physical storage administration,
 policy enforcement and credential management remain outside Atlas execution.
+
+## Reference scan budget
+
+Resource reference and impact scans use an independent budget of 5,000 Channel
+and DataStore rows, combined, across the caller's visible namespaces. They
+supplement capped model projections so a missing projection row cannot silently
+remove an inbound architecture dependency. Exceeding this visible scan budget
+returns `RESOURCE_EXHAUSTED`.
+
+Delete responses use the capped model snapshot for visible referrer reporting
+when that resource scan budget is exceeded. Their referrer lists can therefore
+be incomplete, including for forced and preview deletes. Other scan errors
+remain errors. This reporting limit does not authorize a guarded deletion.
+
+The safe-deletion guard separately checks for an incoming reference to the
+selected targets across namespaces, without returning hidden referrer data or
+applying a global resource row limit. A guarded batch checks its targets in one
+scan. The scan streams candidate keys and stops when every requested target has
+a matching reference, with bounded concurrent reads and a total timeout.
+Proving a target unreferenced can require scanning every candidate key. This is
+not a persistent reverse index. Timeout or backend failure refuses deletion
+rather than authorizing a mutation from an incomplete scan. Branch checks use
+the merged branch view, including replacements and removals.

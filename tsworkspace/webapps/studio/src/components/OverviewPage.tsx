@@ -77,6 +77,8 @@ const KIND_SHORT: Record<Entity['kind'], string> = {
   alertPolicy: 'alert_policy',
   alertNotificationTarget: 'alert_notification_target',
   typeLibrary: 'type_library',
+  channel: 'channel',
+  dataStore: 'data_store',
 };
 
 function isOverviewMode(value: string | null): value is OverviewMode {

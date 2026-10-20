@@ -190,6 +190,14 @@ impl Store for GatedRecoveryStore {
         self.inner.delete(kind, id, expected_etag, ctx).await
     }
 
+    async fn referenced_targets(
+        &self,
+        targets: &[pb::EntityKey],
+        branch: Option<&str>,
+    ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
+        self.inner.referenced_targets(targets, branch).await
+    }
+
     async fn list(
         &self,
         filter: ListFilter<'_>,

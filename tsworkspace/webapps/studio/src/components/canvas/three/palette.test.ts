@@ -34,6 +34,8 @@ const KINDS: Record<EntityKind, true> = {
   alertPolicy: true,
   alertNotificationTarget: true,
   typeLibrary: true,
+  channel: true,
+  dataStore: true,
 };
 
 describe('kindColors', () => {

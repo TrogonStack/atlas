@@ -32,6 +32,8 @@ const ALL_ENTITY_KINDS: EntityKind[] = [
   'alertPolicy',
   'alertNotificationTarget',
   'typeLibrary',
+  'channel',
+  'dataStore',
 ];
 
 describe('KIND_SHORT_TO_CAMEL registry completeness', () => {
