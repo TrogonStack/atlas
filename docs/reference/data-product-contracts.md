@@ -209,7 +209,7 @@ the port ID and replaces the data-selection association ID.
 | Change input/output direction | Remove and create a new port; the old ID cannot change direction. |
 | Retarget data, contract, access or lineage input | Preserve the containing port, replace the changed association with a fresh ID, and revalidate the complete proposed product. |
 | Remove and later re-add a port or association | Receive a fresh identity; old selectors do not revive. Remove and re-add in separate writes when unchanged endpoints would otherwise be indistinguishable. |
-| Remove a locally selected input | Reject unless the guarded final graph removes or explicitly replaces every local lineage selection of it. |
+| Remove an INPUT port selected by lineage | Reject unless the guarded final graph removes or explicitly replaces every local lineage selection of that port. |
 | Remove output data | Remove its access in the same guarded edit; optional contract and declared lineage may remain visibly undeclared as to data. |
 | Delete and recreate a product at the same key | New UID invalidates old port and connection references; plain DataProductRef follows its exact key. |
 
@@ -325,6 +325,22 @@ current scanner coverage. Exceeding it returns `RESOURCE_EXHAUSTED`; an empty
 result is not a substitute. Bounded impact/lineage queries retain checked scope
 and explicitly mark incomplete traversal. Operational failures remain errors,
 not undeclared data or negative lineage findings.
+
+Event-confirmation discovery uses a separate per-request budget: at most 5,000
+distinct Event and CommandSlice rows combined, and at most 5,000 emission
+occurrence examinations. These do not consume the visible resource-row budget.
+Count each exact kind/key/version row once within the selected branch view,
+including candidate CommandSlices that yield no matching emission. Count every
+examined emission occurrence, including repeated occurrences targeting the same
+Event. Reusing a loaded row does not add another row charge; examining its
+emissions again still consumes occurrence work. Share these ceilings across all
+products and Event inputs in one public request, including a guarded batch;
+pagination and per-product loops do not reset them. Confirmation may stop once
+every selected Event has a valid authorized witness. If completing required
+confirmation would exceed either ceiling, return `RESOURCE_EXHAUSTED` and reject
+the entire admission request atomically. A diagnostic query marks that evidence
+incomplete, without asserting a missing emission or confirmed lineage. Backend
+failures retain their operational error instead of becoming model findings.
 
 Deletion reporting may use the existing capped-projection fallback only for
 visible resource-budget exhaustion, with incomplete reporting explicit. Other
