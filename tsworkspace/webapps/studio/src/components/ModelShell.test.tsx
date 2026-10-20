@@ -32,6 +32,9 @@ vi.mock('@/components/canvas/PlanBoard', () => ({
 vi.mock('@/components/canvas/DomainChartBoard', () => ({
   DomainChartBoard: () => <div data-testid="domain-chart-board" />,
 }));
+vi.mock('@/components/canvas/WaterfallBoard', () => ({
+  WaterfallBoard: () => <div data-testid="waterfall-board" />,
+}));
 vi.mock('@xyflow/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@xyflow/react')>();
   return {
@@ -134,6 +137,57 @@ describe('ModelShell', () => {
     render(<ModelShell model={model} scopedTitle="Shop" />);
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: 'UI' })).toBeDefined();
+    });
+  });
+
+  describe('Waterfall tab', () => {
+    const sliceModel = () =>
+      buildModel([
+        {
+          commandSlice: {
+            id: { namespace: 'shop', slug: 'place-order-slice', version: '1' },
+            title: 'Place order',
+          },
+        },
+      ] as never);
+
+    it('is offered when the model has a slice, as the Plan tab is', async () => {
+      render(<ModelShell model={sliceModel()} scopedTitle="Shop" />);
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'Waterfall' })).toBeDefined();
+      });
+      expect(screen.getByRole('tab', { name: 'Plan' })).toBeDefined();
+    });
+
+    it('is not offered when the model has no slice', async () => {
+      const model = buildModel([
+        { command: { id: { namespace: 'shop', slug: 'place-order', version: '1' }, title: 'Place order' } },
+      ] as never);
+      render(<ModelShell model={model} scopedTitle="Shop" />);
+      await waitFor(() => {
+        expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
+      });
+      expect(screen.queryByRole('tab', { name: 'Waterfall' })).toBeNull();
+    });
+
+    it('renders the waterfall for ?view=waterfall', async () => {
+      rtlRender(<ModelShell model={sliceModel()} scopedTitle="Shop" />, {
+        wrapper: withNuqsTestingAdapter({ searchParams: '?view=waterfall' }),
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('waterfall-board')).toBeDefined();
+      });
+      expect(screen.queryByTestId('board')).toBeNull();
+    });
+
+    it('falls back to the board for ?view=waterfall on a model with no slice', async () => {
+      rtlRender(<ModelShell model={buildModel([])} scopedTitle="Empty" />, {
+        wrapper: withNuqsTestingAdapter({ searchParams: '?view=waterfall' }),
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId('board')).toBeDefined();
+      });
+      expect(screen.queryByTestId('waterfall-board')).toBeNull();
     });
   });
 

@@ -1,4 +1,4 @@
-// The studio's five-view shell for a single EventModel page. A caller may
+// The studio's six-view shell for a single EventModel page. A caller may
 // still omit the model for direct debugging, but the top-level router no
 // longer exposes the old whole-store query route.
 import { useHotkey } from '@tanstack/react-hotkeys';
@@ -14,6 +14,7 @@ import { ScreensBoard } from '@/components/canvas/ScreensBoard';
 import { SequenceBoard } from '@/components/canvas/SequenceBoard';
 import { SliceBoard } from '@/components/canvas/SliceBoard';
 import type { FocusRequest } from '@/components/canvas/useFocusNode';
+import { WaterfallBoard } from '@/components/canvas/WaterfallBoard';
 import { EdgeInspector } from '@/components/EdgeInspector';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { HistoryPanel } from '@/components/HistoryPanel';
@@ -43,7 +44,7 @@ function edgeIdentity(data: BoardEdgeData): string {
   return `${data.source.key}\0${data.relation}\0${data.target.key}`;
 }
 
-const VIEWS = ['board', 'sequence', 'slice', 'ui', 'plan', 'domain'] as const;
+const VIEWS = ['board', 'sequence', 'slice', 'ui', 'plan', 'domain', 'waterfall'] as const;
 type View = (typeof VIEWS)[number];
 const VIEW_LABELS: Record<View, string> = {
   board: 'Board',
@@ -52,6 +53,7 @@ const VIEW_LABELS: Record<View, string> = {
   ui: 'UI',
   plan: 'Plan',
   domain: 'Domain',
+  waterfall: 'Waterfall',
 };
 function isView(value: unknown): value is View {
   return (VIEWS as readonly unknown[]).includes(value);
@@ -528,21 +530,17 @@ export function ModelShell({
   }, [model, selectAndFocus, focusParam, setFocusParam]);
 
   // A view with nothing to draw is not offered: an EM without UI screens
-  // (or slices for the slice view and the plan, or knowledge entities for
-  // the domain chart)
-  // would put an empty canvas behind a clickable tab. Board and sequence
-  // always show: they are the model itself.
+  // (or slices for the slice view, plan, and waterfall, or knowledge entities
+  // for the domain chart) would put an empty canvas behind a clickable tab.
+  // Board and sequence always show: they are the model itself.
+  const hasSlices = model.entities.some(
+    (e) =>
+      e.kind === 'commandSlice' || e.kind === 'readModelSlice' || e.kind === 'automationSlice' || e.kind === 'uiSlice',
+  );
   const availableViews = VIEWS.filter((v) => {
     if (v === 'ui') return model.entities.some((e) => e.kind === 'ui');
     if (v === 'slice') return model.slices.length > 0;
-    if (v === 'plan')
-      return model.entities.some(
-        (e) =>
-          e.kind === 'commandSlice' ||
-          e.kind === 'readModelSlice' ||
-          e.kind === 'automationSlice' ||
-          e.kind === 'uiSlice',
-      );
+    if (v === 'plan' || v === 'waterfall') return hasSlices;
     if (v === 'domain')
       return model.entities.some((e) => e.kind === 'domain' || e.kind === 'subdomain' || e.kind === 'boundedContext');
     return true;
@@ -712,9 +710,13 @@ export function ModelShell({
                   <ErrorBoundary>
                     <PlanBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
                   </ErrorBoundary>
-                ) : (
+                ) : activeView === 'domain' ? (
                   <ErrorBoundary>
                     <DomainChartBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
+                  </ErrorBoundary>
+                ) : (
+                  <ErrorBoundary>
+                    <WaterfallBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
                   </ErrorBoundary>
                 )}
               </ReactFlowProvider>
