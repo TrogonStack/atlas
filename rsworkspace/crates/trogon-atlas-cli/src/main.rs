@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use trogon_atlas_client::{
     apply, branch, client, compat, export, failure::Failure, fmt, manifest, manifest_schema,
     openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
-    precondition::BranchEntryState, view,
+    precondition::BranchEntryState, validate, view,
 };
 use trogon_atlas_proto as pb;
 
@@ -139,6 +139,15 @@ enum Cmd {
     },
     /// List the namespaces the caller can see, with their ids and entity counts.
     Namespaces,
+    /// Run model-level validation on a stored event model: the rules that
+    /// need the whole model in view, which `apply --dry-run` does not run.
+    /// Exits 1 when any finding is an error. With --branch, validates the
+    /// branch's view of the model.
+    Validate {
+        /// `<namespace>/<model>[@version]`, e.g. `shop/checkout`. Omit
+        /// `@version` to validate the latest version.
+        model: String,
+    },
     /// Manage branch lifecycle (Phase 1: Isolation). Branch scope for
     /// Apply/Diff/Export is set via the top-level --branch flag, not here.
     Branch {
@@ -744,6 +753,37 @@ async fn run(
                 print!("{}", view::render_namespaces(&namespaces));
             }
             Ok((ExitCode::SUCCESS, Some(view::namespaces_json(&namespaces))))
+        }
+        Cmd::Validate { model } => {
+            let address = validate::parse_model_address(&model)?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let (id, issues) = validate::validate_event_model(&mut client, &address).await?;
+            let model = pb::canonical::id_string(pb::EntityKind::EventModel, &id);
+            let severities = branch::SeverityCounts::of(&issues);
+            if text {
+                println!("{model}: {severities}");
+                for issue in &issues {
+                    println!("{}", apply::format_issue(issue));
+                }
+            }
+            let data = json!({
+                "event_model": model,
+                "validation_summary": {
+                    "errors": severities.errors,
+                    "warnings": severities.warnings,
+                    "info": severities.infos,
+                },
+                "validation": issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
+            });
+            Ok((
+                if severities.errors > 0 {
+                    ExitCode::from(EXIT_FINDINGS)
+                } else {
+                    ExitCode::SUCCESS
+                },
+                Some(data),
+            ))
         }
         Cmd::Tree { namespace } => {
             if let Some(namespace) = &namespace {

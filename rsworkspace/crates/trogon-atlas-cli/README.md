@@ -30,12 +30,20 @@ trogon-atlas describe command_slice/shop/place-order-slice # title, doc, fields,
 trogon-atlas tree shop                            # domains, storyboards, slices and what each slice connects
 trogon-atlas tree                                 # the same for every namespace that holds entities
 trogon-atlas namespaces                           # namespaces you can see, with ids and entity counts
+trogon-atlas validate shop/checkout                # model-level findings, exit 1 on any error
 ```
 
 `get`, `describe`, `tree` and `namespaces` are read-only. They take the same kind names
 as manifests (`read-model`, `read_model`, `ReadModel`). A missing entity
 exits `6` (`not_found`). They also take the ids that `describe`
 prints, such as `event:shop/order.placed@1`.
+
+`validate <namespace>/<model>[@version]` runs the model-level rules on a
+stored event model: storyboard entries, projection order, field provenance.
+`apply --dry-run` runs only the per-entity checks, so run `validate` after an
+apply to see these findings. With `--branch`, it validates the branch's view
+of the model. It exits `1` when any finding is an error and `6` when the
+model does not exist.
 
 Connection flags (or environment):
 
