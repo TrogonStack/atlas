@@ -1189,6 +1189,29 @@ impl EventModelServiceImpl {
         Err(Status::not_found("entity not found"))
     }
 
+    /// Map a direct read's store error, adding near-match slugs to a
+    /// `NOT_FOUND`. Call only after `require_visible` has passed: the
+    /// suggestions come from the lensed snapshot, but a hidden namespace must
+    /// get the bare `NOT_FOUND` that `require_visible` already gave it.
+    async fn read_err(
+        &self,
+        err: trogon_atlas_store::error::StoreError,
+        vis: &Visibility,
+        branch: Option<&str>,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+    ) -> Status {
+        if !matches!(err, trogon_atlas_store::error::StoreError::NotFound) {
+            return store_err(err);
+        }
+        match self.snapshot_for(branch, vis).await {
+            Ok(all) => crate::conv::not_found_with_suggestions(&crate::suggest::did_you_mean(
+                kind, id, &all,
+            )),
+            Err(_) => store_err(err),
+        }
+    }
+
     /// The set of namespaces this request may read, resolved once so the
     /// per-record filters that follow stay synchronous.
     async fn lens(&self, vis: &Visibility) -> Result<Lens, Status> {
@@ -2730,11 +2753,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Direct-by-key reads never touch the snapshot, so the visibility
         // filter that covers every other read path does not reach them.
         self.require_visible(&vis, &id.namespace).await?;
-        let stored = self
-            .store
-            .get(kind, id, branch.as_deref())
-            .await
-            .map_err(store_err)?;
+        let stored = match self.store.get(kind, id, branch.as_deref()).await {
+            Ok(stored) => stored,
+            Err(err) => return Err(self.read_err(err, &vis, branch.as_deref(), kind, id).await),
+        };
         Ok(Response::new(pb::GetEntityResponse {
             entity: Some(stored.entity),
             etag: stored.etag,
@@ -3651,11 +3673,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // The root is fetched by key, so the lensed snapshot below
         // narrows the neighbourhood but never the root itself.
         self.require_visible(&vis, &id.namespace).await?;
-        let stored = self
-            .store
-            .get(kind, id, branch.as_deref())
-            .await
-            .map_err(store_err)?;
+        let stored = match self.store.get(kind, id, branch.as_deref()).await {
+            Ok(stored) => stored,
+            Err(err) => return Err(self.read_err(err, &vis, branch.as_deref(), kind, id).await),
+        };
         let slice = slice_from_entity(&stored.entity)
             .ok_or_else(|| Status::internal("slice entity kind mismatch"))?;
 
@@ -3693,11 +3714,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // The root is fetched by key, so the lensed snapshot below
         // narrows the neighbourhood but never the root itself.
         self.require_visible(&vis, &id.namespace).await?;
-        let stored = self
-            .store
-            .get(pb::EntityKind::Storyboard, id, branch.as_deref())
-            .await
-            .map_err(store_err)?;
+        let kind = pb::EntityKind::Storyboard;
+        let stored = match self.store.get(kind, id, branch.as_deref()).await {
+            Ok(stored) => stored,
+            Err(err) => return Err(self.read_err(err, &vis, branch.as_deref(), kind, id).await),
+        };
         let Some(pb::entity::Kind::Storyboard(storyboard)) = stored.entity.kind.clone() else {
             return Err(Status::internal("storyboard entity kind mismatch"));
         };
@@ -3767,11 +3788,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // narrows the neighbourhood but never the root itself.
         self.require_visible(&vis, &id.namespace).await?;
         let (em, all, as_of_incomplete) = if req.as_of_changeset.is_empty() {
-            let stored = self
-                .store
-                .get(pb::EntityKind::EventModel, id, branch.as_deref())
-                .await
-                .map_err(store_err)?;
+            let kind = pb::EntityKind::EventModel;
+            let stored = match self.store.get(kind, id, branch.as_deref()).await {
+                Ok(stored) => stored,
+                Err(err) => {
+                    return Err(self.read_err(err, &vis, branch.as_deref(), kind, id).await)
+                }
+            };
             let Some(pb::entity::Kind::EventModel(em)) = stored.entity.kind.clone() else {
                 return Err(Status::internal("event_model entity kind mismatch"));
             };

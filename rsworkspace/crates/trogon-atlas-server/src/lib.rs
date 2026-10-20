@@ -21,6 +21,7 @@ pub mod scope;
 pub mod search;
 pub mod service;
 pub mod spicedb;
+pub mod suggest;
 pub mod telemetry;
 pub mod tls;
 pub mod token_reload;

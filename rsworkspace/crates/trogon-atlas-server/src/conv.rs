@@ -180,6 +180,21 @@ pub fn cursor_rejected_err(message: impl Into<String>) -> Status {
     with_reason(Code::InvalidArgument, message, reason::CURSOR_REJECTED)
 }
 
+/// `NOT_FOUND` carrying near-match slugs under `did_you_mean`, comma-joined
+/// because `ErrorInfo` metadata values are strings. With no suggestions it is
+/// the same status `store_err` gives, so the two cannot be told apart.
+pub fn not_found_with_suggestions(suggestions: &[String]) -> Status {
+    if suggestions.is_empty() {
+        return store_err(StoreError::NotFound);
+    }
+    with_reason_and_metadata(
+        Code::NotFound,
+        "entity not found",
+        reason::NOT_FOUND,
+        HashMap::from([("did_you_mean".to_string(), suggestions.join(","))]),
+    )
+}
+
 pub fn store_err(err: StoreError) -> Status {
     match err {
         StoreError::NotFound => with_reason(Code::NotFound, "entity not found", reason::NOT_FOUND),
