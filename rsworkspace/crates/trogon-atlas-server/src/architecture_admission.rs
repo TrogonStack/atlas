@@ -1,5 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 
+use tonic::Code;
 use trogon_atlas_store::store::BranchLandOp;
 
 use super::{
@@ -226,8 +227,9 @@ impl EventModelServiceImpl {
         &self,
         snapshot: &[StoredEntity],
         context: &[StoredEntity],
-    ) -> Vec<pb::ValidationIssue> {
+    ) -> Result<Vec<pb::ValidationIssue>, Status> {
         let mut issues = Vec::new();
+        let mut checked = HashMap::new();
         for stored in snapshot {
             for selection in crate::specification_resources::library_types(&stored.entity) {
                 let (Some(id), Some(message)) = (
@@ -236,12 +238,25 @@ impl EventModelServiceImpl {
                 ) else {
                     continue;
                 };
-                if self
-                    .type_libraries
-                    .check_contract_type(id, &message.value, context)
-                    .await
-                    .is_err()
-                {
+                let key = (
+                    pb::EntityKey::new(pb::EntityKind::TypeLibrary, id),
+                    message.value.clone(),
+                );
+                let result = match checked.entry(key) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => entry.insert(
+                        self.type_libraries
+                            .check_contract_type(id, &message.value, context)
+                            .await,
+                    ),
+                };
+                if let Err(status) = result {
+                    if !matches!(
+                        status.code(),
+                        Code::InvalidArgument | Code::FailedPrecondition
+                    ) {
+                        return Err(status.clone());
+                    }
                     issues.push(validation::issue_error(
                         "SPECIFICATION_REFERENCE_UNRESOLVED",
                         "Selected protobuf message is absent, unreadable or does not compile in its exact library".into(),
@@ -251,7 +266,7 @@ impl EventModelServiceImpl {
                 }
             }
         }
-        issues
+        Ok(issues)
     }
 
     pub(super) async fn architecture_reference_snapshot(
@@ -482,4 +497,268 @@ fn observation_endpoints(
         }
     }
     endpoints
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod specification_validation_tests {
+    use std::{sync::Arc, time::Duration};
+
+    use tonic::{Code, Request};
+    use tonic_types::StatusExt;
+    use trogon_atlas_proto::event_model_service_server::EventModelService;
+    use trogon_atlas_store::WriteContext;
+    use trogon_atlas_types::CompileRunner;
+
+    use super::*;
+    use crate::{metrics::ServerMetrics, type_libraries::TypeLibraryGate};
+
+    fn library_id(namespace: &str, version: u64) -> pb::Id {
+        pb::Id {
+            namespace: namespace.into(),
+            slug: "orders".into(),
+            version,
+        }
+    }
+
+    async fn fixture() -> EventModelServiceImpl {
+        let nats = trogon_atlas_testsupport::shared().await;
+        EventModelServiceImpl::try_new(Arc::new(nats.store().await), ServerMetrics::default())
+            .unwrap()
+    }
+
+    async fn library(
+        service: &EventModelServiceImpl,
+        id: pb::Id,
+        source: &str,
+        dependencies: Vec<pb::TypeLibraryRef>,
+    ) {
+        service
+            .store
+            .put(
+                pb::EntityKind::TypeLibrary,
+                &pb::Entity {
+                    kind: Some(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                        id: Some(id),
+                        title: "Orders".into(),
+                        files: vec![pb::ProtoSourceFile {
+                            path: "orders.proto".into(),
+                            content: source.into(),
+                        }],
+                        dependencies,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                false,
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+    }
+
+    const VALID: &str = "syntax = \"proto3\"; package orders.v1; message Order {}";
+
+    async fn selection(service: &EventModelServiceImpl, slug: &str, id: pb::Id, message: &str) {
+        service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(pb::Entity {
+                    kind: Some(pb::entity::Kind::Specification(pb::Specification {
+                        id: Some(pb::Id {
+                            namespace: "contracts".into(),
+                            slug: slug.into(),
+                            version: 1,
+                        }),
+                        title: slug.into(),
+                        messages: vec![pb::ContractMessage {
+                            name: Some(pb::MemberName {
+                                value: "Payload".into(),
+                            }),
+                            schemas: vec![pb::SchemaBinding {
+                                role: pb::schema_binding::Role::Payload as i32,
+                                r#type: Some(pb::schema_binding::Type::LibraryType(
+                                    pb::TypeLibraryTypeRef {
+                                        library: Some(pb::TypeLibraryRef { id: Some(id) }),
+                                        message: Some(pb::QualifiedProtoName {
+                                            value: message.into(),
+                                        }),
+                                    },
+                                )),
+                                ..Default::default()
+                            }],
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+    }
+
+    async fn validate(
+        service: &EventModelServiceImpl,
+    ) -> Result<tonic::Response<pb::ValidateProjectResponse>, Status> {
+        service
+            .validate_project(Request::new(pb::ValidateProjectRequest {
+                scope: Some(pb::validate_project_request::Scope::Namespace(
+                    "contracts".into(),
+                )),
+            }))
+            .await
+    }
+
+    fn issues(report: &pb::ValidateProjectResponse) -> Vec<&pb::ValidationIssue> {
+        report
+            .reports
+            .iter()
+            .flat_map(|r| &r.issues)
+            .filter(|i| {
+                i.code == "SPECIFICATION_REFERENCE_UNRESOLVED"
+                    && i.subject_field == "messages.schemas.library_type"
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn validate_project_propagates_compile_timeout() {
+        let mut service = fixture().await;
+        library(&service, library_id("types", 1), VALID, vec![]).await;
+        selection(&service, "typed", library_id("types", 1), "orders.v1.Order").await;
+        service.type_libraries =
+            TypeLibraryGate::with_compile_runner(CompileRunner::new(0, Duration::from_millis(1)));
+        let error = validate(&service)
+            .await
+            .expect_err("compiler timeout must fail the RPC, not diagnose the model");
+        assert_eq!(error.code(), Code::DeadlineExceeded);
+        assert_eq!(
+            error.get_error_details().error_info().unwrap().reason,
+            crate::conv::reason::UNAVAILABLE
+        );
+        for private in ["types", "orders", "Order", "orders.proto"] {
+            assert!(!format!("{error:?}").contains(private));
+        }
+    }
+
+    #[tokio::test]
+    async fn validate_project_memoizes_exact_selections_only_within_each_call() {
+        let service = fixture().await;
+        for (namespace, version) in [("types", 1), ("types", 2), ("other-types", 1)] {
+            library(&service, library_id(namespace, version), VALID, vec![]).await;
+        }
+        for (slug, namespace, version) in [
+            ("first", "types", 1),
+            ("duplicate", "types", 1),
+            ("version", "types", 2),
+            ("namespace", "other-types", 1),
+        ] {
+            selection(
+                &service,
+                slug,
+                library_id(namespace, version),
+                "orders.v1.Order",
+            )
+            .await;
+        }
+        let before = service.type_libraries.contract_compile_calls();
+        let report = validate(&service).await.unwrap().into_inner();
+        assert!(issues(&report).is_empty(), "{report:?}");
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 3);
+        library(
+            &service,
+            library_id("types", 1),
+            "syntax = \"proto3\"; package orders.v1; message Replacement {}",
+            vec![],
+        )
+        .await;
+        let report = validate(&service).await.unwrap().into_inner();
+        let failures = issues(&report);
+        assert_eq!(failures.len(), 2, "{report:?}");
+        for slug in ["first", "duplicate"] {
+            assert!(
+                failures.iter().any(|i| i
+                    .subject
+                    .as_ref()
+                    .and_then(|r| r.id.as_ref())
+                    .is_some_and(|id| id.slug == slug)),
+                "{report:?}"
+            );
+        }
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 6);
+    }
+
+    #[tokio::test]
+    async fn validate_project_distinguishes_message_selections_and_redacts_model_errors() {
+        let service = fixture().await;
+        library(
+            &service,
+            library_id("types", 1),
+            "syntax = \"proto3\"; package orders.v1; message Order {} message Replacement {}",
+            vec![],
+        )
+        .await;
+        selection(
+            &service,
+            "valid",
+            library_id("types", 1),
+            "orders.v1.Replacement",
+        )
+        .await;
+        selection(
+            &service,
+            "removed",
+            library_id("types", 1),
+            "orders.v1.Order",
+        )
+        .await;
+        library(
+            &service,
+            library_id("types", 1),
+            "syntax = \"proto3\"; package orders.v1; message Replacement {}",
+            vec![],
+        )
+        .await;
+        let report = validate(&service).await.unwrap().into_inner();
+        assert_eq!(issues(&report).len(), 1, "{report:?}");
+        assert_eq!(
+            issues(&report)[0]
+                .subject
+                .as_ref()
+                .unwrap()
+                .id
+                .as_ref()
+                .unwrap()
+                .slug,
+            "removed"
+        );
+        for (source, dependencies) in [
+            ("syntax = \"proto3\"; private compiler source", vec![]),
+            (
+                VALID,
+                vec![pb::TypeLibraryRef {
+                    id: Some(pb::Id {
+                        namespace: "types".into(),
+                        slug: "secret-dependency".into(),
+                        version: 1,
+                    }),
+                }],
+            ),
+        ] {
+            library(&service, library_id("types", 1), source, dependencies).await;
+            let report = validate(&service).await.unwrap().into_inner();
+            assert_eq!(issues(&report).len(), 2, "{report:?}");
+            for issue in issues(&report) {
+                for private in [
+                    "orders.proto",
+                    "secret-dependency",
+                    "private compiler source",
+                    "orders.v1",
+                ] {
+                    assert!(!format!("{issue:?}").contains(private), "{issue:?}");
+                }
+            }
+        }
+    }
 }

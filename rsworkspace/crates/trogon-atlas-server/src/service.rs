@@ -6119,7 +6119,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             validation::validate_store_with_architecture_context(&all, &architecture_context);
         store_issues.extend(
             self.specification_type_diagnostics(&all, &architecture_context)
-                .await,
+                .await?,
         );
 
         // Resolve which Domain(s) belong to the scope, then iterate

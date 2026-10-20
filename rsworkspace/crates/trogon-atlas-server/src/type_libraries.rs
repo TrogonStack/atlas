@@ -96,6 +96,8 @@ pub struct TypeLibraryGate {
     runner: CompileRunner,
     limits: CompileLimits,
     pools: Arc<TypePools<LibraryVersion>>,
+    #[cfg(test)]
+    contract_compile_calls: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for TypeLibraryGate {
@@ -106,6 +108,8 @@ impl Default for TypeLibraryGate {
             pools: Arc::new(TypePools::new(runner.clone(), limits)),
             runner,
             limits,
+            #[cfg(test)]
+            contract_compile_calls: Arc::default(),
         }
     }
 }
@@ -130,6 +134,19 @@ struct Registered {
 }
 
 impl TypeLibraryGate {
+    #[cfg(test)]
+    pub(crate) fn with_compile_runner(runner: CompileRunner) -> Self {
+        Self {
+            runner,
+            ..Self::default()
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn contract_compile_calls(&self) -> usize {
+        self.contract_compile_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
     /// Checks a write of `entity`. Returns `None` for any other kind.
     ///
     /// # Errors
@@ -388,6 +405,9 @@ impl TypeLibraryGate {
         let selected = registered
             .get(&key)
             .ok_or_else(|| invalid("selected contract type library is unresolved".into()))?;
+        #[cfg(test)]
+        self.contract_compile_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let compiled = self.compile_registered(&key, selected, &registered).await?;
         if !compiled.message_names().iter().any(|name| name == message) {
             return Err(invalid(
