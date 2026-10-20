@@ -20,6 +20,9 @@ vi.mock('@/components/canvas/Board', () => ({
 vi.mock('@/components/canvas/SequenceBoard', () => ({
   SequenceBoard: () => <div data-testid="sequence-board" />,
 }));
+vi.mock('@/components/canvas/SliceBoard', () => ({
+  SliceBoard: () => <div data-testid="slice-board" />,
+}));
 vi.mock('@/components/canvas/ScreensBoard', () => ({
   ScreensBoard: () => <div data-testid="screens-board" />,
 }));
@@ -168,6 +171,45 @@ describe('ModelShell', () => {
       expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
     });
     expect(screen.queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
+  });
+
+  it('offers the Slice tab only when the model has a slice', async () => {
+    const id = (slug: string) => ({ namespace: 'shop', slug, version: '1' });
+    const noSlices = buildModel([{ command: { id: id('place-order'), title: 'Place order' } }] as never);
+    const { unmount } = render(<ModelShell model={noSlices} scopedTitle="Shop" />);
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
+    });
+    expect(screen.queryByRole('tab', { name: 'Slice' })).toBeNull();
+    unmount();
+
+    const withSlice = buildModel([
+      { command: { id: id('place-order'), title: 'Place order' } },
+      {
+        commandSlice: {
+          id: id('place-order-slice'),
+          title: 'Place order',
+          command: { command: { id: id('place-order') } },
+        },
+      },
+    ] as never);
+    rtlRender(<ModelShell model={withSlice} scopedTitle="Shop" />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: '?view=slice' }),
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Slice' })).toBeDefined();
+    });
+    expect(screen.getByTestId('slice-board')).toBeDefined();
+  });
+
+  it('draws the board for ?view=slice when the model has no slices', async () => {
+    rtlRender(<ModelShell model={buildModel([])} scopedTitle="Empty" />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: '?view=slice' }),
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('board')).toBeDefined();
+    });
+    expect(screen.queryByTestId('slice-board')).toBeNull();
   });
 
   it('aborts the in-flight model fetch on unmount', async () => {

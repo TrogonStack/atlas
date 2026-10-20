@@ -67,6 +67,13 @@ export interface FieldSpec {
   [key: string]: unknown;
 }
 
+/** A field annotated as derived with a non-empty doc, which the validator exempts from sourcing rules. */
+export function isDerivedField(f: FieldSpec): boolean {
+  return decodeAnnotations(f.metadata).some(
+    (a) => a.type === 'DerivedFieldAnnotation' && typeof a.data.doc === 'string' && a.data.doc !== '',
+  );
+}
+
 export function fieldTypeLabel(f: FieldSpec): string | undefined {
   const kind = Object.keys(f.type ?? {})[0];
   if (!kind) return undefined;
@@ -960,9 +967,27 @@ export function storyboardEntryObserver(sb: Entity): StoryboardEntryObserver {
   };
 }
 
-/** Ordered slice keys: storyboard order first, leftovers by slug. */
+/**
+ * One slice per `namespace/slug`, at its highest loaded version. Every view that
+ * lists slices must use this, so they agree on which version a slug means.
+ */
+export function latestSliceBySlug(model: Model): Map<string, SliceView> {
+  const bySlug = new Map<string, SliceView>();
+  for (const s of model.slices) {
+    const k = `${s.entity.id.namespace}/${s.entity.id.slug}`;
+    const cur = bySlug.get(k);
+    if (!cur || versionOf(s.entity.id) > versionOf(cur.entity.id)) bySlug.set(k, s);
+  }
+  return bySlug;
+}
+
+/**
+ * Ordered slices: storyboard order first, leftovers by slug. Only the latest
+ * version of a slug is listed, so an older version no storyboard names does not
+ * show up as a second slice on the board, plan and sequence views.
+ */
 export function orderedSlices(model: Model): SliceView[] {
-  const bySlug = new Map(model.slices.map((s) => [`${s.entity.id.namespace}/${s.entity.id.slug}`, s]));
+  const bySlug = latestSliceBySlug(model);
   const ordered: SliceView[] = [];
   const seen = new Set<string>();
   for (const sb of model.storyboards) {
@@ -977,8 +1002,9 @@ export function orderedSlices(model: Model): SliceView[] {
       }
     }
   }
-  const rest = model.slices
-    .filter((s) => !seen.has(`${s.entity.id.namespace}/${s.entity.id.slug}`))
+  const rest = [...bySlug.entries()]
+    .filter(([k]) => !seen.has(k))
+    .map(([, s]) => s)
     .sort((a, b) => a.entity.id.slug.localeCompare(b.entity.id.slug));
   return [...ordered, ...rest];
 }
