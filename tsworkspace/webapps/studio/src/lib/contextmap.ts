@@ -1,5 +1,5 @@
 import { type Edge, MarkerType, type Node } from '@xyflow/react';
-import { contextSeams, type Entity, type Model, relationshipsOf } from './model';
+import { contextSeams, type Entity, type Model, relationshipsOf, SEAM_EDGE_PREFIX } from './model';
 
 export const CONTEXT_MAP_W = 220;
 export const CONTEXT_MAP_H = 76;
@@ -115,7 +115,7 @@ export function buildContextMap(model: Model): { nodes: Node[]; edges: Edge[] } 
       (r) => r.upstream.namespace === upstream.id.namespace && r.upstream.slug === upstream.id.slug,
     );
     edges.push({
-      id: `seam:${group.upstream}->${group.downstream}`,
+      id: `${SEAM_EDGE_PREFIX}${group.upstream}->${group.downstream}`,
       source: `ctx:${group.upstream}`,
       target: `ctx:${group.downstream}`,
       type: 'smoothstep',

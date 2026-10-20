@@ -14,7 +14,17 @@ export default defineConfig(({ command }) => ({
   // server (`vite dev`) keeps both so authors still see logs in iteration.
   build:
     command === 'build'
-      ? { rolldownOptions: { output: { minify: { compress: { dropConsole: true, dropDebugger: true } } } } }
+      ? {
+          // three.js gets a chunk of its own that only the 3D tabs load. It is
+          // larger than the default warning size, so the limit sits just above it.
+          chunkSizeWarningLimit: 600,
+          rolldownOptions: {
+            output: {
+              minify: { compress: { dropConsole: true, dropDebugger: true } },
+              codeSplitting: { groups: [{ name: 'three', test: /[\\/]node_modules[\\/]three[\\/]/ }] },
+            },
+          },
+        }
       : undefined,
   server: {
     port: 5179,
