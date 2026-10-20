@@ -738,12 +738,16 @@ fn slice_to_flow(
                 // Several upsert slices can each write part of one read model, so a
                 // field this slice lacks is sourced when a sibling slice carries it.
                 let supplied = sibling_supplied_fields(rs, read_model_id, by_key);
-                for endpoint in &mut downstream {
+                // An endpoint that siblings cover completely leaves the link, or it
+                // would read as a read model that declares no fields.
+                downstream.retain_mut(|endpoint| {
+                    let declared = !endpoint.fields.is_empty();
                     endpoint.fields.retain(|f| {
                         !candidate_sources(&f.name, &upstream).is_empty()
                             || !supplied.contains(&f.name.to_ascii_lowercase())
                     });
-                }
+                    !declared || !endpoint.fields.is_empty()
+                });
             }
             FlowLink {
                 upstream,
@@ -1649,6 +1653,55 @@ mod tests {
             .map(|g| g.field_path.as_str())
             .collect();
         assert_eq!(missing, vec!["shipped_at"], "{gaps:?}");
+    }
+
+    #[test]
+    fn slice_fully_covered_by_siblings_is_not_undeclared() {
+        let mut all = sibling_scenario(Vec::new());
+        all.push(stored(event(
+            "order-viewed",
+            "order",
+            vec![field("viewer", string_kind())],
+        )));
+        all.push(stored(read_model_slice(
+            "summary-on-viewed",
+            vec!["order-viewed"],
+            "order-summary",
+        )));
+        let (gaps, _) = check_completeness(
+            &scope(pb::EntityKind::ReadModelSlice, "summary-on-viewed"),
+            &all,
+        );
+        assert_eq!(
+            count(&gaps, pb::completeness_gap::Kind::UndeclaredFields),
+            0,
+            "{gaps:?}"
+        );
+    }
+
+    #[test]
+    fn read_model_without_fields_is_still_undeclared() {
+        let all = vec![
+            stored(swimlane("order", Vec::new())),
+            stored(event(
+                "order-placed",
+                "order",
+                vec![field("order_id", string_kind())],
+            )),
+            stored(read_model("orders", Vec::new(), vec!["order-placed"])),
+            stored(read_model_slice(
+                "orders-slice",
+                vec!["order-placed"],
+                "orders",
+            )),
+        ];
+        let (gaps, _) =
+            check_completeness(&scope(pb::EntityKind::ReadModelSlice, "orders-slice"), &all);
+        assert_eq!(
+            count(&gaps, pb::completeness_gap::Kind::UndeclaredFields),
+            1,
+            "{gaps:?}"
+        );
     }
 
     #[test]
