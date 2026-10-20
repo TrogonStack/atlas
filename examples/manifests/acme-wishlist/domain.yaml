@@ -1,0 +1,13 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata:
+  name: shopping
+  namespace: acme-wishlist
+spec:
+  doc: Helping shoppers find and keep track of products they want.
+  project:
+    id:
+      namespace: acme-wishlist
+      slug: acme-wishlist
+      version: '1'
+  title: Shopping

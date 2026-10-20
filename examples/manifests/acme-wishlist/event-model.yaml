@@ -1,0 +1,69 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: EventModel
+metadata:
+  name: acme-wishlist-model
+  namespace: acme-wishlist
+spec:
+  doc: A shopper saves products to a wishlist.
+  members:
+  - id:
+      namespace: acme-wishlist
+      slug: shopping
+      version: '1'
+    kind: ENTITY_KIND_DOMAIN
+  - id:
+      namespace: acme-wishlist
+      slug: wishlists
+      version: '1'
+    kind: ENTITY_KIND_SUBDOMAIN
+  - id:
+      namespace: acme-wishlist
+      slug: acme-wishlist
+      version: '1'
+    kind: ENTITY_KIND_BOUNDED_CONTEXT
+  - id:
+      namespace: acme-wishlist
+      slug: shopper
+      version: '1'
+    kind: ENTITY_KIND_PERSONA
+  - id:
+      namespace: acme-wishlist
+      slug: wishlist
+      version: '1'
+    kind: ENTITY_KIND_SWIMLANE
+  - id:
+      namespace: acme-wishlist
+      slug: wishlist-item.added
+      version: '1'
+    kind: ENTITY_KIND_EVENT
+  - id:
+      namespace: acme-wishlist
+      slug: add-item-to-wishlist
+      version: '1'
+    kind: ENTITY_KIND_COMMAND
+  - id:
+      namespace: acme-wishlist
+      slug: wishlist-items
+      version: '1'
+    kind: ENTITY_KIND_READ_MODEL
+  - id:
+      namespace: acme-wishlist
+      slug: wishlist-page
+      version: '1'
+    kind: ENTITY_KIND_UI
+  - id:
+      namespace: acme-wishlist
+      slug: add-item-to-wishlist-slice
+      version: '1'
+    kind: ENTITY_KIND_COMMAND_SLICE
+  - id:
+      namespace: acme-wishlist
+      slug: wishlist-items-upsert-rms
+      version: '1'
+    kind: ENTITY_KIND_READ_MODEL_SLICE
+  - id:
+      namespace: acme-wishlist
+      slug: add-to-wishlist
+      version: '1'
+    kind: ENTITY_KIND_STORYBOARD
+  title: Acme Wishlist

@@ -1,0 +1,9 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: shopper
+  namespace: acme-wishlist
+spec:
+  doc: A signed-in customer browsing the store.
+  role: customer
+  title: Shopper

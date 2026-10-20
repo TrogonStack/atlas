@@ -1,0 +1,21 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: wishlist-items-upsert-rms
+  namespace: acme-wishlist
+spec:
+  doc: An added item appears on the wishlist.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-wishlist
+        slug: wishlist-items
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-wishlist
+        slug: wishlist-item.added
+        version: '1'
+  title: 'Projection: wishlist items'

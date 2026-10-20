@@ -1,0 +1,8 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Project
+metadata:
+  name: acme-wishlist
+  namespace: acme-wishlist
+spec:
+  doc: The smallest valid Acme event model, a shopper's wishlist.
+  title: Acme Wishlist
