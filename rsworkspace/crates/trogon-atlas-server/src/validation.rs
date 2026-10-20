@@ -11059,7 +11059,10 @@ mod previously_untested_rules {
             metadata: Vec::new(),
             supersedes: None,
         };
-        trogon_atlas_core::connections::validate_stored_connection_ids(&ui).unwrap();
+        assert_eq!(
+            trogon_atlas_core::connections::validate_stored_connection_ids(&ui),
+            Ok(())
+        );
         let issues = validate_model(&model, &[stored(ui)]);
         let count = issues
             .iter()
