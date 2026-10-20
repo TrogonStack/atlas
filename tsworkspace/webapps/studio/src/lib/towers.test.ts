@@ -77,8 +77,7 @@ describe('buildTowers', () => {
     const boardX = new Map(layoutBoards(m).nodes.map((n) => [n.id, n.position.x]));
     for (const a of spec.nodes) {
       for (const b of spec.nodes) {
-        const sameColumn =
-          boardX.get(a.id) === boardX.get(b.id) && namespaceOf(a.id) === namespaceOf(b.id);
+        const sameColumn = boardX.get(a.id) === boardX.get(b.id) && namespaceOf(a.id) === namespaceOf(b.id);
         expect(a.body.center.y === b.body.center.y).toBe(sameColumn);
       }
     }
