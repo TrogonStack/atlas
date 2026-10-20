@@ -834,8 +834,8 @@ fn check_unique_titles<I, S>(
 // `metadata` as an Info finding. Both are purely informational by design:
 // an open question names something nobody has answered yet, an assumption
 // names something nobody has confirmed yet, and either is a prompt for a
-// human to look, never a blocker. Shared by the entity-level walk in
-// validate_model and the per-scenario walk in validate_scenarios, since
+// human to look, never a blocker. Called for entity metadata and, through
+// push_scenario_annotation_findings, for scenario metadata, since
 // CommandScenario/ReadModelScenario/AutomationScenario carry their own
 // metadata independent of the entity that owns them.
 fn push_annotation_findings(
@@ -885,6 +885,42 @@ fn push_annotation_findings(
                 });
             }
         }
+    }
+}
+
+// Shared by apply (validate_scenarios) and validate_model so both surfaces
+// describe a scenario's annotation with the same finding.
+fn push_scenario_annotation_findings(
+    entity: &pb::Entity,
+    subject: Option<&pb::EntityRef>,
+    issues: &mut Vec<pb::ValidationIssue>,
+) {
+    let scenarios: Vec<(&str, &String, &[prost_types::Any])> = match entity.kind.as_ref() {
+        Some(pb::entity::Kind::CommandSlice(s)) => s
+            .scenarios
+            .iter()
+            .map(|sc| ("command", &sc.title, sc.metadata.as_slice()))
+            .collect(),
+        Some(pb::entity::Kind::ReadModelSlice(s)) => s
+            .scenarios
+            .iter()
+            .map(|sc| ("read-model", &sc.title, sc.metadata.as_slice()))
+            .collect(),
+        Some(pb::entity::Kind::AutomationSlice(s)) => s
+            .scenarios
+            .iter()
+            .map(|sc| ("automation", &sc.title, sc.metadata.as_slice()))
+            .collect(),
+        _ => return,
+    };
+    for (kind, title, metadata) in scenarios {
+        push_annotation_findings(
+            metadata,
+            subject,
+            "scenarios[].metadata",
+            &format!("{kind} scenario {title:?}"),
+            issues,
+        );
     }
 }
 
@@ -1714,15 +1750,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     }
                 }
             }
-            for sc in &s.scenarios {
-                push_annotation_findings(
-                    &sc.metadata,
-                    subject.as_ref(),
-                    "scenarios[].metadata",
-                    &format!("command scenario {:?}", sc.title),
-                    &mut issues,
-                );
-            }
+            push_scenario_annotation_findings(entity, subject.as_ref(), &mut issues);
         }
         Some(pb::entity::Kind::ReadModelSlice(s)) => {
             check_unique_titles(
@@ -1783,15 +1811,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     }
                 }
             }
-            for sc in &s.scenarios {
-                push_annotation_findings(
-                    &sc.metadata,
-                    subject.as_ref(),
-                    "scenarios[].metadata",
-                    &format!("read-model scenario {:?}", sc.title),
-                    &mut issues,
-                );
-            }
+            push_scenario_annotation_findings(entity, subject.as_ref(), &mut issues);
         }
         Some(pb::entity::Kind::AutomationSlice(s)) => {
             check_unique_titles(
@@ -1853,15 +1873,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     }
                 }
             }
-            for sc in &s.scenarios {
-                push_annotation_findings(
-                    &sc.metadata,
-                    subject.as_ref(),
-                    "scenarios[].metadata",
-                    &format!("automation scenario {:?}", sc.title),
-                    &mut issues,
-                );
-            }
+            push_scenario_annotation_findings(entity, subject.as_ref(), &mut issues);
         }
         // The context's root document names its boundary: slug == namespace
         // (Decision #27), which also makes it naturally unique per context.
@@ -5673,11 +5685,16 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // metadata: an open design question, or a belief the design proceeds
     // on that nobody has confirmed. Unlike the orphan walk above, this is
     // not restricted to a handful of entity kinds: either annotation can
-    // land on any member.
+    // land on any member. A member listed twice still reports each
+    // annotation once.
+    let mut annotated = HashSet::new();
     for m in &model.members {
         let (Some(id), Ok(k)) = (m.id.as_ref(), pb::EntityKind::try_from(m.kind)) else {
             continue;
         };
+        if !annotated.insert((k, &id.namespace, &id.slug, id.version)) {
+            continue;
+        }
         let Some(se) = all.iter().find(|se| {
             matches!(
                 (entity_kind(&se.entity), entity_id(&se.entity)),
@@ -5708,6 +5725,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
             &label,
             &mut issues,
         );
+        push_scenario_annotation_findings(&se.entity, subject.as_ref(), &mut issues);
     }
 
     // Decision #33: shape is declared, not inferred. Two entities
@@ -12391,6 +12409,85 @@ mod annotation_finding_tests {
         assert!(hit
             .message
             .contains("the payload always carries a currency"));
+    }
+
+    // validate_event_model must answer "what is still open?" in one call, so
+    // it walks scenario metadata as well as the entity's own metadata.
+    fn command_slice_with_both_metadata(
+        entity_meta: prost_types::Any,
+        scenario_meta: prost_types::Any,
+    ) -> pb::Entity {
+        let mut e =
+            command_slice_with_scenario_metadata("place-slice", "place", vec![scenario_meta]);
+        if let Some(pb::entity::Kind::CommandSlice(s)) = e.kind.as_mut() {
+            s.metadata = vec![entity_meta];
+        }
+        e
+    }
+
+    fn fields_for(issues: &[pb::ValidationIssue], code: &str) -> Vec<String> {
+        let mut f: Vec<String> = issues
+            .iter()
+            .filter(|i| i.code == code)
+            .map(|i| i.subject_field.clone())
+            .collect();
+        f.sort();
+        f
+    }
+
+    #[test]
+    fn validate_model_reports_open_questions_on_slice_and_scenario() {
+        let slice = command_slice_with_both_metadata(
+            open_question_any("who owns refunds?", "alex"),
+            open_question_any("what happens on a tie?", "alex"),
+        );
+        let all = vec![stored(slice.clone())];
+        let m = model(&[(pb::EntityKind::CommandSlice, "place-slice")]);
+        let issues = validate_model(&m, &all);
+        assert_eq!(
+            fields_for(&issues, "OPEN_QUESTION_PRESENT"),
+            vec!["metadata", "scenarios[].metadata"]
+        );
+        let from_model = issues
+            .iter()
+            .find(|i| i.subject_field == "scenarios[].metadata")
+            .unwrap_or_else(|| panic!("expected scenario finding; got {issues:?}"));
+        let from_apply = validate_scenarios(&slice, &[])
+            .into_iter()
+            .find(|i| i.code == "OPEN_QUESTION_PRESENT")
+            .unwrap_or_else(|| panic!("expected scenario finding from validate_scenarios"));
+        assert_eq!(from_model, &from_apply);
+    }
+
+    #[test]
+    fn validate_model_reports_assumptions_on_slice_and_scenario() {
+        let all = vec![stored(command_slice_with_both_metadata(
+            assumption_any("refunds are rare", "alex"),
+            assumption_any("the payload always carries a currency", "alex"),
+        ))];
+        let m = model(&[(pb::EntityKind::CommandSlice, "place-slice")]);
+        let issues = validate_model(&m, &all);
+        assert_eq!(
+            fields_for(&issues, "ASSUMPTION_PRESENT"),
+            vec!["metadata", "scenarios[].metadata"]
+        );
+    }
+
+    #[test]
+    fn validate_model_reports_each_annotation_once_for_a_repeated_member() {
+        let all = vec![stored(command_slice_with_both_metadata(
+            open_question_any("who owns refunds?", "alex"),
+            open_question_any("what happens on a tie?", "alex"),
+        ))];
+        let m = model(&[
+            (pb::EntityKind::CommandSlice, "place-slice"),
+            (pb::EntityKind::CommandSlice, "place-slice"),
+        ]);
+        let issues = validate_model(&m, &all);
+        assert_eq!(
+            fields_for(&issues, "OPEN_QUESTION_PRESENT"),
+            vec!["metadata", "scenarios[].metadata"]
+        );
     }
 }
 
