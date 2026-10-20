@@ -10,6 +10,10 @@ contracts explain current mechanisms and limits; the principles also set
 direction for capabilities that still need to be built. They do not imply
 that every desired interface, profile, or agent workflow already exists.
 
+Atlas is currently greenfield: breaking schema/API changes and recreating
+development data are acceptable. Prefer the intended model over legacy
+compatibility layers. See the [development policy](../wire-compatibility.md#current-development-policy).
+
 ## Principles
 
 - [Backend authority](backend-authority.md): Keep authoritative state and rules in the backend.

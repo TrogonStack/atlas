@@ -2993,6 +2993,7 @@ async fn delete_entity_on_branch_must_see_branch_referrers() {
                     id: Some(id("delref-ns", "referrer-slice", 1)),
                     title: "referrer-slice".into(),
                     emitted_events: vec![pb::EventEdge {
+                        connection_id: None,
                         event: Some(pb::EventRef {
                             id: Some(id("delref-ns", "target", 1)),
                         }),
