@@ -724,6 +724,7 @@ export function ModelShell({
                         model={model}
                         selections={selections}
                         onSelect={selectEntity}
+                        onSelectEdge={selectEdge}
                         focus={focusReq}
                       />
                     </Suspense>

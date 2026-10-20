@@ -1,4 +1,4 @@
-import { PlaneGeometry } from 'three';
+import { Mesh, PlaneGeometry, TubeGeometry } from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SceneSpec } from '@/lib/scene3d';
 
@@ -97,6 +97,33 @@ describe('GraphScene plates', () => {
     disposeSpy.mockClear();
     scene.setSpec(emptySpec([{ id: 'p1', center: { x: 0, y: 0, z: 0 }, width: 200, height: 20, title: 'Lane' }]));
     expect(disposeSpy).not.toHaveBeenCalled();
+    scene.dispose();
+  });
+
+  it('registers link tubes as pick targets so a click hits the tube, not the card behind', () => {
+    const scene = new GraphScene(host, { pick: () => {}, hover: () => {}, lost: () => {} });
+    const link = {
+      id: 'edge-1',
+      from: 'a',
+      to: 'b',
+      points: [
+        { x: 0, y: 0, z: 0 },
+        { x: 10, y: 0, z: 20 },
+        { x: 20, y: 0, z: 20 },
+        { x: 30, y: 0, z: 0 },
+      ],
+      color: '#71717a',
+      radius: 0.55,
+      kind: 'edge' as const,
+    };
+    scene.setSpec({ ...emptySpec([]), links: [link] });
+    const tubes: Mesh[] = [];
+    scene['content'].traverse((obj) => {
+      if (obj instanceof Mesh && obj.geometry instanceof TubeGeometry) tubes.push(obj);
+    });
+    expect(tubes).toHaveLength(1);
+    expect(tubes[0].userData.pick).toEqual({ type: 'link', link });
+    expect(scene['pickables']).toContain(tubes[0]);
     scene.dispose();
   });
 });

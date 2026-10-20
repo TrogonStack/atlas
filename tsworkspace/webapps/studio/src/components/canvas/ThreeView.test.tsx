@@ -13,7 +13,7 @@ vi.mock('@/components/canvas/three/LaneMeshBoard', () => {
 import { buildModel } from '@/lib/model';
 import { ThreeView } from './ThreeView';
 
-const props = { model: buildModel([]), selections: [], onSelect: () => {} };
+const props = { model: buildModel([]), selections: [], onSelect: () => {}, onSelectEdge: () => {} };
 
 describe('ThreeView', () => {
   beforeEach(() => {

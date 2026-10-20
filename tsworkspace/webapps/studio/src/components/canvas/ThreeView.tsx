@@ -5,7 +5,7 @@
 
 import { Box } from 'lucide-react';
 import { lazy, Suspense, useState } from 'react';
-import type { Selection } from '@/components/canvas/Board';
+import type { SelectedEdge, Selection } from '@/components/canvas/Board';
 import type { FocusRequest } from '@/components/canvas/useFocusNode';
 import { BoardEmptyState } from '@/components/ui/empty-state';
 import type { Model } from '@/lib/model';
@@ -25,6 +25,7 @@ export interface ThreeBoardProps {
     instance?: string,
     momentKey?: string,
   ) => void;
+  onSelectEdge: (edge: SelectedEdge, additive?: boolean) => void;
   focus?: FocusRequest;
 }
 

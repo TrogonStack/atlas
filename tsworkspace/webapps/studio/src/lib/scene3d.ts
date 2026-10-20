@@ -3,6 +3,7 @@
 // draws any SceneSpec. The layouts stay pure and testable, and the views
 // share picking, selection, camera presets and disposal.
 
+import type { BoardEdgeData } from './layout';
 import type { Entity, EntityKind } from './model';
 import { add, type Body, dot, normalize, scale, sub, type Vec3, vec } from './ports';
 
@@ -50,6 +51,8 @@ export interface SceneLink {
   color: string;
   radius: number;
   kind: 'edge' | 'cite';
+  /** Board connection payload; present when `kind` is `edge` so a pick can select the connection. */
+  edge?: BoardEdgeData;
 }
 
 /** Printed text on a flat plate facing +z: lane labels and slice, storyboard and context headers. */

@@ -53,6 +53,19 @@ describe('buildLaneMesh', () => {
     for (const l of spec.links.filter((l) => l.kind === 'edge')) expect(edgeIds.has(l.id)).toBe(true);
   });
 
+  it('carries the Board edge payload on every edge tube so a pick can select the connection', () => {
+    const m = model();
+    const spec = buildLaneMesh(m);
+    const { edges } = layoutBoards(m);
+    const byId = new Map(edges.map((e) => [e.id, e]));
+    for (const l of spec.links.filter((l) => l.kind === 'edge')) {
+      const board = byId.get(l.id);
+      expect(l.edge).toEqual(board?.data);
+      expect(l.edge?.source).toBeDefined();
+      expect(l.edge?.target).toBeDefined();
+    }
+  });
+
   it('stacks the stream lanes in swimlane order, top to bottom', () => {
     const spec = buildLaneMesh(model());
     const rowOf = (slug: string) => {

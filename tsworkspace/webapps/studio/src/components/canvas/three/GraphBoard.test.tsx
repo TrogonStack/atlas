@@ -48,6 +48,9 @@ import { GraphBoard } from './GraphBoard';
 const model = buildModel(storefrontEntities() as never);
 const spec = buildLaneMesh(model);
 const calls = (name: string) => fake.calls.filter(([n]) => n === name).map(([, arg]) => arg);
+const board = (extra: Partial<Parameters<typeof GraphBoard>[0]> = {}) => (
+  <GraphBoard spec={spec} selections={[]} onSelect={() => {}} onSelectEdge={() => {}} {...extra} />
+);
 
 describe('GraphBoard', () => {
   beforeEach(() => {
@@ -60,20 +63,20 @@ describe('GraphBoard', () => {
 
   it('shows a plain message when the browser cannot start WebGL', () => {
     fake.fail = true;
-    render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
+    render(board());
     expect(screen.getByText('This view needs WebGL')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Front' })).toBeNull();
   });
 
   it('shows a message when the browser takes the graphics context back', () => {
-    render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
+    render(board());
     act(() => fake.events?.lost());
     expect(screen.getByText('The 3D view stopped')).toBeDefined();
   });
 
   it('frees the scene when setup fails after WebGL starts', () => {
     fake.failOnSetSpec = true;
-    const { unmount } = render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
+    const { unmount } = render(board());
     expect(screen.getByText('This view needs WebGL')).toBeDefined();
     expect(calls('dispose')).toHaveLength(1);
     unmount();
@@ -81,7 +84,7 @@ describe('GraphBoard', () => {
   });
 
   it('opens on the overview and frees the scene on unmount', () => {
-    const { unmount } = render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
+    const { unmount } = render(board());
     expect(calls('setSpec')).toEqual(['overview']);
     unmount();
     expect(calls('dispose')).toHaveLength(1);
@@ -89,7 +92,7 @@ describe('GraphBoard', () => {
 
   it('passes a click on a card to onSelect with its Board occurrence', () => {
     const onSelect = vi.fn();
-    render(<GraphBoard spec={spec} selections={[]} onSelect={onSelect} />);
+    render(board({ onSelect }));
     const node = spec.nodes[0];
     act(() => fake.events?.pick({ type: 'node', node }, true));
     expect(onSelect).toHaveBeenCalledWith(node.entity.key, node.occId, true, node.instanceUid, node.momentKey);
@@ -97,9 +100,21 @@ describe('GraphBoard', () => {
     expect(onSelect).toHaveBeenLastCalledWith(undefined);
   });
 
+  it('passes a click on an edge tube to onSelectEdge with the Board connection', () => {
+    const onSelect = vi.fn();
+    const onSelectEdge = vi.fn();
+    render(board({ onSelect, onSelectEdge }));
+    const link = spec.links.find((l) => l.kind === 'edge' && l.edge);
+    if (!link?.edge) throw new Error('no edge link');
+    act(() => fake.events?.pick({ type: 'link', link }, true));
+    expect(onSelectEdge).toHaveBeenCalledWith({ id: link.id, data: link.edge }, true);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
   it('keeps the selection when a code file is clicked', () => {
     const onSelect = vi.fn();
-    render(<GraphBoard spec={spec} selections={[]} onSelect={onSelect} />);
+    const onSelectEdge = vi.fn();
+    render(board({ onSelect, onSelectEdge }));
     const file = {
       id: 'file:x',
       body: { id: 'file:x', center: { x: 0, y: 0, z: 0 }, shape: { type: 'sphere' as const, radius: 1 } },
@@ -110,26 +125,27 @@ describe('GraphBoard', () => {
     };
     act(() => fake.events?.pick({ type: 'file', file }, false));
     expect(onSelect).not.toHaveBeenCalled();
+    expect(onSelectEdge).not.toHaveBeenCalled();
   });
 
   it('shows the selection in the scene', () => {
     const node = spec.nodes[0];
     const selections: Selection[] = [{ type: 'entity', key: node.entity.key, occId: node.id }];
-    const { rerender } = render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
-    rerender(<GraphBoard spec={spec} selections={selections} onSelect={() => {}} />);
+    const { rerender } = render(board());
+    rerender(board({ selections }));
     expect(calls('setFocus').at(-1)).toEqual([node.id]);
   });
 
   it('flies to the card a focus request names', () => {
     const node = spec.nodes.find((n) => n.entity.id.slug === 'place-order' && n.entity.kind === 'command');
     if (!node) throw new Error('no place-order card');
-    const { rerender } = render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
-    rerender(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} focus={{ key: node.entity.key, n: 1 }} />);
+    const { rerender } = render(board());
+    rerender(board({ focus: { key: node.entity.key, n: 1 } }));
     expect(calls('focusOn')).toEqual([[node.id]]);
   });
 
   it('moves the camera to the presets and steps through the slices', () => {
-    render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
+    render(board());
     fireEvent.click(screen.getByRole('button', { name: 'Front' }));
     fireEvent.click(screen.getByRole('button', { name: 'Overview' }));
     fireEvent.click(screen.getByRole('button', { name: 'Next slice' }));
@@ -141,7 +157,9 @@ describe('GraphBoard', () => {
   });
 
   it('says so when the model has nothing to draw', () => {
-    render(<GraphBoard spec={buildLaneMesh(buildModel([]))} selections={[]} onSelect={() => {}} />);
+    render(
+      <GraphBoard spec={buildLaneMesh(buildModel([]))} selections={[]} onSelect={() => {}} onSelectEdge={() => {}} />,
+    );
     expect(screen.getByText('Nothing to draw yet')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Next slice' })).toBeNull();
   });

@@ -30,6 +30,17 @@ function describe(pick: ScenePick): { title: string; detail: string } {
     const { plate } = pick;
     return { title: plate.title, detail: plate.kicker ?? (plate.kind ? kindColors(plate.kind).label : '') };
   }
+  if (pick.type === 'link') {
+    const { link } = pick;
+    if (link.kind === 'edge' && link.edge) {
+      const { relation, source, target } = link.edge;
+      return {
+        title: relation || 'connection',
+        detail: `${source.title} → ${target.title}`,
+      };
+    }
+    return { title: 'Code reference', detail: 'Cite link to a file on the wall' };
+  }
   const { file } = pick;
   const cites = `cited by ${file.citedBy.length} ${file.citedBy.length === 1 ? 'entity' : 'entities'}`;
   return { title: file.path, detail: [file.repo, ...file.symbols, cites].join(' · ') };
@@ -39,6 +50,7 @@ export function GraphBoard({
   spec,
   selections,
   onSelect,
+  onSelectEdge,
   focus,
 }: Omit<ThreeBoardProps, 'model'> & { spec: SceneSpec }) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -52,6 +64,8 @@ export function GraphBoard({
   // Read through refs so the scene is created once, not on every new callback or selection.
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const onSelectEdgeRef = useRef(onSelectEdge);
+  onSelectEdgeRef.current = onSelectEdge;
   const specRef = useRef(spec);
   specRef.current = spec;
   const focusStateRef = useRef(focusState);
@@ -72,8 +86,10 @@ export function GraphBoard({
             onSelectRef.current(n.entity.key, n.occId, additive, n.instanceUid, n.momentKey);
           } else if (pick.type === 'plate' && pick.plate.entity) {
             onSelectRef.current(pick.plate.entity.key, undefined, additive);
+          } else if (pick.type === 'link' && pick.link.kind === 'edge' && pick.link.edge) {
+            onSelectEdgeRef.current({ id: pick.link.id, data: pick.link.edge }, additive);
           }
-          // A code file is not a model entity, so a click on one keeps the selection.
+          // A code file (or cite tube) is not a model entity, so a click keeps the selection.
         },
         hover: (pick, at) => {
           const tip = tipRef.current;

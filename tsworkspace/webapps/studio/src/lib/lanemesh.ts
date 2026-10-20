@@ -7,7 +7,15 @@
 
 import type { Edge, Node } from '@xyflow/react';
 import { codeRefsOf, FILE_SIZE, layoutCodeWall, type WallEntry } from './codewall';
-import { type GapHeaderData, type LaneData, NODE_H, NODE_W, type SliceHeaderData, type StickyData } from './layout';
+import {
+  type BoardEdgeData,
+  type GapHeaderData,
+  type LaneData,
+  NODE_H,
+  NODE_W,
+  type SliceHeaderData,
+  type StickyData,
+} from './layout';
 import { type Entity, isSeamEdge, type Model, orphanOf } from './model';
 import { layoutBoards, namespaceOf } from './multiboard';
 import {
@@ -219,6 +227,7 @@ export function buildLaneMesh(model: Model): SceneSpec {
       color: strokeOf(e),
       radius: isSeamEdge(e.id) ? 0.8 : 0.55,
       kind: 'edge',
+      edge: e.data as BoardEdgeData,
     });
   });
   cites.forEach(({ card, file }, i) => {

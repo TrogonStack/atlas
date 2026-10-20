@@ -61,7 +61,8 @@ import { paintTexture } from './paint';
 export type ScenePick =
   | { type: 'node'; node: SceneNode }
   | { type: 'plate'; plate: ScenePlate }
-  | { type: 'file'; file: SceneFile };
+  | { type: 'file'; file: SceneFile }
+  | { type: 'link'; link: SceneLink };
 
 export interface SceneEvents {
   pick(pick: ScenePick | undefined, additive: boolean): void;
@@ -633,7 +634,10 @@ export class GraphScene {
     const base = link.kind === 'cite' ? 0.35 : 0.6;
     const material = new MeshBasicMaterial({ color: link.color, transparent: true, opacity: base, depthWrite: false });
     const mesh = new Mesh(new TubeGeometry(curve, 32, link.radius, 6, false), material);
+    // Tubes arc in front of cards; without a pick target the card behind steals the hit.
+    mesh.userData.pick = { type: 'link', link } satisfies ScenePick;
     this.content.add(mesh);
+    this.pickables.push(mesh);
     this.links.set(link.id, { link, material, curve, length: curve.getLength(), base });
   }
 
