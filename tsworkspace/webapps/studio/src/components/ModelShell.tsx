@@ -12,6 +12,7 @@ import { DomainChartBoard } from '@/components/canvas/DomainChartBoard';
 import { PlanBoard } from '@/components/canvas/PlanBoard';
 import { ScreensBoard } from '@/components/canvas/ScreensBoard';
 import { SequenceBoard } from '@/components/canvas/SequenceBoard';
+import { SliceBoard } from '@/components/canvas/SliceBoard';
 import type { FocusRequest } from '@/components/canvas/useFocusNode';
 import { EdgeInspector } from '@/components/EdgeInspector';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -42,11 +43,12 @@ function edgeIdentity(data: BoardEdgeData): string {
   return `${data.source.key}\0${data.relation}\0${data.target.key}`;
 }
 
-const VIEWS = ['board', 'sequence', 'ui', 'plan', 'domain'] as const;
+const VIEWS = ['board', 'sequence', 'slice', 'ui', 'plan', 'domain'] as const;
 type View = (typeof VIEWS)[number];
 const VIEW_LABELS: Record<View, string> = {
   board: 'Board',
   sequence: 'Sequence',
+  slice: 'Slice',
   ui: 'UI',
   plan: 'Plan',
   domain: 'Domain',
@@ -526,11 +528,13 @@ export function ModelShell({
   }, [model, selectAndFocus, focusParam, setFocusParam]);
 
   // A view with nothing to draw is not offered: an EM without UI screens
-  // (or slices for the plan, or knowledge entities for the domain chart)
+  // (or slices for the slice view and the plan, or knowledge entities for
+  // the domain chart)
   // would put an empty canvas behind a clickable tab. Board and sequence
   // always show: they are the model itself.
   const availableViews = VIEWS.filter((v) => {
     if (v === 'ui') return model.entities.some((e) => e.kind === 'ui');
+    if (v === 'slice') return model.slices.length > 0;
     if (v === 'plan')
       return model.entities.some(
         (e) =>
@@ -689,6 +693,10 @@ export function ModelShell({
                       focus={focusReq}
                       branchStatusLookup={branchLookup}
                     />
+                  </ErrorBoundary>
+                ) : activeView === 'slice' ? (
+                  <ErrorBoundary>
+                    <SliceBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
                   </ErrorBoundary>
                 ) : activeView === 'ui' ? (
                   <ErrorBoundary>
