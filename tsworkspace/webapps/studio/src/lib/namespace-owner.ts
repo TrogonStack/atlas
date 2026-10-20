@@ -27,12 +27,12 @@ export function groupByOwner<T>(
   namespaceOf: (item: T) => string,
   registry: readonly NamespaceRegistryRow[] | undefined,
 ): OwnerGroup<T>[] {
-  // Entity keys carry the namespace id; unregistered rows have no id, only a name.
+  // Entity keys carry the namespace id, so a minted row's name must not claim
+  // a key; only unregistered rows, which have no id, are matched by name.
   const ownerOf = new Map<string, string | null>();
   for (const r of registry ?? []) {
-    const owner = r.registered ? ownerLabel(r) : null;
-    if (r.id !== '') ownerOf.set(r.id, owner);
-    if (!ownerOf.has(r.name)) ownerOf.set(r.name, owner);
+    if (r.id !== '') ownerOf.set(r.id, r.registered ? ownerLabel(r) : null);
+    else if (!ownerOf.has(r.name)) ownerOf.set(r.name, null);
   }
 
   const tree = new Map<string | null, Map<string, T[]>>();

@@ -68,6 +68,18 @@ describe('groupByOwner', () => {
     ]);
   });
 
+  it('leaves an unregistered name ownerless when a minted row shares that name', () => {
+    const rows = [
+      row({ id: 'ns_01', name: 'acme-billing', parent: 'acme' }),
+      row({ id: '', name: 'acme-billing', registered: false }),
+    ];
+    const items = [model('acme-billing', 'u'), model('ns_01', 'm')];
+    expect(shape(groupByOwner(items, (m) => m.namespace, rows))).toEqual([
+      { owner: 'acme', namespaces: [['ns_01', ['m']]] },
+      { owner: null, namespaces: [['acme-billing', ['u']]] },
+    ]);
+  });
+
   it('keeps an owner literally named unregistered apart from the no-owner group', () => {
     const rows = [
       row({ name: 'acme-orders', parent: 'unregistered' }),
