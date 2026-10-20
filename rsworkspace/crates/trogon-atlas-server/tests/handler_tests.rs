@@ -531,7 +531,9 @@ async fn extract_subgraph_happy_path_returns_event_model() {
 struct FailingBatchStore {
     inner: NatsStore,
     failure: fn() -> StoreError,
+    fail_batches: bool,
     resource_scan_gate: Option<Arc<ResourceScanGate>>,
+    reference_scans: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Default)]
@@ -551,7 +553,9 @@ impl FailingBatchStore {
         Self {
             inner: nats.store().await,
             failure,
+            fail_batches: true,
             resource_scan_gate: None,
+            reference_scans: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -687,13 +691,14 @@ impl Store for FailingBatchStore {
         self.inner.delete(kind, id, expected_etag, ctx).await
     }
 
-    async fn has_incoming_reference(
+    async fn referenced_targets(
         &self,
-        kind: pb::EntityKind,
-        id: &pb::Id,
+        targets: &[pb::EntityKey],
         branch: Option<&str>,
-    ) -> trogon_atlas_store::StoreResult<bool> {
-        self.inner.has_incoming_reference(kind, id, branch).await
+    ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
+        self.reference_scans
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.referenced_targets(targets, branch).await
     }
 
     async fn list(
@@ -737,10 +742,14 @@ impl Store for FailingBatchStore {
 
     async fn batch_apply(
         &self,
-        _ops: &[MutationOp],
-        _ctx: WriteContext<'_>,
+        ops: &[MutationOp],
+        ctx: WriteContext<'_>,
     ) -> trogon_atlas_store::StoreResult<Vec<MutationOutcome>> {
-        Err((self.failure)())
+        if self.fail_batches {
+            Err((self.failure)())
+        } else {
+            self.inner.batch_apply(ops, ctx).await
+        }
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ChangeRecord> {
@@ -3897,4 +3906,78 @@ async fn owner_reverse_index_does_not_cache_scan_invalidated_by_concurrent_write
     let owner = references[0].from.as_ref().unwrap();
     assert_eq!(owner.kind, pb::EntityKind::DataStore as i32);
     assert_eq!(owner.id, Some(id(&namespace, "cache", 1)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_delete_checks_all_targets_in_one_reference_scan() {
+    let mut backend = FailingBatchStore::new().await;
+    backend.fail_batches = false;
+    let backend = Arc::new(backend);
+    for slug in ["one", "two", "three"] {
+        backend
+            .create(
+                pb::EntityKind::Event,
+                &make_event("public", slug, 1),
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+    }
+    let service =
+        EventModelServiceImpl::try_new(backend.clone(), ServerMetrics::default()).unwrap();
+    for validate_only in [true, false] {
+        backend
+            .reference_scans
+            .store(0, std::sync::atomic::Ordering::SeqCst);
+        let response = service
+            .batch_mutate(Request::new(pb::BatchMutateRequest {
+                validate_only,
+                ops: ["one", "two", "three"]
+                    .into_iter()
+                    .map(|slug| pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                            kind: pb::EntityKind::Event as i32,
+                            id: Some(id("public", slug, 1)),
+                            ..Default::default()
+                        })),
+                    })
+                    .collect(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            response.status,
+            if validate_only {
+                pb::batch_mutate_response::Status::Validated
+            } else {
+                pb::batch_mutate_response::Status::Applied
+            } as i32,
+            "{response:?}"
+        );
+        assert_eq!(
+            backend
+                .reference_scans
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+    backend
+        .reference_scans
+        .store(0, std::sync::atomic::Ordering::SeqCst);
+    service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            validate_only: true,
+            ops: vec![],
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        backend
+            .reference_scans
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
 }

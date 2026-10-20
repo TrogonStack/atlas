@@ -182,6 +182,17 @@ async fn untyped_reference_guard_preserves_first_existing_slice_kind_precedence(
         .await
         .unwrap();
     store.create_branch("untyped", "").await.unwrap();
+    let targets = [
+        pb::EntityKey::new(pb::EntityKind::CommandSlice, &slice_id),
+        pb::EntityKey::new(pb::EntityKind::AutomationSlice, &slice_id),
+    ];
+    assert_eq!(
+        store
+            .referenced_targets(&targets, Some("untyped"))
+            .await
+            .unwrap(),
+        std::collections::HashSet::from([targets[0].clone()])
+    );
     assert!(store
         .has_incoming_reference(pb::EntityKind::CommandSlice, &slice_id, Some("untyped"))
         .await
@@ -199,6 +210,13 @@ async fn untyped_reference_guard_preserves_first_existing_slice_kind_precedence(
         )
         .await
         .unwrap();
+    assert_eq!(
+        store
+            .referenced_targets(&targets, Some("untyped"))
+            .await
+            .unwrap(),
+        std::collections::HashSet::from([targets[1].clone()])
+    );
     assert!(store
         .has_incoming_reference(pb::EntityKind::AutomationSlice, &slice_id, Some("untyped"))
         .await
@@ -207,4 +225,78 @@ async fn untyped_reference_guard_preserves_first_existing_slice_kind_precedence(
         .has_incoming_reference(pb::EntityKind::AutomationSlice, &slice_id, None)
         .await
         .unwrap());
+}
+
+#[tokio::test]
+async fn multi_target_reference_guard_uses_one_merged_world() {
+    use std::collections::HashSet;
+
+    let nats = trogon_atlas_testsupport::shared().await;
+    let store = nats.store().await;
+    let key = |slug| pb::EntityKey::new(pb::EntityKind::ExternalSystem, &id(slug));
+    for (target, owner) in [("old", "replacement"), ("removed", "tombstone")] {
+        store
+            .create(
+                pb::EntityKind::Processor,
+                &processor(target, owner),
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+    }
+    store.create_branch("multi", "").await.unwrap();
+    store
+        .put(
+            pb::EntityKind::Processor,
+            &processor("new", "replacement"),
+            false,
+            WriteContext::branch("multi"),
+        )
+        .await
+        .unwrap();
+    store
+        .delete(
+            pb::EntityKind::Processor,
+            &id("tombstone"),
+            None,
+            WriteContext::branch("multi"),
+        )
+        .await
+        .unwrap();
+    store
+        .create(
+            pb::EntityKind::Processor,
+            &processor("added", "branch-only"),
+            WriteContext::branch("multi"),
+        )
+        .await
+        .unwrap();
+    let targets = [
+        key("old"),
+        key("removed"),
+        key("new"),
+        key("added"),
+        key("absent"),
+        key("new"),
+    ];
+    assert_eq!(
+        store
+            .referenced_targets(&targets, Some("multi"))
+            .await
+            .unwrap(),
+        HashSet::from([key("new"), key("added")])
+    );
+    assert_eq!(
+        store.referenced_targets(&targets, None).await.unwrap(),
+        HashSet::from([key("old"), key("removed")])
+    );
+    assert!(store
+        .referenced_targets(&[], None)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(matches!(
+        store.referenced_targets(&targets, Some("missing")).await,
+        Err(StoreError::NotFound)
+    ));
 }

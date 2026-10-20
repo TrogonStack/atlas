@@ -257,11 +257,17 @@ supplement capped model projections so a missing projection row cannot silently
 remove an inbound architecture dependency. Exceeding this visible scan budget
 returns `RESOURCE_EXHAUSTED`.
 
+Delete responses use the capped model snapshot for visible referrer reporting
+when that resource scan budget is exceeded. Their referrer lists can therefore
+be incomplete, including for forced and preview deletes. Other scan errors
+remain errors. This reporting limit does not authorize a guarded deletion.
+
 The safe-deletion guard separately checks for an incoming reference to the
-selected target across namespaces, without returning hidden referrer data or
-applying a global resource row limit. It streams candidate keys and stops at
-the first matching reference, with bounded concurrent reads and a total timeout.
-A negative result can require scanning every candidate key. This is not a
-persistent reverse index. Timeout or backend failure refuses deletion rather
-than authorizing a mutation from an incomplete scan. Branch checks use the
-merged branch view, including replacements and removals.
+selected targets across namespaces, without returning hidden referrer data or
+applying a global resource row limit. A guarded batch checks its targets in one
+scan. The scan streams candidate keys and stops when every requested target has
+a matching reference, with bounded concurrent reads and a total timeout.
+Proving a target unreferenced can require scanning every candidate key. This is
+not a persistent reverse index. Timeout or backend failure refuses deletion
+rather than authorizing a mutation from an incomplete scan. Branch checks use
+the merged branch view, including replacements and removals.

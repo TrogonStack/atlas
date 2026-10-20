@@ -34,7 +34,7 @@
 //! journal entry recovery will act on. Recovery assumes a single writer.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -57,7 +57,8 @@ use prost::Message as _;
 use tokio::sync::{broadcast, Notify};
 use trogon_atlas_core::{NamespaceId, NamespaceName, OwnerId, WriterRole};
 use trogon_atlas_proto::{
-    canonical::ALL_KINDS, entity::Kind as EntityOneof, Entity, EntityKind, EntityRef, Id,
+    canonical::ALL_KINDS, entity::Kind as EntityOneof, Entity, EntityKey, EntityKind, EntityRef,
+    Id, IdKey,
 };
 
 use crate::{
@@ -3314,13 +3315,15 @@ impl Store for NatsStore {
         }
     }
 
-    #[tracing::instrument(skip(self))]
-    async fn has_incoming_reference(
+    #[tracing::instrument(skip(self, targets))]
+    async fn referenced_targets(
         &self,
-        kind: EntityKind,
-        id: &Id,
+        targets: &[EntityKey],
         branch: Option<&str>,
-    ) -> StoreResult<bool> {
+    ) -> StoreResult<HashSet<EntityKey>> {
+        if targets.is_empty() {
+            return Ok(HashSet::new());
+        }
         tokio::time::timeout(LIST_TOTAL_TIMEOUT, async {
             if let Some(branch) = branch {
                 let metadata = kv_entry_timeout(&self.branches_kv, branch_meta_key(branch)).await?;
@@ -3328,23 +3331,31 @@ impl Store for NatsStore {
                     return Err(StoreError::NotFound);
                 }
             }
-            let mut untyped_kind = None;
-            if matches!(
-                kind,
-                EntityKind::CommandSlice
-                    | EntityKind::ReadModelSlice
-                    | EntityKind::AutomationSlice
-                    | EntityKind::UiSlice
-            ) {
+            let targets: HashSet<_> = targets.iter().cloned().collect();
+            let slice_ids: HashSet<_> = targets
+                .iter()
+                .filter(|target| {
+                    matches!(
+                        target.kind,
+                        EntityKind::CommandSlice
+                            | EntityKind::ReadModelSlice
+                            | EntityKind::AutomationSlice
+                            | EntityKind::UiSlice
+                    )
+                })
+                .map(|target| IdKey::new(&target.id()))
+                .collect();
+            let mut untyped_kinds = HashMap::new();
+            for id_key in slice_ids {
                 for candidate in [
                     EntityKind::CommandSlice,
                     EntityKind::ReadModelSlice,
                     EntityKind::AutomationSlice,
                     EntityKind::UiSlice,
                 ] {
-                    match self.get(candidate, id, branch).await {
+                    match self.get(candidate, &id_key.id(), branch).await {
                         Ok(_) => {
-                            untyped_kind = Some(candidate);
+                            untyped_kinds.insert(id_key, candidate);
                             break;
                         }
                         Err(StoreError::NotFound) => {}
@@ -3352,6 +3363,7 @@ impl Store for NatsStore {
                     }
                 }
             }
+            let mut referenced = HashSet::new();
             for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
                 if delta_keys && branch.is_none() {
                     continue;
@@ -3360,6 +3372,8 @@ impl Store for NatsStore {
                     .await
                     .map_err(|_| StoreError::Backend("reference key scan: timeout".into()))?
                     .map_err(|error| StoreError::Backend(format!("reference key scan: {error}")))?;
+                let targets = &targets;
+                let untyped_kinds = &untyped_kinds;
                 let mut checks = keys
                     .map(|item| async move {
                         let key = item.map_err(|error| {
@@ -3372,31 +3386,34 @@ impl Store for NatsStore {
                             parse_entity_key(&key)
                         };
                         let Some((owner_kind, owner_id)) = owner else {
-                            return Ok(false);
+                            return Ok(Vec::new());
                         };
                         // Merged gets suppress tombstones and replaced baseline references.
                         let stored = match self.get(owner_kind, &owner_id, branch).await {
                             Ok(stored) => stored,
-                            Err(StoreError::NotFound) => return Ok(false),
+                            Err(StoreError::NotFound) => return Ok(Vec::new()),
                             Err(error) => return Err(error),
                         };
                         Ok(trogon_atlas_core::refs::outbound_refs(&stored.entity)
                             .iter()
-                            .any(|reference| {
-                                reference.to_id == *id
-                                    && (reference.to_kind == Some(kind)
-                                        || (reference.to_kind.is_none()
-                                            && untyped_kind == Some(kind)))
-                            }))
+                            .filter_map(|reference| {
+                                let kind = reference.to_kind.or_else(|| {
+                                    untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
+                                })?;
+                                let target = EntityKey::new(kind, &reference.to_id);
+                                targets.contains(&target).then_some(target)
+                            })
+                            .collect::<Vec<_>>())
                     })
                     .buffer_unordered(LIST_FETCH_CONCURRENCY);
                 while let Some(found) = checks.next().await {
-                    if found? {
-                        return Ok(true);
+                    referenced.extend(found?);
+                    if referenced.len() == targets.len() {
+                        return Ok(referenced);
                     }
                 }
             }
-            Ok(false)
+            Ok(referenced)
         })
         .await
         .map_err(|_| StoreError::Backend("reference scan exceeded its time limit".into()))?

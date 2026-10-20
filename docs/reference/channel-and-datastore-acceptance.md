@@ -102,6 +102,8 @@ unauthorized callers must not receive hidden entity data through diagnostics.
 | Change an association target while retaining its association ID | Reject; replace the occurrence through the identity contract. |
 | Safely delete a selected AutomationSlice or attached ReadModel | Report the inbound dependency and refuse the deletion. Explicit forced deletion preserves the architecture resource and surfaces its unresolved reference; it does not retarget it. |
 | Safely delete an unreferenced entity while foreign namespaces exceed the resource scan budget | Permit deletion without scanning foreign resources into the caller's reference index. |
+| Delete or preview deletion while unrestricted visible resources exceed the scan budget | Permit forced and unreferenced guarded deletes, individually and in batches; visible referrer reporting may be incomplete, while referenced targets remain protected by the complete safety scan. |
+| Guard a batch with multiple delete targets | Check the target set in one complete reference scan and preserve the earliest failing operation and hidden-referrer privacy. |
 | Safely delete a target with only hidden referrers, individually or in a guarded batch | Refuse deletion, including batch preview, without exposing hidden owner keys, titles or relationship details. |
 | Remove a selected observation through an otherwise accepted guarded edit | Preserve the Channel and diagnose its unresolved binding. An attempt to write that resource with the same unresolved binding fails validation. |
 | Retarget a selected source or its paired Processor | A changed behavioral occurrence gets a fresh ID. Existing Channel bindings do not follow it and require explicit repair. |
@@ -165,10 +167,11 @@ or fitness runtime result is implied by passing this fixture.
   distinguish permitted unresolved declarations from invalid selected resource
   writes. [Validation context regressions](../../rsworkspace/crates/trogon-atlas-server/tests/architecture_validation_context.rs)
   exercise exact anchor resolution outside the model projection.
-- [Scoped deletion regression](../../rsworkspace/crates/trogon-atlas-server/tests/resource_delete_scope.rs)
-  covers foreign resource volume, hidden dependencies, batch preview/apply and
+- [Deletion scope regressions](../../rsworkspace/crates/trogon-atlas-server/tests/resource_delete_scope.rs)
+  cover unrestricted and foreign resource volume, hidden dependencies, batch preview/apply and
   diagnostic privacy. [Store reference guard tests](../../rsworkspace/crates/trogon-atlas-store/tests/reference_guards.rs)
-  cover merged branch references and untyped slice resolution precedence.
+  cover multi-target scans, merged branch references and untyped slice resolution
+  precedence.
 - [Resource diff tests](../../rsworkspace/crates/trogon-atlas-server/src/diff.rs)
   cover canonical values, map ordering, metadata rendering and claim presence.
 - [Core association tests](../../rsworkspace/crates/trogon-atlas-core/tests/resource_connections.rs)

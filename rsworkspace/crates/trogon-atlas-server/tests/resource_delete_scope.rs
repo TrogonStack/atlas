@@ -85,7 +85,7 @@ async fn foreign_resource_volume_does_not_block_bound_delete_or_expose_hidden_re
     }
     let own = namespaces[0].clone();
     let foreign = namespaces[1].clone();
-    for slug in ["unreferenced", "hidden-target"] {
+    for slug in ["unreferenced", "batch-unreferenced", "hidden-target"] {
         backend
             .create(
                 pb::EntityKind::ReadModel,
@@ -208,14 +208,24 @@ parent = "acme"
             let response = client
                 .batch_mutate(authenticated(pb::BatchMutateRequest {
                     validate_only,
-                    ops: vec![pb::BatchMutateOp {
-                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
-                            kind: pb::EntityKind::ReadModel as i32,
-                            id: Some(id(&own, "hidden-target")),
-                            mode: mode as i32,
-                            ..Default::default()
-                        })),
-                    }],
+                    ops: vec![
+                        pb::BatchMutateOp {
+                            op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                                kind: pb::EntityKind::ReadModel as i32,
+                                id: Some(id(&own, "batch-unreferenced")),
+                                mode: mode as i32,
+                                ..Default::default()
+                            })),
+                        },
+                        pb::BatchMutateOp {
+                            op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                                kind: pb::EntityKind::ReadModel as i32,
+                                id: Some(id(&own, "hidden-target")),
+                                mode: mode as i32,
+                                ..Default::default()
+                            })),
+                        },
+                    ],
                     ..Default::default()
                 }))
                 .await
@@ -226,6 +236,7 @@ parent = "acme"
                 pb::batch_mutate_response::Status::Failed as i32,
                 "{response:?}"
             );
+            assert_eq!(response.failed_op_index, 1);
             assert_eq!(response.failure.len(), 1);
             assert_eq!(response.failure[0].code, "ENTITY_REFERENCED");
             let details = format!("{response:?}");
@@ -241,4 +252,134 @@ parent = "acme"
         }))
         .await
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unrestricted_resource_volume_does_not_block_delete_modes_or_batches() {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let backend = Arc::new(nats.store().await);
+    backend
+        .create(
+            pb::EntityKind::ReadModel,
+            &read_model("public", "feed"),
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let mut writes = tokio::task::JoinSet::new();
+    for index in 0..5001 {
+        let backend = backend.clone();
+        writes.spawn(async move {
+            backend
+                .create(
+                    pb::EntityKind::DataStore,
+                    &data_store("public", &format!("store-{index}"), id("public", "feed")),
+                    WriteContext::baseline(),
+                )
+                .await
+                .unwrap();
+        });
+        if writes.len() == 32 {
+            writes.join_next().await.unwrap().unwrap();
+        }
+    }
+    while let Some(result) = writes.join_next().await {
+        result.unwrap();
+    }
+    let service = EventModelServiceImpl::try_new(backend.clone(), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(10000);
+    for mode in [
+        pb::delete_entity_request::Mode::Force,
+        pb::delete_entity_request::Mode::DryRun,
+        pb::delete_entity_request::Mode::FailIfReferenced,
+    ] {
+        let slug = format!("standalone-{mode:?}").to_lowercase();
+        backend
+            .create(
+                pb::EntityKind::ReadModel,
+                &read_model("public", &slug),
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+        service
+            .delete_entity(Request::new(pb::DeleteEntityRequest {
+                kind: pb::EntityKind::ReadModel as i32,
+                id: Some(id("public", &slug)),
+                mode: mode as i32,
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            backend
+                .get(pb::EntityKind::ReadModel, &id("public", &slug), None)
+                .await
+                .is_ok(),
+            mode == pb::delete_entity_request::Mode::DryRun
+        );
+    }
+    for validate_only in [true, false] {
+        for mode in [
+            pb::delete_entity_request::Mode::Force,
+            pb::delete_entity_request::Mode::Unspecified,
+            pb::delete_entity_request::Mode::FailIfReferenced,
+        ] {
+            let slug = format!("batch-{validate_only}-{mode:?}").to_lowercase();
+            backend
+                .create(
+                    pb::EntityKind::ReadModel,
+                    &read_model("public", &slug),
+                    WriteContext::baseline(),
+                )
+                .await
+                .unwrap();
+            let service = EventModelServiceImpl::try_new(backend.clone(), ServerMetrics::default())
+                .unwrap()
+                .with_snapshot_cap(10000);
+            let response = service
+                .batch_mutate(Request::new(pb::BatchMutateRequest {
+                    validate_only,
+                    ops: vec![pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                            kind: pb::EntityKind::ReadModel as i32,
+                            id: Some(id("public", &slug)),
+                            mode: mode as i32,
+                            ..Default::default()
+                        })),
+                    }],
+                    ..Default::default()
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(
+                response.status,
+                if validate_only {
+                    pb::batch_mutate_response::Status::Validated
+                } else {
+                    pb::batch_mutate_response::Status::Applied
+                } as i32,
+                "{response:?}"
+            );
+            assert_eq!(
+                backend
+                    .get(pb::EntityKind::ReadModel, &id("public", &slug), None)
+                    .await
+                    .is_ok(),
+                validate_only
+            );
+        }
+    }
+    let blocked = service
+        .delete_entity(Request::new(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::ReadModel as i32,
+            id: Some(id("public", "feed")),
+            mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(blocked.code(), Code::FailedPrecondition);
 }

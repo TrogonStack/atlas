@@ -985,6 +985,25 @@ impl EventModelServiceImpl {
         Ok(Arc::new(graph::ReverseIndex::build(&complete)))
     }
 
+    async fn delete_reporting_index(
+        &self,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<Arc<graph::ReverseIndex>, Status> {
+        match self.reverse_index_for(branch, vis).await {
+            Ok(index) => Ok(index),
+            Err(status)
+                if status.code() == tonic::Code::ResourceExhausted
+                    && status.message()
+                        == "architecture reference scan exceeds its entity budget" =>
+            {
+                let snapshot = self.snapshot_for(branch, vis).await?;
+                Ok(Arc::new(graph::ReverseIndex::build(&snapshot)))
+            }
+            Err(status) => Err(status),
+        }
+    }
+
     /// Refuses ops that remove a type library an entity schema would still
     /// name once they apply. Scans every tenant, like the referrer gate on
     /// deletes, so a bound caller cannot strand another tenant's schema.
@@ -4462,22 +4481,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
-        // Referrer scan must match the client's write scope: baseline for
-        // baseline deletes, merged branch view for branch deletes. Using the
-        // baseline-only index here would let a branch-only referrer silently
-        // lose its target (GetIncomingReferences already uses the branch
-        // index; deletes must agree).
-        let index = self.reverse_index_for(branch.as_deref(), &vis).await?;
-        let referrers: Vec<pb::Reference> = index.incoming(kind, &id).to_vec();
-
-        // Hidden referrers participate only in the boolean safety gate.
         let is_referenced = matches!(mode, pb::delete_entity_request::Mode::FailIfReferenced)
-            && (!referrers.is_empty()
-                || self
-                    .store
-                    .has_incoming_reference(kind, &id, branch.as_deref())
-                    .await
-                    .map_err(store_err)?);
+            && self
+                .store
+                .has_incoming_reference(kind, &id, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+        let index = self.delete_reporting_index(branch.as_deref(), &vis).await?;
+        let referrers = index.incoming(kind, &id).to_vec();
 
         match mode {
             pb::delete_entity_request::Mode::DryRun => {
@@ -4829,18 +4840,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
-        // A batch delete defaults to the same FAIL_IF_REFERENCED contract as
-        // the standalone delete_entity RPC: embedding a DeleteEntityRequest
-        // in a batch op must not silently relax it. Checked once, up front,
-        // under the mutation lock, so a dry-run batch reports the same
-        // outcome a real apply would reach -- and so this also runs for the
-        // non-dry-run branch below, which has no referrer check of its own.
-        //
-        // The same scan also feeds `per_op_referrers`: the standalone
-        // delete_entity RPC always returns its referrers on success (FORCE
-        // included) so the caller knows what else now points at nothing;
-        // a batch delete result should carry the same awareness instead of
-        // the empty list `build_op_results` used to hand back unconditionally.
+        // Safety includes hidden referrers; response details remain visibility-scoped.
         let delete_modes: Vec<Option<pb::delete_entity_request::Mode>> = req
             .ops
             .iter()
@@ -4855,25 +4855,46 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let mut per_op_referrers: Vec<Vec<pb::Reference>> =
             std::iter::repeat_with(Vec::new).take(metas.len()).collect();
         if delete_modes.iter().any(Option::is_some) {
-            let index = self.reverse_index_for(branch.as_deref(), &vis).await?;
-            for (i, mode) in delete_modes.iter().enumerate() {
-                let Some(mode) = mode else { continue };
-                let Some(meta) = metas.get(i) else { continue };
-                let referrers = index.incoming(meta.kind, &meta.id).to_vec();
+            let guarded_targets: Vec<pb::EntityKey> = delete_modes
+                .iter()
+                .zip(&metas)
+                .filter(|(mode, _)| {
+                    matches!(
+                        mode,
+                        Some(
+                            pb::delete_entity_request::Mode::FailIfReferenced
+                                | pb::delete_entity_request::Mode::Unspecified
+                        )
+                    )
+                })
+                .map(|(_, meta)| pb::EntityKey::new(meta.kind, &meta.id))
+                .collect();
+            let referenced = if guarded_targets.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                self.store
+                    .referenced_targets(&guarded_targets, branch.as_deref())
+                    .await
+                    .map_err(store_err)?
+            };
+            for (i, meta) in metas.iter().enumerate() {
                 if matches!(
-                    mode,
-                    pb::delete_entity_request::Mode::FailIfReferenced
-                        | pb::delete_entity_request::Mode::Unspecified
-                ) && (!referrers.is_empty()
-                    || self
-                        .store
-                        .has_incoming_reference(meta.kind, &meta.id, branch.as_deref())
-                        .await
-                        .map_err(store_err)?)
+                    delete_modes[i],
+                    Some(
+                        pb::delete_entity_request::Mode::FailIfReferenced
+                            | pb::delete_entity_request::Mode::Unspecified
+                    )
+                ) && referenced.contains(&pb::EntityKey::new(meta.kind, &meta.id))
                 {
                     return Ok(Response::new(Self::batch_referenced_response(&metas, i)));
                 }
-                per_op_referrers[i] = referrers;
+            }
+            let index = self.delete_reporting_index(branch.as_deref(), &vis).await?;
+            for (i, mode) in delete_modes.iter().enumerate() {
+                if mode.is_some() {
+                    let meta = &metas[i];
+                    per_op_referrers[i] = index.incoming(meta.kind, &meta.id).to_vec();
+                }
             }
         }
 
