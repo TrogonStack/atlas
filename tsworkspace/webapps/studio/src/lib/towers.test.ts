@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildModel, hasStreamEvents } from './model';
-import { layoutBoards } from './multiboard';
+import { layoutBoards, namespaceOf } from './multiboard';
 import { type Body, curvePoint, distance, type Vec3 } from './ports';
 import { storefrontEntities } from './scene3d.fixture';
 import type { SceneNode, SceneSpec } from './scene3d';
@@ -55,13 +55,30 @@ describe('buildTowers', () => {
     expect(byHeight.map((e) => e.id)).toEqual(byBoard.map((e) => e.id));
   });
 
+  it('does not share floor heights across bounded contexts that left-align to the same column', () => {
+    const id = (namespace: string, slug: string) => ({ namespace, slug, version: '1' });
+    const ref = (namespace: string, slug: string) => ({ id: id(namespace, slug) });
+    const m = buildModel([
+      { swimlane: { id: id('alpha', 'stream'), title: 'Alpha stream', order: 1 } },
+      { event: { id: id('alpha', 'alpha.done'), title: 'Alpha done', swimlane: ref('alpha', 'stream') } },
+      { swimlane: { id: id('beta', 'stream'), title: 'Beta stream', order: 1 } },
+      { event: { id: id('beta', 'beta.done'), title: 'Beta done', swimlane: ref('beta', 'stream') } },
+    ] as never);
+    const spec = buildTowers(m);
+    const alpha = spec.nodes.find((n) => n.entity.id.slug === 'alpha.done');
+    const beta = spec.nodes.find((n) => n.entity.id.slug === 'beta.done');
+    if (!alpha || !beta) throw new Error('expected both events');
+    expect(alpha.body.center.y).not.toBe(beta.body.center.y);
+  });
+
   it('lines floors up across towers: one Board column is one height', () => {
     const m = storefront();
     const spec = buildTowers(m);
     const boardX = new Map(layoutBoards(m).nodes.map((n) => [n.id, n.position.x]));
     for (const a of spec.nodes) {
       for (const b of spec.nodes) {
-        const sameColumn = boardX.get(a.id) === boardX.get(b.id);
+        const sameColumn =
+          boardX.get(a.id) === boardX.get(b.id) && namespaceOf(a.id) === namespaceOf(b.id);
         expect(a.body.center.y === b.body.center.y).toBe(sameColumn);
       }
     }

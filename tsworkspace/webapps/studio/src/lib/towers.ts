@@ -120,11 +120,16 @@ export function buildTowers(model: Model): SceneSpec {
   // Floors: one per Board column that holds something here, bottom up. A
   // floor grows a row for each extra item of one kind in one tower, so
   // stacked Board cards do not overlap.
-  const slots = [...new Set([...placed.values()].map((p) => p.box.x))].sort((a, b) => a - b);
-  const slotOf = new Map(slots.map((x, i) => [x, i]));
+  const slotKey = (p: Placed) => `${namespaceOf(p.node.id)}|${p.box.x}`;
+  const slots = [...new Set([...placed.values()].map(slotKey))].sort((a, b) => {
+    const [na, xa] = a.split('|');
+    const [nb, xb] = b.split('|');
+    return na.localeCompare(nb) || Number(xa) - Number(xb);
+  });
+  const slotOf = new Map(slots.map((key, i) => [key, i]));
   const groups = new Map<string, Placed[]>();
   for (const p of placed.values()) {
-    const key = `${p.tower}:${p.role}:${slotOf.get(p.box.x)}`;
+    const key = `${p.tower}:${p.role}:${slotOf.get(slotKey(p))}`;
     groups.set(key, [...(groups.get(key) ?? []), p]);
   }
   const rowOf = new Map<string, number>();
@@ -139,7 +144,7 @@ export function buildTowers(model: Model): SceneSpec {
   slots.forEach((_, i) => {
     floorY.push(i === 0 ? 0 : floorY[i - 1] + FLOOR + (rows[i - 1] - 1) * SUB_FLOOR);
   });
-  const yOf = (p: Placed) => floorY[slotOf.get(p.box.x) ?? 0] + (rowOf.get(p.node.id) ?? 0) * SUB_FLOOR;
+  const yOf = (p: Placed) => floorY[slotOf.get(slotKey(p)) ?? 0] + (rowOf.get(p.node.id) ?? 0) * SUB_FLOOR;
   // A stream lane with nothing on it gets no tower, and the towers close up in Board lane order.
   const used = [...new Set([...placed.values()].map((p) => p.tower))].sort((a, b) => a - b);
   const column = new Map(used.map((t, i) => [t, i]));
@@ -257,18 +262,22 @@ export function buildTowers(model: Model): SceneSpec {
   // A faint line behind each floor, labelled with its slice, gives the shared time axis.
   const left = (used.length > 0 ? axisX(used[0]) : 0) - SIDE_R - CARD_W / 2 - 8;
   const right = (used.length > 0 ? axisX(used[used.length - 1]) : 0) + SIDE_R + CARD_W / 2 + 8;
-  slots.forEach((slotX, i) => {
+  slots.forEach((key, i) => {
     const y = floorY[i];
+    const [ns, slotX] = key.split('|');
+    const x = Number(slotX);
     decor.push({
       type: 'line',
-      id: `floor:${slotX}`,
+      id: `floor:${key}`,
       points: [vec(left, y, -DISC_R - 6), vec(right, y, -DISC_R - 6)],
       color: '#a1a1aa',
       opacity: 0.35,
     });
-    const moment = [...placed.values()].find((p) => p.box.x === slotX && p.data.moment)?.data.moment;
+    const moment = [...placed.values()].find(
+      (p) => namespaceOf(p.node.id) === ns && p.box.x === x && p.data.moment,
+    )?.data.moment;
     tags.push({
-      id: `floor:${slotX}`,
+      id: `floor:${key}`,
       position: vec(left - 50, y, -DISC_R - 6),
       text: moment ? moment.title : 'Implicit projection',
       tone: 'ghost',
