@@ -1018,6 +1018,36 @@ async fn board_html_applies_into_a_fresh_namespace_and_checks_external_entities(
         format!("{err:#}").contains("event:board-gone/payment.captured"),
         "{err:#}"
     );
+
+    // The bundled copy is never written, so a spec this client cannot transcode
+    // must neither hide a missing entity nor block a present one.
+    let untyped = |ns: &str| {
+        format!(
+            "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: {{ namespace: {ns}, name: payment.captured }}
+spec:
+  title: Payment captured
+  metadata:
+    - '@type': type.googleapis.com/acme.payments.v1.Retired
+      note: gone
+"
+        )
+    };
+    let path = write_board_html(dir.path(), &model, &untyped("board-gone"));
+    let files = manifest::read_paths(&[path]).unwrap();
+    let err = apply::require_external(&mut client, files.external)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("missing external entities"),
+        "{err:#}"
+    );
+    let path = write_board_html(dir.path(), &model, &untyped("board-pay"));
+    let files = manifest::read_paths(&[path]).unwrap();
+    apply::require_external(&mut client, files.external)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

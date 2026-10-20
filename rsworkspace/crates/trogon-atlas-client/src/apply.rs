@@ -21,7 +21,7 @@ use trogon_atlas_proto as pb;
 
 use crate::{
     client::Client,
-    manifest::{self, entity_json_value, LoadedManifest, ManifestDocument},
+    manifest::{entity_json_value, LoadedManifest, ManifestDocument},
     precondition::{Revision, StalePlan},
 };
 
@@ -183,17 +183,37 @@ pub async fn plan(
 
 /// Refuse a board import whose target lacks a foreign entity the board
 /// references. Another namespace owns those entities, so the import never
-/// writes them, even when the bundled copy differs from the stored one.
+/// writes them, and only their identity is checked: a bundled spec that no
+/// longer transcodes must not hide a missing entity or block a present one.
 pub async fn require_external(client: &mut Client, external: Vec<ManifestDocument>) -> Result<()> {
     if external.is_empty() {
         return Ok(());
     }
-    let resolved = manifest::load_with_tenant_types(client, external).await?;
-    let missing: Vec<String> = plan(client, resolved.manifests)
-        .await?
+    let keys = external
         .iter()
-        .filter(|c| c.action == Action::Create)
-        .map(|c| id_label(&c.manifest))
+        .map(|d| pb::EntityRef {
+            kind: d.kind as i32,
+            id: Some(d.id.clone()),
+        })
+        .collect();
+    let found = client
+        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
+        .await
+        .context("BatchGetEntities failed")?
+        .into_inner()
+        .found;
+    if found.len() != external.len() {
+        bail!(
+            "server returned {} found flags for {} keys",
+            found.len(),
+            external.len()
+        );
+    }
+    let missing: Vec<String> = external
+        .iter()
+        .zip(found)
+        .filter(|(_, found)| !found)
+        .map(|(d, _)| pb::canonical::id_string(d.kind, &d.id))
         .collect();
     if !missing.is_empty() {
         crate::invalid_input!(
