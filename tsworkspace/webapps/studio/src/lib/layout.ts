@@ -65,7 +65,7 @@ const LANE_GAP = 18;
 // row has no trailing gutter, so cards stay vertically centered in the lane.
 const laneHeight = (depth: number) => depth * ROW_H - ROW_GAP + LANE_PAD * 2;
 
-interface Lane {
+export interface Lane {
   id: string;
   label: string;
   glyph: Glyph;
@@ -158,6 +158,20 @@ export interface BoardEdgeData extends Record<string, unknown> {
 // Processors repeat too: the same automation can be triggered by more than
 // one slice, and each trigger is its own moment on the board.
 const MULTI_OCCURRENCE: ReadonlySet<EntityKind> = new Set(['ui', 'readModel', 'processor']);
+
+// Edge colors follow the classic Event Modeling convention: an arrow
+// carries the color of the payload flowing along it. Command flow (UI or
+// processor into a command) is sky like the command card, event data
+// (command emits, projections into read models) is orange like the event
+// card, and read model data (into a UI or a processor) is emerald like the
+// read model card. A projection that crosses a context takes the boundary
+// color. Exported so other views draw the same flow in the same colors.
+export const FLOW_COLOR = {
+  command: '#0ea5e9',
+  event: '#f97316',
+  readModel: '#10b981',
+  seam: '#d946ef',
+} as const;
 
 type Slice = ReturnType<typeof orderedSlices>[number];
 
@@ -346,7 +360,7 @@ class LaneIndex {
 // Returns the lane list plus a `laneFor(entity)` lookup. Lane indices are
 // embedded in every Occurrence and used downstream for Y coordinates.
 // =============================================================================
-interface LaneMap {
+export interface LaneMap {
   lanes: Lane[];
   laneFor: (entity: Entity) => number;
 }
@@ -462,6 +476,15 @@ function buildLaneMap(model: Model, bySlug: Map<string, Entity>): LaneMap {
   };
 
   return { lanes: lanes.toArray(), laneFor };
+}
+
+/**
+ * The Board's lane for every entity, for views that group entities the way
+ * the Board places them. Exposed so those views reuse this rule instead of
+ * keeping a second one that can drift from it.
+ */
+export function boardLanes(model: Model): LaneMap {
+  return buildLaneMap(model, buildLatestBySlug(model));
 }
 
 // =============================================================================
@@ -1090,23 +1113,16 @@ function buildEdges(occs: OccurrenceMap, _model: Model, slices: Slice[], rmLinks
     });
   };
 
-  // Edge colors follow the classic Event Modeling convention: an arrow
-  // carries the color of the payload flowing along it. Command flow
-  // (UI or processor into a command) is sky like the command card,
-  // event data (command emits, projections into read models) is orange
-  // like the event card, and read model data (into a UI or a processor)
-  // is emerald like the read model card. Cross-context projections keep
-  // the distinct boundary color below.
   slices.forEach((slice, col) => {
     if (slice.kind === 'commandSlice') {
-      connectOcc(occs.at('ui', slice.ui?.id, col), occs.at('command', slice.command?.id), '#0ea5e9', {
+      connectOcc(occs.at('ui', slice.ui?.id, col), occs.at('command', slice.command?.id), FLOW_COLOR.command, {
         animated: true,
         relation: 'triggers',
         edge: slice.command,
         slice: slice.entity,
       });
       for (const ev of slice.events)
-        connectOcc(occs.at('command', slice.command?.id), occs.at('event', ev.id), '#f97316', {
+        connectOcc(occs.at('command', slice.command?.id), occs.at('event', ev.id), FLOW_COLOR.event, {
           animated: true,
           relation: 'emits',
           edge: ev,
@@ -1115,7 +1131,7 @@ function buildEdges(occs: OccurrenceMap, _model: Model, slices: Slice[], rmLinks
     }
     if (slice.kind === 'uiSlice') {
       for (const rm of slice.readModels)
-        connectOcc(occs.latestBefore('readModel', rm.id, col), occs.at('ui', slice.ui?.id, col), '#10b981', {
+        connectOcc(occs.latestBefore('readModel', rm.id, col), occs.at('ui', slice.ui?.id, col), FLOW_COLOR.readModel, {
           animated: true,
           relation: 'renders into',
           edge: rm,
@@ -1127,7 +1143,7 @@ function buildEdges(occs: OccurrenceMap, _model: Model, slices: Slice[], rmLinks
         connectOcc(
           occs.latestBefore('readModel', rm.id, col),
           occs.at('processor', slice.processor?.id, col),
-          '#10b981',
+          FLOW_COLOR.readModel,
           {
             animated: true,
             relation: 'observed by',
@@ -1135,12 +1151,17 @@ function buildEdges(occs: OccurrenceMap, _model: Model, slices: Slice[], rmLinks
             slice: slice.entity,
           },
         );
-      connectOcc(occs.at('processor', slice.processor?.id, col), occs.at('command', slice.command?.id), '#0ea5e9', {
-        animated: true,
-        relation: 'issues',
-        edge: slice.command,
-        slice: slice.entity,
-      });
+      connectOcc(
+        occs.at('processor', slice.processor?.id, col),
+        occs.at('command', slice.command?.id),
+        FLOW_COLOR.command,
+        {
+          animated: true,
+          relation: 'issues',
+          edge: slice.command,
+          slice: slice.entity,
+        },
+      );
     }
   });
 
@@ -1149,7 +1170,7 @@ function buildEdges(occs: OccurrenceMap, _model: Model, slices: Slice[], rmLinks
     // event translated into this context's subscription view. Boundary
     // color, "feeds context": pub/sub translation, not a local update.
     const cross = link.from && link.to && link.from.entity.id.namespace !== link.to.entity.id.namespace;
-    connectOcc(link.from, link.to, cross ? '#d946ef' : '#f97316', {
+    connectOcc(link.from, link.to, cross ? FLOW_COLOR.seam : FLOW_COLOR.event, {
       animated: link.animated,
       relation: cross ? 'feeds context' : 'updates',
       edge: link.ev,
