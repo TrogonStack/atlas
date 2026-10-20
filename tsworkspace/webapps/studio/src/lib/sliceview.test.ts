@@ -172,6 +172,30 @@ describe('sliceNeighborhood', () => {
     expect(hood.cards.filter((c) => c.role === 'upstream')).toHaveLength(1);
   });
 
+  it('shows the loaded entity when the slice pins an older version', () => {
+    const model = storefront([
+      {
+        command: {
+          id: id('place-order', '2'),
+          title: 'Place order v2',
+          schema: {
+            '@type': 'type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema',
+            fields: [
+              { name: 'order_id', type: { uuid: {} } },
+              { name: 'cart_id', type: { uuid: {} } },
+              { name: 'buyer_id', type: { uuid: {} } },
+            ],
+          },
+        },
+      },
+    ]);
+    const hood = sliceNeighborhood(model, sliceNamed(model, 'place-order-slice'));
+    const command = hood.cards.find((c) => c.ref.slug === 'place-order');
+    expect(command?.ref.version).toBe('1');
+    expect(command?.entity?.id.version).toBe('2');
+    expect(command?.entity?.title).toBe('Place order v2');
+  });
+
   it('keeps an entity the slice names but the model does not load', () => {
     const model = storefront([
       {

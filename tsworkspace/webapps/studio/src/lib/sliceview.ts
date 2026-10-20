@@ -30,6 +30,7 @@ import {
   type ScenarioView,
   type SliceView,
   slugKey,
+  versionOf,
 } from './model';
 
 export type StepRole = 'upstream' | 'slice' | 'downstream';
@@ -139,7 +140,15 @@ const LANE = {
  * downstream step when other slices connect to it.
  */
 export function sliceNeighborhood(model: Model, slice: SliceView): SliceNeighborhood {
-  const resolve = (ref: Ref) => model.byKey.get(entityKey(ref.kind, ref.id));
+  // Match layout.ts, sequence.ts and screens.ts: refs are (kind, slug), not
+  // pinned version keys, so a slice that names @1 still shows the loaded @2.
+  const bySlug = new Map<string, Entity>();
+  for (const e of model.entities) {
+    const k = slugKey(e.kind, e.id);
+    const cur = bySlug.get(k);
+    if (!cur || versionOf(e.id) > versionOf(cur.id)) bySlug.set(k, e);
+  }
+  const resolve = (ref: Ref) => bySlug.get(refKey(ref));
   const self = slugKey(slice.entity.kind, slice.entity.id);
   const others = [...latestSliceBySlug(model).values()].filter((s) => slugKey(s.entity.kind, s.entity.id) !== self);
   const otherLinks = others.flatMap(declaredLinks);
@@ -180,7 +189,7 @@ export function sliceNeighborhood(model: Model, slice: SliceView): SliceNeighbor
     if (ref.kind === 'processor') return LANE.automation.id;
     if (ref.kind === 'ui') return LANE.ui.id;
     if (ref.kind === 'command' || ref.kind === 'readModel') return LANE.timeline.id;
-    const lane = entity?.swimlane ? model.byKey.get(entityKey('swimlane', entity.swimlane)) : undefined;
+    const lane = entity?.swimlane ? bySlug.get(slugKey('swimlane', entity.swimlane)) : undefined;
     if (!lane) {
       hasLooseEvents = true;
       return LANE.events.id;
