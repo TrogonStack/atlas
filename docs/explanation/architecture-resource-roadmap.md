@@ -34,29 +34,33 @@ the fitness host's reference adapter still need their own supported representati
 Implementing a new association requires extending reference discovery,
 validation and lifecycle handling together.
 
-## Deliver a connected resource slice
+## Implemented transport and storage resources
 
 Channel and DataStore include typed values, identified associations and nested
 reference handling. The acceptance fixture covers repeated observations, exact
 versions, reference discovery, guarded mutations and branch behavior.
 
-Implemented scope:
-
-- [x] Add entity kinds, typed references and generated bindings.
-- [x] Admit writes and resolve associations through the authorized backend.
-- [x] Index nested references for queries, reverse references and impact.
-- [x] Preserve identity through edit, copy, retarget and branch operations.
-- [x] Exercise the connected fixture through public service and CLI/MCP paths.
-- [x] Expose the resources and diagnostics in Studio's review surfaces.
-
 Runtime evidence comes from the linked executable tests. Component review
 coverage does not establish deployed-browser or production readiness.
 
+## Next resource slice: Specification and API contracts
+
+The [Specification/API contract](../reference/specification-and-api-contracts.md)
+defines the next native resource slice. Its schema and runtime implementation
+are pending. The [acceptance fixture](../reference/specification-and-api-acceptance.md)
+records required queries, identity changes, authorization and lifecycle cases;
+it does not claim executable evidence.
+
+Implementation must add the entity/member representations, identified
+associations, authorized admission, exact reference discovery and lifecycle
+handling together. Native manifest, CLI/MCP and Studio support must preserve
+those selections. No source connector or additional format compiler is required
+by this slice.
+
 ## Follow-on contracts
 
-Specification/API resources need explicit operation, message and schema-member
-identity, with request and response roles kept separate. Team and Person need
-exact-version versus family responsibility, retained directory data and a clear
+Team and Person need exact-version versus family responsibility, retained
+directory data and a clear
 separation from authorization principals. DataProduct needs ReadModel output
 ports, lineage and selected access paths tied to the same output.
 
