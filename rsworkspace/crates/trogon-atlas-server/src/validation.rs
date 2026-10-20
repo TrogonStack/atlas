@@ -11039,7 +11039,7 @@ mod previously_untested_rules {
                 doc: String::new(),
                 design_ref: String::new(),
                 transitions: vec![pb::ui::Transition {
-                    connection_id: None,
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
                     to: Some(pb::UiRef {
                         id: Some(id(ns, "ghost", 1)),
                     }),
@@ -11059,6 +11059,7 @@ mod previously_untested_rules {
             metadata: Vec::new(),
             supersedes: None,
         };
+        trogon_atlas_core::connections::validate_stored_connection_ids(&ui).unwrap();
         let issues = validate_model(&model, &[stored(ui)]);
         let count = issues
             .iter()
