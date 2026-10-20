@@ -377,6 +377,47 @@ async fn get_slice_projection_does_not_project_another_owners_slice() {
     assert_hidden("get_slice_projection", out, |r| r.projection.is_none());
 }
 
+/// The `did_you_mean` slugs a not-found slice projection names, if any.
+async fn suggestions_for(
+    c: &mut EventModelServiceClient<Channel>,
+    slug: &str,
+    token: &str,
+) -> Option<String> {
+    use tonic_types::StatusExt;
+
+    let status = c
+        .get_slice_projection(authed(
+            pb::GetSliceProjectionRequest {
+                kind: pb::EntityKind::CommandSlice as i32,
+                id: Some(id(slug)),
+            },
+            token,
+        ))
+        .await
+        .expect_err("the slug does not exist");
+    assert_eq!(status.code(), Code::NotFound, "{}", status.message());
+    status
+        .get_details_error_info()
+        .and_then(|info| info.metadata.get("did_you_mean").cloned())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_not_found_read_suggests_near_slugs_to_their_owner() {
+    let mut c = world().await;
+    assert_eq!(
+        suggestions_for(&mut c, "plac", ACME_TOKEN).await.as_deref(),
+        Some("place"),
+    );
+}
+
+/// A suggestion would name a slug in the hidden namespace, which is the
+/// existence oracle `require_visible` answers `NOT_FOUND` to prevent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_not_found_read_suggests_nothing_from_a_hidden_namespace() {
+    let mut c = world().await;
+    assert_eq!(suggestions_for(&mut c, "plac", BETA_TOKEN).await, None);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn extract_subgraph_does_not_extract_another_owners_subgraph() {
     let mut c = world().await;

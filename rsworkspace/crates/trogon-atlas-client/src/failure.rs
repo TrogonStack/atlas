@@ -397,9 +397,15 @@ impl Failure {
                 ),
                 _ => return None,
             };
-        let details = match metadata.get("journal") {
-            Some(journal) => FailureDetails::from_json(json!({ "journal": journal })),
-            None => FailureDetails::empty(),
+        let details = if let Some(journal) = metadata.get("journal") {
+            FailureDetails::from_json(json!({ "journal": journal }))
+        } else if let Some(slugs) = metadata.get("did_you_mean") {
+            // ErrorInfo metadata is string-to-string, so the server joins the
+            // slugs with a comma, which a valid slug can never contain.
+            let slugs: Vec<&str> = slugs.split(',').filter(|s| !s.is_empty()).collect();
+            FailureDetails::from_json(json!({ "did_you_mean": slugs }))
+        } else {
+            FailureDetails::empty()
         };
         let failure = Self::new(category, status.message().to_string())
             .with_code(FailureCode::known(code))
@@ -638,6 +644,29 @@ mod tests {
         assert_eq!(failure.next_action, NextAction::Retry);
         assert_eq!(failure.code.unwrap().as_str(), "PARTIAL_APPLY");
         assert_eq!(failure.details.0["journal"], json!("journal-123"));
+    }
+
+    #[test]
+    fn not_found_with_did_you_mean_carries_the_slugs_as_a_list() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "NOT_FOUND",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([(
+                "did_you_mean".to_string(),
+                "place-order-slice,place-orders".to_string(),
+            )]),
+        );
+        let status = Status::with_error_details(Code::NotFound, "entity not found", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::NotFound);
+        assert_eq!(
+            failure.details.0["did_you_mean"],
+            json!(["place-order-slice", "place-orders"])
+        );
     }
 
     #[test]

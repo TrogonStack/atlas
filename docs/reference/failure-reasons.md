@@ -26,7 +26,7 @@ instead of re-deriving category from code or reason on its own.
 
 | Reason | gRPC code | Category | Metadata |
 | --- | --- | --- | --- |
-| `NOT_FOUND` | `NOT_FOUND` | `not_found` | none |
+| `NOT_FOUND` | `NOT_FOUND` | `not_found` | `did_you_mean`, up to 3 comma-separated slugs of the same kind in the same namespace that are near the requested slug, closest first. Only `get_entity`, `get_slice_projection`, `get_storyboard_projection` and `get_event_model_projection` set it, and only for a namespace the caller can read. Absent when nothing is near. The client gives it as a list in the failure details (MCP `next_action_detail.did_you_mean`). |
 | `ALREADY_EXISTS` | `ALREADY_EXISTS` | `precondition` | none |
 | `STALE_PRECONDITION` | `ABORTED` | `stale_state` | none |
 | `VALIDATION_FAILED` | `INVALID_ARGUMENT` | `validation` | none |
