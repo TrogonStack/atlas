@@ -25,14 +25,21 @@ Solve a specific problem:
 Look up exact behavior:
 
 - [Failure reasons](reference/failure-reasons.md)
+- [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
 - [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)
+
+Proposed resource contracts, pending schema and runtime implementation:
+
+- [Channel and DataStore contracts](reference/channel-and-datastore-contracts.md)
+- [Channel and DataStore acceptance fixture](reference/channel-and-datastore-acceptance.md)
 
 ## Explanation
 
 Understand how Atlas works and why:
 
 - [Atlas principles](explanation/principles/README.md)
+- [Architecture resource roadmap](explanation/architecture-resource-roadmap.md)
 - [Authorization design](explanation/authorization.md)
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)
