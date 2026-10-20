@@ -5,6 +5,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     overview: vi.fn(),
     search: vi.fn(),
+    namespaceRegistry: vi.fn(),
   },
 }));
 
@@ -71,6 +72,7 @@ describe('OverviewPage', () => {
     window.history.replaceState(null, '', '/');
     (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(EMPTY_OVERVIEW);
     (api.search as ReturnType<typeof vi.fn>).mockResolvedValue({ results: [] });
+    (api.namespaceRegistry as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [] });
   });
 
   afterEach(() => {
@@ -345,6 +347,50 @@ describe('OverviewPage', () => {
       expect(screen.queryByText(/Search Results/)).toBeNull();
       expect((input as HTMLInputElement).value).toBe('');
       expect(screen.getByTestId('context-map-board')).toBeDefined();
+    });
+  });
+
+  describe('models grouped by owner', () => {
+    const em = (namespace: string, slug: string) => ({
+      eventModel: { id: { namespace, slug, version: 1 }, title: slug },
+    });
+    const reg = (name: string, parent: string) => ({ id: name, name, parent, entityCount: 1, registered: true });
+
+    beforeEach(() => {
+      (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue({
+        entities: [em('acme-orders', 'checkout'), em('acme-probe', 'probe'), em('other-ns', 'misc')],
+      });
+    });
+
+    it('puts namespaces that share a registry parent under one owner section', async () => {
+      (api.namespaceRegistry as ReturnType<typeof vi.fn>).mockResolvedValue({
+        namespaces: [reg('acme-orders', 'acme'), reg('acme-probe', 'acme'), reg('other-ns', '')],
+      });
+      const { container } = render(<OverviewPage />);
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      const sections = [...container.querySelectorAll('details')];
+      expect(sections.map((d) => d.querySelector('summary')?.firstChild?.textContent)).toEqual(['acme', 'default']);
+      expect([...sections[0].querySelectorAll('h3')].map((h) => h.firstChild?.textContent)).toEqual([
+        'acme-orders',
+        'acme-probe',
+      ]);
+      expect(sections[1].textContent).toContain('other-ns');
+    });
+
+    it('still lists every namespace when the registry cannot be read', async () => {
+      (api.namespaceRegistry as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('forbidden'));
+      const { container } = render(<OverviewPage />);
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(container.querySelectorAll('details')).toHaveLength(0);
+      expect([...container.querySelectorAll('h3')].map((h) => h.firstChild?.textContent)).toEqual([
+        'acme-orders',
+        'acme-probe',
+        'other-ns',
+      ]);
     });
   });
 
