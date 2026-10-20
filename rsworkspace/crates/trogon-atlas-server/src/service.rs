@@ -924,10 +924,19 @@ impl EventModelServiceImpl {
                 .architecture_reference_snapshot(&snap, None, vis)
                 .await?;
             let idx = Arc::new(graph::ReverseIndex::build(&complete));
-            self.owner_reverse_index_cache
-                .write()
-                .await
-                .insert(owner.clone(), (lens, idx.clone()));
+            let mut indexes = self.owner_reverse_index_cache.write().await;
+            if let Some((cached, current)) = indexes.get(owner) {
+                if cached == &lens {
+                    return Ok(current.clone());
+                }
+            }
+            let snapshots = self.owner_snapshot_cache.read().await;
+            if snapshots
+                .get(owner)
+                .is_some_and(|(cached, current)| cached == &lens && Arc::ptr_eq(current, &snap))
+            {
+                indexes.insert(owner.clone(), (lens, idx.clone()));
+            }
             return Ok(idx);
         }
         if let Some(idx) = self.reverse_index_cache.read().await.clone() {

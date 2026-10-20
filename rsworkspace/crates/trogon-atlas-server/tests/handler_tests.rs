@@ -531,6 +531,14 @@ async fn extract_subgraph_happy_path_returns_event_model() {
 struct FailingBatchStore {
     inner: NatsStore,
     failure: fn() -> StoreError,
+    resource_scan_gate: Option<Arc<ResourceScanGate>>,
+}
+
+#[derive(Default)]
+struct ResourceScanGate {
+    armed: std::sync::atomic::AtomicBool,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl FailingBatchStore {
@@ -543,6 +551,7 @@ impl FailingBatchStore {
         Self {
             inner: nats.store().await,
             failure,
+            resource_scan_gate: None,
         }
     }
 }
@@ -693,7 +702,16 @@ impl Store for FailingBatchStore {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<Vec<StoredEntity>> {
-        self.inner.list(filter, limit, branch).await
+        let resource_scan = filter.kinds.contains(&pb::EntityKind::Channel)
+            || filter.kinds.contains(&pb::EntityKind::DataStore);
+        let rows = self.inner.list(filter, limit, branch).await?;
+        if let Some(gate) = &self.resource_scan_gate {
+            if resource_scan && gate.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
+        }
+        Ok(rows)
     }
 
     async fn record_change(
@@ -3768,4 +3786,115 @@ async fn search_index_live_updates_after_warmup_reflect_put_and_delete() {
         gone,
         "live index update via search_apply_delete must remove the entity from search results"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_reverse_index_does_not_cache_scan_invalidated_by_concurrent_write() {
+    use trogon_atlas_server::auth::{Principal, PrincipalKind, Role};
+
+    fn owned<T>(body: T) -> Request<T> {
+        let mut request = Request::new(body);
+        request.extensions_mut().insert(Principal {
+            name: Arc::from("owner-reader"),
+            role: Role::Writer,
+            kind: PrincipalKind::User,
+            is_anonymous: false,
+            namespaces: trogon_atlas_server::scope::NamespaceScope::unrestricted(),
+            parent: Some(trogon_atlas_core::OwnerId::parse("acme").unwrap()),
+        });
+        request
+    }
+
+    let gate = Arc::new(ResourceScanGate::default());
+    let mut backend = FailingBatchStore::new().await;
+    backend.resource_scan_gate = Some(gate.clone());
+    let service = Arc::new(
+        EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default()).unwrap(),
+    );
+    let namespace = service
+        .register_namespace(Request::new(pb::RegisterNamespaceRequest {
+            name: "commerce".into(),
+            parent: "acme".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let target = id(&namespace, "ready", 1);
+    service
+        .put_entity(owned(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                    id: Some(target.clone()),
+                    title: "Ready orders".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    gate.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let query = pb::GetReferencesRequest {
+        kind: pb::EntityKind::ReadModel as i32,
+        id: Some(target.clone()),
+        ..Default::default()
+    };
+    let pending_service = service.clone();
+    let pending_query = query.clone();
+    let pending = tokio::spawn(async move {
+        pending_service
+            .get_incoming_references(owned(pending_query))
+            .await
+            .unwrap()
+            .into_inner()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered.notified())
+        .await
+        .unwrap();
+    service
+        .put_entity(owned(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::DataStore(pb::DataStore {
+                    id: Some(id(&namespace, "cache", 1)),
+                    title: "Order cache".into(),
+                    store_class: Some(pb::StoreClass {
+                        kind: Some(pb::store_class::Kind::Known(
+                            pb::store_class::Known::Cache as i32,
+                        )),
+                    }),
+                    attachments: vec![pb::ReadModelAttachment {
+                        read_model: Some(pb::ReadModelRef { id: Some(target) }),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    gate.release.notify_one();
+    tokio::time::timeout(std::time::Duration::from_secs(10), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    let references = service
+        .get_incoming_references(owned(query))
+        .await
+        .unwrap()
+        .into_inner()
+        .references;
+    assert_eq!(
+        references.len(),
+        1,
+        "the completed old scan must not replace the invalidated cache"
+    );
+    let owner = references[0].from.as_ref().unwrap();
+    assert_eq!(owner.kind, pb::EntityKind::DataStore as i32);
+    assert_eq!(owner.id, Some(id(&namespace, "cache", 1)));
 }
