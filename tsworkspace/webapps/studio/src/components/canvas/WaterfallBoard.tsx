@@ -216,6 +216,11 @@ interface Placed {
   row?: WaterfallRow;
 }
 
+/** WebKit does not resolve url(#id) when the id contains colons (React useId). */
+function svgFragmentId(raw: string): string {
+  return raw.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
 function CableGutter({
   cables,
   groups,
@@ -233,7 +238,7 @@ function CableGutter({
   height: number;
   onOpenBoth: (cable: WaterfallCable) => void;
 }) {
-  const markerBase = useId();
+  const markerBase = svgFragmentId(useId());
   const headerY = new Map<string, number>();
   const memberY = new Map<string, number>();
   for (const p of placed) {

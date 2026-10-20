@@ -220,6 +220,22 @@ describe('WaterfallBoard', () => {
     expect(scrollIntoView.mock.contexts).toContain(row);
   });
 
+  it('uses colon-free SVG fragment ids for cable arrow markers', () => {
+    renderBoard();
+    fireEvent.click(screen.getByRole('button', { name: 'By object type' }));
+    const svg = screen.getByTestId('waterfall-cables');
+    for (const marker of svg.querySelectorAll('marker[id]')) {
+      expect(marker.id).not.toContain(':');
+    }
+    for (const path of svg.querySelectorAll('path[marker-end]')) {
+      const end = path.getAttribute('marker-end') ?? '';
+      const id = end.match(/^url\(#(.+)\)$/)?.[1];
+      expect(id).toBeTruthy();
+      expect(id).not.toContain(':');
+      expect(svg.querySelector(`#${CSS.escape(id!)}`)).toBeTruthy();
+    }
+  });
+
   it('groups by lane and kind and draws cables between the groups', () => {
     renderBoard();
     fireEvent.click(screen.getByRole('button', { name: 'By object type' }));

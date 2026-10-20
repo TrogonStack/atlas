@@ -470,7 +470,7 @@ export function buildWaterfall(model: Model): Waterfall {
   };
 
   for (const sb of model.storyboards) {
-    const group = `storyboard:${slugKey('storyboard', sb.id)}`;
+    const group = sb.key;
     const rows: WaterfallRow[] = [];
     // Entity key to the first row this chain gave it, whatever its type.
     const firstRow = new Map<string, string>();

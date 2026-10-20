@@ -423,6 +423,23 @@ describe('buildWaterfall: by storyboard', () => {
     expect(rows.map((r) => r.entity.id.version)).toEqual(['2']);
     expect(wf.types.flatMap((g) => g.members).filter((e) => e.id.slug === 'place-order')).toHaveLength(1);
   });
+
+  it('gives each loaded storyboard version its own group and row keys', () => {
+    const entities = storefront();
+    entities.push({
+      storyboard: {
+        id: id('checkout-flow', NS, '2'),
+        title: 'Checkout v2',
+        slices: [ref('add-item-to-cart-slice'), ref('place-order-slice')],
+      },
+    });
+    const { wf } = build(entities);
+    const versions = wf.storyboards.filter((g) => g.entity?.id.slug === 'checkout-flow');
+    expect(versions.map((g) => g.entity?.id.version)).toEqual(['1', '2']);
+    expect(versions[0].key).not.toBe(versions[1].key);
+    const rowKeys = wf.storyboards.flatMap((g) => g.rows.map((r) => r.key));
+    expect(new Set(rowKeys).size).toBe(rowKeys.length);
+  });
 });
 
 describe('buildWaterfall: by object type', () => {
