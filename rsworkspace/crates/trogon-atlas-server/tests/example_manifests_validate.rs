@@ -7,13 +7,14 @@ use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
-const NAMESPACES: [(&str, &str); 3] = [
+const NAMESPACES: [(&str, &str); 4] = [
     ("acme-storefront", "acme-storefront-model"),
     ("acme-reviews", "acme-reviews-model"),
     (
         "acme-customer-data-deletion",
         "acme-customer-data-deletion-pipeline",
     ),
+    ("acme-wishlist", "acme-wishlist-model"),
 ];
 
 fn manifests_dir() -> PathBuf {

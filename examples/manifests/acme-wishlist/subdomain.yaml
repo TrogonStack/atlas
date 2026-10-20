@@ -1,0 +1,14 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: wishlists
+  namespace: acme-wishlist
+spec:
+  classification: CLASSIFICATION_CORE
+  doc: Saving products a shopper wants to buy later.
+  domain:
+    id:
+      namespace: acme-wishlist
+      slug: shopping
+      version: '1'
+  title: Wishlists

@@ -1,0 +1,13 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata:
+  name: acme-wishlist
+  namespace: acme-wishlist
+spec:
+  doc: Owns each shopper's wishlist.
+  realizes:
+  - id:
+      namespace: acme-wishlist
+      slug: wishlists
+      version: '1'
+  title: Acme Wishlist

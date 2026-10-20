@@ -18,6 +18,7 @@ Solve a specific problem:
 - [Repair a validation finding](how-to/repair-validation-findings.md)
 - [Replan after a stale refusal](how-to/replan-after-a-stale-refusal.md)
 - [Ship a breaking proto change](how-to/ship-a-breaking-proto-change.md)
+- [Start an event model from scratch](how-to/start-a-model-from-scratch.md)
 - [Track a version migration](how-to/track-a-migration.md)
 
 ## Reference
