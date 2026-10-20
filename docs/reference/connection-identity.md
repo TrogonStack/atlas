@@ -47,6 +47,7 @@ fall back to another occurrence with matching endpoints.
 | Edit on a branch | Preserve the owner's incarnation and connection IDs. Branch selection remains part of the read context. |
 | Independently create the same owner key on baseline and a branch | Distinct incarnation UIDs require explicit conflict resolution, even when authored content matches. |
 | Resolve a branch conflict | Preserve the selected side's content and incarnation. Within the same incarnation, use the recorded branch base to detect occurrences deleted by the discarded side and assign those fresh IDs. |
+| Keep the branch owner after baseline owner deletion | Explicit resolution restores the surviving branch incarnation with its unchanged connection IDs. |
 | Land a branch | Preserve connection identity and check deletions against the recorded branch base. An intentional owner replacement keeps its new UID; a stale branch must resolve a recreated baseline explicitly. |
 
 For lifecycle transitions the source event is part of the connection. For slice
@@ -81,6 +82,10 @@ side denotes a removed occurrence; an ID introduced on the branch can land with
 its identity intact. Check this before advancing the branch's recorded base.
 Different owner incarnations have separate identity scopes. Ordinary landing
 rejects revival rather than renewing deleted IDs implicitly.
+
+Occurrence deletion is compared against a present opposing owner in the same
+incarnation. If baseline deleted the entire owner, explicit keep-ours resolution
+restores the surviving branch incarnation and its unchanged connection IDs.
 
 ## Creation and authoring
 

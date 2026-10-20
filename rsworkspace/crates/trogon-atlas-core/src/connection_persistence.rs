@@ -100,13 +100,10 @@ fn removed_base_ids(
     let Some(base) = base.filter(|base| same_incarnation(base, selected)) else {
         return Ok(HashSet::new());
     };
-    if opposing.is_some_and(|entity| !same_incarnation(entity, selected)) {
+    let Some(opposing) = opposing.filter(|entity| same_incarnation(entity, selected)) else {
         return Ok(HashSet::new());
-    }
-    let active = opposing
-        .map(connection_occurrences)
-        .transpose()?
-        .unwrap_or_default()
+    };
+    let active = connection_occurrences(opposing)?
         .into_iter()
         .filter_map(|item| item.id)
         .collect::<HashSet<_>>();
@@ -270,6 +267,19 @@ mod tests {
     }
 
     #[test]
+    fn absent_opposing_owner_preserves_surviving_branch_occurrence_identity() {
+        let branch = prepare_entity(None, &ui()).unwrap();
+        assert_eq!(
+            prepare_resolution(Some(&branch), None, &branch).unwrap(),
+            branch
+        );
+        assert_eq!(
+            prepare_landing(Some(&branch), None, &branch).unwrap(),
+            branch
+        );
+    }
+
+    #[test]
     fn trusted_landing_accepts_branch_only_additions() {
         let mut authored = ui();
         clear_connections(&mut authored);
@@ -318,6 +328,8 @@ mod tests {
                 Some(incomplete_other_incarnation),
                 stored.clone(),
             ),
+            (Some(ui()), None, stored.clone()),
+            (Some(stored.clone()), None, ui()),
             (Some(ui()), Some(stored.clone()), stored.clone()),
             (Some(stored.clone()), Some(ui()), stored.clone()),
             (Some(stored.clone()), Some(stored.clone()), ui()),

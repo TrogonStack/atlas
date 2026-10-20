@@ -1099,3 +1099,124 @@ async fn keep_ours_renews_connections_removed_by_baseline() {
 async fn take_theirs_renews_connections_removed_by_branch() {
     resolve_with_removed_selected_connection(true).await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keep_ours_after_baseline_owner_deletion_preserves_branch_connection_identity() {
+    let service = service().await;
+    let mut destination = screen("destination");
+    ui(&mut destination).transitions.clear();
+    save(&service, destination).await;
+    let original = save(&service, screen("surviving-owner")).await;
+    let references = [reference(&original, 0), reference(&original, 1)];
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut branch = original;
+    ui(&mut branch).doc = "branch documentation edit".into();
+    let branch = service
+        .put_entity(on_branch(put(branch)))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    service
+        .delete_entity(Request::new(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Ui as i32,
+            id: Some(id("surviving-owner")),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let diff = service
+        .diff_branch(Request::new(pb::DiffBranchRequest {
+            name: "identity-work".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(diff.entries.len(), 1);
+    assert_eq!(
+        diff.entries[0].status,
+        pb::branch_diff_entry::Status::ConflictDeleteEdit as i32
+    );
+    let blocked = service
+        .merge_branch(Request::new(pb::MergeBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        blocked.status,
+        pb::merge_branch_response::Status::Conflicts as i32
+    );
+    service
+        .resolve_branch_entry(Request::new(pb::ResolveBranchEntryRequest {
+            name: "identity-work".into(),
+            r#ref: references[0].owner.clone(),
+            resolution: pb::resolve_branch_entry_request::Resolution::KeepOurs as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let resolved = service
+        .get_entity(on_branch(pb::GetEntityRequest {
+            kind: pb::EntityKind::Ui as i32,
+            id: Some(id("surviving-owner")),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    assert_eq!(
+        resolved.system.as_ref().unwrap().uid,
+        branch.system.as_ref().unwrap().uid
+    );
+    assert_eq!(
+        connection_occurrences(&resolved).unwrap(),
+        connection_occurrences(&branch).unwrap()
+    );
+    for reference in &references {
+        assert!(resolve_connection(&resolved, reference).is_ok());
+    }
+    for dry_run in [true, false] {
+        let merged = service
+            .merge_branch(Request::new(pb::MergeBranchRequest {
+                name: "identity-work".into(),
+                dry_run,
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            merged.status,
+            if dry_run {
+                pb::merge_branch_response::Status::Validated
+            } else {
+                pb::merge_branch_response::Status::Applied
+            } as i32,
+            "{merged:?}"
+        );
+    }
+    let landed = get(&service, "surviving-owner").await;
+    assert_eq!(
+        landed.system.as_ref().unwrap().uid,
+        branch.system.as_ref().unwrap().uid
+    );
+    assert_eq!(
+        connection_occurrences(&landed).unwrap(),
+        connection_occurrences(&branch).unwrap()
+    );
+    for reference in &references {
+        assert!(resolve_connection(&landed, reference).is_ok());
+    }
+}
