@@ -574,10 +574,11 @@ describe('code bundles', () => {
   });
 
   it('skips incomplete references', () => {
-    const { model } = build([
+    const { model, wf } = build([
       { command: { id: id('place-order'), title: 'Place order', metadata: [codeRef('storefront', '')] } },
     ]);
     expect(codeBundles(model.entities)).toEqual([]);
+    expect(wf.hasCode).toBe(false);
   });
 
   it('reports no code when no entity carries a reference', () => {

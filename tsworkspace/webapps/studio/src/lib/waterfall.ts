@@ -143,7 +143,7 @@ export interface Waterfall {
   occurrences: Map<string, number[]>;
   /** Steps that more than one group reaches in the storyboard grouping. */
   shared: number;
-  /** False when no entity in the model carries a code reference, so the code column has nothing to show. */
+  /** False when no entity carries a complete code reference (repo + path), so the code column has nothing to show. */
   hasCode: boolean;
 }
 
@@ -646,6 +646,7 @@ export function buildWaterfall(model: Model): Waterfall {
     cables,
     occurrences,
     shared: [...rowByKey.values()].filter((r) => r.joinedBy.length > 0).length,
-    hasCode: model.entities.some((e) => e.annotations.some((a) => a.type === 'CodeRefAnnotation')),
+    // Match codeBundles: incomplete refs (no repo/path) never populate the column.
+    hasCode: codeBundles(model.entities).length > 0,
   };
 }
