@@ -925,6 +925,12 @@ export function assembleModel(entities: Entity[]): Model {
   return { entities, byKey, byKind, slices, storyboards, continuations, swimlanes, tracking, namespaces };
 }
 
+/** True when some swimlane holds an event: the stream towers then have something to draw. */
+export function hasStreamEvents(model: Model): boolean {
+  const lanes = new Set(model.swimlanes.map((l) => slugKey('swimlane', l.id)));
+  return model.entities.some((e) => e.kind === 'event' && e.swimlane && lanes.has(slugKey('swimlane', e.swimlane)));
+}
+
 /** Tracker entries pointing at this entity (status overlays). */
 export function trackingOf(model: Model, entity: Entity): TrackingView[] {
   return model.tracking.get(slugKey(entity.kind, entity.id)) ?? [];

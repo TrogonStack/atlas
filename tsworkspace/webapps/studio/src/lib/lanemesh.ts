@@ -60,14 +60,14 @@ export const WALL_DROP = 40;
 export const WALL_BACK = 24;
 const FILE_DEPTH = 6;
 
-interface PxBox {
+export interface PxBox {
   x: number;
   y: number;
   w: number;
   h: number;
 }
 
-function pxBox(n: Node): PxBox {
+export function pxBox(n: Node): PxBox {
   const style = (n.style ?? {}) as { width?: number | string; height?: number | string };
   return {
     x: n.position.x,
@@ -121,13 +121,7 @@ export function buildLaneMesh(model: Model): SceneSpec {
         momentKey: d.moment?.key,
         instance: d.instance,
         synthetic: d.synthetic,
-        flag: d.multipleIssuers
-          ? 'error'
-          : d.noEmittedEvents
-            ? 'pending'
-            : orphanOf(d.entity) !== undefined
-              ? 'orphan'
-              : undefined,
+        flag: flagOf(d),
       });
       corners.push(...cornersOf(b, -CARD_DEPTH / 2, CARD_DEPTH / 2));
       continue;
@@ -336,7 +330,14 @@ function bodyOf(byId: Map<string, SceneNode>, id: string): Body {
   return (byId.get(id) as SceneNode).body;
 }
 
-function strokeOf(e: Edge): string {
+/** The validator state the Board marks on a card. */
+export function flagOf(d: StickyData): SceneNode['flag'] {
+  if (d.multipleIssuers) return 'error';
+  if (d.noEmittedEvents) return 'pending';
+  return orphanOf(d.entity) !== undefined ? 'orphan' : undefined;
+}
+
+export function strokeOf(e: Edge): string {
   const stroke = (e.style as { stroke?: unknown } | undefined)?.stroke;
   return typeof stroke === 'string' ? stroke : '#a1a1aa';
 }

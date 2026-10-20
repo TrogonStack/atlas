@@ -181,9 +181,18 @@ describe('tagState', () => {
   };
 
   it('ranks the names of the selection above the names of its neighbours', () => {
-    expect(tagState(tag({ related: [a.key] }), focus)).toEqual({ visible: true, priority: 21, selected: true });
-    expect(tagState(tag({ related: [b.key] }), focus)).toEqual({ visible: true, priority: 11, selected: false });
-    expect(tagState(tag({ related: ['other'] }), focus)).toEqual({ visible: true, priority: 1, selected: false });
+    expect(tagState(tag({ related: [a.key] }), focus)).toMatchObject({ visible: true, priority: 21, selected: true });
+    expect(tagState(tag({ related: [b.key] }), focus)).toMatchObject({ visible: true, priority: 11, selected: false });
+    expect(tagState(tag({ related: ['other'] }), focus)).toMatchObject({ visible: true, priority: 1, selected: false });
+  });
+
+  it('fades the name of a node that a selection fades, but never a guide', () => {
+    const dimming = { ...focus, dimNodes: true };
+    expect(tagState(tag({ related: ['other'] }), dimming).dim).toBe(true);
+    expect(tagState(tag({ related: [b.key] }), dimming).dim).toBe(false);
+    expect(tagState(tag({ related: ['other'], tone: 'ghost' }), dimming).dim).toBe(false);
+    expect(tagState(tag({}), dimming).dim).toBe(false);
+    expect(tagState(tag({ related: ['other'] }), focus).dim).toBe(false);
   });
 
   it('hides a tag that only shows with its entity lit', () => {
