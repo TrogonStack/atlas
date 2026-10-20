@@ -25,7 +25,6 @@ pub fn stamp_system(prev: Option<&Entity>, entity: &Entity) -> Entity {
         _ => SystemMeta {
             uid: uuid::Uuid::now_v7().to_string(),
             created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            retired_connection_ids: Vec::new(),
         },
     });
     e
@@ -56,7 +55,6 @@ mod tests {
     #[test]
     fn update_path_preserves_prior_uid() {
         let prev_sys = SystemMeta {
-            retired_connection_ids: Vec::new(),
             uid: "prior-uid-abc".into(),
             created_at: "2025-01-01T00:00:00Z".into(),
         };
@@ -73,7 +71,6 @@ mod tests {
     #[test]
     fn update_with_empty_uid_mints_new() {
         let prev_sys = SystemMeta {
-            retired_connection_ids: Vec::new(),
             uid: String::new(),
             created_at: String::new(),
         };
@@ -90,7 +87,6 @@ mod tests {
     #[test]
     fn client_provided_system_is_overwritten() {
         let client_sys = SystemMeta {
-            retired_connection_ids: Vec::new(),
             uid: "client-uid".into(),
             created_at: "client-ts".into(),
         };
@@ -112,7 +108,6 @@ mod tests {
         // must not be preserved as a "valid" incarnation id.
         let prev = Entity {
             system: Some(SystemMeta {
-                retired_connection_ids: Vec::new(),
                 uid: "   ".into(),
                 created_at: "2025-01-01T00:00:00Z".into(),
             }),
@@ -128,7 +123,6 @@ mod tests {
     fn update_overwrites_client_system_with_prev() {
         let prev = Entity {
             system: Some(SystemMeta {
-                retired_connection_ids: Vec::new(),
                 uid: "prior-uid".into(),
                 created_at: "2025-01-01T00:00:00Z".into(),
             }),
@@ -136,7 +130,6 @@ mod tests {
         };
         let client = Entity {
             system: Some(SystemMeta {
-                retired_connection_ids: Vec::new(),
                 uid: "client-uid".into(),
                 created_at: "client-ts".into(),
             }),

@@ -90,7 +90,7 @@ pub struct ConnectionId {
 /// uid on delete+recreate of the same name, making silent re-keying
 /// detectable and giving external state management a durable handle.
 /// Client-provided values are ignored; the server owns this block.
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SystemMeta {
     /// UUIDv7, time-sortable incarnation id
     #[prost(string, tag="1")]
@@ -98,8 +98,5 @@ pub struct SystemMeta {
     /// RFC 3339, set once at creation
     #[prost(string, tag="2")]
     pub created_at: ::prost::alloc::string::String,
-    /// Removed occurrences cannot be reused while this incarnation exists.
-    #[prost(message, repeated, tag="3")]
-    pub retired_connection_ids: ::prost::alloc::vec::Vec<ConnectionId>,
 }
 // @@protoc_insertion_point(module)

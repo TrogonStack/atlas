@@ -91,8 +91,10 @@ pub enum ConnectionError {
     MissingId,
     #[error("connection {0} is absent from this owner")]
     NotFound(ConnectionId),
-    #[error("connection ID {0} was retired and cannot be reused")]
-    RetiredId(ConnectionId),
+    #[error("connection ID {0} is not active in this owner; omit IDs for new occurrences")]
+    UnknownId(ConnectionId),
+    #[error("connection ID {0} from the branch base was removed on the opposing side")]
+    RemovedFromBranchBase(ConnectionId),
     #[error("connection encoding error: {0}")]
     Encoding(String),
 }
@@ -271,7 +273,7 @@ fn visit(
     Ok(())
 }
 
-/// Renew identified occurrences whose role or either declared endpoint changed.
+/// Request fresh identities for occurrences whose role or either declared endpoint changed.
 pub fn renew_retargeted_connection_ids(
     previous: &Entity,
     proposed: &mut Entity,
@@ -296,14 +298,7 @@ pub fn renew_retargeted_connection_ids(
                 .ok_or_else(|| {
                     ConnectionError::Encoding("connection ID descriptor missing".into())
                 })?;
-            let prost_reflect::Kind::Message(descriptor) = field.kind() else {
-                return Err(ConnectionError::Encoding(
-                    "connection ID is not a message".into(),
-                ));
-            };
-            let mut id = DynamicMessage::new(descriptor);
-            id.set_field_by_name("value", Value::String(ConnectionId::new().to_string()));
-            message.set_field(&field, Value::Message(id));
+            message.clear_field(&field);
             renewed += 1;
         }
         Ok(())
@@ -435,6 +430,21 @@ pub fn reconcile_connection_ids(
     previous: &Entity,
     proposed: &mut Entity,
 ) -> Result<usize, ConnectionError> {
+    reconcile(previous, proposed, false)
+}
+
+pub(crate) fn reconcile_branch_connection_ids(
+    previous: &Entity,
+    proposed: &mut Entity,
+) -> Result<usize, ConnectionError> {
+    reconcile(previous, proposed, true)
+}
+
+fn reconcile(
+    previous: &Entity,
+    proposed: &mut Entity,
+    trusted_additions: bool,
+) -> Result<usize, ConnectionError> {
     validate_stored_connection_ids(previous)?;
     validate_connection_ids(proposed)?;
     let old = connection_occurrences(previous)?;
@@ -449,6 +459,9 @@ pub fn reconcile_connection_ids(
         .collect();
     for occurrence in proposed_occurrences {
         match occurrence.id {
+            Some(id) if !trusted_additions && !old_ids.contains_key(&id) => {
+                return Err(ConnectionError::UnknownId(id));
+            }
             Some(id)
                 if old_ids
                     .get(&id)
@@ -639,7 +652,18 @@ mod tests {
             renew_retargeted_connection_ids(&entity, &mut changed).unwrap(),
             1
         );
+        assert!(slice(&mut changed).emitted_events[0]
+            .connection_id
+            .is_none());
+        assert_eq!(
+            slice(&mut changed).emitted_events[1].connection_id,
+            slice(&mut entity).emitted_events[1].connection_id
+        );
         reconcile_connection_ids(&entity, &mut changed).unwrap();
+        assert_ne!(
+            slice(&mut changed).emitted_events[0].connection_id,
+            slice(&mut entity).emitted_events[0].connection_id
+        );
         let mut changed_source = entity.clone();
         slice(&mut changed_source)
             .command
@@ -657,6 +681,10 @@ mod tests {
             renew_retargeted_connection_ids(&entity, &mut changed_source).unwrap(),
             3
         );
+        assert!(connection_occurrences(&changed_source)
+            .unwrap()
+            .iter()
+            .all(|occurrence| occurrence.id.is_none()));
         reconcile_connection_ids(&entity, &mut changed_source).unwrap();
     }
 

@@ -117,8 +117,8 @@ Detection alone is half a design; this section is the other half.
 **Conflict classes.** Four, and the fourth has no git analog:
 
 1. *Edit/edit*: baseline and branch both changed the same entity, and the
-   results differ semantically. (If they converged on the same content,
-   that is not a conflict; semantic equality already knows.)
+   results differ in content or owner incarnation. Matching edits converge when
+   both agree.
 2. *Edit/delete*: the branch deleted what the baseline meanwhile changed.
 3. *Delete/edit*: the branch changed what the baseline meanwhile deleted.
 4. *Compositional invalidity*: no entity conflicts at all, but the merged
@@ -134,6 +134,13 @@ entries split into added, changed and deleted, and every finding the merged
 world carries, errors and non-blocking ones alike. A reviewer reads one
 result instead of a diff and a separate validation call.
 
+Independently creating the same key on baseline and a branch creates distinct
+owner incarnations, even when the authored content matches. This remains an
+edit/edit conflict with `system.uid` as a conflicting path. Choose an incarnation
+explicitly with keep-ours or take-theirs; automatically discarding either
+incarnation would invalidate references to it. There is no common ancestor for a
+structural merge. See [connection identity](../reference/connection-identity.md).
+
 **Resolution happens on the branch, never inside the merge.** Merge is
 all-or-nothing: it either lands everything or reports conflicts and
 changes nothing. Resolving is ordinary branch work, not a special mode:
@@ -141,9 +148,9 @@ take the baseline's version, keep the
 branch's version, take the structural merge of the two, or write a
 hand-merged entity onto the branch, and in every case the key's recorded
 base refreshes to the current baseline.
-Connection retirement history survives resolution within the same owner
-incarnation. If the discarded side retired an occurrence selected by the
-resolution, that occurrence receives a fresh ID instead of reviving a stale
+Within the same owner incarnation, the recorded branch base identifies
+connections deleted by the discarded side. If the resolution restores one,
+that occurrence receives a fresh ID instead of reviving a stale
 reference. Taking the baseline's content can therefore leave an identity delta
 to land. See [connection identity](../reference/connection-identity.md).
 Merge again, now clean. There are no half-merged states, no resolution

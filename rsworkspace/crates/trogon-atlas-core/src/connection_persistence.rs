@@ -1,14 +1,14 @@
-//! Backend-owned connection identity continuity, including retired occurrences.
+//! Backend-owned connection identity continuity against bounded current snapshots.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 use trogon_atlas_proto::Entity;
 
 use crate::{
     connections::{
         assign_connection_ids, connection_occurrences, equivalent_with_unassigned_ids,
-        reconcile_connection_ids, renew_connection_ids, validate_stored_connection_ids,
-        ConnectionError, ConnectionId,
+        reconcile_branch_connection_ids, reconcile_connection_ids, renew_connection_ids,
+        validate_stored_connection_ids, ConnectionError, ConnectionId,
     },
     stamp_system,
 };
@@ -18,107 +18,44 @@ pub fn prepare_entity(
     previous: Option<&Entity>,
     proposed: &Entity,
 ) -> Result<Entity, ConnectionError> {
-    if let Some(previous) = previous {
-        if equivalent_with_unassigned_ids(previous, proposed)? {
-            return prepare(Some(previous), previous, &[], false);
-        }
-    }
-    prepare(previous, proposed, &[], false)
-}
-
-/// Land a trusted branch value after checking its baseline concurrency guard.
-pub fn prepare_landing(
-    previous: Option<&Entity>,
-    branch: &Entity,
-) -> Result<Entity, ConnectionError> {
-    if let Some(previous) = previous {
-        validate_stored_connection_ids(previous)?;
-    }
-    validate_stored_connection_ids(branch)?;
-    let retired = branch
-        .system
-        .as_ref()
-        .map_or(&[][..], |system| system.retired_connection_ids.as_slice());
-    let previous = previous.filter(|previous| {
-        let old_uid = previous.system.as_ref().map(|system| system.uid.as_str());
-        let branch_uid = branch.system.as_ref().map(|system| system.uid.as_str());
-        !matches!((old_uid, branch_uid), (Some(old), Some(new)) if !old.is_empty() && !new.is_empty() && old != new)
-    });
-    prepare(previous, branch, retired, true)
-}
-
-/// Resolve an explicit branch choice without reviving retired occurrence identities.
-pub fn prepare_resolution(
-    discarded: Option<&Entity>,
-    selected: &Entity,
-) -> Result<Entity, ConnectionError> {
-    if let Some(discarded) = discarded {
-        validate_stored_connection_ids(discarded)?;
-    }
-    let discarded = discarded.filter(|entity| {
-        entity.system.as_ref().map(|system| &system.uid)
-            == selected.system.as_ref().map(|system| &system.uid)
-    });
-    let retired = discarded
-        .into_iter()
-        .chain(std::iter::once(selected))
-        .filter_map(|entity| entity.system.as_ref())
-        .flat_map(|system| &system.retired_connection_ids)
-        .map(|id| id.value.parse())
-        .collect::<Result<HashSet<ConnectionId>, ConnectionError>>()?;
-    let mut resolved = selected.clone();
-    renew_connection_ids(&mut resolved, &retired)?;
-    prepare_landing(discarded, &resolved)
-}
-
-fn prepare(
-    previous: Option<&Entity>,
-    proposed: &Entity,
-    branch_retired: &[trogon_atlas_proto::ConnectionId],
-    landing: bool,
-) -> Result<Entity, ConnectionError> {
     let mut prepared = proposed.clone();
     match previous {
         Some(previous) => {
-            reconcile_connection_ids(previous, &mut prepared)?;
+            if equivalent_with_unassigned_ids(previous, proposed)? {
+                prepared = previous.clone();
+            } else {
+                reconcile_connection_ids(previous, &mut prepared)?;
+            }
         }
         None => {
             assign_connection_ids(&mut prepared)?;
         }
     }
-    let active: BTreeSet<String> = connection_occurrences(&prepared)?
+    Ok(stamp_system(previous, &prepared))
+}
+
+/// Land a trusted branch value after checking its baseline concurrency guard.
+pub fn prepare_landing(
+    base: Option<&Entity>,
+    previous: Option<&Entity>,
+    branch: &Entity,
+) -> Result<Entity, ConnectionError> {
+    let removed = removed_base_ids(base, previous, branch)?;
+    if let Some(id) = connection_occurrences(branch)?
         .into_iter()
-        .filter_map(|item| item.id.map(|id| id.to_string()))
-        .collect();
-    let mut retired = BTreeSet::new();
-    for id in previous
-        .and_then(|entity| entity.system.as_ref())
-        .into_iter()
-        .flat_map(|system| &system.retired_connection_ids)
-        .chain(branch_retired)
+        .filter_map(|item| item.id)
+        .find(|id| removed.contains(id))
     {
-        let id: ConnectionId = id.value.parse()?;
-        retired.insert(id.to_string());
+        return Err(ConnectionError::RemovedFromBranchBase(id));
     }
-    for id in &active {
-        if retired.contains(id) {
-            return Err(ConnectionError::RetiredId(id.parse()?));
-        }
-    }
+    let previous = previous.filter(|entity| same_incarnation(entity, branch));
+    let mut prepared = branch.clone();
     if let Some(previous) = previous {
-        for id in connection_occurrences(previous)?
-            .into_iter()
-            .filter_map(|item| item.id)
-        {
-            let id = id.to_string();
-            if !active.contains(&id) {
-                retired.insert(id);
-            }
-        }
+        reconcile_branch_connection_ids(previous, &mut prepared)?;
     }
     prepared = stamp_system(previous, &prepared);
-    if landing && previous.is_none() {
-        if let Some(system) = proposed
+    if previous.is_none() {
+        if let Some(system) = branch
             .system
             .as_ref()
             .filter(|system| !system.uid.is_empty())
@@ -126,13 +63,58 @@ fn prepare(
             prepared.system = Some(system.clone());
         }
     }
-    if let Some(system) = prepared.system.as_mut() {
-        system.retired_connection_ids = retired
-            .into_iter()
-            .map(|value| trogon_atlas_proto::ConnectionId { value })
-            .collect();
-    }
     Ok(prepared)
+}
+
+/// Resolve an explicit branch choice without reviving occurrences removed since its base.
+pub fn prepare_resolution(
+    base: Option<&Entity>,
+    discarded: Option<&Entity>,
+    selected: &Entity,
+) -> Result<Entity, ConnectionError> {
+    let removed = removed_base_ids(base, discarded, selected)?;
+    let mut resolved = selected.clone();
+    renew_connection_ids(&mut resolved, &removed)?;
+    prepare_landing(base, discarded, &resolved)
+}
+
+fn same_incarnation(left: &Entity, right: &Entity) -> bool {
+    left.system
+        .as_ref()
+        .zip(right.system.as_ref())
+        .is_some_and(|(left, right)| !left.uid.is_empty() && left.uid == right.uid)
+}
+
+fn removed_base_ids(
+    base: Option<&Entity>,
+    opposing: Option<&Entity>,
+    selected: &Entity,
+) -> Result<HashSet<ConnectionId>, ConnectionError> {
+    for entity in base
+        .into_iter()
+        .chain(opposing)
+        .chain(std::iter::once(selected))
+    {
+        validate_stored_connection_ids(entity)?;
+    }
+    let Some(base) = base.filter(|base| same_incarnation(base, selected)) else {
+        return Ok(HashSet::new());
+    };
+    if opposing.is_some_and(|entity| !same_incarnation(entity, selected)) {
+        return Ok(HashSet::new());
+    }
+    let active = opposing
+        .map(connection_occurrences)
+        .transpose()?
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| item.id)
+        .collect::<HashSet<_>>();
+    Ok(connection_occurrences(base)?
+        .into_iter()
+        .filter_map(|item| item.id)
+        .filter(|id| !active.contains(id))
+        .collect())
 }
 
 #[cfg(test)]
@@ -175,6 +157,27 @@ mod tests {
     }
 
     #[test]
+    fn existing_owner_rejects_client_supplied_unknown_connection_id() {
+        let stored = prepare_entity(None, &ui()).unwrap();
+        let mut proposed = stored.clone();
+        let Some(entity::Kind::Ui(screen)) = proposed.kind.as_mut() else {
+            panic!("expected UI");
+        };
+        screen.transitions.push(trogon_atlas_proto::ui::Transition {
+            to: Some(UiRef {
+                id: Some(Id {
+                    namespace: "shop".into(),
+                    slug: "checkout".into(),
+                    version: 1,
+                }),
+            }),
+            connection_id: Some(ConnectionId::new().into()),
+            ..Default::default()
+        });
+        assert!(prepare_entity(Some(&stored), &proposed).is_err());
+    }
+
+    #[test]
     fn creation_ignores_client_system_and_assigns_ids() {
         let mut proposed = ui();
         proposed.system = Some(SystemMeta {
@@ -204,113 +207,144 @@ mod tests {
     }
 
     #[test]
-    fn landing_requires_complete_stored_baseline_and_branch_ids() {
-        let stored = prepare_entity(None, &ui()).unwrap();
-        assert!(matches!(
-            prepare_landing(Some(&ui()), &stored),
-            Err(ConnectionError::MissingStoredId(_))
-        ));
-        assert!(matches!(
-            prepare_landing(None, &ui()),
-            Err(ConnectionError::MissingStoredId(_))
-        ));
-        assert!(matches!(
-            prepare_landing(Some(&stored), &ui()),
-            Err(ConnectionError::MissingStoredId(_))
-        ));
-    }
-
-    #[test]
-    fn removal_retires_id_and_client_cannot_clear_history() {
+    fn removed_ids_cannot_be_supplied_again_but_idless_additions_are_fresh() {
         let original = prepare_entity(None, &ui()).unwrap();
-        let id = connection_occurrences(&original).unwrap()[0].id.unwrap();
+        let old = connection_occurrences(&original).unwrap()[0].id.unwrap();
         let mut removed = original.clone();
         clear_connections(&mut removed);
         let removed = prepare_entity(Some(&original), &removed).unwrap();
         assert_eq!(
-            removed.system.as_ref().unwrap().retired_connection_ids,
-            vec![id.into()]
+            prepare_entity(Some(&removed), &original),
+            Err(ConnectionError::UnknownId(old))
         );
-        let mut reuse = original;
-        reuse.system = None;
+        let restored = prepare_entity(Some(&removed), &ui()).unwrap();
+        assert_ne!(
+            connection_occurrences(&restored).unwrap()[0].id.unwrap(),
+            old
+        );
+    }
+
+    #[test]
+    fn fresh_incarnation_can_accept_supplied_ids() {
+        let original = prepare_entity(None, &ui()).unwrap();
+        let replacement = prepare_entity(None, &original).unwrap();
         assert_eq!(
-            prepare_entity(Some(&removed), &reuse),
-            Err(ConnectionError::RetiredId(id))
+            connection_occurrences(&original).unwrap(),
+            connection_occurrences(&replacement).unwrap()
+        );
+        assert_ne!(
+            original.system.unwrap().uid,
+            replacement.system.unwrap().uid
         );
     }
 
     #[test]
-    fn malformed_retirement_history_is_not_silently_dropped() {
-        let mut original = prepare_entity(None, &ui()).unwrap();
-        original
-            .system
-            .as_mut()
-            .unwrap()
-            .retired_connection_ids
-            .push(trogon_atlas_proto::ConnectionId {
-                value: "invalid".into(),
-            });
-        assert!(matches!(
-            prepare_entity(Some(&original), &original),
-            Err(ConnectionError::InvalidId(_))
-        ));
-    }
-
-    #[test]
-    fn landing_preserves_branch_only_retirement_history() {
-        let mut baseline = ui();
-        clear_connections(&mut baseline);
-        let baseline = prepare_entity(None, &baseline).unwrap();
-        let branch = prepare_entity(Some(&baseline), &ui()).unwrap();
-        let id = connection_occurrences(&branch).unwrap()[0].id.unwrap();
-        let mut removed = branch.clone();
-        clear_connections(&mut removed);
-        let removed = prepare_entity(Some(&branch), &removed).unwrap();
-        let landed = prepare_landing(Some(&baseline), &removed).unwrap();
+    fn common_base_removal_blocks_landing_and_explicit_resolution_renews_only_removed_ids() {
+        let mut authored = ui();
+        let Some(entity::Kind::Ui(screen)) = authored.kind.as_mut() else {
+            panic!("expected UI")
+        };
+        screen.transitions.push(screen.transitions[0].clone());
+        let base = prepare_entity(None, &authored).unwrap();
+        let mut pruned = base.clone();
+        let Some(entity::Kind::Ui(screen)) = pruned.kind.as_mut() else {
+            panic!("expected UI")
+        };
+        screen.transitions.remove(0);
+        let pruned = prepare_entity(Some(&base), &pruned).unwrap();
+        let ids = connection_occurrences(&base).unwrap();
+        let removed = ids[0].id.unwrap();
         assert_eq!(
-            landed.system.as_ref().unwrap().retired_connection_ids,
-            vec![id.into()]
+            prepare_landing(Some(&base), Some(&pruned), &base),
+            Err(ConnectionError::RemovedFromBranchBase(removed))
+        );
+        let resolved = prepare_resolution(Some(&base), Some(&pruned), &base).unwrap();
+        let resolved_ids = connection_occurrences(&resolved).unwrap();
+        assert_ne!(resolved_ids[0].id, ids[0].id);
+        assert_eq!(resolved_ids[1].id, ids[1].id);
+        assert_eq!(
+            resolved.system.as_ref().unwrap().uid,
+            base.system.as_ref().unwrap().uid
+        );
+        assert!(prepare_landing(Some(&pruned), Some(&pruned), &resolved).is_ok());
+    }
+
+    #[test]
+    fn trusted_landing_accepts_branch_only_additions() {
+        let mut authored = ui();
+        clear_connections(&mut authored);
+        let base = prepare_entity(None, &authored).unwrap();
+        let branch = prepare_entity(Some(&base), &ui()).unwrap();
+        let landed = prepare_landing(Some(&base), Some(&base), &branch).unwrap();
+        assert_eq!(
+            connection_occurrences(&landed).unwrap(),
+            connection_occurrences(&branch).unwrap()
+        );
+    }
+
+    #[test]
+    fn distinct_incarnations_do_not_share_removed_base_ids() {
+        let base = prepare_entity(None, &ui()).unwrap();
+        let mut authored = ui();
+        clear_connections(&mut authored);
+        let other = prepare_entity(None, &authored).unwrap();
+        let landed = prepare_landing(Some(&base), Some(&other), &base).unwrap();
+        assert_eq!(
+            landed.system.as_ref().unwrap().uid,
+            base.system.as_ref().unwrap().uid
         );
         assert_eq!(
-            prepare_entity(Some(&landed), &branch),
-            Err(ConnectionError::RetiredId(id))
+            connection_occurrences(&landed).unwrap(),
+            connection_occurrences(&base).unwrap()
+        );
+        let resolved = prepare_resolution(Some(&base), Some(&other), &base).unwrap();
+        assert_eq!(
+            connection_occurrences(&resolved).unwrap(),
+            connection_occurrences(&base).unwrap()
         );
     }
 
     #[test]
-    fn resolution_rejects_missing_stored_ids_even_for_discarded_incarnation() {
-        let selected = prepare_entity(None, &ui()).unwrap();
-        assert!(matches!(
-            prepare_resolution(Some(&ui()), &selected),
-            Err(ConnectionError::MissingStoredId(_))
-        ));
-    }
-
-    #[test]
-    fn resolution_does_not_carry_retirements_across_owner_incarnations() {
-        let selected = prepare_entity(None, &ui()).unwrap();
-        let selected_id = connection_occurrences(&selected).unwrap()[0].id.unwrap();
-        let mut discarded = prepare_entity(None, &ui()).unwrap();
-        discarded
-            .system
-            .as_mut()
-            .unwrap()
-            .retired_connection_ids
-            .push(selected_id.into());
-        let resolved = prepare_resolution(Some(&discarded), &selected).unwrap();
-        assert_eq!(resolved, selected);
+    fn branch_preparation_validates_all_snapshots_before_incarnation_filtering() {
+        let stored = prepare_entity(None, &ui()).unwrap();
+        let mut incomplete_other_incarnation = prepare_entity(None, &ui()).unwrap();
+        let Some(entity::Kind::Ui(screen)) = incomplete_other_incarnation.kind.as_mut() else {
+            panic!("expected UI")
+        };
+        screen.transitions[0].connection_id = None;
+        for (base, previous, selected) in [
+            (
+                Some(stored.clone()),
+                Some(incomplete_other_incarnation),
+                stored.clone(),
+            ),
+            (Some(ui()), Some(stored.clone()), stored.clone()),
+            (Some(stored.clone()), Some(ui()), stored.clone()),
+            (Some(stored.clone()), Some(stored.clone()), ui()),
+        ] {
+            assert!(matches!(
+                prepare_landing(base.as_ref(), previous.as_ref(), &selected),
+                Err(ConnectionError::MissingStoredId(_))
+            ));
+            assert!(matches!(
+                prepare_resolution(base.as_ref(), previous.as_ref(), &selected),
+                Err(ConnectionError::MissingStoredId(_))
+            ));
+        }
     }
 
     #[test]
     fn guarded_landing_preserves_new_or_replaced_branch_incarnation() {
         let branch = prepare_entity(None, &ui()).unwrap();
         assert_eq!(
-            prepare_landing(None, &branch).unwrap().system,
+            prepare_landing(None, None, &branch).unwrap().system,
             branch.system
         );
         let replacement = prepare_entity(None, &ui()).unwrap();
         assert_eq!(
-            prepare_landing(Some(&replacement), &branch).unwrap().system,
+            prepare_landing(None, Some(&replacement), &branch)
+                .unwrap()
+                .system,
             branch.system
         );
     }

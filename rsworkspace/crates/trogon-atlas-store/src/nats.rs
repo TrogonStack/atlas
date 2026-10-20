@@ -83,14 +83,6 @@ fn prepare_entity(previous: Option<&Entity>, entity: &Entity) -> StoreResult<Ent
 
 fn unchanged_entity(previous: &Entity, prepared: &Entity) -> bool {
     trogon_atlas_core::semantically_equal(previous, prepared)
-        && previous
-            .system
-            .as_ref()
-            .map(|system| &system.retired_connection_ids)
-            == prepared
-                .system
-                .as_ref()
-                .map(|system| &system.retired_connection_ids)
 }
 
 const DEFAULT_KV_BUCKET: &str = "trogon-atlas-entities";
@@ -2872,7 +2864,19 @@ impl Store for NatsStore {
                 kind,
                 &id,
                 |prev_entity, _prev_etag, base| {
-                    let prepared = prepare_entity(prev_entity.as_ref(), entity)?;
+                    let prepared = match ctx.connection_admission() {
+                        crate::store::ConnectionAdmission::Active => {
+                            prepare_entity(prev_entity.as_ref(), entity)?
+                        }
+                        crate::store::ConnectionAdmission::BranchMerge { base } => {
+                            trogon_atlas_core::connection_persistence::prepare_landing(
+                                Some(base),
+                                prev_entity.as_ref(),
+                                entity,
+                            )
+                            .map_err(|error| StoreError::InvalidArgument(error.to_string()))?
+                        }
+                    };
                     if !force {
                         if let Some(prev) = prev_entity.as_ref() {
                             if unchanged_entity(prev, &prepared) {
@@ -4624,6 +4628,7 @@ impl Store for NatsStore {
                 BranchLandOp::Put {
                     kind,
                     ours,
+                    base: _,
                     expected_baseline_etag,
                 } => {
                     let id = Self::validate(*kind, ours)
@@ -4682,6 +4687,7 @@ impl Store for NatsStore {
                 BranchLandOp::Put {
                     kind,
                     ours,
+                    base,
                     expected_baseline_etag,
                 } => 'put: {
                     let id = match Self::validate(*kind, ours) {
@@ -4691,6 +4697,7 @@ impl Store for NatsStore {
                     let key = entity_key(*kind, &id);
                     let before = baseline_before(*kind, &id);
                     let prepared = match trogon_atlas_core::connection_persistence::prepare_landing(
+                        base.as_deref(),
                         before.as_ref(),
                         ours,
                     ) {
@@ -4951,6 +4958,7 @@ impl Store for NatsStore {
                         .as_ref()
                         .map(|ours| {
                             trogon_atlas_core::connection_persistence::prepare_landing(
+                                delta.base.as_ref(),
                                 Some(base_entity),
                                 ours,
                             )
@@ -5004,6 +5012,7 @@ impl Store for NatsStore {
                     let baseline_entity = decode_entity(&be.value)?;
                     let baseline_etag = be.revision.to_string();
                     let ours = trogon_atlas_core::connection_persistence::prepare_resolution(
+                        delta.base.as_ref(),
                         delta.ours.as_ref(),
                         &baseline_entity,
                     )
@@ -5056,6 +5065,7 @@ impl Store for NatsStore {
             .as_ref()
             .map(|ours| {
                 trogon_atlas_core::connection_persistence::prepare_resolution(
+                    delta.base.as_ref(),
                     new_base.as_ref(),
                     ours,
                 )

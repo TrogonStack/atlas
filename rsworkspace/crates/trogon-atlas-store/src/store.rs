@@ -35,12 +35,13 @@ pub struct BranchDeltaEntry {
 #[derive(Debug, Clone)]
 pub enum BranchLandOp {
     /// Land a trusted branch value while preserving incarnation identity and
-    /// combining baseline and branch retired connection IDs. Used
+    /// checking connection provenance against its recorded fork snapshot. Used
     /// for ADDED/CHANGED entries (and CONFLICT_DELETE_EDIT resolved via
     /// take-ours, if ever surfaced that way).
     Put {
         kind: EntityKind,
         ours: Box<Entity>,
+        base: Option<Box<Entity>>,
         /// Baseline etag this was diffed against. `None` means baseline
         /// had no row for this key at diff time.
         expected_baseline_etag: Option<String>,
@@ -214,6 +215,15 @@ pub struct ChangesetRef<'a> {
     pub operation_id: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ConnectionAdmission<'a> {
+    #[default]
+    Active,
+    /// Only for server-computed structural merges of stored snapshots while
+    /// holding the writer lease and mutation lock across selection and write.
+    BranchMerge { base: &'a Entity },
+}
+
 /// Scope and attribution for one mutating call.
 ///
 /// This replaces the bare `branch: Option<&str>` that mutating methods used
@@ -228,6 +238,7 @@ pub struct WriteContext<'a> {
     branch: Option<&'a str>,
     changeset: Option<ChangesetRef<'a>>,
     operation_key: Option<&'a str>,
+    connection_admission: ConnectionAdmission<'a>,
 }
 
 impl<'a> WriteContext<'a> {
@@ -244,6 +255,7 @@ impl<'a> WriteContext<'a> {
             branch: Some(name),
             changeset: None,
             operation_key: None,
+            connection_admission: ConnectionAdmission::Active,
         }
     }
 
@@ -255,6 +267,7 @@ impl<'a> WriteContext<'a> {
             branch,
             changeset: None,
             operation_key: None,
+            connection_admission: ConnectionAdmission::Active,
         }
     }
 
@@ -263,6 +276,17 @@ impl<'a> WriteContext<'a> {
     pub fn attributed(mut self, changeset: ChangesetRef<'a>) -> Self {
         self.changeset = Some(changeset);
         self
+    }
+
+    #[must_use]
+    pub fn with_branch_merge_base(mut self, base: &'a Entity) -> Self {
+        self.connection_admission = ConnectionAdmission::BranchMerge { base };
+        self
+    }
+
+    #[must_use]
+    pub fn connection_admission(self) -> ConnectionAdmission<'a> {
+        self.connection_admission
     }
 
     /// Attach the operation-receipt key this write claims, so a journaled
@@ -451,9 +475,10 @@ pub struct ChangesetPage<'a> {
 /// Connection-bearing writes normalize IDs against the entity actually replaced
 /// before semantic no-op detection. Use
 /// `trogon_atlas_core::connection_persistence::prepare_entity` for ordinary
-/// writes and `prepare_landing` for trusted branch landings. Persist the returned
-/// backend-owned retirement ledger atomically with the entity; never accept a
-/// caller-provided ledger. Retired IDs cannot be reused in that incarnation.
+/// writes and `prepare_landing` for trusted branch landings. Existing owners
+/// accept supplied IDs only for active occurrences; additions receive fresh IDs.
+/// Branch landing and resolution also consult the recorded common base so
+/// deleted occurrences cannot be restored under their former identity.
 ///
 /// ## Error mapping
 ///
@@ -747,7 +772,7 @@ pub trait Store: Send + Sync {
 
     /// Land a set of branch deltas onto baseline. Each `BranchLandOp::Put`
     /// passes through `prepare_landing` against the baseline row it replaces,
-    /// preserving connection identity and combining retirement history while
+    /// preserving connection identity and checking the recorded fork snapshot while
     /// allowing the system stamp to change. There is no idempotency
     /// short-circuit. `BranchLandOp::Delete` removes the baseline row. Each op is
     /// guarded by the baseline etag captured at diff time: if baseline moved
@@ -793,8 +818,8 @@ pub trait Store: Send + Sync {
     ///   forward to the current baseline, keeping the branch's content.
     ///
     /// Both choices preserve the selected incarnation. Within the same
-    /// incarnation, combine retirement history and renew selected connections
-    /// whose IDs the discarded side retired. Unaffected IDs remain stable.
+    /// incarnation, consult the common base and renew selected connections
+    /// whose IDs the discarded side removed. Unaffected IDs remain stable.
     /// Taking theirs can therefore leave a resolved delta rather than converge.
     ///
     /// Returns `NotFound` if the branch has no delta for this key.

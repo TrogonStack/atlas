@@ -6676,7 +6676,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await
             .map_err(store_err)?;
         let mut classified = Vec::with_capacity(deltas.len());
+        let mut fork_bases = std::collections::HashMap::with_capacity(deltas.len());
         for delta in deltas {
+            fork_bases.insert(
+                pb::EntityKey::new(delta.kind, &delta.id),
+                delta.base.clone(),
+            );
             let (mut entry, theirs_etag) = self.classify_branch_delta(delta).await?;
             if req.auto_merge {
                 accept_structural_merge(&mut entry, theirs_etag.as_deref());
@@ -6748,6 +6753,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 ops.push(trogon_atlas_store::store::BranchLandOp::Put {
                     kind,
                     ours: Box::new(ours.clone()),
+                    base: fork_bases
+                        .get(&pb::EntityKey::new(kind, &id))
+                        .cloned()
+                        .flatten()
+                        .map(Box::new),
                     expected_baseline_etag,
                 });
                 op_metas.push(OpMetaLike {
@@ -6802,69 +6812,52 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // Full detection already ran above; validate the post-merge
             // world via an in-memory overlay without persisting anything.
             let pre_all = self.snapshot(&vis).await?;
-            let overlay_mutations: Vec<MutationOp> = op_metas
-                .iter()
-                .map(|meta| match &meta.entity {
-                    Some(entity) if meta.is_put => MutationOp::Put {
-                        kind: meta.kind,
-                        entity: entity.clone(),
-                        if_match: None,
-                        force: true,
-                    },
-                    _ => MutationOp::Delete {
-                        kind: meta.kind,
-                        id: meta.id.clone(),
-                        if_match: None,
-                    },
-                })
-                .collect();
-            let post_world: Vec<StoredEntity> =
-                match dry_run::apply_landing(&pre_all, &overlay_mutations) {
-                    Ok(outcomes) => {
-                        let mut world: Vec<StoredEntity> = (*pre_all).clone();
-                        let mut by_key: std::collections::HashMap<pb::EntityKey, usize> =
-                            std::collections::HashMap::new();
-                        for (i, se) in world.iter().enumerate() {
-                            if let (Some(k), Some(id)) = (
-                                trogon_atlas_store::refs::entity_kind(&se.entity),
-                                trogon_atlas_store::refs::entity_id(&se.entity),
-                            ) {
-                                by_key.insert(pb::EntityKey::new(k, id), i);
-                            }
+            let post_world: Vec<StoredEntity> = match dry_run::apply_landing(&pre_all, &ops) {
+                Ok(outcomes) => {
+                    let mut world: Vec<StoredEntity> = (*pre_all).clone();
+                    let mut by_key: std::collections::HashMap<pb::EntityKey, usize> =
+                        std::collections::HashMap::new();
+                    for (i, se) in world.iter().enumerate() {
+                        if let (Some(k), Some(id)) = (
+                            trogon_atlas_store::refs::entity_kind(&se.entity),
+                            trogon_atlas_store::refs::entity_id(&se.entity),
+                        ) {
+                            by_key.insert(pb::EntityKey::new(k, id), i);
                         }
-                        for (meta, oc) in op_metas.iter().zip(outcomes.iter()) {
-                            let key = pb::EntityKey::new(meta.kind, &meta.id);
-                            match oc {
-                                MutationOutcome::Wrote { entity, etag } => {
-                                    let se = StoredEntity {
-                                        entity: entity.clone(),
-                                        etag: etag.clone(),
-                                    };
-                                    if let Some(&i) = by_key.get(&key) {
-                                        world[i] = se;
-                                    } else {
-                                        by_key.insert(key, world.len());
-                                        world.push(se);
-                                    }
+                    }
+                    for (meta, oc) in op_metas.iter().zip(outcomes.iter()) {
+                        let key = pb::EntityKey::new(meta.kind, &meta.id);
+                        match oc {
+                            MutationOutcome::Wrote { entity, etag } => {
+                                let se = StoredEntity {
+                                    entity: entity.clone(),
+                                    etag: etag.clone(),
+                                };
+                                if let Some(&i) = by_key.get(&key) {
+                                    world[i] = se;
+                                } else {
+                                    by_key.insert(key, world.len());
+                                    world.push(se);
                                 }
-                                MutationOutcome::Noop { .. } => {}
-                                MutationOutcome::Deleted => {
-                                    if let Some(&i) = by_key.get(&key) {
-                                        world.remove(i);
-                                        by_key.remove(&key);
-                                        for v in by_key.values_mut() {
-                                            if *v > i {
-                                                *v -= 1;
-                                            }
+                            }
+                            MutationOutcome::Noop { .. } => {}
+                            MutationOutcome::Deleted => {
+                                if let Some(&i) = by_key.get(&key) {
+                                    world.remove(i);
+                                    by_key.remove(&key);
+                                    for v in by_key.values_mut() {
+                                        if *v > i {
+                                            *v -= 1;
                                         }
                                     }
                                 }
                             }
                         }
-                        world
                     }
-                    Err(error) => return Err(store_err(error)),
-                };
+                    world
+                }
+                Err(error) => return Err(store_err(error)),
+            };
             let validation_issues = validation::validate_store(&post_world);
             let has_error = validation_issues
                 .iter()
@@ -6899,7 +6892,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     by_key.insert(pb::EntityKey::new(k, id), i);
                 }
             }
-            for meta in &op_metas {
+            for (meta, op) in op_metas.iter().zip(&ops) {
                 let key = pb::EntityKey::new(meta.kind, &meta.id);
                 let Some(entity) = meta.entity.clone().filter(|_| meta.is_put) else {
                     if let Some(&i) = by_key.get(&key) {
@@ -6914,9 +6907,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     continue;
                 };
                 let previous = by_key.get(&key).map(|index| &projected[*index].entity);
-                let entity =
-                    trogon_atlas_core::connection_persistence::prepare_landing(previous, &entity)
-                        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+                let trogon_atlas_store::store::BranchLandOp::Put { base, .. } = op else {
+                    return Err(Status::internal("merge put is paired with a deletion"));
+                };
+                let entity = trogon_atlas_core::connection_persistence::prepare_landing(
+                    base.as_deref(),
+                    previous,
+                    &entity,
+                )
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
                 let se = StoredEntity {
                     entity,
                     etag: String::new(),
@@ -7310,6 +7309,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                      same field paths, or it is not an edit/edit conflict",
                 )
             })?;
+            let fork = entry.base.as_ref().ok_or_else(|| {
+                Status::failed_precondition("structural merge requires a common base")
+            })?;
+            let merged = trogon_atlas_core::connection_persistence::prepare_landing(
+                Some(fork),
+                entry.theirs.as_ref(),
+                &merged,
+            )
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
             let changeset =
                 PendingChangeset::mint("ResolveBranchEntry", &author, Some(req.name.as_str()))
                     .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
@@ -7317,7 +7325,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             receipt_changeset_id = changeset.id.clone();
             if let Err(err) = self
                 .store
-                .put(kind, &merged, true, changeset.write_ctx())
+                .put(
+                    kind,
+                    &merged,
+                    true,
+                    changeset.write_ctx().with_branch_merge_base(fork),
+                )
                 .await
             {
                 let status = store_err(err);
@@ -8437,14 +8450,8 @@ mod lifecycle_filter_tests {
 
 fn connection_state_equal(left: &pb::Entity, right: &pb::Entity) -> bool {
     trogon_atlas_core::semantically_equal(left, right)
-        && left
-            .system
-            .as_ref()
-            .map(|system| (&system.uid, &system.retired_connection_ids))
-            == right
-                .system
-                .as_ref()
-                .map(|system| (&system.uid, &system.retired_connection_ids))
+        && left.system.as_ref().map(|system| &system.uid)
+            == right.system.as_ref().map(|system| &system.uid)
 }
 
 mod dry_run {
@@ -8477,11 +8484,7 @@ mod dry_run {
             Self { map }
         }
 
-        pub fn batch_apply(
-            mut self,
-            ops: &[MutationOp],
-            landing: bool,
-        ) -> StoreResult<Vec<MutationOutcome>> {
+        pub fn batch_apply(mut self, ops: &[MutationOp]) -> StoreResult<Vec<MutationOutcome>> {
             let mut outcomes: Vec<MutationOutcome> = Vec::with_capacity(ops.len());
             for (i, op) in ops.iter().enumerate() {
                 match op {
@@ -8525,16 +8528,13 @@ mod dry_run {
                             }
                         })?;
                         let key: OverlayKey = (*kind as i32, pb::IdKey::new(&id));
-                        let prepare = if landing {
-                            trogon_atlas_core::connection_persistence::prepare_landing
-                        } else {
-                            trogon_atlas_core::connection_persistence::prepare_entity
-                        };
-                        let prepared = prepare(self.map.get(&key), entity).map_err(|error| {
-                            StoreError::BatchFailed {
-                                index: i,
-                                source: Box::new(StoreError::InvalidArgument(error.to_string())),
-                            }
+                        let prepared = trogon_atlas_core::connection_persistence::prepare_entity(
+                            self.map.get(&key),
+                            entity,
+                        )
+                        .map_err(|error| StoreError::BatchFailed {
+                            index: i,
+                            source: Box::new(StoreError::InvalidArgument(error.to_string())),
                         })?;
                         self.map.insert(key, prepared.clone());
                         outcomes.push(MutationOutcome::Wrote {
@@ -8560,16 +8560,52 @@ mod dry_run {
 
     pub fn apply_landing(
         snapshot: &[StoredEntity],
-        ops: &[MutationOp],
+        ops: &[trogon_atlas_store::store::BranchLandOp],
     ) -> StoreResult<Vec<MutationOutcome>> {
-        Overlay::from_snapshot(snapshot).batch_apply(ops, true)
+        use trogon_atlas_store::store::BranchLandOp;
+        let mut overlay = Overlay::from_snapshot(snapshot);
+        ops.iter()
+            .enumerate()
+            .map(|(index, op)| {
+                let result = (|| match op {
+                    BranchLandOp::Put {
+                        kind, base, ours, ..
+                    } => {
+                        let id = r::entity_id(ours).ok_or_else(|| {
+                            StoreError::InvalidArgument("entity.id is required".into())
+                        })?;
+                        let key = (*kind as i32, pb::IdKey::new(id));
+                        let entity = trogon_atlas_core::connection_persistence::prepare_landing(
+                            base.as_deref(),
+                            overlay.map.get(&key),
+                            ours,
+                        )
+                        .map_err(|error| StoreError::InvalidArgument(error.to_string()))?;
+                        overlay.map.insert(key, entity.clone());
+                        Ok(MutationOutcome::Wrote {
+                            etag: "dry-run".into(),
+                            entity,
+                        })
+                    }
+                    BranchLandOp::Delete { kind, id, .. } => {
+                        let key = (*kind as i32, pb::IdKey::new(id));
+                        overlay.map.remove(&key).ok_or(StoreError::NotFound)?;
+                        Ok(MutationOutcome::Deleted)
+                    }
+                })();
+                result.map_err(|source| StoreError::BatchFailed {
+                    index,
+                    source: Box::new(source),
+                })
+            })
+            .collect()
     }
 
     pub fn apply(
         snapshot: &[StoredEntity],
         ops: &[MutationOp],
     ) -> StoreResult<Vec<MutationOutcome>> {
-        Overlay::from_snapshot(snapshot).batch_apply(ops, false)
+        Overlay::from_snapshot(snapshot).batch_apply(ops)
     }
 }
 

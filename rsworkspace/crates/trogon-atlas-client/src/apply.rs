@@ -481,7 +481,6 @@ mod tests {
     fn classify_equal_is_unchanged_ignoring_system_meta() {
         let mut stored = event("A");
         stored.system = Some(pb::SystemMeta {
-            retired_connection_ids: Vec::new(),
             uid: "0198-uid".into(),
             created_at: "2026-07-18T00:00:00Z".into(),
         });

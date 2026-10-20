@@ -140,32 +140,67 @@ async fn public_writes_preserve_ids_on_reorder_and_noop_and_reject_retarget_or_s
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn removed_ids_are_retired_and_owner_recreation_does_not_revive_references() {
+async fn existing_owner_rejects_unknown_client_supplied_connection_ids() {
     let service = service().await;
-    let mut original = save(&service, screen("retirement")).await;
+    let original = save(&service, screen("unknown-id")).await;
+    let mut proposed = original.clone();
+    ui(&mut proposed).transitions.push(pb::ui::Transition {
+        to: Some(pb::UiRef {
+            id: Some(id("destination")),
+        }),
+        connection_id: Some(pb::ConnectionId {
+            value: "01900000-0000-7000-8000-000000000001".into(),
+        }),
+        ..Default::default()
+    });
+    assert!(service
+        .put_entity(Request::new(put(proposed)))
+        .await
+        .is_err());
+    assert_eq!(get(&service, "unknown-id").await, original);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn removed_ids_are_rejected_and_owner_recreation_does_not_revive_references() {
+    let service = service().await;
+    let mut original = save(&service, screen("removed-id")).await;
     let selected = reference(&original, 0);
     let removed = ui(&mut original).transitions.remove(0);
     let mut pruned = save(&service, original).await;
     assert!(resolve_connection(&pruned, &selected).is_err());
-    ui(&mut pruned).transitions.push(removed.clone());
+    let mut reused = pruned.clone();
+    ui(&mut reused).transitions.push(removed.clone());
     assert_eq!(
         service
-            .put_entity(Request::new(put(pruned)))
+            .put_entity(Request::new(put(reused)))
             .await
             .unwrap_err()
             .code(),
         Code::InvalidArgument
     );
+    let mut replacement = removed.clone();
+    replacement.connection_id = None;
+    ui(&mut pruned).transitions.push(replacement);
+    let replaced = save(&service, pruned).await;
+    assert!(resolve_connection(&replaced, &selected).is_err());
+    assert_ne!(
+        ui(&mut replaced.clone())
+            .transitions
+            .last()
+            .unwrap()
+            .connection_id,
+        selected.id
+    );
     service
         .delete_entity(Request::new(pb::DeleteEntityRequest {
             kind: pb::EntityKind::Ui as i32,
-            id: Some(id("retirement")),
+            id: Some(id("removed-id")),
             mode: pb::delete_entity_request::Mode::Force as i32,
             ..Default::default()
         }))
         .await
         .unwrap();
-    let mut recreated = screen("retirement");
+    let mut recreated = screen("removed-id");
     ui(&mut recreated).transitions[0] = removed;
     let recreated = save(&service, recreated).await;
     assert!(resolve_connection(&recreated, &selected).is_err());
@@ -245,7 +280,189 @@ fn on_branch<T>(value: T) -> Request<T> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn branch_merge_keeps_retired_ids_and_incarnation() {
+async fn taking_structural_merge_preserves_baseline_added_connection_ids() {
+    let service = service().await;
+    let mut destination = screen("destination");
+    ui(&mut destination).transitions.clear();
+    save(&service, destination).await;
+    let original = save(&service, screen("structural-owner")).await;
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut branch = original.clone();
+    ui(&mut branch).doc = "branch description".into();
+    service.put_entity(on_branch(put(branch))).await.unwrap();
+    let mut baseline = original.clone();
+    ui(&mut baseline).transitions.push(pb::ui::Transition {
+        to: Some(pb::UiRef {
+            id: Some(id("destination")),
+        }),
+        ..Default::default()
+    });
+    let baseline = save(&service, baseline).await;
+    let references = (0..3)
+        .map(|index| reference(&baseline, index))
+        .collect::<Vec<_>>();
+    service
+        .resolve_branch_entry(Request::new(pb::ResolveBranchEntryRequest {
+            name: "identity-work".into(),
+            r#ref: Some(pb::EntityRef {
+                kind: pb::EntityKind::Ui as i32,
+                id: Some(id("structural-owner")),
+            }),
+            resolution: pb::resolve_branch_entry_request::Resolution::TakeMerged as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut selected = service
+        .get_entity(on_branch(pb::GetEntityRequest {
+            kind: pb::EntityKind::Ui as i32,
+            id: Some(id("structural-owner")),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    assert_eq!(ui(&mut selected).doc, "branch description");
+    for reference in &references {
+        assert!(resolve_connection(&selected, reference).is_ok());
+    }
+    for dry_run in [true, false] {
+        let merged = service
+            .merge_branch(Request::new(pb::MergeBranchRequest {
+                name: "identity-work".into(),
+                dry_run,
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            merged.status,
+            if dry_run {
+                pb::merge_branch_response::Status::Validated
+            } else {
+                pb::merge_branch_response::Status::Applied
+            } as i32,
+            "{merged:?}"
+        );
+    }
+    let mut landed = get(&service, "structural-owner").await;
+    assert_eq!(ui(&mut landed).doc, "branch description");
+    for reference in &references {
+        assert!(resolve_connection(&landed, reference).is_ok());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn updating_branch_does_not_erase_removed_connection_provenance() {
+    let service = service().await;
+    let original = save(&service, screen("branch-rebase")).await;
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut branch = original.clone();
+    ui(&mut branch).transitions[0].doc = "branch connection annotation".into();
+    service.put_entity(on_branch(put(branch))).await.unwrap();
+    let mut baseline = original.clone();
+    ui(&mut baseline).transitions.remove(0);
+    let baseline = save(&service, baseline).await;
+    service
+        .update_branch(Request::new(pb::UpdateBranchRequest {
+            name: "identity-work".into(),
+        }))
+        .await
+        .unwrap();
+    let diff = service
+        .diff_branch(Request::new(pb::DiffBranchRequest {
+            name: "identity-work".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(diff.entries.len(), 1);
+    assert_eq!(
+        diff.entries[0].status,
+        pb::branch_diff_entry::Status::ConflictEditEdit as i32
+    );
+    assert_eq!(diff.entries[0].base.as_ref(), Some(&original));
+    assert!(diff.entries[0].auto_merged.is_none());
+    assert_eq!(get(&service, "branch-rebase").await, baseline);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn branch_added_connections_land_with_their_assigned_ids_and_dry_run_parity() {
+    let service = service().await;
+    let mut destination = screen("destination");
+    ui(&mut destination).transitions.clear();
+    save(&service, destination).await;
+    let baseline = save(&service, screen("branch-addition")).await;
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut proposed = baseline.clone();
+    ui(&mut proposed).transitions.push(pb::ui::Transition {
+        to: Some(pb::UiRef {
+            id: Some(id("destination")),
+        }),
+        ..Default::default()
+    });
+    let branch = service
+        .put_entity(on_branch(put(proposed)))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let selected = reference(&branch, 2);
+    for dry_run in [true, false] {
+        let merged = service
+            .merge_branch(Request::new(pb::MergeBranchRequest {
+                name: "identity-work".into(),
+                dry_run,
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            merged.status,
+            if dry_run {
+                pb::merge_branch_response::Status::Validated
+            } else {
+                pb::merge_branch_response::Status::Applied
+            } as i32,
+            "{merged:?}"
+        );
+        let stored = get(&service, "branch-addition").await;
+        if dry_run {
+            assert_eq!(stored, baseline);
+        } else {
+            assert!(resolve_connection(&stored, &selected).is_ok());
+            assert_eq!(
+                connection_occurrences(&stored).unwrap(),
+                connection_occurrences(&branch).unwrap()
+            );
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn branch_merge_rejects_removed_ids_and_preserves_incarnation() {
     let service = service().await;
     save(
         &service,
@@ -281,7 +498,7 @@ async fn branch_merge_keeps_retired_ids_and_incarnation() {
         .entity
         .unwrap();
     let removed = ui(&mut added).transitions.pop().unwrap();
-    let branch = service
+    service
         .put_entity(on_branch(put(added)))
         .await
         .unwrap()
@@ -306,10 +523,6 @@ async fn branch_merge_keeps_retired_ids_and_incarnation() {
     assert_eq!(
         landed.system.as_ref().unwrap().uid,
         baseline.system.as_ref().unwrap().uid
-    );
-    assert_eq!(
-        landed.system.as_ref().unwrap().retired_connection_ids,
-        branch.system.as_ref().unwrap().retired_connection_ids
     );
     ui(&mut landed).transitions.push(removed);
     assert_eq!(
@@ -625,7 +838,97 @@ async fn recreated_baseline_owner_is_not_automatically_merged_with_a_stale_branc
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn taking_baseline_content_does_not_drop_branch_retirement_history() {
+async fn independent_identical_creates_require_an_explicit_incarnation_choice() {
+    let service = service().await;
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut entity = screen("independent-owner");
+    ui(&mut entity).transitions.clear();
+    let branch = service
+        .put_entity(on_branch(put(entity.clone())))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let baseline = save(&service, entity).await;
+    assert!(trogon_atlas_core::semantically_equal(&branch, &baseline));
+    assert_ne!(
+        branch.system.as_ref().unwrap().uid,
+        baseline.system.as_ref().unwrap().uid
+    );
+    let diff = service
+        .diff_branch(Request::new(pb::DiffBranchRequest {
+            name: "identity-work".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(diff.entries.len(), 1);
+    let entry = &diff.entries[0];
+    assert_eq!(
+        entry.status,
+        pb::branch_diff_entry::Status::ConflictEditEdit as i32
+    );
+    assert!(entry.auto_merged.is_none());
+    assert!(entry.conflict_field_paths.contains(&"system.uid".into()));
+    let blocked = service
+        .merge_branch(Request::new(pb::MergeBranchRequest {
+            name: "identity-work".into(),
+            auto_merge: true,
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        blocked.status,
+        pb::merge_branch_response::Status::Conflicts as i32
+    );
+    assert_eq!(get(&service, "independent-owner").await, baseline);
+    service
+        .resolve_branch_entry(Request::new(pb::ResolveBranchEntryRequest {
+            name: "identity-work".into(),
+            r#ref: entry.r#ref.clone(),
+            resolution: pb::resolve_branch_entry_request::Resolution::TakeTheirs as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let selected = service
+        .get_entity(on_branch(pb::GetEntityRequest {
+            kind: pb::EntityKind::Ui as i32,
+            id: Some(id("independent-owner")),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    assert_eq!(selected, baseline);
+    let merged = service
+        .merge_branch(Request::new(pb::MergeBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        merged.status,
+        pb::merge_branch_response::Status::Applied as i32
+    );
+    assert_eq!(merged.applied_count, 1);
+    assert_eq!(get(&service, "independent-owner").await, baseline);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn taking_baseline_content_rejects_removed_branch_ids() {
     let service = service().await;
     let original = save(&service, screen("resolved-owner")).await;
     service
@@ -676,12 +979,6 @@ async fn taking_baseline_content_does_not_drop_branch_retirement_history() {
         .into_inner()
         .entity
         .unwrap();
-    assert!(resolved
-        .system
-        .as_ref()
-        .unwrap()
-        .retired_connection_ids
-        .contains(removed.connection_id.as_ref().unwrap()));
     ui(&mut resolved).transitions.push(removed);
     assert_eq!(
         service
@@ -693,7 +990,7 @@ async fn taking_baseline_content_does_not_drop_branch_retirement_history() {
     );
 }
 
-async fn resolve_with_retired_selected_connection(take_theirs: bool) {
+async fn resolve_with_removed_selected_connection(take_theirs: bool) {
     let service = service().await;
     let mut destination = screen("destination");
     ui(&mut destination).transitions.clear();
@@ -758,12 +1055,6 @@ async fn resolve_with_retired_selected_connection(take_theirs: bool) {
     );
     assert!(resolve_connection(&resolved, &selected).is_err());
     assert!(resolve_connection(&resolved, &unaffected).is_ok());
-    assert!(resolved
-        .system
-        .as_ref()
-        .unwrap()
-        .retired_connection_ids
-        .contains(selected.id.as_ref().unwrap()));
     assert_eq!(get(&service, "resolution-renewal").await, baseline);
     let diff = service
         .diff_branch(Request::new(pb::DiffBranchRequest {
@@ -800,11 +1091,11 @@ async fn resolve_with_retired_selected_connection(take_theirs: bool) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn keep_ours_renews_connections_retired_by_baseline() {
-    resolve_with_retired_selected_connection(false).await;
+async fn keep_ours_renews_connections_removed_by_baseline() {
+    resolve_with_removed_selected_connection(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn take_theirs_renews_connections_retired_by_branch() {
-    resolve_with_retired_selected_connection(true).await;
+async fn take_theirs_renews_connections_removed_by_branch() {
+    resolve_with_removed_selected_connection(true).await;
 }
