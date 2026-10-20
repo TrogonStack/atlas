@@ -3516,6 +3516,80 @@ async fn batch_mutate_domain_cross_project_namespace_rejected() {
     assert_eq!(resp.code(), tonic::Code::FailedPrecondition);
 }
 
+fn make_bounded_context(ns: &str, slug: &str) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::BoundedContext(pb::BoundedContext {
+            id: Some(id(ns, slug, 1)),
+            title: format!("{ns}/{slug}"),
+            ..Default::default()
+        })),
+    }
+}
+
+fn put_request(entity: pb::Entity) -> pb::PutEntityRequest {
+    pb::PutEntityRequest {
+        operation_id: String::new(),
+        entity: Some(entity),
+        create_only: false,
+        if_match: String::new(),
+        validate_only: false,
+        force: false,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_entity_bounded_context_slug_mismatch_rejected() {
+    let svc = svc().await;
+    let err = svc
+        .put_entity(Request::new(put_request(make_bounded_context(
+            "acme-probe",
+            "billing",
+        ))))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("CONTEXT_SLUG_MISMATCH"),
+        "{}",
+        err.message()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_entity_bounded_context_slug_matching_namespace_accepted() {
+    let svc = svc().await;
+    svc.put_entity(Request::new(put_request(make_bounded_context(
+        "acme-root-bc",
+        "acme-root-bc",
+    ))))
+    .await
+    .expect("bounded context whose slug equals its namespace must be accepted");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_bounded_context_slug_mismatch_rejected() {
+    let svc = svc().await;
+    let err = svc
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            operation_id: String::new(),
+            ops: vec![pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(put_request(
+                    make_bounded_context("acme-probe-batch", "billing"),
+                ))),
+            }],
+            validate_only: false,
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(
+        err.message().contains("CONTEXT_SLUG_MISMATCH"),
+        "{}",
+        err.message()
+    );
+}
+
 // ===== principal authorship tests (P1) =====
 
 #[tokio::test(flavor = "multi_thread")]

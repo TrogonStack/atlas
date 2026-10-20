@@ -4026,6 +4026,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
         validate_entity_content(&entity)?;
         check_project_namespace_conflict(&entity)?;
+        check_context_slug(&entity)?;
         let type_library = self
             .type_libraries
             .admit(&*self.store, &entity, branch.as_deref())
@@ -4589,6 +4590,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     let id = entity_id(&entity)?.clone();
                     validate_entity_content(&entity)?;
                     check_project_namespace_conflict(&entity)?;
+                    check_context_slug(&entity)?;
                     if is_slice_kind(kind) {
                         has_slice_puts = true;
                     }
@@ -8013,6 +8015,25 @@ fn check_project_namespace_conflict(entity: &pb::Entity) -> Result<(), Status> {
         )));
     }
     Ok(())
+}
+
+/// Reject a BoundedContext whose slug differs from its namespace.
+///
+/// The put path runs `validate_scenarios` only for slice kinds, so the
+/// `CONTEXT_SLUG_MISMATCH` rule has to be enforced here to stop a second
+/// context from landing in a namespace.
+#[allow(clippy::result_large_err)]
+fn check_context_slug(entity: &pb::Entity) -> Result<(), Status> {
+    let Some(pb::entity::Kind::BoundedContext(bc)) = entity.kind.as_ref() else {
+        return Ok(());
+    };
+    match validation::context_slug_mismatch(bc) {
+        Some(issue) => Err(Status::invalid_argument(format!(
+            "{}: {}",
+            issue.code, issue.message
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// Classify an LLM error into a stable short reason code for client visibility.
