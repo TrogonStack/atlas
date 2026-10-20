@@ -192,6 +192,18 @@ describe('SliceBoard story playback', () => {
     expect(screen.getByText('5 of 5')).toBeDefined();
   });
 
+  it('restarts from the first slice when Play is pressed on the last', async () => {
+    const { lastSlice } = renderBoard({ slice: 'order-status-placed-rms' });
+    fireEvent.click(screen.getByRole('tab', { name: 'Story' }));
+    expect(screen.getByText('5 of 5')).toBeDefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    // Must stay on Pause while go(0) lands; pausing immediately was the bug.
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeDefined();
+    await waitFor(() => expect(lastSlice()).toBe('acme-storefront/add-item-to-cart-slice'));
+    expect(screen.getByText('1 of 5')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Pause' })).toBeDefined();
+  });
+
   it('says when no storyboard lists the slice', () => {
     const loose = storefront([
       { commandSlice: { id: id('loose-slice'), title: 'Loose', command: { command: { id: id('place-order') } } } },

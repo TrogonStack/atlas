@@ -79,22 +79,35 @@ function usePlayback(length: number, index: number, go: (index: number) => void)
   const [playing, setPlaying] = useState(false);
   const goRef = useRef(go);
   goRef.current = go;
+  // Play-from-end calls go(0) before the parent has switched slice/index. Hold
+  // playing until that lands so the "stop on last" branch does not cancel it.
+  const awaitingRestart = useRef(false);
   useEffect(() => {
     if (!playing) return;
     if (index < 0 || index >= length - 1) {
+      if (awaitingRestart.current && length > 1 && index === length - 1) return;
+      awaitingRestart.current = false;
       setPlaying(false);
       return;
     }
+    awaitingRestart.current = false;
     const t = window.setTimeout(() => goRef.current(index + 1), PLAY_STEP_MS);
     return () => window.clearTimeout(t);
   }, [playing, index, length]);
-  const stop = useCallback(() => setPlaying(false), []);
+  const stop = useCallback(() => {
+    awaitingRestart.current = false;
+    setPlaying(false);
+  }, []);
   const toggle = () => {
     if (playing) {
+      awaitingRestart.current = false;
       setPlaying(false);
       return;
     }
-    if (index >= length - 1) goRef.current(0);
+    if (index >= length - 1) {
+      awaitingRestart.current = length > 1;
+      goRef.current(0);
+    }
     setPlaying(true);
   };
   return { playing, toggle, stop };
