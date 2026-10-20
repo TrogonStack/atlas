@@ -36,6 +36,7 @@ const KINDS: Record<EntityKind, true> = {
   typeLibrary: true,
   channel: true,
   dataStore: true,
+  specification: true,
 };
 
 describe('kindColors', () => {

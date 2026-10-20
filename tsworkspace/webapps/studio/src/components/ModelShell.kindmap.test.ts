@@ -34,6 +34,7 @@ const ALL_ENTITY_KINDS: EntityKind[] = [
   'typeLibrary',
   'channel',
   'dataStore',
+  'specification',
 ];
 
 describe('KIND_SHORT_TO_CAMEL registry completeness', () => {

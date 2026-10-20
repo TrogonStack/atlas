@@ -358,6 +358,45 @@ impl TypeLibraryGate {
         })
     }
 
+    pub(super) async fn check_contract_type(
+        &self,
+        library: &pb::Id,
+        message: &str,
+        context: &[trogon_atlas_store::StoredEntity],
+    ) -> Result<(), Status> {
+        let registered: BTreeMap<_, _> = context
+            .iter()
+            .filter_map(|stored| match &stored.entity.kind {
+                Some(pb::entity::Kind::TypeLibrary(value))
+                    if value
+                        .id
+                        .as_ref()
+                        .is_some_and(|id| id.namespace == library.namespace) =>
+                {
+                    Some((
+                        LibraryVersion::of(value.id.as_ref()?),
+                        Registered {
+                            library: value.clone(),
+                            etag: stored.etag.clone(),
+                        },
+                    ))
+                }
+                _ => None,
+            })
+            .collect();
+        let key = LibraryVersion::of(library);
+        let selected = registered
+            .get(&key)
+            .ok_or_else(|| invalid("selected contract type library is unresolved".into()))?;
+        let compiled = self.compile_registered(&key, selected, &registered).await?;
+        if !compiled.message_names().iter().any(|name| name == message) {
+            return Err(invalid(
+                "selected contract protobuf message is unresolved".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Finds the message `type_url` names among the namespace's live type
     /// libraries and the built-in types.
     ///
@@ -797,11 +836,7 @@ fn reject_overlap(
                 format!(
                     "type library {own} owns packages under {prefix}, which overlap the packages under {other} owned by {key}"
                 ),
-                ErrorDetails::with_error_info(
-                    reason::ALREADY_EXISTS,
-                    ERROR_DOMAIN,
-                    HashMap::new(),
-                ),
+                ErrorDetails::with_error_info(reason::ALREADY_EXISTS, ERROR_DOMAIN, HashMap::new()),
             ));
         }
     }

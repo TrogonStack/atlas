@@ -300,3 +300,150 @@ async fn multi_target_reference_guard_uses_one_merged_world() {
         Err(StoreError::NotFound)
     ));
 }
+
+#[tokio::test]
+async fn specification_nested_references_guard_the_complete_target_set_and_branch_tombstones() {
+    use std::collections::HashSet;
+
+    let nats = trogon_atlas_testsupport::shared().await;
+    let store = nats.store().await;
+    let targets = [
+        (pb::EntityKind::ReadModel, "receipt"),
+        (pb::EntityKind::Schema, "native-shape"),
+        (pb::EntityKind::TypeLibrary, "types"),
+        (pb::EntityKind::Specification, "shared-contract"),
+        (pb::EntityKind::Channel, "transport"),
+        (pb::EntityKind::Component, "provider"),
+        (pb::EntityKind::ExternalSystem, "caller"),
+    ]
+    .map(|(kind, slug)| pb::EntityKey::new(kind, &id(slug)));
+    let entity = pb::Entity {
+        kind: Some(pb::entity::Kind::Specification(pb::Specification {
+            id: Some(id("order-contract")),
+            title: "Order contract".into(),
+            schemas: vec![pb::ContractSchema {
+                definition: Some(pb::SchemaDefinition {
+                    target: Some(pb::schema_definition::Target::Schema(pb::SchemaRef {
+                        id: Some(id("native-shape")),
+                    })),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            messages: vec![pb::ContractMessage {
+                mapping: Some(pb::MessageReadModelMapping {
+                    read_model: Some(pb::ReadModelRef {
+                        id: Some(id("receipt")),
+                    }),
+                    ..Default::default()
+                }),
+                schemas: vec![
+                    pb::SchemaBinding {
+                        r#type: Some(pb::schema_binding::Type::LibraryType(
+                            pb::TypeLibraryTypeRef {
+                                library: Some(pb::TypeLibraryRef {
+                                    id: Some(id("types")),
+                                }),
+                                message: Some(pb::QualifiedProtoName {
+                                    value: "orders.Receipt".into(),
+                                }),
+                            },
+                        )),
+                        ..Default::default()
+                    },
+                    pb::SchemaBinding {
+                        r#type: Some(pb::schema_binding::Type::ContractType(
+                            pb::ContractTypeRef {
+                                schema: Some(pb::ContractMemberRef {
+                                    specification: Some(pb::SpecificationRef {
+                                        id: Some(id("shared-contract")),
+                                    }),
+                                    owner_uid: "selected-incarnation".into(),
+                                    kind: pb::ContractMemberKind::Schema as i32,
+                                    member_id: Some(pb::ContractMemberId {
+                                        value: "11111111-1111-4111-8111-111111111111".into(),
+                                    }),
+                                    ..Default::default()
+                                }),
+                                ..Default::default()
+                            },
+                        )),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }],
+            operations: vec![pb::ContractOperation {
+                binding: Some(pb::OperationBinding {
+                    kind: Some(pb::operation_binding::Kind::Channel(
+                        pb::ChannelOperationBinding {
+                            channel: Some(pb::ChannelRef {
+                                id: Some(id("transport")),
+                            }),
+                            ..Default::default()
+                        },
+                    )),
+                }),
+                ..Default::default()
+            }],
+            exposures: vec![pb::ProviderExposure {
+                provider: Some(pb::ProviderTarget {
+                    target: Some(pb::provider_target::Target::Component(pb::ComponentRef {
+                        id: Some(id("provider")),
+                    })),
+                }),
+                ..Default::default()
+            }],
+            usages: vec![pb::ApiUsage {
+                caller: Some(pb::ProviderTarget {
+                    target: Some(pb::provider_target::Target::ExternalSystem(
+                        pb::ExternalSystemRef {
+                            id: Some(id("caller")),
+                        },
+                    )),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    store
+        .create(
+            pb::EntityKind::Specification,
+            &entity,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.referenced_targets(&targets, None).await.unwrap(),
+        HashSet::from(targets.clone())
+    );
+    store.create_branch("contract-removal", "").await.unwrap();
+    assert_eq!(
+        store
+            .referenced_targets(&targets, Some("contract-removal"))
+            .await
+            .unwrap(),
+        HashSet::from(targets.clone())
+    );
+    store
+        .delete(
+            pb::EntityKind::Specification,
+            &id("order-contract"),
+            None,
+            WriteContext::branch("contract-removal"),
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .referenced_targets(&targets, Some("contract-removal"))
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store.referenced_targets(&targets, None).await.unwrap(),
+        HashSet::from(targets)
+    );
+}

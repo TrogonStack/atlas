@@ -22,6 +22,8 @@ pub mod operation_id;
 pub mod refs;
 pub mod schema;
 pub mod semantic_eq;
+pub mod specification;
+mod specification_refs;
 pub mod system_meta;
 pub mod transcode;
 pub mod writer_lease;

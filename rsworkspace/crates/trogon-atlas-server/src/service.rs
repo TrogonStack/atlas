@@ -6117,6 +6117,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Project-level hygiene runs once for the whole call.
         let mut store_issues =
             validation::validate_store_with_architecture_context(&all, &architecture_context);
+        store_issues.extend(
+            self.specification_type_diagnostics(&all, &architecture_context)
+                .await,
+        );
 
         // Resolve which Domain(s) belong to the scope, then iterate
         // every stored EventModel whose namespace traces back to one of
@@ -7315,7 +7319,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .ok_or_else(|| Status::invalid_argument("ref is required"))?;
         let kind = kind_from_i32(entity_ref.kind, "ref.kind")?;
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
-        if matches!(kind, pb::EntityKind::Channel | pb::EntityKind::DataStore) {
+        if matches!(
+            kind,
+            pb::EntityKind::Channel | pb::EntityKind::DataStore | pb::EntityKind::Specification
+        ) {
             self.authorize_write(
                 principal.as_ref(),
                 Some(&req.name),

@@ -58,6 +58,21 @@ describe('proto entrypoint contract', () => {
     expect(typeof ctor).toBe('function');
   });
 
+  it('loads the native Specification union and exact nested content through the deployed service package', () => {
+    const definitions = protoLoader.loadSync(path.join(protoRoot, SERVICE_PKG_DIR, 'service.proto'), {
+      keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot],
+    });
+    const entityCodec = definitions['trogonatlas.eventmodel.v1alpha1.Entity'];
+    const kind = definitions['trogonatlas.eventmodel.v1alpha1.EntityKind'];
+    expect(kind.type.value).toContainEqual(expect.objectContaining({ name: 'ENTITY_KIND_SPECIFICATION', number: 32 }));
+    const entity = { specification: {
+      id: { namespace: 'shop', slug: 'contract', version: '2' }, title: 'Order contract',
+      artifacts: [{ memberId: { value: '11111111-1111-4111-8111-111111111111' }, name: { value: 'Source' }, content: '{"type":"object"}\r\n', digest: { sha256: 'a'.repeat(64) } }],
+      messages: [{ memberId: { value: '22222222-2222-4222-8222-222222222222' }, name: { value: 'Receipt' }, mapping: { connectionId: { value: '33333333-3333-4333-8333-333333333333' }, readModel: { id: { namespace: 'shop', slug: 'receipt', version: '3' } } } }],
+    } };
+    expect(entityCodec.deserialize(entityCodec.serialize(entity))).toEqual(entity);
+  });
+
   it('event_model.proto does not expose EventModelService (must not be PROTO_PATH)', () => {
     // service definitions live in service.proto; using event_model.proto as
     // PROTO_PATH leaves EventModelService undefined at studio boot.

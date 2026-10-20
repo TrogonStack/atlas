@@ -23,10 +23,20 @@ The identity fields are:
 | `Swimlane.Transition.Next` | `connection_id` |
 | `UI.Transition` | `connection_id` |
 | `ChannelBinding`, `ReadModelAttachment` | `connection_id` |
+| `SchemaDefinition`, `SchemaBinding`, `MessageReadModelMapping` | `connection_id` |
+| `OperationMessage`, `ChannelOperationBinding` | `connection_id` |
+| `ProviderExposure`, `ApiUsage`, `ContractDependency` | `connection_id` |
 
 The typed edges include slice endpoints and storyboard entry/outcome endpoints.
 Their ownership is the containing entity, not the referenced primitive. A local
 ID does not introduce a new top-level entity or another behavioral primitive.
+
+Specification associations belong to the containing Specification incarnation,
+including associations nested in members. Their endpoint identity includes the
+containing member and declared role or selection. Selectable members have
+separate `ContractMemberId` values and use `ContractMemberRef`; they are not
+connections. The [Specification contract](specification-and-api-contracts.md)
+defines member restoration, immutable content pins and local selection rules.
 
 `ConnectionRef` contains `owner: EntityRef`, `owner_uid` and `id: ConnectionId`.
 The core resolver checks the exact owner kind/version, incarnation and unique

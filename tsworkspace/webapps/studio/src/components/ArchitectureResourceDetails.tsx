@@ -28,7 +28,7 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function ExactReference({
+export function ExactReference({
   kind,
   reference,
   model,

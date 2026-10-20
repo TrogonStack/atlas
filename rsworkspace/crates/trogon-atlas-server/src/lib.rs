@@ -20,6 +20,7 @@ pub mod ownership;
 pub mod scope;
 pub mod search;
 pub mod service;
+mod specification_resources;
 pub mod spicedb;
 pub mod telemetry;
 pub mod tls;

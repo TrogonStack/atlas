@@ -141,6 +141,7 @@ pub(crate) fn entity_label(entity: &pb::Entity) -> String {
         K::TypeLibrary(x) => x.id.as_ref(),
         K::Channel(x) => x.id.as_ref(),
         K::DataStore(x) => x.id.as_ref(),
+        K::Specification(x) => x.id.as_ref(),
     };
     match id {
         Some(id) => pb::canonical::id_string(entity_kind_of(kind), id),
@@ -185,6 +186,7 @@ fn entity_kind_of(kind: &pb::entity::Kind) -> pb::EntityKind {
         K::TypeLibrary(_) => pb::EntityKind::TypeLibrary,
         K::Channel(_) => pb::EntityKind::Channel,
         K::DataStore(_) => pb::EntityKind::DataStore,
+        K::Specification(_) => pb::EntityKind::Specification,
     }
 }
 

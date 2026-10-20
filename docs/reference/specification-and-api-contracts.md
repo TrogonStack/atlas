@@ -1,10 +1,9 @@
 # Specification and API contracts
 
-Status: native first-release contract; schema, backend, CLI/MCP and Studio
-implementation is pending. Names below describe the required model, not
-existing protobuf messages or allocated field numbers. The
-[acceptance contract](specification-and-api-acceptance.md) defines the connected
-fixture and failure cases required before implementation can be called complete.
+Status: native schema, backend, CLI/MCP and Studio review support are
+implemented. The [protobuf contract](../../proto/trogonatlas/eventmodel/v1alpha1/specification.proto)
+defines the wire representation. The [acceptance reference](specification-and-api-acceptance.md)
+links executable coverage and distinguishes it from deployment evidence.
 
 ## Behavioral scope
 

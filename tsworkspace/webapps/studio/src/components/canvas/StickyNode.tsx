@@ -86,6 +86,7 @@ const KIND_STYLE: Record<
     label: 'Alert Notification Target',
     icon: Megaphone,
   },
+  specification: { bg: 'bg-slate-100', border: 'border-slate-400', label: 'Specification', icon: ListChecks },
   typeLibrary: { bg: 'bg-slate-100', border: 'border-slate-400', label: 'Type Library', icon: ListChecks },
 };
 

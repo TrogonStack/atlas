@@ -54,6 +54,7 @@ fn kind_name(e: &pb::Entity) -> &'static str {
         Some(K::TypeLibrary(_)) => "TypeLibrary",
         Some(K::Channel(_)) => "Channel",
         Some(K::DataStore(_)) => "DataStore",
+        Some(K::Specification(_)) => "Specification",
         None => "<empty>",
     }
 }
@@ -594,6 +595,27 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
                     ("delivery_guarantee", "deliveryGuarantee"),
                     ("broker", "broker"),
                     ("bindings", "bindings"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
+        (Some(K::Specification(x)), Some(K::Specification(y))) => {
+            resource_fields(
+                ops,
+                "Specification",
+                x,
+                y,
+                &[
+                    ("title", "title"),
+                    ("doc", "doc"),
+                    ("supersedes", "supersedes"),
+                    ("artifacts", "artifacts"),
+                    ("schemas", "schemas"),
+                    ("messages", "messages"),
+                    ("operations", "operations"),
+                    ("exposures", "exposures"),
+                    ("usages", "usages"),
+                    ("dependencies", "dependencies"),
                 ],
             );
             resource_metadata(ops, &x.metadata, &y.metadata);

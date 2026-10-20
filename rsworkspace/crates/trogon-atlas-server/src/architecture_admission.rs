@@ -81,7 +81,9 @@ impl EventModelServiceImpl {
                 meta.is_put
                     && matches!(
                         meta.kind,
-                        pb::EntityKind::Channel | pb::EntityKind::DataStore
+                        pb::EntityKind::Channel
+                            | pb::EntityKind::DataStore
+                            | pb::EntityKind::Specification
                     )
             })
             .filter_map(|meta| meta.entity.as_ref())
@@ -145,6 +147,16 @@ impl EventModelServiceImpl {
                     &issues,
                 )));
             }
+            for selection in crate::specification_resources::library_types(&prepared) {
+                if let (Some(id), Some(message)) = (
+                    selection.library.as_ref().and_then(|v| v.id.as_ref()),
+                    selection.message.as_ref(),
+                ) {
+                    self.type_libraries
+                        .check_contract_type(id, &message.value, &context)
+                        .await?;
+                }
+            }
         }
         Ok(())
     }
@@ -161,7 +173,11 @@ impl EventModelServiceImpl {
             .filter(|entity| {
                 matches!(
                     entity.kind,
-                    Some(pb::entity::Kind::Channel(_) | pb::entity::Kind::DataStore(_))
+                    Some(
+                        pb::entity::Kind::Channel(_)
+                            | pb::entity::Kind::DataStore(_)
+                            | pb::entity::Kind::Specification(_)
+                    )
                 )
             })
             .collect();
@@ -206,6 +222,38 @@ impl EventModelServiceImpl {
         Ok(world.into_values().collect())
     }
 
+    pub(super) async fn specification_type_diagnostics(
+        &self,
+        snapshot: &[StoredEntity],
+        context: &[StoredEntity],
+    ) -> Vec<pb::ValidationIssue> {
+        let mut issues = Vec::new();
+        for stored in snapshot {
+            for selection in crate::specification_resources::library_types(&stored.entity) {
+                let (Some(id), Some(message)) = (
+                    selection.library.as_ref().and_then(|v| v.id.as_ref()),
+                    selection.message.as_ref(),
+                ) else {
+                    continue;
+                };
+                if self
+                    .type_libraries
+                    .check_contract_type(id, &message.value, context)
+                    .await
+                    .is_err()
+                {
+                    issues.push(validation::issue_error(
+                        "SPECIFICATION_REFERENCE_UNRESOLVED",
+                        "Selected protobuf message is absent, unreadable or does not compile in its exact library".into(),
+                        crate::conv::entity_to_ref(&stored.entity).ok(),
+                        "messages.schemas.library_type",
+                    ));
+                }
+            }
+        }
+        issues
+    }
+
     pub(super) async fn architecture_reference_snapshot(
         &self,
         snapshot: &[StoredEntity],
@@ -224,7 +272,11 @@ impl EventModelServiceImpl {
             .store
             .list(
                 super::ListFilter {
-                    kinds: &[pb::EntityKind::Channel, pb::EntityKind::DataStore],
+                    kinds: &[
+                        pb::EntityKind::Channel,
+                        pb::EntityKind::DataStore,
+                        pb::EntityKind::Specification,
+                    ],
                     namespaces: &namespaces,
                     ..Default::default()
                 },
@@ -268,7 +320,8 @@ impl EventModelServiceImpl {
         loaded: &mut HashSet<pb::EntityKey>,
         world: &mut HashMap<pb::EntityKey, StoredEntity>,
     ) -> Result<(), Status> {
-        for (kind, id) in targets {
+        let mut pending = targets;
+        while let Some((kind, id)) = pending.pop() {
             match access {
                 ArchitectureTargetAccess::Required(vis) => {
                     self.require_visible(vis, &id.namespace).await?;
@@ -306,6 +359,18 @@ impl EventModelServiceImpl {
                 None => stored,
             };
             if let Some(stored) = next {
+                if let Some(pb::entity::Kind::TypeLibrary(library)) = &stored.entity.kind {
+                    for dependency in &library.dependencies {
+                        if let Some(target) = &dependency.id {
+                            if target.namespace != id.namespace {
+                                return Err(Status::invalid_argument(
+                                    "type library imports must remain in their owning namespace",
+                                ));
+                            }
+                            pending.push((pb::EntityKind::TypeLibrary, target.clone()));
+                        }
+                    }
+                }
                 world.insert(key, stored);
             }
         }
@@ -320,7 +385,11 @@ impl EventModelServiceImpl {
     ) -> Result<(), Status> {
         if !matches!(
             entity.kind,
-            Some(pb::entity::Kind::Channel(_) | pb::entity::Kind::DataStore(_))
+            Some(
+                pb::entity::Kind::Channel(_)
+                    | pb::entity::Kind::DataStore(_)
+                    | pb::entity::Kind::Specification(_)
+            )
         ) {
             return Ok(());
         }

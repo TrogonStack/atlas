@@ -18,6 +18,7 @@ const LEGEND: { kind: Entity['kind']; label: string; swatch: string }[] = [
   { kind: 'externalSystem', label: 'External System', swatch: 'bg-fuchsia-200' },
   { kind: 'channel', label: 'Channel', swatch: 'bg-cyan-100' },
   { kind: 'dataStore', label: 'DataStore', swatch: 'bg-emerald-100' },
+  { kind: 'specification', label: 'Specification', swatch: 'bg-slate-100' },
   { kind: 'tracker', label: 'Tracker', swatch: 'bg-stone-200' },
   { kind: 'boundedContext', label: 'Bounded Context', swatch: 'bg-fuchsia-100' },
   { kind: 'domain', label: 'Domain', swatch: 'bg-indigo-100' },

@@ -43,19 +43,19 @@ versions, reference discovery, guarded mutations and branch behavior.
 Runtime evidence comes from the linked executable tests. Component review
 coverage does not establish deployed-browser or production readiness.
 
-## Next resource slice: Specification and API contracts
+## Implemented Specification and API resources
 
 The [Specification/API contract](../reference/specification-and-api-contracts.md)
-defines the next native resource slice. Its schema and runtime implementation
-are pending. The [acceptance fixture](../reference/specification-and-api-acceptance.md)
-records required queries, identity changes, authorization and lifecycle cases;
-it does not claim executable evidence.
+defines native retained artifacts, selectable members and identified
+associations. Backend admission and exact reference resolution preserve separate
+request/response mappings and explicit provider usage. Native manifest, CLI/MCP
+and Studio review surfaces preserve these selections. The
+[acceptance reference](../reference/specification-and-api-acceptance.md) links
+the executable fixture and identity, authorization and lifecycle regressions.
 
-Implementation must add the entity/member representations, identified
-associations, authorized admission, exact reference discovery and lifecycle
-handling together. Native manifest, CLI/MCP and Studio support must preserve
-those selections. No source connector or additional format compiler is required
-by this slice.
+Retained opaque formats and selectors do not imply semantic format validation,
+a source connector or another format compiler. Deployment and production-scale
+evidence remain distinct from the linked local tests.
 
 ## Follow-on contracts
 

@@ -51,6 +51,14 @@ pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatl
              which role, namespaces, or owner you are authenticated as; the tools listed here \
              are already filtered to what that role can call.\n\
              \n\
+             SPECIFICATION AUTHORING: use the native specification entity for retained contract artifacts, \
+             schemas, messages, operations, provider exposures and usages. API classification is derived \
+             from operations and exposures selecting them. Integration messages map only to ReadModels; \
+             request/response/notification roles do not create Commands or Events. Preserve authoritative \
+             member IDs, connection IDs, exact artifact text and SHA-256 digests on edits and manifest \
+             round trips. Add replacement artifact members to change bytes. Opaque selectors remain \
+             unverified; no format importer, remote fetch or semantic validation is implied.\n\
+             \n\
              STORYBOARD AUTHORING RULES (validated; violations are rejected or flagged):\n\
              1. A storyboard is a TEMPORAL sequence: each slice is one moment. A read-model \
              slice lists only the events that just happened at that moment, never the type's \
@@ -1794,7 +1802,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Fetch a single entity as proto3 JSON (editable without protobuf tooling). The canonical JSON workflow is get_entity_json -> edit -> put_entity_json.",
+        description = "Fetch a single entity as proto3 JSON, including Specification artifact content, member IDs and association IDs. The canonical JSON workflow is get_entity_json -> edit -> put_entity_json; preserve returned identities and retained bytes.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2061,7 +2069,7 @@ impl McpServer {
                     return Err(rmcp::ErrorData::invalid_params(
                         format!("unknown op {other}"),
                         None,
-                    ))
+                    ));
                 }
             };
             ops.push(pb::BatchMutateOp { op: Some(inner) });
@@ -2630,7 +2638,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Export every entity in a namespace back into manifest YAML (same format as trogon-atlas export), one file per entity kind.",
+        description = "Export every entity in a namespace back into native manifest YAML, one file per entity kind. Specification exports retain exact artifact text, digests, member IDs and association IDs for apply_manifests round trips.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2871,7 +2879,7 @@ impl McpServer {
                          {other:?}"
                     ),
                     None,
-                ))
+                ));
             }
         };
         let expected = BranchEntryState::from_wire(&pb::BranchEntryState {
@@ -2993,6 +3001,8 @@ mod tests {
             ("Channel", pb::EntityKind::Channel),
             ("data_store", pb::EntityKind::DataStore),
             ("DataStore", pb::EntityKind::DataStore),
+            ("specification", pb::EntityKind::Specification),
+            ("Specification", pb::EntityKind::Specification),
         ] {
             assert_eq!(parse_kind(s).unwrap(), expected, "kind {s}");
         }

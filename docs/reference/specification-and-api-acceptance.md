@@ -1,9 +1,9 @@
 # Specification and API acceptance fixture
 
-Status: required acceptance criteria for the
-[Specification/API contract](specification-and-api-contracts.md). The resource
-schema, service implementation, CLI/MCP support and Studio surfaces are pending.
-This fixture describes required outcomes; it is not executable test evidence.
+Status: implemented native resource slice. This reference records acceptance
+criteria for the [Specification/API contract](specification-and-api-contracts.md)
+and links executable evidence below. Local service, store, authoring and
+component tests do not establish production or deployed-browser readiness.
 
 ## Connected fixture
 
@@ -114,14 +114,45 @@ preview. Invalid or forbidden target diagnostics must not expose hidden data.
 | Exceed the visible resource reporting budget during guarded deletion | Reporting may be incomplete under its explicit policy; authorization must still use the complete incoming-reference guard. |
 | Encounter a complete-guard scan error or timeout | Refuse deletion. An incomplete scan is not proof that a target is unreferenced. |
 
-## Implementation evidence required
+## Executable coverage and limits
 
-The implementation PR must replace this pending status with links to executable
-public-service regressions, real store reference-guard tests, native manifest
-round trips, CLI/MCP coverage and Studio review coverage. Assert absence of
-invented provider cross-products and behavioral edges, not just the presence of
-the intended references.
+- The [connected public-service fixture](../../rsworkspace/crates/trogon-atlas-server/tests/specification_fixture.rs)
+  creates the behavioral graph, Channel, native Schema, TypeLibrary and pinned
+  external schema. It checks independent roles and ReadModels, selective provider
+  usage, nested references, absence of invented behavioral edges and exact native
+  manifest export.
+- [Backend regressions](../../rsworkspace/crates/trogon-atlas-server/tests/specification_resources.rs)
+  exercise atomic admission, immutable content, exact member/type pins, branch
+  tombstones, permitted unresolved declarations, selected-library compilation,
+  out-of-projection anchors and authenticated hidden-referrer protection through
+  real gRPC authorization. Existing TypeLibrary compatibility rules still guard
+  breaking edits; forced deletion exercises retained unresolved diagnostics.
+- [Core identity regressions](../../rsworkspace/crates/trogon-atlas-core/tests/specification.rs)
+  cover member/connection identity, no-op manifests, concurrent removal and
+  explicit restoration, cloning, local reference repair, immutable byte pins,
+  selector presence, value limits and retargeting. Malformed or ambiguous
+  persisted member identity sets fail resolution.
+- [Store reference guards](../../rsworkspace/crates/trogon-atlas-store/tests/reference_guards.rs)
+  include nested Specification targets in complete multi-target scans and merged
+  branch tombstone behavior.
+- [CLI round trips](../../rsworkspace/crates/trogon-atlas-cli/tests/export_cli_integration.rs)
+  and [MCP transport round trips](../../rsworkspace/crates/trogon-atlas-mcp/tests/mcp_integration.rs)
+  preserve authoritative member/association IDs, CRLF source bytes, digests and
+  unchanged reapply identity through native authoring surfaces.
+- [Studio review tests](../../tsworkspace/webapps/studio/src/components/SpecificationDetails.test.tsx)
+  cover declared API classification, member/pin display, role separation,
+  provider selection and explicitly unverified opaque selectors. The production
+  [protobuf-loading regression](../../tsworkspace/webapps/studio/server/devops-contract.test.mjs)
+  checks the new kind and retained values through the actual service-package
+  codec. [Validation-context tests](../../tsworkspace/webapps/studio/src/lib/validation-context.test.ts)
+  cover nested typed reference discovery without treating artifact content or
+  arbitrary annotation payloads as reference declarations.
 
-Documentation checks establish link and formatting integrity only. They do not
-establish a generated wire contract, backend enforcement, format compatibility,
-runtime behavior or deployed-browser readiness.
+The protobuf string representation accepts UTF-8 artifact text; binary codecs
+and semantic parsing of retained formats are outside this release. Opaque
+selectors remain unverified. Native TypeLibrary compilation does not establish
+compatibility of those opaque documents.
+
+Documentation checks establish formatting and link integrity. Executable local
+tests establish the behaviors they exercise, not deployed UI operation,
+production scale or a complete proof of every possible concurrency schedule.

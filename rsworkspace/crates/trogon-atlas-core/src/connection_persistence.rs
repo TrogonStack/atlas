@@ -10,7 +10,7 @@ use crate::{
         reconcile_branch_connection_ids, reconcile_connection_ids, renew_connection_ids,
         validate_stored_connection_ids, ConnectionError, ConnectionId,
     },
-    stamp_system,
+    specification, stamp_system,
 };
 
 /// Prepare an untrusted write against the value guarded by the store's CAS.
@@ -19,9 +19,15 @@ pub fn prepare_entity(
     proposed: &Entity,
 ) -> Result<Entity, ConnectionError> {
     let mut prepared = proposed.clone();
+    if let Some(previous) = previous {
+        if specification::equivalent_manifest(previous, proposed)? {
+            return Ok(previous.clone());
+        }
+    }
+    specification::prepare_members(previous, &mut prepared, false)?;
     match previous {
         Some(previous) => {
-            if equivalent_with_unassigned_ids(previous, proposed)? {
+            if equivalent_with_unassigned_ids(previous, &prepared)? {
                 prepared = previous.clone();
             } else {
                 reconcile_connection_ids(previous, &mut prepared)?;
@@ -40,6 +46,8 @@ pub fn prepare_landing(
     previous: Option<&Entity>,
     branch: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    let removed_members = specification::removed_members(base, previous, branch)?;
+    specification::reject_removed(branch, &removed_members)?;
     let removed = removed_base_ids(base, previous, branch)?;
     if let Some(id) = connection_occurrences(branch)?
         .into_iter()
@@ -50,6 +58,7 @@ pub fn prepare_landing(
     }
     let previous = previous.filter(|entity| same_incarnation(entity, branch));
     let mut prepared = branch.clone();
+    specification::prepare_members(previous, &mut prepared, true)?;
     if let Some(previous) = previous {
         reconcile_branch_connection_ids(previous, &mut prepared)?;
     }
@@ -75,6 +84,13 @@ pub fn prepare_resolution(
     let removed = removed_base_ids(base, discarded, selected)?;
     let mut resolved = selected.clone();
     renew_connection_ids(&mut resolved, &removed)?;
+    let removed_members = specification::removed_members(base, discarded, selected)?;
+    specification::restore_members(&mut resolved, &removed_members)?;
+    crate::connections::renew_retargeted_connection_ids(selected, &mut resolved)?;
+    crate::connections::assign_connection_ids(&mut resolved)?;
+    specification::rewrite_exposure_selections(selected, &mut resolved);
+    crate::connections::renew_retargeted_connection_ids(selected, &mut resolved)?;
+    crate::connections::assign_connection_ids(&mut resolved)?;
     prepare_landing(base, discarded, &resolved)
 }
 

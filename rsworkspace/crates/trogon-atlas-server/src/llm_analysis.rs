@@ -290,6 +290,7 @@ fn kind_label(k: pb::EntityKind) -> &'static str {
         pb::EntityKind::TypeLibrary => "type_library",
         pb::EntityKind::Channel => "channel",
         pb::EntityKind::DataStore => "data_store",
+        pb::EntityKind::Specification => "specification",
         pb::EntityKind::Unspecified => "unspecified",
     }
 }
