@@ -23,4 +23,5 @@ pub mod operation;
 pub mod outcome;
 pub mod precondition;
 pub mod tenant_types;
+pub mod validate;
 pub mod view;

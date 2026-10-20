@@ -10,7 +10,7 @@ it.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. |
-| `1` | The command ran to completion but reports a finding rather than an error: a diff found drift, `fmt --check` found files that would change, a merge or rebase left conflicts. |
+| `1` | The command ran to completion but reports a finding rather than an error: a diff found drift, `fmt --check` found files that would change, a merge or rebase left conflicts, `validate` found an error. |
 | `2` | Usage error: clap rejected the arguments before any command ran. |
 | `3` | `stale_state` -- a plan was made against a revision the server no longer holds. Read fresh state and plan again. |
 | `4` | `precondition` -- an etag or referrer check refused the request without staling a plan. |
