@@ -252,8 +252,8 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("PROCESSOR_MULTIPLE_COMMANDS", Error, "Processor issues more than one command",
           "A processor issues exactly one command. Branching outcomes (approve vs reject) are different scenarios: model each as its own automation slice with its own processor.",
           Processor, "emitted_command", "model"),
-        r("READ_MODEL_MULTIPLE_AUTOMATIONS", Error, "Read model consumed by multiple automations",
-          "A read model is observed by more than one automation slice; different consumers need different data, so each automation should observe its own consumer-shaped view. Opt in with SharedConsumersAnnotation when the fan-out is intentional.",
+        r("READ_MODEL_MULTIPLE_AUTOMATIONS", Info, "Read model consumed by multiple automations",
+          "A read model is observed by more than one automation slice. Consumers that read the same data share one read model; split it only when a consumer needs different fields, key or source events. Declare a SharedConsumersAnnotation to name the consumers.",
           ReadModel, "source_read_models", "model"),
         r("READ_MODEL_SHARED_CONSUMERS", Info, "Read model shared across consumers (declared)",
           "A read model serves multiple automation slices and a SharedConsumersAnnotation declares the arrangement is intentional. Informational; surfaces because the multi-consumer pattern is load-bearing.",
@@ -261,6 +261,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY", Error, "SharedConsumersAnnotation has no doc",
           "A read model carries SharedConsumersAnnotation but its doc is empty; name the consumers and why they share the same data.",
           ReadModel, "metadata", "model"),
+        r("READ_MODEL_DUPLICATE_SHAPE", Warning, "Read models with the same shape",
+          "Two or more read models in one namespace have the same key, fields and source events. They are one view drawn several times: merge them into one read model that every consumer observes.",
+          ReadModel, "schema", "model"),
         r("EVENT_MULTIPLE_EMITTERS", Error, "Event emitted by more than one command",
           "An event is emitted by more than one distinct command; the board cannot say which decision caused the fact. There is NO annotation escape: when a design fans in, fix it structurally (origin split merged by a read model, or a projection + detector automation firing one dedicated completion command); when an AS-IS mapping fans in, the error is the finding: it reports the mapped system's own causal ambiguity, and the fix belongs in that system's code, not in the model.",
           Event, "", "model"),
@@ -635,6 +638,7 @@ mod catalog_drift_tests {
         "READ_MODEL_MULTIPLE_AUTOMATIONS",
         "READ_MODEL_SHARED_CONSUMERS",
         "READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY",
+        "READ_MODEL_DUPLICATE_SHAPE",
         "REALIZES_DANGLING",
         "REALIZES_MISSING_REF",
         "REALIZES_MULTIPLE",
@@ -2350,6 +2354,52 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
 //   * `member_set`: members claimed by THIS event model
 // Both feed every pass; no other state is shared across pass boundaries.
 // =============================================================================
+fn id_key_order(a: &pb::IdKey, b: &pb::IdKey) -> std::cmp::Ordering {
+    (&a.namespace, &a.slug, a.version).cmp(&(&b.namespace, &b.slug, b.version))
+}
+
+/// What a consumer reads from a read model: two read models with an equal
+/// shape in one namespace are the same view. Docs and annotations on fields
+/// are left out because they don't change the data.
+#[derive(PartialEq)]
+struct ReadModelShape {
+    namespace: String,
+    key: Vec<String>,
+    fields: Vec<pb::FieldSpec>,
+    source_events: Vec<pb::IdKey>,
+}
+
+impl ReadModelShape {
+    fn of(id: &pb::Id, rm: &pb::ReadModel, fields: &[pb::FieldSpec]) -> Option<Self> {
+        let mut source_events: Vec<pb::IdKey> = rm
+            .source_events
+            .iter()
+            .filter_map(|e| e.id.as_ref())
+            .map(pb::IdKey::new)
+            .collect();
+        if source_events.is_empty() {
+            return None;
+        }
+        source_events.sort_by(id_key_order);
+        source_events.dedup();
+        let mut fields: Vec<pb::FieldSpec> = fields
+            .iter()
+            .map(|f| pb::FieldSpec {
+                doc: String::new(),
+                metadata: Vec::new(),
+                ..f.clone()
+            })
+            .collect();
+        fields.sort_by(|a, b| a.name.cmp(&b.name));
+        Some(Self {
+            namespace: id.namespace.clone(),
+            key: rm.key.clone(),
+            fields,
+            source_events,
+        })
+    }
+}
+
 pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
 
@@ -2422,10 +2472,9 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     // (e.g. approve vs reject) are different scenarios and must be modeled as
     // separate automation slices with separate processors.
     //
-    // Invariant: a read model is observed by at most ONE automation. Different
-    // consumer code paths need different data, so each automation observes its
-    // own consumer-shaped view (external webhooks may project into several
-    // ExternalSource read models for this purpose).
+    // Several automations may observe one read model: consumers that read the
+    // same data share it, and READ_MODEL_DUPLICATE_SHAPE catches the clones
+    // that splitting per consumer produces.
     let mut processor_commands: HashMap<pb::IdKey, HashSet<String>> = HashMap::new();
     let mut read_model_automations: HashMap<pb::IdKey, HashSet<String>> = HashMap::new();
     for m in &model.members {
@@ -2560,11 +2609,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 })
                 .unwrap_or((false, false));
 
-            let severity = if shared_declared {
-                pb::validation_issue::Severity::Info as i32
-            } else {
-                pb::validation_issue::Severity::Error as i32
-            };
+            let severity = pb::validation_issue::Severity::Info as i32;
             let code = if shared_declared {
                 "READ_MODEL_SHARED_CONSUMERS"
             } else {
@@ -2579,7 +2624,7 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 )
             } else {
                 format!(
-                    "read model {}/{}@{} is observed by {} automation slices ({}); each automation observes its own consumer-shaped read model: split the view per consumer, or declare a SharedConsumersAnnotation if the consumers genuinely share the same data",
+                    "read model {}/{}@{} is observed by {} automation slices ({}); declare a SharedConsumersAnnotation naming them, or split the view if a consumer needs a different shape",
                     ns, slug, version, slices.len(), list.join(", ")
                 )
             };
@@ -4104,6 +4149,53 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
                 ..Default::default()
             });
         }
+    }
+
+    // ===== PASS: rm_duplicate_shape =====
+    // Read models in one namespace with the same key, fields and source
+    // events are one view drawn several times. External feeds have no
+    // source events to compare, so they are skipped.
+    let mut shape_groups: Vec<(ReadModelShape, Vec<pb::IdKey>)> = Vec::new();
+    for m in &model.members {
+        let (Some(rm_id), Ok(pb::EntityKind::ReadModel)) =
+            (m.id.as_ref(), pb::EntityKind::try_from(m.kind))
+        else {
+            continue;
+        };
+        let Some(rm) = rms_by_id.get(&pb::IdKey::new(rm_id)) else {
+            continue;
+        };
+        let Some(shape) = ReadModelShape::of(rm_id, rm, declared(&rm_fields, rm.id.as_ref()))
+        else {
+            continue;
+        };
+        let rm_key = pb::IdKey::new(rm_id);
+        match shape_groups.iter_mut().find(|(s, _)| *s == shape) {
+            Some((_, ids)) if !ids.contains(&rm_key) => ids.push(rm_key),
+            Some(_) => {}
+            None => shape_groups.push((shape, vec![rm_key])),
+        }
+    }
+    for (_, ids) in shape_groups.iter_mut().filter(|(_, ids)| ids.len() > 1) {
+        ids.sort_by(id_key_order);
+        let list: Vec<String> = ids
+            .iter()
+            .map(|k| format!("{}/{}@{}", k.namespace, k.slug, k.version))
+            .collect();
+        issues.push(pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: "READ_MODEL_DUPLICATE_SHAPE".into(),
+            message: format!(
+                "read models {} have the same key, fields and source events: merge them into one read model that every consumer observes",
+                list.join(", ")
+            ),
+            subject: Some(pb::EntityRef {
+                kind: pb::EntityKind::ReadModel as i32,
+                id: Some(ids[0].id()),
+            }),
+            subject_field: "schema".into(),
+            ..Default::default()
+        });
     }
 
     // ===== PASS: rm_slice_key_sourcing =====
@@ -13637,5 +13729,227 @@ mod reliability_rule_tests {
             0,
             "{issues:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod read_model_shape_tests {
+    use super::*;
+
+    fn id(ns: &str, slug: &str) -> pb::Id {
+        pb::Id {
+            namespace: ns.into(),
+            slug: slug.into(),
+            version: 1,
+        }
+    }
+
+    fn stored(entity: pb::Entity) -> StoredEntity {
+        StoredEntity {
+            entity,
+            etag: "1".into(),
+        }
+    }
+
+    fn issues_with<'a>(
+        issues: &'a [pb::ValidationIssue],
+        code: &str,
+    ) -> Vec<&'a pb::ValidationIssue> {
+        issues.iter().filter(|i| i.code == code).collect()
+    }
+
+    fn read_model(
+        ns: &str,
+        slug: &str,
+        fields: &[&str],
+        events: &[&str],
+        shared_doc: Option<&str>,
+    ) -> pb::Entity {
+        let metadata = shared_doc
+            .map(|doc| prost_types::Any {
+                type_url:
+                    "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.SharedConsumersAnnotation"
+                        .into(),
+                value: prost::Message::encode_to_vec(&pb::SharedConsumersAnnotation {
+                    doc: doc.into(),
+                }),
+            })
+            .into_iter()
+            .collect();
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id(ns, slug)),
+                title: slug.into(),
+                key: vec!["reservation_id".into()],
+                schema: Some(trogon_atlas_core::schema::pack_fields(
+                    fields
+                        .iter()
+                        .map(|n| pb::FieldSpec {
+                            name: (*n).into(),
+                            ..Default::default()
+                        })
+                        .collect(),
+                )),
+                source_events: events
+                    .iter()
+                    .map(|e| pb::EventRef {
+                        id: Some(id(ns, e)),
+                    })
+                    .collect(),
+                metadata,
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn automation_slice(slug: &str, read_model: &str) -> pb::Entity {
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+                id: Some(id("acme", slug)),
+                title: slug.into(),
+                source_read_models: vec![pb::ReadModelEdge {
+                    read_model: Some(pb::ReadModelRef {
+                        id: Some(id("acme", read_model)),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        }
+    }
+
+    fn validate(entities: Vec<pb::Entity>) -> Vec<pb::ValidationIssue> {
+        let members = entities
+            .iter()
+            .filter_map(|e| {
+                Some(pb::EntityRef {
+                    kind: entity_kind(e)? as i32,
+                    id: Some(entity_id(e)?.clone()),
+                })
+            })
+            .collect();
+        let model = pb::EventModel {
+            id: Some(id("acme", "m")),
+            title: "m".into(),
+            members,
+            ..Default::default()
+        };
+        let all: Vec<StoredEntity> = entities.into_iter().map(stored).collect();
+        validate_model(&model, &all)
+    }
+
+    const FIELDS: &[&str] = &["reservation_id", "expires_at"];
+    const EVENTS: &[&str] = &["reservation.placed", "reservation.released"];
+
+    #[test]
+    fn several_automations_on_one_read_model_is_info() {
+        let issues = validate(vec![
+            read_model("acme", "held-reservations", FIELDS, EVENTS, None),
+            automation_slice("confirm", "held-reservations"),
+            automation_slice("expire", "held-reservations"),
+        ]);
+        let found = issues_with(&issues, "READ_MODEL_MULTIPLE_AUTOMATIONS");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+    }
+
+    #[test]
+    fn declared_shared_consumers_is_info() {
+        let issues = validate(vec![
+            read_model(
+                "acme",
+                "held-reservations",
+                FIELDS,
+                EVENTS,
+                Some("confirm and expire read the same rows"),
+            ),
+            automation_slice("confirm", "held-reservations"),
+            automation_slice("expire", "held-reservations"),
+        ]);
+        let found = issues_with(&issues, "READ_MODEL_SHARED_CONSUMERS");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+        assert_eq!(
+            issues_with(&issues, "READ_MODEL_MULTIPLE_AUTOMATIONS").len(),
+            0
+        );
+    }
+
+    #[test]
+    fn shared_consumers_without_doc_is_error() {
+        let issues = validate(vec![
+            read_model("acme", "held-reservations", FIELDS, EVENTS, Some("")),
+            automation_slice("confirm", "held-reservations"),
+            automation_slice("expire", "held-reservations"),
+        ]);
+        let found = issues_with(&issues, "READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Error as i32
+        );
+    }
+
+    #[test]
+    fn read_models_with_the_same_shape_warn_once() {
+        let issues = validate(vec![
+            read_model("acme", "reservations-to-confirm", FIELDS, EVENTS, None),
+            read_model(
+                "acme",
+                "expired-reservations",
+                FIELDS,
+                &["reservation.released", "reservation.placed"],
+                None,
+            ),
+        ]);
+        let found = issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE");
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].severity,
+            pb::validation_issue::Severity::Warning as i32
+        );
+        assert!(found[0].message.contains("acme/expired-reservations@1"));
+        assert!(found[0].message.contains("acme/reservations-to-confirm@1"));
+    }
+
+    #[test]
+    fn read_models_with_different_fields_do_not_warn() {
+        let issues = validate(vec![
+            read_model("acme", "reservations-to-confirm", FIELDS, EVENTS, None),
+            read_model(
+                "acme",
+                "reservation-board",
+                &["reservation_id", "guest_name"],
+                EVENTS,
+                None,
+            ),
+        ]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 0);
+    }
+
+    #[test]
+    fn read_models_in_different_contexts_do_not_warn() {
+        let issues = validate(vec![
+            read_model("acme", "held-reservations", FIELDS, EVENTS, None),
+            read_model("billing", "held-reservations", FIELDS, EVENTS, None),
+        ]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 0);
+    }
+
+    #[test]
+    fn read_models_without_source_events_do_not_warn() {
+        let issues = validate(vec![
+            read_model("acme", "dispute-webhooks", FIELDS, &[], None),
+            read_model("acme", "refund-webhooks", FIELDS, &[], None),
+        ]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 0);
     }
 }

@@ -1434,17 +1434,15 @@ pub struct MixedSurfaceAnnotation {
     #[prost(string, tag="1")]
     pub doc: ::prost::alloc::string::String,
 }
-/// Decision #34. The "at most one automation per read model" rule is
-/// a useful default -- different automations usually consume
-/// differently-shaped data, and splitting RMs per consumer keeps the
-/// coupling explicit. But sometimes one RM legitimately serves
-/// several consumers: a captured-payment row read by the ledger
-/// recorder and the refund processor and the treasury UI carries the
-/// same data; forcing a clone per consumer just multiplies the same
-/// sticky on the board. Declare the multi-consumer case explicitly
-/// with SharedConsumersAnnotation; the validator's
-/// READ_MODEL_MULTIPLE_AUTOMATIONS rule downgrades from Error to
-/// Info when this annotation is present and its doc is non-empty.
+/// Decision #34. Read models split by shape, not by consumer: a
+/// captured-payment row read by the ledger recorder, the refund
+/// processor and the treasury UI is one read model, and a clone per
+/// consumer just multiplies the same sticky on the board
+/// (READ_MODEL_DUPLICATE_SHAPE warns about such clones). This
+/// annotation names the consumers of a shared read model; the
+/// validator reports READ_MODEL_SHARED_CONSUMERS instead of
+/// READ_MODEL_MULTIPLE_AUTOMATIONS, both Info, and an empty doc is an
+/// Error.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SharedConsumersAnnotation {
     /// Free-form explanation naming the consumers and why they share
@@ -3948,20 +3946,16 @@ impl ContractMemberKind {
 //      the same namespace. The inline `repeated FieldSpec fields`
 //      these entities once carried is reserved.
 //
-// 34. ONE RM CAN HAVE MANY CONSUMERS WHEN DECLARED. The
-//      at-most-one-automation-per-RM heuristic is right by default:
-//      different automations usually want differently-shaped data,
-//      and per-consumer RMs keep the coupling visible. But when
-//      several consumers genuinely share the same data -- the
-//      captured-payment row read by the ledger recorder, the refund
-//      processor, and the treasury UI -- splitting into clones makes
-//      the board lie. Declare the multi-consumer case with
-//      SharedConsumersAnnotation (Any in the RM's metadata,
-//      non-empty doc) and the validator downgrades
-//      READ_MODEL_MULTIPLE_AUTOMATIONS from Error to Info. Without
-//      the annotation the heuristic still fires; with it, the board
-//      renders one RM sticky with labeled outgoing edges per
-//      consumer.
+// 34. READ MODELS SPLIT BY SHAPE, NOT BY CONSUMER. Consumers that
+//      read the same data -- the captured-payment row read by the
+//      ledger recorder, the refund processor, and the treasury UI --
+//      share one RM; splitting into clones makes the board lie, and
+//      READ_MODEL_DUPLICATE_SHAPE warns when two RMs in a namespace
+//      have the same key, fields and source events. Split only when a
+//      consumer needs a different shape. Name the consumers with
+//      SharedConsumersAnnotation (Any in the RM's metadata, non-empty
+//      doc); the board renders one RM sticky with labeled outgoing
+//      edges per consumer.
 //
 // 35. SCREENS ARE COMPOSITION, NOT MOMENTS.
 //      Some user surfaces -- a checkout page, a changeset review view -- are

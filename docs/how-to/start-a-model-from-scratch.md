@@ -126,10 +126,11 @@ storyboard entry (`UI_NO_PERSONA`, Error).
 - Add a read model only for a different shape: other fields, key or
   source events. Screens and automations that read the same data share
   one read model.
-- Two automation slices that observe one read model are an error
-  (`READ_MODEL_MULTIPLE_AUTOMATIONS`) unless the read model declares a
-  `SharedConsumersAnnotation` whose `doc` names the consumers. See
-  `examples/manifests/acme-customer-data-deletion/read-model.yaml`.
+- Read models in one namespace with the same key, fields and source
+  events are a warning (`READ_MODEL_DUPLICATE_SHAPE`): merge them.
+- When several automation slices observe one read model, name them in a
+  `SharedConsumersAnnotation` (`READ_MODEL_MULTIPLE_AUTOMATIONS` is Info).
+  See `examples/manifests/acme-customer-data-deletion/read-model.yaml`.
 - A command's decision state comes from its stream (the given events).
   Do not add a read model for it.
 

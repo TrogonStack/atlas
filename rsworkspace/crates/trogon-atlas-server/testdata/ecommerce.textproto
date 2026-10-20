@@ -203,7 +203,7 @@ ops {
   }
 }
 # These automations read different fields and events, so each observes its
-# own read model (READ_MODEL_MULTIPLE_AUTOMATIONS).
+# own read model.
 ops {
   put {
     create_only: true
