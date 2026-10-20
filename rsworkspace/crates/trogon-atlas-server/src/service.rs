@@ -8587,9 +8587,15 @@ mod dry_run {
                             entity,
                         })
                     }
-                    BranchLandOp::Delete { kind, id, .. } => {
+                    BranchLandOp::Delete {
+                        kind,
+                        id,
+                        expected_baseline_etag,
+                    } => {
                         let key = (*kind as i32, pb::IdKey::new(id));
-                        overlay.map.remove(&key).ok_or(StoreError::NotFound)?;
+                        if overlay.map.remove(&key).is_none() && expected_baseline_etag.is_empty() {
+                            return Err(StoreError::NotFound);
+                        }
                         Ok(MutationOutcome::Deleted)
                     }
                 })();
