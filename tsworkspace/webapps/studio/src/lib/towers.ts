@@ -304,11 +304,19 @@ export function buildTowers(model: Model): SceneSpec {
     const y0 = Math.min(...ys) - FLOOR / 2;
     const y1 = Math.max(...ys) + FLOOR / 2;
     const region: Region = { min: vec(left, y0, z0), max: vec(right, y1, z1) };
+    // Sit under the lowest item's bottom edge. DISC_H clears event discs only;
+    // printed cards are CARD_H tall, so use each role's half-height.
+    const lowestBottom = Math.min(
+      ...own.map((p) => {
+        const y = yOf(p);
+        return p.role === 'event' ? y - DISC_H / 2 : y - CARD_H / 2;
+      }),
+    );
     steps.push({
       label: slice.title,
       region,
       highlight: {
-        center: vec((left + right) / 2, Math.min(...ys) - DISC_H, (z0 + z1) / 2),
+        center: vec((left + right) / 2, lowestBottom - DISC_H / 2, (z0 + z1) / 2),
         width: right - left,
         height: z1 - z0,
         facing: 'y',
