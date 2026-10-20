@@ -259,6 +259,36 @@
       ],
       "type": "string"
     },
+    "trogonatlas.eventmodel.v1alpha1.ApiUsage": {
+      "additionalProperties": false,
+      "properties": {
+        "caller": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ProviderTarget"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "exposureId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "operationId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ArtifactPath": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.AutomationScenario": {
       "additionalProperties": false,
       "properties": {
@@ -591,6 +621,41 @@
         }
       },
       "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ChannelOperationBinding": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelRef"
+            },
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.ChannelRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
     },
     "trogonatlas.eventmodel.v1alpha1.Command": {
       "additionalProperties": false,
@@ -1276,6 +1341,248 @@
         }
       ]
     },
+    "trogonatlas.eventmodel.v1alpha1.ContentDigest": {
+      "additionalProperties": false,
+      "properties": {
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "digest": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "format": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractFormat"
+        },
+        "formatVersion": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.FormatVersion"
+        },
+        "mediaType": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MediaType"
+        },
+        "memberId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "name": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MemberName"
+        },
+        "path": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ArtifactPath"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractDependency": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "specification",
+                  "typeLibrary"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "doc": {
+              "type": "string"
+            },
+            "specification": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SpecificationRef"
+            },
+            "typeLibrary": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TypeLibraryRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractFormat": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "known",
+              "other"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "known": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractFormat.Known"
+        },
+        "other": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractFormat.Known": {
+      "enum": [
+        "KNOWN_ASYNCAPI",
+        "KNOWN_AVRO",
+        "KNOWN_GRAPHQL",
+        "KNOWN_JSON_SCHEMA",
+        "KNOWN_OPENAPI",
+        "KNOWN_PROTOBUF",
+        "KNOWN_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractMemberId": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractMemberKind": {
+      "enum": [
+        "CONTRACT_MEMBER_KIND_ARTIFACT",
+        "CONTRACT_MEMBER_KIND_MESSAGE",
+        "CONTRACT_MEMBER_KIND_OPERATION",
+        "CONTRACT_MEMBER_KIND_SCHEMA",
+        "CONTRACT_MEMBER_KIND_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractMemberRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "expectedDigest": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+            },
+            "kind": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberKind"
+            },
+            "memberId": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+            },
+            "ownerUid": {
+              "type": "string"
+            },
+            "specification": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SpecificationRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "doc": {
+          "type": "string"
+        },
+        "mapping": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MessageReadModelMapping"
+        },
+        "memberId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "name": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MemberName"
+        },
+        "schemas": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaBinding"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.OperationBinding"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "memberId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.OperationMessage"
+          },
+          "type": "array"
+        },
+        "name": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MemberName"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "definition": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaDefinition"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "memberId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "name": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MemberName"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ContractTypeRef": {
+      "additionalProperties": false,
+      "properties": {
+        "expectedArtifactId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "expectedDigest": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+        },
+        "expectedSelector": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.OpaqueTypeSelector"
+        },
+        "schema": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.DataStore": {
       "additionalProperties": false,
       "properties": {
@@ -1451,6 +1758,7 @@
         "ENTITY_KIND_SCREEN",
         "ENTITY_KIND_SERVICE_LEVEL_INDICATOR",
         "ENTITY_KIND_SERVICE_LEVEL_OBJECTIVE",
+        "ENTITY_KIND_SPECIFICATION",
         "ENTITY_KIND_STORYBOARD",
         "ENTITY_KIND_SUBDOMAIN",
         "ENTITY_KIND_SWIMLANE",
@@ -1471,6 +1779,7 @@
         "Screen",
         "ServiceLevelIndicator",
         "ServiceLevelObjective",
+        "Specification",
         "Storyboard",
         "Subdomain",
         "Swimlane",
@@ -1514,6 +1823,7 @@
         "service-level-objective",
         "service_level_indicator",
         "service_level_objective",
+        "specification",
         "storyboard",
         "subdomain",
         "swimlane",
@@ -2276,6 +2586,55 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.FormatVersion": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.GraphqlOperationBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GraphqlOperationBinding.Kind"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.GraphqlOperationBinding.Kind": {
+      "enum": [
+        "KIND_MUTATION",
+        "KIND_QUERY",
+        "KIND_SUBSCRIPTION",
+        "KIND_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.HttpOperationBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "responseStatusCodes": {
+          "items": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.LatencyThreshold": {
       "additionalProperties": false,
       "properties": {
@@ -2283,6 +2642,209 @@
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.Comparison"
         },
         "value": true
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.LocalArtifactSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "expectedDigest": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.MediaType": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.MemberName": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.MessageReadModelMapping": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "readModel": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ReadModelRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.OpaqueTypeSelector": {
+      "additionalProperties": false,
+      "properties": {
+        "syntax": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.OperationBinding": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "http",
+              "rpc"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "http",
+              "channel"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "http",
+              "graphql"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "http",
+              "other"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "rpc",
+              "channel"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "rpc",
+              "graphql"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "rpc",
+              "other"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "graphql"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "other"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "graphql",
+              "other"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelOperationBinding"
+        },
+        "graphql": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.GraphqlOperationBinding"
+        },
+        "http": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.HttpOperationBinding"
+        },
+        "other": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.OtherOperationBinding"
+        },
+        "rpc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.RpcOperationBinding"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.OperationMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "messageId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "role": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.OperationMessage.Role"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.OperationMessage.Role": {
+      "enum": [
+        "ROLE_NOTIFICATION",
+        "ROLE_REQUEST",
+        "ROLE_RESPONSE",
+        "ROLE_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.OtherOperationBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "protocol": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ProtocolName"
+        }
       },
       "type": "object"
     },
@@ -2565,6 +3127,62 @@
       "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.ProtocolName": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ProviderExposure": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "operationId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "provider": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ProviderTarget"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ProviderTarget": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "externalSystem"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "component": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ComponentRef"
+            },
+            "externalSystem": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalSystemRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.QualifiedProtoName": {
       "additionalProperties": false,
       "properties": {
         "value": {
@@ -2899,6 +3517,18 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.RpcOperationBinding": {
+      "additionalProperties": false,
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.Schema": {
       "additionalProperties": false,
       "properties": {
@@ -2933,6 +3563,149 @@
         }
       },
       "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SchemaBinding": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "localSchema",
+                  "contractType"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "localSchema",
+                  "schema"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "localSchema",
+                  "libraryType"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "contractType",
+                  "schema"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "contractType",
+                  "libraryType"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "schema",
+                  "libraryType"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "contractType": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractTypeRef"
+            },
+            "doc": {
+              "type": "string"
+            },
+            "libraryType": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TypeLibraryTypeRef"
+            },
+            "localSchema": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+            },
+            "role": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaBinding.Role"
+            },
+            "schema": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.SchemaBinding.Role": {
+      "enum": [
+        "ROLE_HEADERS",
+        "ROLE_PAYLOAD",
+        "ROLE_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SchemaDefinition": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "artifact",
+                  "schema"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "artifact": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LocalArtifactSelection"
+            },
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "schema": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaRef"
+            },
+            "selector": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.OpaqueTypeSelector"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.SchemaRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
     },
     "trogonatlas.eventmodel.v1alpha1.Screen": {
       "additionalProperties": false,
@@ -3289,6 +4062,93 @@
         }
       },
       "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.Specification": {
+      "additionalProperties": false,
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractArtifact"
+          },
+          "type": "array"
+        },
+        "dependencies": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractDependency"
+          },
+          "type": "array"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "exposures": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ProviderExposure"
+          },
+          "type": "array"
+        },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMessage"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "items": {
+            "properties": {
+              "@type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "@type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractOperation"
+          },
+          "type": "array"
+        },
+        "schemas": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractSchema"
+          },
+          "type": "array"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+        },
+        "title": {
+          "type": "string"
+        },
+        "usages": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ApiUsage"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SpecificationRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
     },
     "trogonatlas.eventmodel.v1alpha1.StoreClass": {
       "additionalProperties": false,
@@ -4070,6 +4930,25 @@
           "properties": {
             "id": {
               "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.TypeLibraryTypeRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "library": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TypeLibraryRef"
+            },
+            "message": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.QualifiedProtoName"
             }
           },
           "type": "object"
@@ -5221,6 +6100,29 @@
         "properties": {
           "spec": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataStore"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "ENTITY_KIND_SPECIFICATION",
+              "Specification",
+              "specification"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "spec": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.Specification"
           }
         }
       }

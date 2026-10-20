@@ -17,7 +17,7 @@ struct EntitySpecDe {
 #[serde(deny_unknown_fields)]
 pub struct EntitySpec {
     #[schemars(
-        description = "Entity kind in snake_case, e.g. event, read_model or event_model. Call list_entity_kinds for every kind."
+        description = "Entity kind in snake_case, e.g. event, read_model, event_model or specification. Call list_entity_kinds for every kind."
     )]
     pub kind: String,
     pub namespace: String,
@@ -1100,10 +1100,10 @@ mod deny_unknown_params_tests {
         }));
         if let Ok(p) = parsed {
             assert_ne!(
-            p.project_version,
-            Some(0),
-            "omitted project_version silently became 0; agents will look up a non-existent @0 id"
-        );
+                p.project_version,
+                Some(0),
+                "omitted project_version silently became 0; agents will look up a non-existent @0 id"
+            );
         }
     }
 

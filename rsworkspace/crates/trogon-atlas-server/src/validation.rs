@@ -164,6 +164,8 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "Declared transport for exact AutomationSlice observations."),
         k(pb::EntityKind::DataStore, "ENTITY_KIND_DATA_STORE", "dataStore", "Data Store", "Data Stores",
           "Declared storage attached to exact ReadModels."),
+        k(pb::EntityKind::Specification, "ENTITY_KIND_SPECIFICATION", "specification", "Specification", "Specifications",
+          "Retained interface and schema declarations with exact message, operation, provider and usage selections."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -216,6 +218,12 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         category: category.into(),
     };
     vec![
+        r("SPECIFICATION_VALUE_INVALID", Error, "Invalid Specification declaration",
+          "Contract values and local selections must satisfy the native Specification contract.",
+          pb::EntityKind::Specification, "", "architecture"),
+        r("SPECIFICATION_REFERENCE_UNRESOLVED", Error, "Specification selection does not resolve",
+          "Contract declarations select exact readable targets, owner incarnations and retained schema pins.",
+          pb::EntityKind::Specification, "", "architecture"),
         r("ARCHITECTURE_VALUE_INVALID", Error, "Invalid architecture declaration",
           "Transport and storage declarations must satisfy their native typed field contracts.",
           Unspecified, "", "architecture"),
@@ -572,10 +580,12 @@ mod catalog_drift_tests {
 
     use super::*;
 
-    // Lifted from a `grep -oE` of this file. If you add an emission code
+    // Lifted from the validation emission sites across the validation modules. If you add an emission code
     // OR remove one, update both the catalog AND this list so the diff
     // test below can guard against drift.
     const EMITTED_CODES: &[&str] = &[
+        "SPECIFICATION_VALUE_INVALID",
+        "SPECIFICATION_REFERENCE_UNRESOLVED",
         "ARCHITECTURE_VALUE_INVALID",
         "ARCHITECTURE_REFERENCE_UNRESOLVED",
         "CHANNEL_OBSERVATION_UNRESOLVED",
@@ -725,6 +735,7 @@ mod catalog_drift_tests {
             pb::EntityKind::TypeLibrary,
             pb::EntityKind::Channel,
             pb::EntityKind::DataStore,
+            pb::EntityKind::Specification,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -759,7 +770,7 @@ mod catalog_drift_tests {
     }
 }
 
-fn issue_error(
+pub(crate) fn issue_error(
     code: &str,
     message: String,
     subject: Option<pb::EntityRef>,
@@ -1057,6 +1068,7 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::TypeLibrary(x)) => &x.metadata,
         Some(pb::entity::Kind::Channel(x)) => &x.metadata,
         Some(pb::entity::Kind::DataStore(x)) => &x.metadata,
+        Some(pb::entity::Kind::Specification(x)) => &x.metadata,
         None => &[],
     }
 }

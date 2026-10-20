@@ -708,7 +708,8 @@ impl Store for FailingBatchStore {
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<Vec<StoredEntity>> {
         let resource_scan = filter.kinds.contains(&pb::EntityKind::Channel)
-            || filter.kinds.contains(&pb::EntityKind::DataStore);
+            || filter.kinds.contains(&pb::EntityKind::DataStore)
+            || filter.kinds.contains(&pb::EntityKind::Specification);
         let rows = self.inner.list(filter, limit, branch).await?;
         if let Some(gate) = &self.resource_scan_gate {
             if resource_scan && gate.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {

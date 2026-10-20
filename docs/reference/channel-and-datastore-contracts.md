@@ -251,8 +251,8 @@ policy enforcement and credential management remain outside Atlas execution.
 
 ## Reference scan budget
 
-Resource reference and impact scans use an independent budget of 5,000 Channel
-and DataStore rows, combined, across the caller's visible namespaces. They
+Resource reference and impact scans use an independent budget of 5,000 Channel,
+DataStore and Specification rows, combined, across the caller's visible namespaces. They
 supplement capped model projections so a missing projection row cannot silently
 remove an inbound architecture dependency. Exceeding this visible scan budget
 returns `RESOURCE_EXHAUSTED`.

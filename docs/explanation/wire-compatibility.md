@@ -116,11 +116,18 @@ retired for that stored entity incarnation, and connection references also pin
 the owner's system UID so delete and recreate cannot revive a stale reference.
 
 Contract revision 10 adds Channel and DataStore entity kinds with identified
-associations and reference admission. Both mutation compatibility floors are
-revision 10: clients and servers must understand these owners and preserve
+associations and reference admission. That revision raised both mutation
+compatibility floors to 10: clients and servers must understand these owners and preserve
 their association IDs and pinned observation references. Upgrade the server
 and clients together before authoring these resources. Existing revision-9
 entities retain their stored identities.
+
+The current contract revision is 11, with both mutation compatibility floors
+also at 11. It adds Specification members, exact member/content pins and
+identified API associations. Writers must preserve member IDs as well as
+connection IDs, request/response roles and provider selections. Upgrade clients
+and server before authoring these resources; an exact entity version alone
+does not pin a mutable contract's content or member incarnation.
 
 ## Supported combinations
 

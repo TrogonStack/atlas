@@ -1,0 +1,232 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/type_library.proto";
+import "trogonatlas/eventmodel/v1alpha1/architecture.proto";
+import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
+
+message ContractMemberId { string value = 1; }
+message MemberName { string value = 1; }
+message ContentDigest { string sha256 = 1; }
+message ArtifactPath { string value = 1; }
+message MediaType { string value = 1; }
+message FormatVersion { string value = 1; }
+message QualifiedProtoName { string value = 1; }
+
+message ContractFormat {
+  enum Known {
+    KNOWN_UNSPECIFIED = 0;
+    KNOWN_OPENAPI = 1;
+    KNOWN_ASYNCAPI = 2;
+    KNOWN_GRAPHQL = 3;
+    KNOWN_JSON_SCHEMA = 4;
+    KNOWN_AVRO = 5;
+    KNOWN_PROTOBUF = 6;
+  }
+  oneof kind {
+    Known known = 1;
+    string other = 2;
+  }
+}
+
+message OpaqueTypeSelector {
+  string syntax = 1;
+  string value = 2;
+}
+
+enum ContractMemberKind {
+  CONTRACT_MEMBER_KIND_UNSPECIFIED = 0;
+  CONTRACT_MEMBER_KIND_ARTIFACT = 1;
+  CONTRACT_MEMBER_KIND_SCHEMA = 2;
+  CONTRACT_MEMBER_KIND_MESSAGE = 3;
+  CONTRACT_MEMBER_KIND_OPERATION = 4;
+}
+
+message ContractMemberRef {
+  SpecificationRef specification = 1;
+  string owner_uid = 2;
+  ContractMemberKind kind = 3;
+  ContractMemberId member_id = 4;
+  ContentDigest expected_digest = 5;
+}
+
+message ContractTypeRef {
+  ContractMemberRef schema = 1;
+  ContractMemberId expected_artifact_id = 2;
+  ContentDigest expected_digest = 3;
+  OpaqueTypeSelector expected_selector = 4;
+}
+
+message ContractArtifact {
+  ContractMemberId member_id = 1;
+  MemberName name = 2;
+  optional string doc = 3;
+  ArtifactPath path = 4;
+  ContractFormat format = 5;
+  FormatVersion format_version = 6;
+  MediaType media_type = 7;
+  string content = 8;
+  ContentDigest digest = 9;
+}
+
+message LocalArtifactSelection {
+  ContractMemberId artifact_id = 1;
+  ContentDigest expected_digest = 2;
+}
+
+message SchemaDefinition {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  oneof target {
+    LocalArtifactSelection artifact = 2;
+    SchemaRef schema = 3;
+  }
+  OpaqueTypeSelector selector = 4;
+}
+
+message ContractSchema {
+  ContractMemberId member_id = 1;
+  MemberName name = 2;
+  optional string doc = 3;
+  SchemaDefinition definition = 4;
+}
+
+message TypeLibraryTypeRef {
+  TypeLibraryRef library = 1;
+  QualifiedProtoName message = 2;
+}
+
+message SchemaBinding {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    ROLE_PAYLOAD = 1;
+    ROLE_HEADERS = 2;
+  }
+  Role role = 2;
+  oneof type {
+    ContractMemberId local_schema = 3;
+    ContractTypeRef contract_type = 4;
+    SchemaRef schema = 5;
+    TypeLibraryTypeRef library_type = 6;
+  }
+  optional string doc = 7;
+}
+
+message MessageReadModelMapping {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ReadModelRef read_model = 2;
+}
+
+message ContractMessage {
+  ContractMemberId member_id = 1;
+  MemberName name = 2;
+  optional string doc = 3;
+  repeated SchemaBinding schemas = 4;
+  MessageReadModelMapping mapping = 5;
+}
+
+message OperationMessage {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ContractMemberId message_id = 2;
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    ROLE_REQUEST = 1;
+    ROLE_RESPONSE = 2;
+    ROLE_NOTIFICATION = 3;
+  }
+  Role role = 3;
+  optional string doc = 4;
+}
+
+message HttpOperationBinding {
+  string method = 1;
+  string path = 2;
+  repeated uint32 response_status_codes = 3;
+}
+message RpcOperationBinding {
+  string service = 1;
+  string method = 2;
+}
+message ChannelOperationBinding {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ChannelRef channel = 2;
+}
+message GraphqlOperationBinding {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_QUERY = 1;
+    KIND_MUTATION = 2;
+    KIND_SUBSCRIPTION = 3;
+  }
+  Kind kind = 1;
+  string field = 2;
+}
+message OtherOperationBinding {
+  ProtocolName protocol = 1;
+  string description = 2;
+}
+message OperationBinding {
+  oneof kind {
+    HttpOperationBinding http = 1;
+    RpcOperationBinding rpc = 2;
+    ChannelOperationBinding channel = 3;
+    GraphqlOperationBinding graphql = 4;
+    OtherOperationBinding other = 5;
+  }
+}
+
+message ContractOperation {
+  ContractMemberId member_id = 1;
+  MemberName name = 2;
+  optional string doc = 3;
+  OperationBinding binding = 4;
+  repeated OperationMessage messages = 5;
+}
+
+message ProviderTarget {
+  oneof target {
+    ComponentRef component = 1;
+    ExternalSystemRef external_system = 2;
+  }
+}
+message ProviderExposure {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ProviderTarget provider = 2;
+  ContractMemberId operation_id = 3;
+  optional string doc = 4;
+}
+message ApiUsage {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ProviderTarget caller = 2;
+  ContractMemberId operation_id = 3;
+  trogonatlas.type.v1alpha1.ConnectionId exposure_id = 4;
+  optional string doc = 5;
+}
+message ContractDependency {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  oneof target {
+    SpecificationRef specification = 2;
+    TypeLibraryRef type_library = 3;
+  }
+  optional string doc = 4;
+}
+
+message Specification {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  optional string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  repeated ContractArtifact artifacts = 6;
+  repeated ContractSchema schemas = 7;
+  repeated ContractMessage messages = 8;
+  repeated ContractOperation operations = 9;
+  repeated ProviderExposure exposures = 10;
+  repeated ApiUsage usages = 11;
+  repeated ContractDependency dependencies = 12;
+}

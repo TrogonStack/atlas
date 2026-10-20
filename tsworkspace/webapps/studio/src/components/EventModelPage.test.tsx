@@ -206,6 +206,7 @@ describe('EventModelPage: as of a changeset', () => {
     cleanup();
     vi.clearAllMocks();
     capturedShell = {};
+    capturedIssues = undefined;
     (api.eventModel as ReturnType<typeof vi.fn>).mockResolvedValue({ entities: [] });
     (api.validate as ReturnType<typeof vi.fn>).mockResolvedValue({ issues: [] });
   });
@@ -265,6 +266,34 @@ describe('EventModelPage: as of a changeset', () => {
     });
   });
 
+  it('loads baseline history before the URL update flushes', async () => {
+    vi.useFakeTimers();
+    try {
+      window.history.replaceState({}, '', '/em/acme/checkout?branch=alex/rework');
+      await act(async () => {
+        render(<EventModelPage namespace="acme" slug="checkout" />);
+      });
+      expect(capturedShell.onAsOfChange).toBeTypeOf('function');
+
+      await act(async () => {
+        (capturedShell.onAsOfChange as (id: string) => void)(AS_OF);
+      });
+
+      expect(new URLSearchParams(window.location.search).get('branch')).toBe('alex/rework');
+      expect(api.eventModel).toHaveBeenLastCalledWith(
+        'acme',
+        'checkout',
+        expect.objectContaining({ asOf: AS_OF, branch: undefined }),
+      );
+      await act(async () => vi.runAllTimersAsync());
+      expect(new URLSearchParams(window.location.search).get('asOf')).toBe(AS_OF);
+      expect(new URLSearchParams(window.location.search).has('branch')).toBe(false);
+    } finally {
+      await act(async () => vi.runAllTimersAsync());
+      vi.useRealTimers();
+    }
+  });
+
   it('never renders the previous board against the new as-of while it loads', async () => {
     render(<EventModelPage namespace="acme" slug="checkout" />);
     await waitFor(() => {
@@ -297,12 +326,23 @@ describe('EventModelPage: as of a changeset', () => {
   });
 
   it('drops the as-of validation note the moment the board returns to live', async () => {
+    let resolveModel!: (value: { entities: unknown[] }) => void;
+    (api.eventModel as ReturnType<typeof vi.fn>).mockImplementation(
+      () =>
+        new Promise<{ entities: unknown[] }>((resolve) => {
+          resolveModel = resolve;
+        }),
+    );
     window.history.replaceState({}, '', `/em/acme/checkout?asOf=${AS_OF}`);
     render(<EventModelPage namespace="acme" slug="checkout" />);
+    expect(capturedIssues).toBeUndefined();
+    expect(capturedShell.onAsOfChange).toBeUndefined();
+    await act(async () => resolveModel({ entities: [] }));
     await waitFor(() => {
       expect(capturedIssues?.error).toMatch(/past changeset/);
     });
 
+    (api.eventModel as ReturnType<typeof vi.fn>).mockResolvedValue({ entities: [] });
     (api.validate as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
     await act(async () => (capturedShell.onAsOfChange as (id: string | undefined) => void)(undefined));
 

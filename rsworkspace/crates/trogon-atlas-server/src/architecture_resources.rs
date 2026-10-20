@@ -94,12 +94,12 @@ impl<'a> EntityLookupKey<'a> {
     }
 }
 
-pub(super) struct ArchitectureContext<'a> {
+pub(crate) struct ArchitectureContext<'a> {
     entities: HashMap<EntityLookupKey<'a>, &'a pb::Entity>,
 }
 
 impl<'a> ArchitectureContext<'a> {
-    pub(super) fn new(entities: impl IntoIterator<Item = &'a StoredEntity>) -> Self {
+    pub(crate) fn new(entities: impl IntoIterator<Item = &'a StoredEntity>) -> Self {
         Self {
             entities: entities
                 .into_iter()
@@ -114,7 +114,7 @@ impl<'a> ArchitectureContext<'a> {
         }
     }
 
-    fn find(&self, kind: pb::EntityKind, id: &pb::Id) -> Option<&'a pb::Entity> {
+    pub(crate) fn find(&self, kind: pb::EntityKind, id: &pb::Id) -> Option<&'a pb::Entity> {
         self.entities.get(&EntityLookupKey::new(kind, id)).copied()
     }
 }
@@ -122,7 +122,11 @@ impl<'a> ArchitectureContext<'a> {
 pub(super) fn is_resource(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
-        Some(pb::entity::Kind::Channel(_) | pb::entity::Kind::DataStore(_))
+        Some(
+            pb::entity::Kind::Channel(_)
+                | pb::entity::Kind::DataStore(_)
+                | pb::entity::Kind::Specification(_)
+        )
     )
 }
 
@@ -303,6 +307,9 @@ pub(super) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
 ) -> Vec<pb::ValidationIssue> {
+    if matches!(entity.kind, Some(pb::entity::Kind::Specification(_))) {
+        return crate::specification_resources::validate_in_context(entity, context);
+    }
     let mut checks = Checks {
         subject: super::slice_ref(entity),
         issues: Vec::new(),

@@ -85,6 +85,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::TypeLibrary(x) => x.supersedes.as_ref(),
         EntityOneof::Channel(x) => x.supersedes.as_ref(),
         EntityOneof::DataStore(x) => x.supersedes.as_ref(),
+        EntityOneof::Specification(x) => x.supersedes.as_ref(),
     };
     if let Some(s) = supersedes_of {
         if let Some(self_kind) = entity_kind(entity) {
@@ -793,6 +794,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
                 }
             }
         }
+        EntityOneof::Specification(x) => crate::specification_refs::outbound(x, &mut out),
         EntityOneof::DataStore(x) => {
             for (i, attachment) in x.attachments.iter().enumerate() {
                 if let Some(id) = attachment.read_model.as_ref().and_then(|r| r.id.as_ref()) {
@@ -1077,6 +1079,7 @@ pub fn entity_kind(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::TypeLibrary(_) => EntityKind::TypeLibrary,
         EntityOneof::Channel(_) => EntityKind::Channel,
         EntityOneof::DataStore(_) => EntityKind::DataStore,
+        EntityOneof::Specification(_) => EntityKind::Specification,
     })
 }
 
@@ -1117,6 +1120,7 @@ pub fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::TypeLibrary(x) => x.id.as_ref(),
         EntityOneof::Channel(x) => x.id.as_ref(),
         EntityOneof::DataStore(x) => x.id.as_ref(),
+        EntityOneof::Specification(x) => x.id.as_ref(),
     }
 }
 
@@ -1177,6 +1181,7 @@ pub fn retarget_refs(
             EntityOneof::TypeLibrary(x) => x.supersedes.as_mut(),
             EntityOneof::Channel(x) => x.supersedes.as_mut(),
             EntityOneof::DataStore(x) => x.supersedes.as_mut(),
+            EntityOneof::Specification(x) => x.supersedes.as_mut(),
         };
         if self_kind_matches {
             if let Some(s) = supersedes_opt {
@@ -1940,6 +1945,9 @@ pub fn retarget_refs(
             }
             // An observation pins an incarnation and occurrence, so changing only its owner key cannot select a replacement.
         }
+        EntityOneof::Specification(x) => {
+            crate::specification_refs::retarget(x, from_kind, from_id, to_id, &mut rewritten);
+        }
         EntityOneof::DataStore(x) => {
             if from_kind == EntityKind::ReadModel {
                 for (i, attachment) in x.attachments.iter_mut().enumerate() {
@@ -2137,6 +2145,7 @@ fn matches_kind(kind: &EntityOneof, ek: EntityKind) -> bool {
             | (EntityOneof::TypeLibrary(_), EntityKind::TypeLibrary)
             | (EntityOneof::Channel(_), EntityKind::Channel)
             | (EntityOneof::DataStore(_), EntityKind::DataStore)
+            | (EntityOneof::Specification(_), EntityKind::Specification)
     )
 }
 

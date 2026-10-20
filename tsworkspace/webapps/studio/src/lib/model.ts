@@ -53,7 +53,8 @@ export type EntityKind =
   | 'alertNotificationTarget'
   | 'typeLibrary'
   | 'channel'
-  | 'dataStore';
+  | 'dataStore'
+  | 'specification';
 
 export interface FieldTypeConfig {
   version?: number;
@@ -430,6 +431,7 @@ const KIND_SET: ReadonlySet<string> = new Set([
   'typeLibrary',
   'channel',
   'dataStore',
+  'specification',
 ]);
 
 const WIRE_KIND: Record<string, EntityKind> = {
@@ -464,6 +466,7 @@ const WIRE_KIND: Record<string, EntityKind> = {
   ENTITY_KIND_TYPE_LIBRARY: 'typeLibrary',
   ENTITY_KIND_CHANNEL: 'channel',
   ENTITY_KIND_DATA_STORE: 'dataStore',
+  ENTITY_KIND_SPECIFICATION: 'specification',
 };
 
 export function wireKind(wire: unknown): EntityKind | undefined {

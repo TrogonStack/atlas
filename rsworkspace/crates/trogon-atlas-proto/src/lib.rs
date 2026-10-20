@@ -13,15 +13,15 @@ pub const SCHEMA_VERSION: &str = "trogonatlas.eventmodel.v1alpha1";
 /// Wire contract revision this build speaks, advertised by the server as
 /// `GetServerInfoResponse.contract_revision` and checked by clients before
 /// mutating. See `docs/explanation/wire-compatibility.md` for when it changes.
-pub const CONTRACT_REVISION: u32 = 10;
+pub const CONTRACT_REVISION: u32 = 11;
 
 /// Oldest server contract revision clients built from this tree mutate
 /// against.
-pub const MIN_SERVER_CONTRACT_REVISION: u32 = 10;
+pub const MIN_SERVER_CONTRACT_REVISION: u32 = 11;
 
 /// Oldest client contract revision a server built from this tree accepts
 /// mutations from.
-pub const MIN_CLIENT_CONTRACT_REVISION: u32 = 10;
+pub const MIN_CLIENT_CONTRACT_REVISION: u32 = 11;
 
 /// Serialized `FileDescriptorSet` for the schema, for reflection-based
 /// tooling (textproto/JSON transcoding).
@@ -224,6 +224,7 @@ pub mod canonical {
             EntityKind::TypeLibrary => "type_library",
             EntityKind::Channel => "channel",
             EntityKind::DataStore => "data_store",
+            EntityKind::Specification => "specification",
         }
     }
 
@@ -263,6 +264,7 @@ pub mod canonical {
         EntityKind::TypeLibrary,
         EntityKind::Channel,
         EntityKind::DataStore,
+        EntityKind::Specification,
     ];
 
     /// Parse a kind string into an `EntityKind`. Accepts the canonical

@@ -95,6 +95,8 @@ pub enum ConnectionError {
     UnknownId(ConnectionId),
     #[error("connection ID {0} from the branch base was removed on the opposing side")]
     RemovedFromBranchBase(ConnectionId),
+    #[error("specification identity error: {0}")]
+    Member(String),
     #[error("connection encoding error: {0}")]
     Encoding(String),
 }
@@ -200,6 +202,28 @@ fn visit(
     callback: &mut impl FnMut(&mut DynamicMessage, ConnectionOccurrence) -> Result<(), ConnectionError>,
 ) -> Result<(), ConnectionError> {
     let descriptor = message.descriptor();
+    if descriptor.get_field_by_name("connection_id").is_some()
+        && wrapper_target(descriptor.full_name()).is_none()
+    {
+        let mut endpoint = message.clone();
+        for name in ["connection_id", "doc"] {
+            if let Some(field) = descriptor.get_field_by_name(name) {
+                endpoint.clear_field(&field);
+            }
+        }
+        let mut signature = format!("{role}:{}:", descriptor.full_name()).into_bytes();
+        signature.extend_from_slice(&(predecessor.len() as u64).to_le_bytes());
+        signature.extend_from_slice(predecessor);
+        signature.extend(endpoint.encode_to_vec());
+        let occurrence = ConnectionOccurrence {
+            id: read_id(message)?,
+            path: path.to_owned(),
+            target: None,
+            signature,
+        };
+        callback(message, occurrence)?;
+        return Ok(());
+    }
     if let Some((field, kind)) = wrapper_target(descriptor.full_name()) {
         let endpoint = message.get_field_by_name(field);
         let target_message = endpoint.as_deref().and_then(Value::as_message);
@@ -248,6 +272,14 @@ fn visit(
     } else {
         predecessor.to_vec()
     };
+    let mut after = after;
+    if let Some(value) = message.get_field_by_name("member_id") {
+        if let Some(id) = value.as_message() {
+            let encoded = id.encode_to_vec();
+            after.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
+            after.extend(encoded);
+        }
+    }
     let fields: Vec<_> = descriptor
         .fields()
         .filter(|field| message.has_field(field))

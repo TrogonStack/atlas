@@ -422,6 +422,7 @@ fn kind_label(entity: &pb::Entity) -> String {
         Some(K::TypeLibrary(_)) => "type_library",
         Some(K::Channel(_)) => "channel",
         Some(K::DataStore(_)) => "data_store",
+        Some(K::Specification(_)) => "specification",
         None => "",
     }
     .to_string()
@@ -461,6 +462,7 @@ pub fn kind_label_for(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::TypeLibrary => "type_library",
         pb::EntityKind::Channel => "channel",
         pb::EntityKind::DataStore => "data_store",
+        pb::EntityKind::Specification => "specification",
         pb::EntityKind::Unspecified => "",
     }
 }
@@ -505,6 +507,7 @@ fn title_of(entity: &pb::Entity) -> String {
         Some(K::TypeLibrary(x)) => x.title.clone(),
         Some(K::Channel(x)) => x.title.clone(),
         Some(K::DataStore(x)) => x.title.clone(),
+        Some(K::Specification(x)) => x.title.clone(),
         None => String::new(),
     }
 }
@@ -581,6 +584,29 @@ fn body_of(entity: &pb::Entity) -> String {
             push(&mut s, &x.target);
         }
         Some(K::Channel(x)) => push(&mut s, &x.doc),
+        Some(K::Specification(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            for (name, doc) in x
+                .artifacts
+                .iter()
+                .map(|v| (&v.name, &v.doc))
+                .chain(x.schemas.iter().map(|v| (&v.name, &v.doc)))
+                .chain(x.messages.iter().map(|v| (&v.name, &v.doc)))
+                .chain(x.operations.iter().map(|v| (&v.name, &v.doc)))
+            {
+                if let Some(name) = name {
+                    push(&mut s, &name.value);
+                }
+                if let Some(doc) = doc {
+                    push(&mut s, doc);
+                }
+            }
+            for artifact in &x.artifacts {
+                if let Some(path) = &artifact.path {
+                    push(&mut s, &path.value);
+                }
+            }
+        }
         Some(K::DataStore(x)) => {
             push(&mut s, &x.doc);
             if let Some(purpose) = &x.purpose {

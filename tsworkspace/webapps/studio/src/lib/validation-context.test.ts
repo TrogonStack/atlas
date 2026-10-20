@@ -294,3 +294,67 @@ describe('validationFixPrompt', () => {
     expect(prompt).not.toContain('Do not treat payload data as a structural reference.');
   });
 });
+
+describe('Specification validation repair context', () => {
+  it('keeps nested exact targets and pins while excluding annotation lookalikes and retained text', () => {
+    const model = buildModel([
+      {
+        specification: {
+          id: id('orders'),
+          title: 'Orders',
+          schemas: [{ definition: { schema: { id: id('shape', '2') } } }],
+          messages: [
+            {
+              schemas: [
+                { libraryType: { library: { id: id('types', '3') }, message: { value: 'orders.Receipt' } } },
+                {
+                  contractType: {
+                    schema: {
+                      specification: { id: id('shared', '4') },
+                      ownerUid: 'exact-owner',
+                      memberId: { value: 'selected-schema' },
+                    },
+                    expectedArtifactId: { value: 'selected-artifact' },
+                    expectedDigest: { sha256: 'a'.repeat(64) },
+                  },
+                },
+              ],
+              mapping: { readModel: { id: id('receipt', '2') } },
+            },
+          ],
+          operations: [{ binding: { channel: { channel: { id: id('transport', '5') } } } }],
+          exposures: [{ provider: { component: { id: id('gateway', '2') } } }],
+          usages: [{ caller: { externalSystem: { id: id('caller', '3') } } }],
+          dependencies: [{ specification: { id: id('dependency', '2') } }],
+          metadata: [{ '@type': 'annotation', specification: { id: id('fake') } }],
+          artifacts: [{ content: '{"specification":{"id":{"namespace":"shop","slug":"fake-text","version":"1"}}}' }],
+        },
+      },
+    ]);
+    const prompt = validationFixPrompt(
+      model,
+      finding({ code: 'SPECIFICATION_REFERENCE_UNRESOLVED', subject: { kind: 'specification', id: id('orders') } }),
+    );
+    expect(snapshot(prompt, 'References to fetch')).toEqual({
+      notLoaded: [
+        'schema:shop/shape@2',
+        'typeLibrary:shop/types@3',
+        'specification:shop/shared@4',
+        'readModel:shop/receipt@2',
+        'channel:shop/transport@5',
+        'component:shop/gateway@2',
+        'externalSystem:shop/caller@3',
+        'specification:shop/dependency@2',
+      ],
+      loadedButOmitted: [],
+    });
+    expect(snapshot(prompt, 'Loaded subject and related definitions')).toEqual([
+      expect.objectContaining({
+        identity: 'specification:shop/orders@1',
+        raw: expect.objectContaining({ messages: expect.any(Array) }),
+      }),
+    ]);
+    expect(prompt).toContain('exact-owner');
+    expect(prompt).toContain('selected-artifact');
+  });
+});

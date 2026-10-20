@@ -1546,3 +1546,140 @@ async fn architecture_resources_roundtrip_through_mcp_dispatch() {
     }
     service.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn specification_mcp_roundtrip_preserves_stored_members_associations_and_artifact_bytes() {
+    let (client, service, endpoint) = start_mcp_client().await;
+    let ns = "mcp-specification";
+    for resource in [
+        serde_json::json!({"readModel": {"id": {"namespace": ns, "slug": "receipt", "version": "2"}, "title": "Receipt"}}),
+        serde_json::json!({"component": {"id": {"namespace": ns, "slug": "gateway", "version": "1"}, "title": "Gateway"}}),
+    ] {
+        call_ok(
+            &client,
+            "put_entity_json",
+            put_entity_json_args(&resource.to_string()),
+        )
+        .await;
+    }
+    let artifact_id = "11111111-1111-4111-8111-111111111111";
+    let schema_id = "22222222-2222-4222-8222-222222222222";
+    let message_id = "33333333-3333-4333-8333-333333333333";
+    let operation_id = "44444444-4444-4444-8444-444444444444";
+    let content = "{\"type\":\"object\"}\r\n";
+    let digest = "6f8f8b83ea6711930c12c3c32001521787644432b59f31251b32aefe9f0d494d";
+    let spec = serde_json::json!({
+        "title": "Order contract",
+        "artifacts": [{"memberId": {"value": artifact_id}, "name": {"value": "Order source"},
+            "path": {"value": "contracts/order.json"}, "format": {"known": "KNOWN_JSON_SCHEMA"},
+            "formatVersion": {"value": "2020-12"}, "mediaType": {"value": "application/schema+json"},
+            "content": content, "digest": {"sha256": digest}}],
+        "schemas": [{"memberId": {"value": schema_id}, "name": {"value": "Order shape"},
+            "definition": {"artifact": {"artifactId": {"value": artifact_id}, "expectedDigest": {"sha256": digest}},
+                "selector": {"syntax": "json-pointer", "value": "/$defs/Order"}}}],
+        "messages": [{"memberId": {"value": message_id}, "name": {"value": "Order message"},
+            "schemas": [{"role": "ROLE_PAYLOAD", "localSchema": {"value": schema_id}}],
+            "mapping": {"readModel": {"id": {"namespace": ns, "slug": "receipt", "version": "2"}}}}],
+        "operations": [{"memberId": {"value": operation_id}, "name": {"value": "Submit"},
+            "binding": {"http": {"method": "POST", "path": "/orders", "responseStatusCodes": [201]}},
+            "messages": [
+                {"role": "ROLE_REQUEST", "messageId": {"value": message_id}},
+                {"role": "ROLE_RESPONSE", "messageId": {"value": message_id}}]}],
+        "exposures": [{"provider": {"component": {"id": {"namespace": ns, "slug": "gateway", "version": "1"}}},
+            "operationId": {"value": operation_id}}],
+        "usages": [{"caller": {"component": {"id": {"namespace": ns, "slug": "gateway", "version": "1"}}},
+            "operationId": {"value": operation_id}}]
+    });
+
+    let mut resource = spec;
+    resource["id"] = serde_json::json!({"namespace": ns, "slug": "orders", "version": "1"});
+    let resource = serde_json::json!({"specification": resource});
+    call_ok(
+        &client,
+        "put_entity_json",
+        put_entity_json_args(&resource.to_string()),
+    )
+    .await;
+    let get_args = args_obj(&[
+        ("kind", serde_json::json!("Specification")),
+        ("namespace", serde_json::json!(ns)),
+        ("slug", serde_json::json!("orders")),
+        ("version", serde_json::json!(1)),
+    ]);
+    let got = call_ok(&client, "get_entity_json", get_args.clone()).await;
+    let before = call_tool_result_text(&got);
+    let contract = &before["json"]["specification"];
+    assert_eq!(
+        contract["artifacts"][0]["content"]
+            .as_str()
+            .unwrap()
+            .as_bytes(),
+        content.as_bytes()
+    );
+    assert_eq!(contract["artifacts"][0]["digest"]["sha256"], digest);
+    assert_eq!(
+        contract["operations"][0]["messages"][0]["messageId"]["value"],
+        message_id
+    );
+    assert_eq!(
+        contract["operations"][0]["messages"][1]["messageId"]["value"],
+        message_id
+    );
+    let mut ids = std::collections::HashSet::new();
+    for occurrence in [
+        &contract["schemas"][0]["definition"],
+        &contract["messages"][0]["schemas"][0],
+        &contract["messages"][0]["mapping"],
+        &contract["operations"][0]["messages"][0],
+        &contract["operations"][0]["messages"][1],
+        &contract["exposures"][0],
+        &contract["usages"][0],
+    ] {
+        let id = occurrence["connectionId"]["value"].as_str().unwrap();
+        assert_ne!(id, "");
+        assert!(ids.insert(id));
+    }
+    let exported = call_ok(
+        &client,
+        "export_namespace",
+        args_obj(&[("namespace", serde_json::json!(ns))]),
+    )
+    .await;
+    let exported = call_tool_result_text(&exported);
+    assert_eq!(exported["skipped"], serde_json::json!([]));
+    let yaml = exported["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|v| v.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    call_ok(
+        &client,
+        "apply_manifests",
+        args_obj(&[("manifests_yaml", serde_json::json!(yaml))]),
+    )
+    .await;
+    let after = call_ok(&client, "get_entity_json", get_args).await;
+    assert_eq!(before, call_tool_result_text(&after));
+    let mut grpc = grpc_client(&endpoint).await;
+    let stored = grpc
+        .get_entity(pb::GetEntityRequest {
+            kind: pb::EntityKind::Specification as i32,
+            id: Some(id(ns, "orders", 1)),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let Some(pb::entity::Kind::Specification(contract)) = stored.kind else {
+        panic!("expected Specification")
+    };
+    assert_eq!(contract.artifacts[0].content.as_bytes(), content.as_bytes());
+    assert_eq!(
+        contract.artifacts[0].member_id.as_ref().unwrap().value,
+        artifact_id
+    );
+    service.cancel().await.unwrap();
+}

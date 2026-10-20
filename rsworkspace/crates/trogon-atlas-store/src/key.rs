@@ -346,6 +346,7 @@ fn kind_from_short(s: &str) -> Option<EntityKind> {
         "type_library" => EntityKind::TypeLibrary,
         "channel" => EntityKind::Channel,
         "data_store" => EntityKind::DataStore,
+        "specification" => EntityKind::Specification,
         _ => return None,
     })
 }
@@ -366,7 +367,11 @@ mod tests {
 
     #[test]
     fn resource_keys_roundtrip_through_baseline_and_branch_keys() {
-        for kind in [EntityKind::Channel, EntityKind::DataStore] {
+        for kind in [
+            EntityKind::Channel,
+            EntityKind::DataStore,
+            EntityKind::Specification,
+        ] {
             let id = id("shop", "order-feed", 2);
             assert_eq!(
                 parse_entity_key(&entity_key(kind, &id)),

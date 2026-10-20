@@ -24,6 +24,13 @@ const referenceFields: Record<string, ContextRef['kind']> = {
   upstream: 'boundedContext',
   realizes: 'subdomain',
   domain: 'domain',
+  specification: 'specification',
+  schema: 'schema',
+  channel: 'channel',
+  library: 'typeLibrary',
+  typeLibrary: 'typeLibrary',
+  component: 'component',
+  externalSystem: 'externalSystem',
 };
 
 function identity(ref: ContextRef): string {
@@ -50,7 +57,8 @@ function references(entity: Entity): ContextRef[] {
     const kind = wireKind(body.kind) ?? impliedKind;
     if (kind && body.id) add(kind, body.id);
     for (const [field, child] of Object.entries(body)) {
-      if (['id', 'data', 'metadata', 'fields', 'schema', 'supersedes'].includes(field)) continue;
+      if (['id', 'data', 'metadata', 'fields', 'supersedes'].includes(field)) continue;
+      if (field === 'schema' && entity.kind !== 'specification') continue;
       visit(child, referenceFields[field]);
     }
   };
