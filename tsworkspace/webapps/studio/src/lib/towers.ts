@@ -273,9 +273,8 @@ export function buildTowers(model: Model): SceneSpec {
       color: '#a1a1aa',
       opacity: 0.35,
     });
-    const moment = [...placed.values()].find(
-      (p) => namespaceOf(p.node.id) === ns && p.box.x === x && p.data.moment,
-    )?.data.moment;
+    const moment = [...placed.values()].find((p) => namespaceOf(p.node.id) === ns && p.box.x === x && p.data.moment)
+      ?.data.moment;
     tags.push({
       id: `floor:${key}`,
       position: vec(left - 50, y, -DISC_R - 6),
