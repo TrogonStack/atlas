@@ -21,7 +21,7 @@ use trogon_atlas_proto as pb;
 
 use crate::{
     client::Client,
-    manifest::{entity_json_value, LoadedManifest},
+    manifest::{entity_json_value, LoadedManifest, ManifestDocument},
     precondition::{Revision, StalePlan},
 };
 
@@ -179,6 +179,49 @@ pub async fn plan(
             })
         })
         .collect()
+}
+
+/// Refuse a board import whose target lacks a foreign entity the board
+/// references. Another namespace owns those entities, so the import never
+/// writes them, and only their identity is checked: a bundled spec that no
+/// longer transcodes must not hide a missing entity or block a present one.
+pub async fn require_external(client: &mut Client, external: Vec<ManifestDocument>) -> Result<()> {
+    if external.is_empty() {
+        return Ok(());
+    }
+    let keys = external
+        .iter()
+        .map(|d| pb::EntityRef {
+            kind: d.kind as i32,
+            id: Some(d.id.clone()),
+        })
+        .collect();
+    let found = client
+        .batch_get_entities(pb::BatchGetEntitiesRequest { keys, dense: true })
+        .await
+        .context("BatchGetEntities failed")?
+        .into_inner()
+        .found;
+    if found.len() != external.len() {
+        bail!(
+            "server returned {} found flags for {} keys",
+            found.len(),
+            external.len()
+        );
+    }
+    let missing: Vec<String> = external
+        .iter()
+        .zip(found)
+        .filter(|(_, found)| !found)
+        .map(|(d, _)| pb::canonical::id_string(d.kind, &d.id))
+        .collect();
+    if !missing.is_empty() {
+        crate::invalid_input!(
+            "the target is missing external entities this board references; apply them from their own namespace first: {}",
+            missing.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// A batch was refused (`BatchMutateResponse.status == FAILED`) for a reason

@@ -125,14 +125,30 @@ pub async fn load_with_tenant_types(
     Ok(ResolvedManifests { manifests, types })
 }
 
+/// Manifest documents read from files, with the external ones a board file
+/// bundles kept apart.
+#[derive(Debug, Clone, Default)]
+pub struct ManifestFiles {
+    pub documents: Vec<ManifestDocument>,
+    /// Foreign entities a board references directly. Their own namespace
+    /// owns them, so an import checks that they exist and never writes them.
+    pub external: Vec<ManifestDocument>,
+}
+
 /// Collect manifest files from files/directories into a sorted, deduped
 /// list, so callers (apply, fmt) see a stable order regardless of
 /// filesystem iteration order. Directories are walked recursively for
 /// `.yaml`/`.yml`.
 pub(crate) fn collect_yaml_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    collect_manifest_files(paths, false)
+}
+
+/// Like `collect_yaml_files`, and with `html` also takes a board `.html`
+/// file named explicitly. `fmt` passes false: it would rewrite the file as YAML.
+fn collect_manifest_files(paths: &[PathBuf], html: bool) -> Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = Vec::new();
     for path in paths {
-        collect_files(path, &mut files, true)?;
+        collect_files(path, &mut files, true, html)?;
     }
     files.sort();
     files.dedup();
@@ -145,18 +161,65 @@ pub(crate) fn collect_yaml_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 /// Collect manifest files from files/directories and parse every document
 /// in each one.
 pub fn load_paths(paths: &[PathBuf]) -> Result<Vec<LoadedManifest>> {
-    load_builtin(&read_paths(paths)?)
+    load_builtin(&read_paths(paths)?.documents)
 }
 
 /// Collect manifest files from files/directories and read every document
 /// in each one, leaving their specs for `load_with_tenant_types`.
-pub fn read_paths(paths: &[PathBuf]) -> Result<Vec<ManifestDocument>> {
-    let files = collect_yaml_files(paths)?;
-    let mut documents = Vec::new();
-    for file in &files {
-        documents.extend(read_file(file)?);
+pub fn read_paths(paths: &[PathBuf]) -> Result<ManifestFiles> {
+    let mut out = ManifestFiles::default();
+    for file in &collect_manifest_files(paths, true)? {
+        if is_html(file) {
+            let board = read_board_html(&read_text(file)?, &file.display().to_string())?;
+            out.documents.extend(board.documents);
+            out.external.extend(board.external);
+        } else {
+            out.documents.extend(read_file(file)?);
+        }
     }
-    Ok(documents)
+    Ok(out)
+}
+
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+fn is_html(path: &Path) -> bool {
+    has_extension(path, &["html"])
+}
+
+/// Read the manifests a board file saved by Studio's Export HTML carries in
+/// its `atlas-snapshot` data block. The block's JSON writes every `<` as
+/// `\u003c`, so its first `</script` is its end.
+fn read_board_html(html: &str, source: &str) -> Result<ManifestFiles> {
+    let data = html
+        .find("id=\"atlas-snapshot\"")
+        .and_then(|at| html[at..].find('>').map(|end| &html[at + end + 1..]))
+        .and_then(|rest| rest.find("</script").map(|end| &rest[..end]))
+        .ok_or_else(|| {
+            invalid_input(format!(
+                "{source}: no atlas-snapshot data block; save the board with Studio's Export HTML"
+            ))
+        })?;
+    let snapshot: Value = serde_json::from_str(data)
+        .map_err(|e| invalid_input(format!("{source}: invalid atlas-snapshot JSON: {e}")))?;
+    let manifests = snapshot.get("manifests");
+    let field = |name: &str| manifests.and_then(|m| m.get(name)).and_then(Value::as_str);
+    let (Some(model), Some(external)) = (field("model"), field("external")) else {
+        crate::invalid_input!(
+            "{source}: this snapshot has no manifests; export it again from a newer Studio"
+        );
+    };
+    Ok(ManifestFiles {
+        documents: read_str(model, source)?,
+        external: if external.trim().is_empty() {
+            Vec::new()
+        } else {
+            read_str(external, &format!("{source} (external)"))?
+        },
+    })
 }
 
 fn load_builtin(documents: &[ManifestDocument]) -> Result<Vec<LoadedManifest>> {
@@ -169,8 +232,9 @@ fn load_builtin(documents: &[ManifestDocument]) -> Result<Vec<LoadedManifest>> {
 
 /// Walk `path` into `out`. When `explicit` is true (a path the user named
 /// with `-f`), non-yaml files are errors; when walking a directory they are
-/// skipped, matching kubectl's directory walk.
-fn collect_files(path: &Path, out: &mut Vec<PathBuf>, explicit: bool) -> Result<()> {
+/// skipped, matching kubectl's directory walk. A board `.html` file is only
+/// taken when named, so a saved board next to its YAML is not read twice.
+fn collect_files(path: &Path, out: &mut Vec<PathBuf>, explicit: bool, html: bool) -> Result<()> {
     let meta = std::fs::metadata(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             invalid_input(format!("reading {}: {err}", path.display()))
@@ -182,20 +246,17 @@ fn collect_files(path: &Path, out: &mut Vec<PathBuf>, explicit: bool) -> Result<
         for entry in
             std::fs::read_dir(path).with_context(|| format!("listing {}", path.display()))?
         {
-            collect_files(&entry?.path(), out, false)?;
+            collect_files(&entry?.path(), out, false, html)?;
         }
         return Ok(());
     }
-    let is_yaml = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("yaml") || e.eq_ignore_ascii_case("yml"));
-    if is_yaml {
+    if has_extension(path, &["yaml", "yml"]) || (explicit && html && is_html(path)) {
         out.push(path.to_path_buf());
     } else if explicit {
         crate::invalid_input!(
-            "{}: not a .yaml/.yml manifest file (unsupported)",
-            path.display()
+            "{}: not a .yaml/.yml manifest file{} (unsupported)",
+            path.display(),
+            if html { " or .html board file" } else { "" }
         );
     }
     Ok(())
@@ -207,14 +268,17 @@ pub fn parse_file(path: &Path) -> Result<Vec<LoadedManifest>> {
 }
 
 fn read_file(path: &Path) -> Result<Vec<ManifestDocument>> {
-    let text = std::fs::read_to_string(path).map_err(|err| {
+    read_str(&read_text(path)?, &path.display().to_string())
+}
+
+fn read_text(path: &Path) -> Result<String> {
+    std::fs::read_to_string(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             invalid_input(format!("reading {}: {err}", path.display()))
         } else {
             anyhow::Error::new(err).context(format!("reading {}", path.display()))
         }
-    })?;
-    read_str(&text, &path.display().to_string())
+    })
 }
 
 /// Parse every YAML document in a string. `source` labels errors.
@@ -1022,5 +1086,90 @@ spec: { title: A }
                 || msg.contains("unsupported"),
             "error should name the rejected file or reason, got: {msg}"
         );
+    }
+
+    /// The data block as Studio's Export HTML writes it: every `<` in the
+    /// JSON escaped, so a `</script>` inside a doc cannot end the block.
+    fn board_html(snapshot: &Value) -> String {
+        let data = serde_json::to_string(snapshot)
+            .unwrap()
+            .replace('<', "\\u003c");
+        format!(
+            "<!doctype html>\n<html><body><div id=\"root\"></div>\n\
+             <script id=\"atlas-snapshot\" type=\"application/json\">{data}</script>\n\
+             <script type=\"module\">console.log('\\x3C/script>')</script>\n</body></html>\n"
+        )
+    }
+
+    const BOARD_EVENT: &str = "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: acme-checkout, name: order.placed }
+spec: { title: 'ends with </script>' }
+";
+
+    const FOREIGN_EVENT: &str = "apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata: { namespace: acme-payments, name: payment.captured }
+spec: { title: Payment captured }
+";
+
+    #[test]
+    fn board_html_reads_the_model_and_keeps_external_entities_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("board.html");
+        let snapshot = serde_json::json!({
+            "version": 1,
+            "responses": {},
+            "manifests": { "model": BOARD_EVENT, "external": FOREIGN_EVENT },
+        });
+        std::fs::write(&path, board_html(&snapshot)).unwrap();
+
+        let files = read_paths(&[path]).unwrap();
+        let loaded = load_builtin(&files.documents).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].id.slug, "order.placed");
+        let Some(pb::entity::Kind::Event(event)) = loaded[0].entity.kind.as_ref() else {
+            panic!("expected an event");
+        };
+        assert_eq!(event.title, "ends with </script>");
+        let external: Vec<_> = files.external.iter().map(|d| d.id.slug.as_str()).collect();
+        assert_eq!(external, ["payment.captured"]);
+    }
+
+    #[test]
+    fn board_html_without_manifests_asks_for_a_new_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("old.html");
+        std::fs::write(&path, board_html(&serde_json::json!({ "responses": {} }))).unwrap();
+        let err = read_paths(&[path]).unwrap_err();
+        assert!(format!("{err:#}").contains("export it again"), "{err:#}");
+
+        let page = dir.path().join("page.html");
+        std::fs::write(&page, "<html><body>hello</body></html>").unwrap();
+        let err = read_paths(&[page]).unwrap_err();
+        assert!(format!("{err:#}").contains("atlas-snapshot"), "{err:#}");
+    }
+
+    #[test]
+    fn html_is_read_only_when_named_and_never_formatted() {
+        let dir = tempfile::tempdir().unwrap();
+        let html = dir.path().join("board.html");
+        let snapshot = serde_json::json!({ "manifests": { "model": BOARD_EVENT, "external": "" } });
+        std::fs::write(&html, board_html(&snapshot)).unwrap();
+        std::fs::write(dir.path().join("payments.yaml"), FOREIGN_EVENT).unwrap();
+
+        // A directory walk keeps to YAML, so a saved board next to manifests is not applied twice.
+        let walked = read_paths(&[dir.path().to_path_buf()]).unwrap();
+        let slugs: Vec<_> = walked
+            .documents
+            .iter()
+            .map(|d| d.id.slug.as_str())
+            .collect();
+        assert_eq!(slugs, ["payment.captured"]);
+        assert!(read_paths(std::slice::from_ref(&html))
+            .unwrap()
+            .external
+            .is_empty());
+        assert!(collect_yaml_files(&[html]).is_err());
     }
 }
