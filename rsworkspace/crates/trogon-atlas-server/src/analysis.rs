@@ -566,8 +566,30 @@ fn sibling_supplied_fields(
     read_model_id: &pb::Id,
     by_key: &HashMap<pb::EntityKey, pb::Entity>,
 ) -> HashSet<String> {
+    // The store keeps every version, so only the latest version of each other
+    // slice counts; an older one would hide a field that a bump dropped.
+    let mut latest: HashMap<(&str, &str), u64> = HashMap::new();
+    for entity in by_key.values() {
+        if let Some(pb::entity::Kind::ReadModelSlice(rs)) = entity.kind.as_ref() {
+            if let Some(id) = rs.id.as_ref() {
+                let version = latest
+                    .entry((&id.namespace, &id.slug))
+                    .or_insert(id.version);
+                *version = (*version).max(id.version);
+            }
+        }
+    }
+    let own = slice
+        .id
+        .as_ref()
+        .map(|id| (id.namespace.as_str(), id.slug.as_str()));
     slices_feeding(read_model_id, by_key)
-        .filter(|rs| rs.id != slice.id && rs.projection_role != pb::ProjectionRole::Delete as i32)
+        .filter(|rs| {
+            rs.id.as_ref().is_some_and(|id| {
+                let name = (id.namespace.as_str(), id.slug.as_str());
+                Some(name) != own && latest.get(&name) == Some(&id.version)
+            }) && rs.projection_role != pb::ProjectionRole::Delete as i32
+        })
         .flat_map(|rs| rs.source_events.iter())
         .filter_map(|ee| ee.event.as_ref()?.id.as_ref())
         .filter_map(|id| endpoint_for(pb::EntityKind::Event, id, by_key))
@@ -1486,6 +1508,44 @@ mod tests {
             .map(|g| g.field_path.as_str())
             .collect();
         assert_eq!(missing, vec!["carrier", "carrier"], "{gaps:?}");
+    }
+
+    #[test]
+    fn older_slice_versions_do_not_supply_fields() {
+        let mut all = sibling_scenario(Vec::new());
+        all.push(stored(event(
+            "order-dispatched",
+            "order",
+            vec![field("order_id", string_kind())],
+        )));
+        let mut v2 = read_model_slice(
+            "summary-on-shipped",
+            vec!["order-dispatched"],
+            "order-summary",
+        );
+        if let Some(pb::entity::Kind::ReadModelSlice(rs)) = v2.kind.as_mut() {
+            rs.id.as_mut().unwrap().version = 2;
+        }
+        all.push(stored(v2));
+        all.retain(|se| !matches!(se.entity.kind, Some(pb::entity::Kind::EventModel(_))));
+        let mut model = event_model(
+            "ordering",
+            vec![
+                (pb::EntityKind::ReadModelSlice, "summary-on-placed"),
+                (pb::EntityKind::ReadModelSlice, "summary-on-shipped"),
+            ],
+        );
+        if let Some(pb::entity::Kind::EventModel(em)) = model.kind.as_mut() {
+            em.members[1].id.as_mut().unwrap().version = 2;
+        }
+        all.push(stored(model));
+        let (gaps, _) = check_completeness(&event_model_scope("ordering"), &all);
+        let missing: Vec<&str> = gaps
+            .iter()
+            .filter(|g| g.kind == pb::completeness_gap::Kind::MissingSource as i32)
+            .map(|g| g.field_path.as_str())
+            .collect();
+        assert_eq!(missing, vec!["shipped_at", "shipped_at"], "{gaps:?}");
     }
 
     #[test]
