@@ -45,7 +45,7 @@ export function EventModelPage({
     ctrlRef.current?.abort();
     const ctrl = new AbortController();
     ctrlRef.current = ctrl;
-    const branch = readBranchFromUrl();
+    const branch = asOf ? undefined : readBranchFromUrl();
     api
       .eventModel(namespace, slug, { signal: ctrl.signal, branch, ...(asOf ? { asOf } : {}) })
       .then((res) => {

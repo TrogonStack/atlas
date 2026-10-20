@@ -1,3 +1,10 @@
 [[IgnoredVulns]]
 id = "RUSTSEC-2026-0253"
 reason = "fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru."
+
+[[PackageOverrides]]
+name = "webpki-roots"
+version = "0.26.11"
+ecosystem = "crates.io"
+vulnerability.ignore = true
+reason = "Compatibility shim only reexports webpki-roots 1.x; the locked 1.0.10 certificate data is scanned separately."

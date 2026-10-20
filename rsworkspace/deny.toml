@@ -5,6 +5,7 @@ targets = []
 ignore = [
   # Fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru.
   "RUSTSEC-2026-0253",
+  { id = "RUSTSEC-2026-0381", reason = "0.26.11 only reexports patched 1.x roots; bans below reject every affected version except this data-free shim" },
 ]
 
 [licenses]
@@ -30,6 +31,10 @@ wildcards = "deny"
 # Workspace path dependencies carry no version requirement by design; only
 # external wildcard requirements are a hygiene problem.
 allow-wildcard-paths = true
+deny = [
+  { name = "webpki-roots", version = "<0.26.11", reason = "certificate data must exclude distrusted emSign roots" },
+  { name = "webpki-roots", version = ">0.26.11, <1.0.10", reason = "only the data-free 0.26.11 shim may precede patched certificate data" },
+]
 # Benign duplicate crate versions pulled in by different versions of
 # third-party dependencies. These are not security concerns; skip them
 # until the direct deps align on a common version.
