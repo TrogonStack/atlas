@@ -86,11 +86,27 @@ function storyboardSlices(entity: Entity): ContextRef[] {
   });
 }
 
+// Open questions and assumptions are a register of open items, not defects, so an agent that
+// "repairs" them would change the model to hide a question only a human can settle.
+const annotationCodes = new Set(['OPEN_QUESTION_PRESENT', 'ASSUMPTION_PRESENT']);
+
+const annotationInstructions = [
+  'Nothing in the model is broken. The finding reports an annotation that only a human can settle: an open question needs an answer, and an assumption needs confirmation or correction. Do not change behavior, references, or other definitions to clear the finding.',
+  'Ask the human for the answer or the confirmation, and its source. Then edit the annotation or remove it once resolved, rerun validation for the affected scope, and report the annotation changed and the validation results. If the human cannot settle it yet, leave the annotation in place.',
+];
+
+const repairInstructions = [
+  'Fetch referenced definitions that are missing or omitted, including their exact pinned versions. Apply a targeted repair that preserves intended behavior, event causality, and existing contracts. Do not merely suppress the rule, downgrade its severity, or delete valid behavior to hide the finding.',
+  'For temporal findings, inspect the full ordered storyboard, fetch the definitions of the slices and events it lists that bear on the finding, and check the source and emitted events before deciding whether to change ordering, references, or modeling. Do not assume an event missing from this snapshot does not exist.',
+  'Apply the repair, rerun validation for the affected scope, and report the entities changed, the reason for the repair, and the validation results, including any remaining findings. If the model lacks enough information to choose a behavior-preserving repair, explain the specific ambiguity instead of inventing domain behavior.',
+];
+
 export function validationFixPrompt(
   model: Model,
   issue: Issue,
   options: { branch?: string; momentKey?: string; scopePath?: string } = {},
 ): string {
+  const annotation = annotationCodes.has(issue.code);
   const selected = new Map<string, Entity>();
   const referenced = new Map<string, ContextRef>();
   const refsByKey = new Map(model.entities.map((entity) => [entity.key, references(entity)]));
@@ -161,11 +177,9 @@ export function validationFixPrompt(
   const json = (value: unknown) => `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 
   return [
-    'Fix this validation finding in the Atlas project using the `trogon-atlas` CLI or the `trogon-atlas-mcp` MCP tools.',
+    `${annotation ? 'Resolve' : 'Fix'} this validation finding in the Atlas project using the \`trogon-atlas\` CLI or the \`trogon-atlas-mcp\` MCP tools.`,
     'Re-read the current model and validation results in the specified branch and scope before editing. The snapshot below may be stale or incomplete.',
-    'Fetch referenced definitions that are missing or omitted, including their exact pinned versions. Apply a targeted repair that preserves intended behavior, event causality, and existing contracts. Do not merely suppress the rule, downgrade its severity, or delete valid behavior to hide the finding.',
-    'For temporal findings, inspect the full ordered storyboard, fetch the definitions of the slices and events it lists that bear on the finding, and check the source and emitted events before deciding whether to change ordering, references, or modeling. Do not assume an event missing from this snapshot does not exist.',
-    'Apply the repair, rerun validation for the affected scope, and report the entities changed, the reason for the repair, and the validation results, including any remaining findings. If the model lacks enough information to choose a behavior-preserving repair, explain the specific ambiguity instead of inventing domain behavior.',
+    ...(annotation ? annotationInstructions : repairInstructions),
     '',
     '## Scope',
     json({
