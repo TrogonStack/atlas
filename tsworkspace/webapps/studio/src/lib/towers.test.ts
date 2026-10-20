@@ -137,8 +137,12 @@ describe('buildTowers', () => {
       expect(n.occId).toBe(n.id);
     }
     const edgeIds = new Set(edges.map((e) => e.id));
+    const byId = new Map(edges.map((e) => [e.id, e]));
     expect(spec.links.length).toBeGreaterThan(0);
-    for (const l of spec.links) expect(edgeIds.has(l.id)).toBe(true);
+    for (const l of spec.links) {
+      expect(edgeIds.has(l.id)).toBe(true);
+      expect(l.edge).toEqual(byId.get(l.id)?.data);
+    }
   });
 
   it('ends every link on the surface of its nodes, never at a center', () => {
