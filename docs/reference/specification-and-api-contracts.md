@@ -8,9 +8,13 @@ fixture and failure cases required before implementation can be called complete.
 
 ## Behavioral scope
 
-A Specification describes a versioned interface or schema contract. An API is
-a Specification with operations and explicit provider exposures; it is not a
-competing top-level behavioral primitive. Integration messages map individually
+A Specification describes a versioned interface or schema contract. It is
+classified as an API exactly when it declares at least one operation and at
+least one provider exposure selecting a local operation. This classification
+is derived from the declared structure, not an editable discriminator or a
+separate entity kind. A Specification with operations but no exposures remains
+a valid provider-undeclared contract and is not classified as an API.
+Integration messages map individually
 to ReadModels. Request, response and notification roles belong to an operation's
 use of a message, independently of the message's ReadModel mapping.
 
@@ -51,6 +55,9 @@ across all nested collections. Exceeding either ceiling rejects admission.
 A Specification must contain at least one artifact, schema or message. Member
 and association collections may otherwise be empty unless a rule below requires
 them. Collection order has no execution meaning; export preserves authored order.
+Empty operation or exposure collections therefore do not satisfy the API
+classification rule. An exposure without its selected local operation fails
+admission; the classification rule never fabricates a provider or operation.
 Optional values preserve presence. Unknown enum numbers and missing required
 oneof alternatives are rejected on native writes.
 
@@ -216,6 +223,13 @@ with the operation's binding. The same provider-operation pair may appear only
 once. Different providers can expose one operation; each declaration remains
 separate. This release has no deployment endpoint or environment overrides.
 A provider list never expands into an operation cross-product.
+
+API classification requires a declared exposure for at least one operation,
+not for every operation. Removing the last exposure leaves a valid
+provider-undeclared Specification once its local usage selections are repaired.
+An exposure whose external provider later becomes missing or unreadable remains
+a declaration with an unresolved or unauthorized target. That target state
+does not change classification or make classification viewer-dependent.
 
 | ApiUsage field | Contract |
 | --- | --- |

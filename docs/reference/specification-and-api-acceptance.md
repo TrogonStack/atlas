@@ -7,7 +7,9 @@ This fixture describes required outcomes; it is not executable test evidence.
 
 ## Connected fixture
 
-Use a fresh namespace for each mutation case. Every model reference includes an
+Allocate distinct fresh namespaces for each mutation case and retain their
+returned IDs as `primary_namespace` and `foreign_namespace`. Unqualified model
+labels below belong to `primary_namespace`. Every model reference includes an
 exact version. Names below are fixture labels; retained member and association
 identities come from the authoritative write response.
 
@@ -30,7 +32,7 @@ identities come from the authoritative write response.
 | `native-order-shape@1` | Named native Schema selected by another schema binding, independently of artifact-backed schemas. |
 | `shared-contract@1` | Another Specification with a retained artifact and artifact-backed schema. An order-api message selects it through ContractTypeRef, including exact owner UID, schema/artifact member IDs, digest and expected selector. |
 | `order-transport@1` | Channel selecting the real order-adapter AutomationSlice observation. Another operation uses a CHANNEL binding selecting this Channel without inventing another observation. |
-| Foreign-namespace referrer | Another Specification has a message mapping to `order-receipt@1`; a restricted reader cannot inspect that Specification, its member names or artifact content. |
+| `foreign_namespace/foreign-order-contract@1` | Specification with a message mapping to `primary_namespace/order-receipt@1`; a restricted reader cannot inspect that Specification, its member names or artifact content. |
 
 Keep references to both provider exposures, every message and schema member, and
 their association IDs for later lifecycle cases. Include an authorized anchor
@@ -41,6 +43,7 @@ outside the capped model snapshot so exact-resolution behavior is exercised.
 | Query | Required result |
 | --- | --- |
 | Fetch `order-api@1` through service, CLI and MCP | Preserve retained bytes, digests, value presence, member IDs and association IDs. |
+| Classify `order-api@1` | Report API classification because it declares operations and provider exposures selecting local operations. A provider need not expose every operation. |
 | Select a schema or operation member | Resolve the exact Specification incarnation, expected member kind and member identity. No matching by title, list position or schema shape. |
 | Inspect the submit operation | Return separate REQUEST and RESPONSE message occurrences with independently selected schema and ReadModel mappings. |
 | Follow the submit response | Reach `order-receipt@1`; the request's `order-request@1` is not response data. |
@@ -61,6 +64,10 @@ preview. Invalid or forbidden target diagnostics must not expose hidden data.
 
 | Case | Required outcome |
 | --- | --- |
+| Create a schema/message Specification with no operations or exposures | Accept it as a standalone Specification, without API classification. |
+| Create an operation-bearing Specification with no provider exposures | Accept it as provider-undeclared, without API classification or an invented provider. |
+| Create a provider exposure without its selected local operation | Reject rather than classifying a dangling declaration as an API. |
+| Remove an API's last exposure after repairing local usage selections | Preserve a valid provider-undeclared Specification and remove its derived API classification. |
 | Create a Specification with omitted native member/association IDs | Assign and return the IDs under a fresh server-owned incarnation. A persisted selectable occurrence never has an absent ID. |
 | Reorder members, schema bindings, operation messages, exposures or usages | Preserve the retained identities. |
 | Rename display labels or edit documentation | Preserve the member or association identity when its semantic selection is unchanged. |
@@ -97,6 +104,7 @@ preview. Invalid or forbidden target diagnostics must not expose hidden data.
 | Safely delete an entity with only a hidden Specification referrer | Refuse deletion, individually and in guarded batch preview/apply, without returning hidden referrer details. |
 | Safely delete a selected Specification | Discover incoming member and connection selections as incoming references to their owner and refuse deletion. |
 | Explicitly force-delete an external target | Preserve referring declarations as unresolved. Do not erase, retarget or fabricate replacement members. |
+| Force-delete or revoke reader access to a declared API provider | Preserve the exposure declaration and API classification while reporting only authorized target diagnostics. Classification does not depend on viewer access or current external-target resolution. |
 | Make an otherwise permitted target edit that invalidates a retained member selection | Preserve unchanged referring declarations for inspection and report the unresolved selection. A newly authored or edited invalid declaration still fails admission. |
 | Add descriptive dependencies forming a Specification cycle | Apply the declared relation-specific cycle policy; traversal remains bounded and preserves the cycle. TypeLibrary import and supersedes rules do not change. |
 | Preview and land a branch with unchanged declarations invalidated by a permitted target edit | Use the same admission policy as ordinary writes; do not globally reject all existing unresolved resources. |
