@@ -29,6 +29,9 @@ vi.mock('@/components/canvas/PlanBoard', () => ({
 vi.mock('@/components/canvas/DomainChartBoard', () => ({
   DomainChartBoard: () => <div data-testid="domain-chart-board" />,
 }));
+vi.mock('@/components/canvas/ThreeView', () => ({
+  ThreeView: ({ view }: { view: string }) => <div data-testid={`three-view-${view}`} />,
+}));
 vi.mock('@xyflow/react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@xyflow/react')>();
   return {
@@ -43,6 +46,7 @@ vi.mock('@tanstack/react-hotkeys', () => ({
 import { api } from '@/lib/api';
 import { buildModel } from '@/lib/model';
 import { watchEntities } from '@/lib/realtime';
+import { storefrontEntities } from '@/lib/scene3d.fixture';
 import { ModelShell } from './ModelShell';
 
 const neverResolving = new Promise(() => {});
@@ -132,6 +136,38 @@ describe('ModelShell', () => {
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: 'UI' })).toBeDefined();
     });
+  });
+
+  it('offers the Lane mesh tab when the model has slices, and opens it', async () => {
+    render(<ModelShell model={buildModel(storefrontEntities() as never)} scopedTitle="Storefront" />);
+    const tab = await screen.findByRole('tab', { name: 'Lane mesh' });
+    fireEvent.click(tab);
+    expect(await screen.findByTestId('three-view-lanes')).toBeDefined();
+  });
+
+  it('hides the Lane mesh tab when the model has no slices', async () => {
+    const model = buildModel([
+      { event: { id: { namespace: 'shop', slug: 'order.placed', version: '1' }, title: 'Order placed' } },
+    ] as never);
+    render(<ModelShell model={model} scopedTitle="Shop" />);
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
+    });
+    expect(screen.queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
+  });
+
+  it('hides the Lane mesh tab on a saved snapshot, which carries no 3D code', async () => {
+    render(
+      <ModelShell
+        model={buildModel(storefrontEntities() as never)}
+        scopedTitle="Storefront"
+        snapshot={{ capturedAt: '2026-10-13T00:00:00Z', branch: 'baseline', slug: 'storefront' }}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Board' })).toBeDefined();
+    });
+    expect(screen.queryByRole('tab', { name: 'Lane mesh' })).toBeNull();
   });
 
   it('aborts the in-flight model fetch on unmount', async () => {

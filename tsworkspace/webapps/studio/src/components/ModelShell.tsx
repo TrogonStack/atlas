@@ -4,7 +4,7 @@
 import { useHotkey } from '@tanstack/react-hotkeys';
 import { ReactFlowProvider } from '@xyflow/react';
 import { parseAsArrayOf, parseAsString, parseAsStringLiteral, useQueryState } from 'nuqs';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { ConflictInspector } from '@/components/ConflictInspector';
 import { Board, type SelectedEdge, type Selection } from '@/components/canvas/Board';
 import { BoardTopRightHost } from '@/components/canvas/BoardTopRight';
@@ -42,7 +42,12 @@ function edgeIdentity(data: BoardEdgeData): string {
   return `${data.source.key}\0${data.relation}\0${data.target.key}`;
 }
 
-const VIEWS = ['board', 'sequence', 'ui', 'plan', 'domain'] as const;
+// The 3D views load on first use, their WebGL check included, so the Board's
+// bundle carries only the tab. The `@/` path matters: the saved-board build
+// swaps this module for a stub by its resolved path.
+const ThreeView = lazy(() => import('@/components/canvas/ThreeView').then((m) => ({ default: m.ThreeView })));
+
+const VIEWS = ['board', 'sequence', 'ui', 'plan', 'domain', 'lanes'] as const;
 type View = (typeof VIEWS)[number];
 const VIEW_LABELS: Record<View, string> = {
   board: 'Board',
@@ -50,6 +55,7 @@ const VIEW_LABELS: Record<View, string> = {
   ui: 'UI',
   plan: 'Plan',
   domain: 'Domain',
+  lanes: 'Lane mesh',
 };
 function isView(value: unknown): value is View {
   return (VIEWS as readonly unknown[]).includes(value);
@@ -541,6 +547,8 @@ export function ModelShell({
       );
     if (v === 'domain')
       return model.entities.some((e) => e.kind === 'domain' || e.kind === 'subdomain' || e.kind === 'boundedContext');
+    // A saved board is one inlined runtime file without three.js, so it has no 3D views.
+    if (v === 'lanes') return !snapshot && model.slices.length > 0;
     return true;
   });
   // Deep links to a hidden view (?view=ui on a UI-less EM) render the
@@ -704,9 +712,21 @@ export function ModelShell({
                   <ErrorBoundary>
                     <PlanBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
                   </ErrorBoundary>
-                ) : (
+                ) : activeView === 'domain' ? (
                   <ErrorBoundary>
                     <DomainChartBoard model={model} selections={selections} onSelect={selectEntity} focus={focusReq} />
+                  </ErrorBoundary>
+                ) : (
+                  <ErrorBoundary>
+                    <Suspense fallback={null}>
+                      <ThreeView
+                        view={activeView}
+                        model={model}
+                        selections={selections}
+                        onSelect={selectEntity}
+                        focus={focusReq}
+                      />
+                    </Suspense>
                   </ErrorBoundary>
                 )}
               </ReactFlowProvider>

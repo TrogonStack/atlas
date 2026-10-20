@@ -9,6 +9,11 @@ import studio from './vite.config.ts';
 const STUBS: [RegExp, string][] = [
   [/\/src\/lib\/realtime(\.ts)?$/, path.resolve(import.meta.dirname, 'src/lib/realtime.snapshot.ts')],
   [/\/src\/lib\/export-html(\.ts)?$/, path.resolve(import.meta.dirname, 'src/lib/export-html.snapshot.ts')],
+  // The 3D views pull in three.js, about 580 kB, and a saved board does not offer them.
+  [
+    /\/src\/components\/canvas\/ThreeView(\.tsx)?$/,
+    path.resolve(import.meta.dirname, 'src/components/canvas/ThreeView.snapshot.tsx'),
+  ],
 ];
 
 export default defineConfig((env) =>

@@ -1078,6 +1078,13 @@ export function neighborsOf(model: Model, entity: Entity): { backward: NeighborV
   return { backward, forward };
 }
 
+/** Id prefix of a seam edge; the 2D producers build the ids and the 3D view reads them back. */
+export const SEAM_EDGE_PREFIX = 'seam:';
+
+export function isSeamEdge(edgeId: string): boolean {
+  return edgeId.startsWith(SEAM_EDGE_PREFIX);
+}
+
 // A context seam: the ONE legal touchpoint between bounded contexts, an
 // upstream event flowing into a downstream subscription read model. Derived
 // purely from cross-namespace source_events refs; the upstream entity may
