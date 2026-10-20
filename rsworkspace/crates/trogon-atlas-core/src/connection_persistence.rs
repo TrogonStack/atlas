@@ -7,7 +7,7 @@ use trogon_atlas_proto::Entity;
 use crate::{
     connections::{
         assign_connection_ids, connection_occurrences, equivalent_with_unassigned_ids,
-        reconcile_connection_ids, ConnectionError, ConnectionId,
+        reconcile_connection_ids, validate_stored_connection_ids, ConnectionError, ConnectionId,
     },
     stamp_system,
 };
@@ -30,6 +30,10 @@ pub fn prepare_landing(
     previous: Option<&Entity>,
     branch: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    if let Some(previous) = previous {
+        validate_stored_connection_ids(previous)?;
+    }
+    validate_stored_connection_ids(branch)?;
     let retired = branch
         .system
         .as_ref()
@@ -88,11 +92,7 @@ fn prepare(
         }
     }
     prepared = stamp_system(previous, &prepared);
-    if landing
-        && previous
-            .and_then(|entity| entity.system.as_ref())
-            .is_none_or(|system| system.uid.trim().is_empty())
-    {
+    if landing && previous.is_none() {
         if let Some(system) = proposed
             .system
             .as_ref()
@@ -164,6 +164,38 @@ mod tests {
     }
 
     #[test]
+    fn idless_stored_owner_is_rejected_before_no_op_substitution() {
+        let unsupported = ui();
+        assert_eq!(
+            prepare_entity(Some(&unsupported), &unsupported),
+            Err(ConnectionError::MissingStoredId("ui.transitions[0]".into()))
+        );
+        let mut identified_proposal = unsupported.clone();
+        assign_connection_ids(&mut identified_proposal).unwrap();
+        assert!(matches!(
+            prepare_entity(Some(&unsupported), &identified_proposal),
+            Err(ConnectionError::MissingStoredId(_))
+        ));
+    }
+
+    #[test]
+    fn landing_requires_complete_stored_baseline_and_branch_ids() {
+        let stored = prepare_entity(None, &ui()).unwrap();
+        assert!(matches!(
+            prepare_landing(Some(&ui()), &stored),
+            Err(ConnectionError::MissingStoredId(_))
+        ));
+        assert!(matches!(
+            prepare_landing(None, &ui()),
+            Err(ConnectionError::MissingStoredId(_))
+        ));
+        assert!(matches!(
+            prepare_landing(Some(&stored), &ui()),
+            Err(ConnectionError::MissingStoredId(_))
+        ));
+    }
+
+    #[test]
     fn removal_retires_id_and_client_cannot_clear_history() {
         let original = prepare_entity(None, &ui()).unwrap();
         let id = connection_occurrences(&original).unwrap()[0].id.unwrap();
@@ -232,19 +264,5 @@ mod tests {
             prepare_landing(Some(&replacement), &branch).unwrap().system,
             branch.system
         );
-        let mut legacy = replacement;
-        legacy.system = None;
-        let landed = prepare_landing(Some(&legacy), &branch).unwrap();
-        assert_eq!(
-            landed.system.as_ref().unwrap().uid,
-            branch.system.as_ref().unwrap().uid
-        );
-        let old_id = connection_occurrences(&legacy).unwrap()[0].id.unwrap();
-        assert!(landed
-            .system
-            .as_ref()
-            .unwrap()
-            .retired_connection_ids
-            .contains(&old_id.into()));
     }
 }

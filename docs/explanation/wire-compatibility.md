@@ -7,6 +7,19 @@ are served by the server itself, so they always match it. This page
 explains what keeps those combinations safe: a breaking-change gate on the
 protobuf contract, and a discovery handshake that runs before any mutation.
 
+## Current development policy
+
+Atlas is currently greenfield. Breaking schema and API changes are acceptable;
+development data can be recreated. Prefer the intended model directly over
+compatibility aliases, duplicate representations or migration layers added only
+to preserve unreleased contracts. A change still needs a coherent contract,
+generated clients, validation and tests.
+
+The mixed-version handshake prevents incompatible tools from making unsafe
+writes. It does not promise support for historical development data. Record
+intentional breaks through the existing baseline procedure so checks distinguish
+an accepted change from accidental drift.
+
 ## Why the protobuf contract is checked with the FILE rule set
 
 `buf breaking` offers increasingly strict rule sets: `WIRE`, `WIRE_JSON`,
@@ -95,7 +108,8 @@ every surface applies the same rules; the revision constants live next to
 Contract revision 9 requires clients and servers to preserve explicit connection
 IDs. Older writers can drop those fields, and older servers can discard them,
 so both mutation compatibility floors are revision 9. Existing stored entities
-remain readable; the next supported write assigns IDs to legacy connections.
+are not migrated; persisted connections must already carry valid IDs. New
+connections may request server-generated IDs by omitting them on creation.
 Once assigned, updates preserve an occurrence ID through reordering and content
 annotations. Replacing its role or endpoint requires a new ID. Removed IDs are
 retired for that stored entity incarnation, and connection references also pin

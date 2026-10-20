@@ -12,7 +12,7 @@ UUIDv7 values when an occurrence has no ID. Clients may supply a valid ID for a
 new occurrence. IDs must be unique across the owning entity, including
 occurrences with different roles and repeated connections to the same target.
 
-The identity fields are additive:
+The identity fields are:
 
 | Stored structure | Identity field |
 | --- | --- |
@@ -61,13 +61,19 @@ value protected by the write's concurrency guard, including branch and batch
 writes. A branch that only adds and removes a connection still carries relevant
 retirement history when it lands.
 
-## Legacy data and compatibility
+## Creation and authoring
 
-Existing id-less records remain readable. Their next successful write assigns
-IDs once. The returned/stored entity is authoritative: clients preserve its IDs
-on subsequent edits. An edit that strips IDs from retained connections is
-rejected rather than silently rematched by list index or endpoint. Distinct
-legacy occurrences receive distinct IDs even when their endpoints match.
+Atlas is currently greenfield. Schema changes may break development data and
+older clients; this contract does not provide a migration path for id-less
+stored connections. Existing stored occurrences must have valid, unique IDs.
+Writes against an owner with missing persisted connection IDs are rejected;
+development data must be recreated or reimported through the current contract.
+
+On creation and when adding an occurrence, an omitted ID requests a fresh
+server-generated ID. Distinct occurrences receive distinct IDs even when their
+endpoints match. The returned/stored entity is authoritative: clients preserve
+its IDs on subsequent edits. An edit that strips IDs from retained connections
+is rejected rather than silently rematched by list index or endpoint.
 For declarative manifests, export the stored result after the initial apply and
 retain the assigned IDs in the authored manifests before editing them again.
 Reapplying an unchanged id-less manifest remains a no-op: comparison can ignore
@@ -93,8 +99,10 @@ the underlying stored connections.
 
 Raw entity-reference lists, such as `Processor.calls`, and repeated storyboard
 slice/trace moments do not acquire occurrence IDs through this change. Those
-need their own representation and migration contract before becoming durable
-connection or moment selections. Positional reference paths remain diagnostics.
+need an explicit connection or moment representation before becoming durable
+selections. Greenfield development permits changing those shapes directly;
+compatibility aliases or migration layers are not a prerequisite. Positional
+reference paths remain diagnostics.
 This contract does not claim that every model reference is an individually
 identified connection, or implement architecture resource or fitness subjects.
 

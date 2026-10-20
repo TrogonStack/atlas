@@ -81,6 +81,8 @@ pub enum ConnectionError {
     },
     #[error("connection ID was removed from an existing occurrence at {0}")]
     StrippedId(String),
+    #[error("stored connection at {0} has no connection ID")]
+    MissingStoredId(String),
     #[error("connection {0} changed role or endpoint; use a new ID")]
     Retargeted(ConnectionId),
     #[error("connection reference does not identify this exact owner")]
@@ -274,7 +276,7 @@ pub fn renew_retargeted_connection_ids(
     previous: &Entity,
     proposed: &mut Entity,
 ) -> Result<usize, ConnectionError> {
-    validate_connection_ids(previous)?;
+    validate_stored_connection_ids(previous)?;
     validate_connection_ids(proposed)?;
     let old: HashMap<_, _> = connection_occurrences(previous)?
         .into_iter()
@@ -327,6 +329,7 @@ pub fn equivalent_with_unassigned_ids(
     current: &Entity,
     desired: &Entity,
 ) -> Result<bool, ConnectionError> {
+    validate_stored_connection_ids(current)?;
     if connection_occurrences(desired)?
         .iter()
         .any(|item| item.id.is_some())
@@ -363,7 +366,18 @@ pub fn validate_connection_ids(entity: &Entity) -> Result<(), ConnectionError> {
     Ok(())
 }
 
-/// Assign identities to legacy or newly added occurrences without changing existing IDs.
+/// Require complete occurrence identities in an already persisted owner.
+pub fn validate_stored_connection_ids(entity: &Entity) -> Result<(), ConnectionError> {
+    validate_connection_ids(entity)?;
+    for occurrence in connection_occurrences(entity)? {
+        if occurrence.id.is_none() {
+            return Err(ConnectionError::MissingStoredId(occurrence.path));
+        }
+    }
+    Ok(())
+}
+
+/// Assign identities to freshly authored occurrences without changing existing IDs.
 pub fn assign_connection_ids(entity: &mut Entity) -> Result<usize, ConnectionError> {
     validate_connection_ids(entity)?;
     let mut normalized = dynamic(entity)?;
@@ -398,7 +412,7 @@ pub fn reconcile_connection_ids(
     previous: &Entity,
     proposed: &mut Entity,
 ) -> Result<usize, ConnectionError> {
-    validate_connection_ids(previous)?;
+    validate_stored_connection_ids(previous)?;
     validate_connection_ids(proposed)?;
     let old = connection_occurrences(previous)?;
     let old_ids: HashMap<_, _> = old
@@ -457,7 +471,7 @@ pub fn resolve_connection(
         .ok_or(ConnectionError::MissingId)?
         .value
         .parse()?;
-    validate_connection_ids(entity)?;
+    validate_stored_connection_ids(entity)?;
     connection_occurrences(entity)?
         .into_iter()
         .find(|item| item.id == Some(id))
@@ -657,14 +671,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_assignment_is_idempotent_and_migrates_on_update() {
-        let previous = fixture();
-        let mut proposed = previous.clone();
-        assert_eq!(
-            reconcile_connection_ids(&previous, &mut proposed).unwrap(),
-            3
-        );
+    fn fresh_assignment_is_idempotent() {
+        let mut proposed = fixture();
+        assert_eq!(assign_connection_ids(&mut proposed).unwrap(), 3);
         assert_eq!(assign_connection_ids(&mut proposed).unwrap(), 0);
+        assert!(validate_stored_connection_ids(&proposed).is_ok());
         assert!("00000000-0000-0000-0000-000000000000"
             .parse::<ConnectionId>()
             .is_err());
@@ -672,6 +683,42 @@ mod tests {
             .to_uppercase()
             .parse::<ConnectionId>()
             .is_err());
+    }
+
+    #[test]
+    fn idless_stored_connections_reject_update_and_manifest_comparison() {
+        let unsupported = Entity::decode(fixture().encode_to_vec().as_slice()).unwrap();
+        let mut proposed = unsupported.clone();
+        let expected = ConnectionError::MissingStoredId("command_slice.command".into());
+        assert_eq!(validate_stored_connection_ids(&unsupported), Err(expected));
+        assert!(matches!(
+            reconcile_connection_ids(&unsupported, &mut proposed),
+            Err(ConnectionError::MissingStoredId(_))
+        ));
+        assert_eq!(proposed, unsupported);
+        assert!(matches!(
+            equivalent_with_unassigned_ids(&unsupported, &proposed),
+            Err(ConnectionError::MissingStoredId(_))
+        ));
+        assert!(matches!(
+            renew_retargeted_connection_ids(&unsupported, &mut proposed),
+            Err(ConnectionError::MissingStoredId(_))
+        ));
+    }
+
+    #[test]
+    fn identified_connection_cannot_resolve_from_incomplete_stored_owner() {
+        let mut stored = fixture();
+        assign_connection_ids(&mut stored).unwrap();
+        let occurrence = connection_occurrences(&stored).unwrap().remove(1);
+        let reference = reference(&stored, &occurrence);
+        slice(&mut stored).emitted_events[1].connection_id = None;
+        assert_eq!(
+            resolve_connection(&stored, &reference),
+            Err(ConnectionError::MissingStoredId(
+                "command_slice.emitted_events[1]".into()
+            ))
+        );
     }
 
     #[test]
