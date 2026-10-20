@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde::Deserialize as _;
 use tokio::net::TcpListener;
-use trogon_atlas_client::{client, export, manifest};
+use trogon_atlas_client::{apply, client, export, manifest};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
@@ -954,6 +954,70 @@ async fn board_manifests_carry_the_board_and_load_back_without_drift() {
     let copied = export_board(&mut client, "board-dst").await.unwrap();
     assert_eq!(copied.manifests, copy);
     assert_eq!(copied.external_manifests, out.external_manifests);
+}
+
+/// Write `model` and `external` into a board file the way Studio's Export
+/// HTML does, `<` escaped so the YAML cannot end the data block.
+fn write_board_html(dir: &std::path::Path, model: &str, external: &str) -> std::path::PathBuf {
+    let snapshot = serde_json::json!({ "manifests": { "model": model, "external": external } });
+    let data = snapshot.to_string().replace('<', "\\u003c");
+    let path = dir.join("shop.html");
+    std::fs::write(
+        &path,
+        format!("<script id=\"atlas-snapshot\" type=\"application/json\">{data}</script>"),
+    )
+    .unwrap();
+    path
+}
+
+#[tokio::test]
+async fn board_html_applies_into_a_fresh_namespace_and_checks_external_entities() {
+    let endpoint = start_server().await;
+    let mut client = client::connect(&endpoint, None, 30).await.unwrap();
+    seed(&mut client, BOARD_PAYMENTS).await;
+    seed(&mut client, BOARD_SHOP).await;
+    let out = export_board(&mut client, "board-src").await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+
+    let model = out.manifests.replace("board-src", "board-html");
+    let files = manifest::read_paths(&[write_board_html(
+        dir.path(),
+        &model,
+        &out.external_manifests,
+    )])
+    .unwrap();
+    apply::require_external(&mut client, files.external)
+        .await
+        .unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, files.documents.clone())
+        .await
+        .unwrap();
+    let plan = apply::plan(&mut client, resolved.manifests).await.unwrap();
+    assert!(plan.iter().all(|c| c.action == apply::Action::Create));
+    apply::apply(&mut client, plan, false, None).await.unwrap();
+    let resolved = manifest::load_with_tenant_types(&mut client, files.documents)
+        .await
+        .unwrap();
+    for change in apply::plan(&mut client, resolved.manifests).await.unwrap() {
+        assert_eq!(
+            change.action,
+            apply::Action::Unchanged,
+            "{}",
+            change.manifest.source
+        );
+    }
+
+    // A target that lacks a foreign entity the board uses is refused before any write.
+    let gone = |yaml: &str| yaml.replace("board-pay", "board-gone");
+    let path = write_board_html(dir.path(), &gone(&model), &gone(&out.external_manifests));
+    let files = manifest::read_paths(&[path]).unwrap();
+    let err = apply::require_external(&mut client, files.external)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("event:board-gone/payment.captured"),
+        "{err:#}"
+    );
 }
 
 #[tokio::test]

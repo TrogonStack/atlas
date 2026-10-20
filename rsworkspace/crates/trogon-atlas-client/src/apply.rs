@@ -21,7 +21,7 @@ use trogon_atlas_proto as pb;
 
 use crate::{
     client::Client,
-    manifest::{entity_json_value, LoadedManifest},
+    manifest::{self, entity_json_value, LoadedManifest, ManifestDocument},
     precondition::{Revision, StalePlan},
 };
 
@@ -179,6 +179,29 @@ pub async fn plan(
             })
         })
         .collect()
+}
+
+/// Refuse a board import whose target lacks a foreign entity the board
+/// references. Another namespace owns those entities, so the import never
+/// writes them, even when the bundled copy differs from the stored one.
+pub async fn require_external(client: &mut Client, external: Vec<ManifestDocument>) -> Result<()> {
+    if external.is_empty() {
+        return Ok(());
+    }
+    let resolved = manifest::load_with_tenant_types(client, external).await?;
+    let missing: Vec<String> = plan(client, resolved.manifests)
+        .await?
+        .iter()
+        .filter(|c| c.action == Action::Create)
+        .map(|c| id_label(&c.manifest))
+        .collect();
+    if !missing.is_empty() {
+        crate::invalid_input!(
+            "the target is missing external entities this board references; apply them from their own namespace first: {}",
+            missing.join(", ")
+        );
+    }
+    Ok(())
 }
 
 /// A batch was refused (`BatchMutateResponse.status == FAILED`) for a reason

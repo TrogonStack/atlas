@@ -73,7 +73,9 @@ enum Cmd {
     /// after it was read; run apply again to plan from fresh state.
     Apply {
         /// Manifest files or directories (directories are walked recursively
-        /// for .yaml/.yml).
+        /// for .yaml/.yml), or a board .html file saved by Studio's Export
+        /// HTML. A board file's external entities are never written; apply
+        /// fails if the target lacks one.
         #[arg(short = 'f', long = "filename", required = true, num_args = 1..)]
         filenames: Vec<PathBuf>,
         /// Run server-side validation for every change without persisting.
@@ -88,6 +90,7 @@ enum Cmd {
     /// Show what apply would change, as a unified diff of canonical proto
     /// JSON. Exits 1 when differences exist (kubectl diff semantics).
     Diff {
+        /// Manifest files, directories or a board .html file, as for apply.
         #[arg(short = 'f', long = "filename", required = true, num_args = 1..)]
         filenames: Vec<PathBuf>,
     },
@@ -582,7 +585,7 @@ async fn run(
         } => {
             let operation_id = resolve_operation_id(operation_id)?;
             *operation_id_out = Some(operation_id.clone());
-            let documents = manifest::read_paths(&filenames)?;
+            let files = manifest::read_paths(&filenames)?;
             let mut client = connect_planning_client(
                 &endpoint,
                 auth_token.as_deref(),
@@ -591,7 +594,8 @@ async fn run(
                 dry_run,
             )
             .await?;
-            let resolved = manifest::load_with_tenant_types(&mut client, documents).await?;
+            apply::require_external(&mut client, files.external).await?;
+            let resolved = manifest::load_with_tenant_types(&mut client, files.documents).await?;
             let plan = apply::plan(&mut client, resolved.manifests).await?;
             let outcome = apply::apply(&mut client, plan, dry_run, Some(&operation_id)).await?;
             if text {
@@ -625,10 +629,11 @@ async fn run(
             ))
         }
         Cmd::Diff { filenames } => {
-            let documents = manifest::read_paths(&filenames)?;
+            let files = manifest::read_paths(&filenames)?;
             let mut client =
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
-            let resolved = manifest::load_with_tenant_types(&mut client, documents).await?;
+            apply::require_external(&mut client, files.external).await?;
+            let resolved = manifest::load_with_tenant_types(&mut client, files.documents).await?;
             let plan = apply::plan(&mut client, resolved.manifests).await?;
             let (diff, changed) = apply::render_diff(&plan, &resolved.types)?;
             if text {
