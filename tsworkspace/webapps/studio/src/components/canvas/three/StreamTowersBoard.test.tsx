@@ -24,11 +24,10 @@ describe('StreamTowersBoard', () => {
   });
 
   it('reuses the towers spec when the model changes without layout changes', () => {
-    const { rerender } = render(<StreamTowersBoard model={base} selections={[]} onSelect={() => {}} />);
+    const props = { model: base, selections: [] as never[], onSelect: () => {}, onSelectEdge: () => {} };
+    const { rerender } = render(<StreamTowersBoard {...props} />);
     const first = seen.specs.at(-1);
-    rerender(
-      <StreamTowersBoard model={{ ...base, entities: [...base.entities] }} selections={[]} onSelect={() => {}} />,
-    );
+    rerender(<StreamTowersBoard {...props} model={{ ...base, entities: [...base.entities] }} />);
     expect(seen.specs.at(-1)).toBe(first);
   });
 });
