@@ -1008,3 +1008,73 @@ async fn resource_supersession_requires_an_existing_prior_exact_family_version()
         .unwrap_err();
     assert_eq!(error.code(), Code::InvalidArgument);
 }
+
+#[test]
+fn architecture_context_last_duplicate_owner_controls_observation_resolution() {
+    use trogon_atlas_server::validation::{
+        architecture_resources, validate_store_with_architecture_context,
+    };
+    use trogon_atlas_store::StoredEntity;
+
+    fn stored(entity: pb::Entity) -> StoredEntity {
+        StoredEntity {
+            entity,
+            etag: String::new(),
+        }
+    }
+    let original =
+        trogon_atlas_core::connection_persistence::prepare_entity(None, &automation()).unwrap();
+    let mut stale = original.clone();
+    stale.system.as_mut().unwrap().uid = "stale-incarnation".into();
+    let mut selected = original.clone();
+    selected.system.as_mut().unwrap().uid = "selected-incarnation".into();
+    let Some(pb::entity::Kind::AutomationSlice(slice)) = selected.kind.as_ref() else {
+        panic!()
+    };
+    let channel = entity(pb::entity::Kind::Channel(pb::Channel {
+        id: Some(id("selected-transport")),
+        title: "Selected transport".into(),
+        bindings: vec![pb::ChannelBinding {
+            observation: Some(pb::ConnectionRef {
+                owner: Some(pb::EntityRef {
+                    kind: pb::EntityKind::AutomationSlice as i32,
+                    id: slice.id.clone(),
+                }),
+                owner_uid: selected.system.as_ref().unwrap().uid.clone(),
+                id: slice.source_read_models[0].connection_id.clone(),
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    let base = vec![
+        stored(read_model("order-feed")),
+        stored(entity(pb::entity::Kind::Processor(pb::Processor {
+            id: Some(id("order-intake")),
+            ..Default::default()
+        }))),
+        stored(original),
+        stored(channel.clone()),
+    ];
+    let preferred = vec![stored(stale.clone()), stored(selected.clone())];
+    let findings = validate_store_with_architecture_context(&base, &preferred);
+    assert!(!findings
+        .iter()
+        .any(|issue| issue.code.starts_with("ARCHITECTURE_")
+            || issue.code == "CHANNEL_OBSERVATION_UNRESOLVED"));
+    let mut combined = base.clone();
+    combined.extend(preferred);
+    assert_eq!(
+        architecture_resources::validate(&channel, &combined),
+        Vec::<pb::ValidationIssue>::new()
+    );
+    let stale_last = vec![stored(selected), stored(stale)];
+    let findings = validate_store_with_architecture_context(&base, &stale_last);
+    assert_eq!(
+        findings
+            .iter()
+            .filter(|issue| issue.code == "CHANNEL_OBSERVATION_UNRESOLVED")
+            .count(),
+        1
+    );
+}

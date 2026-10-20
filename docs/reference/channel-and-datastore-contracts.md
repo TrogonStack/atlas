@@ -86,7 +86,7 @@ values are supplied by each binding or by the parameter's default.
 
 | ChannelBinding field | Contract |
 | --- | --- |
-| `connection_id` | Required in persisted state; proposed Channel-owned association occurrence ID. Omitted on addition for server assignment. |
+| `connection_id` | Required in persisted state; Channel-owned association occurrence ID. Omitted on addition for server assignment. |
 | `observation` | Required existing `ConnectionRef`, restricted as specified below. |
 | `parameter_values` | Map from declared `ParameterName` to string value, validated against the address declaration. Empty when no address is declared. |
 | `doc` | Optional binding-specific Markdown. |
@@ -144,7 +144,7 @@ text is valid. Classification does not specify personal-data erasure behavior.
 
 | ReadModelAttachment field | Contract |
 | --- | --- |
-| `connection_id` | Required in persisted state; proposed DataStore-owned association occurrence ID. Omitted on addition for server assignment. |
+| `connection_id` | Required in persisted state; DataStore-owned association occurrence ID. Omitted on addition for server assignment. |
 | `read_model` | Required exact `ReadModelRef`; must resolve. |
 | `doc` | Optional attachment-specific Markdown. |
 
@@ -161,11 +161,9 @@ A binding's `connection_id` identifies the Channel-owned association; its
 `observation.id` identifies the AutomationSlice-owned behavioral occurrence.
 These values are not interchangeable.
 
-The intended association identity is the exact resource owner, its
-server-owned incarnation UID and its local `ConnectionId`. Implementation
-must extend occurrence traversal, reference resolution, indexes and mutation
-validation for the new shapes. The existing resolver does not already support
-these proposed entity kinds.
+Association identity is the exact resource owner, its server-owned incarnation
+UID and its local `ConnectionId`. Occurrence traversal, reference resolution,
+indexes and mutation validation support these association records.
 
 Apply existing connection-ID admission rules: IDs are unique across the owner;
 omitted IDs request server generation. A new owner may accept caller-supplied
@@ -233,9 +231,10 @@ The implementation scope is native authoring, persistence, exact reference
 queries and validation of these resources. It does not depend on a
 Specification entity or a source overlay. Message contract catalogs, schema
 format parsing, nested/routed Channels, field-level transport mapping, API
-operation exposure, source-version mapping, import, synchronization and export
-formats are deferred. Existing generic export behavior is not a promise that
-it already supports new entity kinds.
+operation exposure, source-version mapping, and source-specific import,
+synchronization and export formats are deferred. Native manifest export and
+reapplication support Channel and DataStore, including their association IDs
+and exact references.
 
 Transport delivery, broker configuration, physical storage administration,
 policy enforcement and credential management remain outside Atlas execution.
@@ -245,7 +244,14 @@ policy enforcement and credential management remain outside Atlas execution.
 Resource reference and impact scans use an independent budget of 5,000 Channel
 and DataStore rows, combined, across the caller's visible namespaces. They
 supplement capped model projections so a missing projection row cannot silently
-remove an inbound architecture dependency. The unrestricted safe-deletion guard
-checks dependencies across namespaces without returning hidden referrer data.
-Exceeding the scan budget returns `RESOURCE_EXHAUSTED`; it does not authorize a
-mutation from an incomplete index.
+remove an inbound architecture dependency. Exceeding this visible scan budget
+returns `RESOURCE_EXHAUSTED`.
+
+The safe-deletion guard separately checks for an incoming reference to the
+selected target across namespaces, without returning hidden referrer data or
+applying a global resource row limit. It streams candidate keys and stops at
+the first matching reference, with bounded concurrent reads and a total timeout.
+A negative result can require scanning every candidate key. This is not a
+persistent reverse index. Timeout or backend failure refuses deletion rather
+than authorizing a mutation from an incomplete scan. Branch checks use the
+merged branch view, including replacements and removals.

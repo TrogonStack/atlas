@@ -628,6 +628,20 @@ pub trait Store: Send + Sync {
         branch: Option<&str>,
     ) -> StoreResult<Vec<StoredEntity>>;
 
+    /// Whether any entity in the merged view explicitly references this exact target.
+    ///
+    /// Unlike list(), a false answer requires exhausting the scan without truncation.
+    /// Implementations must fail closed on scan errors or time limits. Callers using
+    /// this as a mutation guard hold the writer lease and mutation lock throughout.
+    /// Untyped slice references use the graph's first-existing-kind precedence.
+    /// Implicit schema ownership by type libraries is checked separately.
+    async fn has_incoming_reference(
+        &self,
+        kind: EntityKind,
+        id: &Id,
+        branch: Option<&str>,
+    ) -> StoreResult<bool>;
+
     /// Append a change record. Returns the assigned sequence number.
     ///
     /// `changeset` attributes the event to the mutation that produced it;

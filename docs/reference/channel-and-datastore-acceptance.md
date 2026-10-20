@@ -101,6 +101,8 @@ unauthorized callers must not receive hidden entity data through diagnostics.
 | Remove the resource's last binding or attachment | Reject; deleting the resource is a separate explicit operation. |
 | Change an association target while retaining its association ID | Reject; replace the occurrence through the identity contract. |
 | Safely delete a selected AutomationSlice or attached ReadModel | Report the inbound dependency and refuse the deletion. Explicit forced deletion preserves the architecture resource and surfaces its unresolved reference; it does not retarget it. |
+| Safely delete an unreferenced entity while foreign namespaces exceed the resource scan budget | Permit deletion without scanning foreign resources into the caller's reference index. |
+| Safely delete a target with only hidden referrers, individually or in a guarded batch | Refuse deletion, including batch preview, without exposing hidden owner keys, titles or relationship details. |
 | Remove a selected observation through an otherwise accepted guarded edit | Preserve the Channel and diagnose its unresolved binding. An attempt to write that resource with the same unresolved binding fails validation. |
 | Retarget a selected source or its paired Processor | A changed behavioral occurrence gets a fresh ID. Existing Channel bindings do not follow it and require explicit repair. |
 | Delete and recreate the AutomationSlice at the same exact key | Its new UID prevents old Channel observation references from resolving. |
@@ -127,6 +129,7 @@ These variations validate resource metadata without contacting infrastructure.
 | Omit both a required placeholder value and its default | Reject; no empty or inferred value is manufactured. |
 | Supply parameter values when the Channel has no address | Reject; an address-free Channel with empty parameter values remains valid. |
 | Omit delivery guarantee and DataStore authoritative claim | Preserve absence as unknown. An explicit `authoritative: false` remains present and false after a round trip. |
+| Compare resource declarations | Render stable proto JSON with named enums and sorted object keys; preserve absent versus false claims and retain undecodable metadata's type and payload. |
 | Declare transport guarantee `EXACTLY_ONCE` | Preserve the transport claim without inferring exactly-once command handling. |
 | Supply an invalid protocol token or unknown native enum number | Reject without silently coercing it to a supported value. |
 | Omit store class or use `OTHER` without a nonblank name | Reject. Known store classes reject an additional custom name. |
@@ -155,6 +158,12 @@ or fitness runtime result is implied by passing this fixture.
 - [Mutation path regressions](../../rsworkspace/crates/trogon-atlas-server/tests/resource_retargeting.rs)
   cover retarget uniqueness and identity, revert and structural-resolution
   admission, and receipt replay after a forced target deletion.
+- [Scoped deletion regression](../../rsworkspace/crates/trogon-atlas-server/tests/resource_delete_scope.rs)
+  covers foreign resource volume, hidden dependencies, batch preview/apply and
+  diagnostic privacy. [Store reference guard tests](../../rsworkspace/crates/trogon-atlas-store/tests/reference_guards.rs)
+  cover merged branch references and untyped slice resolution precedence.
+- [Resource diff tests](../../rsworkspace/crates/trogon-atlas-server/src/diff.rs)
+  cover canonical values, map ordering, metadata rendering and claim presence.
 - [Core association tests](../../rsworkspace/crates/trogon-atlas-core/tests/resource_connections.rs)
   cover association identity, repeated observation selection, copying and pinned
   references.

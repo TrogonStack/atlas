@@ -3314,6 +3314,94 @@ impl Store for NatsStore {
         }
     }
 
+    #[tracing::instrument(skip(self))]
+    async fn has_incoming_reference(
+        &self,
+        kind: EntityKind,
+        id: &Id,
+        branch: Option<&str>,
+    ) -> StoreResult<bool> {
+        tokio::time::timeout(LIST_TOTAL_TIMEOUT, async {
+            if let Some(branch) = branch {
+                let metadata = kv_entry_timeout(&self.branches_kv, branch_meta_key(branch)).await?;
+                if live_entry(metadata).is_none() {
+                    return Err(StoreError::NotFound);
+                }
+            }
+            let mut untyped_kind = None;
+            if matches!(
+                kind,
+                EntityKind::CommandSlice
+                    | EntityKind::ReadModelSlice
+                    | EntityKind::AutomationSlice
+                    | EntityKind::UiSlice
+            ) {
+                for candidate in [
+                    EntityKind::CommandSlice,
+                    EntityKind::ReadModelSlice,
+                    EntityKind::AutomationSlice,
+                    EntityKind::UiSlice,
+                ] {
+                    match self.get(candidate, id, branch).await {
+                        Ok(_) => {
+                            untyped_kind = Some(candidate);
+                            break;
+                        }
+                        Err(StoreError::NotFound) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
+                if delta_keys && branch.is_none() {
+                    continue;
+                }
+                let keys = tokio::time::timeout(KV_OP_TIMEOUT, kv.keys())
+                    .await
+                    .map_err(|_| StoreError::Backend("reference key scan: timeout".into()))?
+                    .map_err(|error| StoreError::Backend(format!("reference key scan: {error}")))?;
+                let mut checks = keys
+                    .map(|item| async move {
+                        let key = item.map_err(|error| {
+                            StoreError::Backend(format!("reference key scan: {error}"))
+                        })?;
+                        let owner = if delta_keys {
+                            branch
+                                .and_then(|branch| crate::key::parse_branch_delta_key(branch, &key))
+                        } else {
+                            parse_entity_key(&key)
+                        };
+                        let Some((owner_kind, owner_id)) = owner else {
+                            return Ok(false);
+                        };
+                        // Merged gets suppress tombstones and replaced baseline references.
+                        let stored = match self.get(owner_kind, &owner_id, branch).await {
+                            Ok(stored) => stored,
+                            Err(StoreError::NotFound) => return Ok(false),
+                            Err(error) => return Err(error),
+                        };
+                        Ok(trogon_atlas_core::refs::outbound_refs(&stored.entity)
+                            .iter()
+                            .any(|reference| {
+                                reference.to_id == *id
+                                    && (reference.to_kind == Some(kind)
+                                        || (reference.to_kind.is_none()
+                                            && untyped_kind == Some(kind)))
+                            }))
+                    })
+                    .buffer_unordered(LIST_FETCH_CONCURRENCY);
+                while let Some(found) = checks.next().await {
+                    if found? {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        })
+        .await
+        .map_err(|_| StoreError::Backend("reference scan exceeded its time limit".into()))?
+    }
+
     #[tracing::instrument(skip(self, filter), fields(limit, branch))]
     async fn list(
         &self,

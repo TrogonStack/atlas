@@ -678,6 +678,15 @@ impl Store for FailingBatchStore {
         self.inner.delete(kind, id, expected_etag, ctx).await
     }
 
+    async fn has_incoming_reference(
+        &self,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        branch: Option<&str>,
+    ) -> trogon_atlas_store::StoreResult<bool> {
+        self.inner.has_incoming_reference(kind, id, branch).await
+    }
+
     async fn list(
         &self,
         filter: ListFilter<'_>,

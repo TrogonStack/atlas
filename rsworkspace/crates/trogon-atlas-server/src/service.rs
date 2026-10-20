@@ -935,17 +935,25 @@ impl EventModelServiceImpl {
         }
         // Load the snapshot first (which may itself be cached).
         let snap = self.snapshot(vis).await?;
+        let complete = self
+            .architecture_reference_snapshot(&snap, None, vis)
+            .await?;
         // Re-check after acquiring write lock: another task may have built the
         // index while we were loading the snapshot.
         let mut guard = self.reverse_index_cache.write().await;
         if let Some(idx) = guard.clone() {
             return Ok(idx);
         }
-        let complete = self
-            .architecture_reference_snapshot(&snap, None, vis)
-            .await?;
         let idx = Arc::new(graph::ReverseIndex::build(&complete));
-        *guard = Some(idx.clone());
+        if self
+            .snapshot_cache
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, &snap))
+        {
+            *guard = Some(idx.clone());
+        }
         Ok(idx)
     }
 
@@ -4453,22 +4461,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let index = self.reverse_index_for(branch.as_deref(), &vis).await?;
         let referrers: Vec<pb::Reference> = index.incoming(kind, &id).to_vec();
 
-        // The gate below must see referrers in every tenant, not just this
-        // caller's own, or a bound caller can delete an entity another
-        // tenant still depends on and silently break that tenant's
-        // reference. Scanning the unrestricted index for the existence
-        // check alone -- never for the `referrers` field above, which stays
-        // scoped to what this caller can see -- closes that hole without
-        // telling a bound caller anything about another tenant's data.
-        let is_referenced = if vis.is_unrestricted() {
-            !referrers.is_empty()
-        } else {
-            let unrestricted = Visibility::unrestricted(vis.principal().into());
-            let global_index = self
-                .reverse_index_for(branch.as_deref(), &unrestricted)
-                .await?;
-            !global_index.incoming(kind, &id).is_empty()
-        };
+        // Hidden referrers participate only in the boolean safety gate.
+        let is_referenced = matches!(mode, pb::delete_entity_request::Mode::FailIfReferenced)
+            && (!referrers.is_empty()
+                || self
+                    .store
+                    .has_incoming_reference(kind, &id, branch.as_deref())
+                    .await
+                    .map_err(store_err)?);
 
         match mode {
             pb::delete_entity_request::Mode::DryRun => {
@@ -4855,7 +4855,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     mode,
                     pb::delete_entity_request::Mode::FailIfReferenced
                         | pb::delete_entity_request::Mode::Unspecified
-                ) && !referrers.is_empty()
+                ) && (!referrers.is_empty()
+                    || self
+                        .store
+                        .has_incoming_reference(meta.kind, &meta.id, branch.as_deref())
+                        .await
+                        .map_err(store_err)?)
                 {
                     return Ok(Response::new(Self::batch_referenced_response(&metas, i)));
                 }

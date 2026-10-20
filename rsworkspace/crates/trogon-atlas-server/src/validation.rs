@@ -1076,13 +1076,20 @@ pub fn validate_store_with_architecture_context(
     architecture_context: &[StoredEntity],
 ) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
-    let mut resource_context = all.to_vec();
-    resource_context.extend_from_slice(architecture_context);
-    for stored in all {
-        issues.extend(architecture_resources::validate(
-            &stored.entity,
-            &resource_context,
-        ));
+    let mut resources = all
+        .iter()
+        .filter(|stored| architecture_resources::is_resource(&stored.entity))
+        .peekable();
+    if resources.peek().is_some() {
+        let resource_context = architecture_resources::ArchitectureContext::new(
+            all.iter().chain(architecture_context),
+        );
+        for stored in resources {
+            issues.extend(architecture_resources::validate_in_context(
+                &stored.entity,
+                &resource_context,
+            ));
+        }
     }
     let known: HashSet<pb::EntityKey> = all
         .iter()

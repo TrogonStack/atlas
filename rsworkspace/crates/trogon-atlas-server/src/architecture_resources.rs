@@ -37,7 +37,7 @@ impl Checks {
         kind: pb::EntityKind,
         current: Option<&pb::Id>,
         prior: Option<&pb::Id>,
-        all: &[StoredEntity],
+        context: &ArchitectureContext<'_>,
     ) {
         if let Some(prior) = prior {
             self.value(
@@ -49,7 +49,7 @@ impl Checks {
                 }),
                 "supersedes",
             );
-            self.target(kind, Some(prior), all, "supersedes");
+            self.target(kind, Some(prior), context, "supersedes");
         }
     }
 
@@ -57,11 +57,11 @@ impl Checks {
         &mut self,
         kind: pb::EntityKind,
         id: Option<&pb::Id>,
-        all: &[StoredEntity],
+        context: &ArchitectureContext<'_>,
         field: &str,
     ) {
         self.require(
-            id.is_some_and(|id| valid_id(id) && find(all, kind, id).is_some()),
+            id.is_some_and(|id| valid_id(id) && context.find(kind, id).is_some()),
             "ARCHITECTURE_REFERENCE_UNRESOLVED",
             field,
             "architecture resource target is absent or invalid",
@@ -75,11 +75,55 @@ fn valid_id(id: &pb::Id) -> bool {
         && trogon_atlas_core::validate_id_component(&id.slug).is_ok()
 }
 
-fn find<'a>(all: &'a [StoredEntity], kind: pb::EntityKind, id: &pb::Id) -> Option<&'a pb::Entity> {
-    all.iter()
-        .rev()
-        .find(|se| entity_kind(&se.entity) == Some(kind) && entity_id(&se.entity) == Some(id))
-        .map(|se| &se.entity)
+#[derive(Eq, Hash, PartialEq)]
+struct EntityLookupKey<'a> {
+    kind: pb::EntityKind,
+    namespace: &'a str,
+    slug: &'a str,
+    version: u64,
+}
+
+impl<'a> EntityLookupKey<'a> {
+    fn new(kind: pb::EntityKind, id: &'a pb::Id) -> Self {
+        Self {
+            kind,
+            namespace: &id.namespace,
+            slug: &id.slug,
+            version: id.version,
+        }
+    }
+}
+
+pub(super) struct ArchitectureContext<'a> {
+    entities: HashMap<EntityLookupKey<'a>, &'a pb::Entity>,
+}
+
+impl<'a> ArchitectureContext<'a> {
+    pub(super) fn new(entities: impl IntoIterator<Item = &'a StoredEntity>) -> Self {
+        Self {
+            entities: entities
+                .into_iter()
+                .filter_map(|stored| {
+                    let entity = &stored.entity;
+                    Some((
+                        EntityLookupKey::new(entity_kind(entity)?, entity_id(entity)?),
+                        entity,
+                    ))
+                })
+                .collect(),
+        }
+    }
+
+    fn find(&self, kind: pb::EntityKind, id: &pb::Id) -> Option<&'a pb::Entity> {
+        self.entities.get(&EntityLookupKey::new(kind, id)).copied()
+    }
+}
+
+pub(super) fn is_resource(entity: &pb::Entity) -> bool {
+    matches!(
+        entity.kind,
+        Some(pb::entity::Kind::Channel(_) | pb::entity::Kind::DataStore(_))
+    )
 }
 
 fn parameter_name(value: &str) -> bool {
@@ -194,7 +238,7 @@ fn address(channel: &pb::Channel, checks: &mut Checks) {
     }
 }
 
-fn observation(reference: Option<&pb::ConnectionRef>, all: &[StoredEntity]) -> bool {
+fn observation(reference: Option<&pb::ConnectionRef>, context: &ArchitectureContext<'_>) -> bool {
     let Some(reference) = reference else {
         return false;
     };
@@ -207,7 +251,7 @@ fn observation(reference: Option<&pb::ConnectionRef>, all: &[StoredEntity]) -> b
     let Some(owner_id) = owner_ref.id.as_ref().filter(|id| valid_id(id)) else {
         return false;
     };
-    let Some(owner) = find(all, pb::EntityKind::AutomationSlice, owner_id) else {
+    let Some(owner) = context.find(pb::EntityKind::AutomationSlice, owner_id) else {
         return false;
     };
     let Ok(occurrence) = trogon_atlas_core::connections::resolve_connection(owner, reference)
@@ -241,12 +285,24 @@ fn observation(reference: Option<&pb::ConnectionRef>, all: &[StoredEntity]) -> b
         .is_some_and(|target| target.kind == pb::EntityKind::ReadModel as i32)
         && valid_id(read_model)
         && valid_id(processor)
-        && find(all, pb::EntityKind::ReadModel, read_model).is_some()
-        && find(all, pb::EntityKind::Processor, processor).is_some()
+        && context
+            .find(pb::EntityKind::ReadModel, read_model)
+            .is_some()
+        && context.find(pb::EntityKind::Processor, processor).is_some()
 }
 
 #[must_use]
 pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    if !is_resource(entity) {
+        return Vec::new();
+    }
+    validate_in_context(entity, &ArchitectureContext::new(all))
+}
+
+pub(super) fn validate_in_context(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+) -> Vec<pb::ValidationIssue> {
     let mut checks = Checks {
         subject: super::slice_ref(entity),
         issues: Vec::new(),
@@ -257,7 +313,7 @@ pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::Validation
                 pb::EntityKind::Channel,
                 channel.id.as_ref(),
                 channel.supersedes.as_ref(),
-                all,
+                context,
             );
             checks.value(channel.id.as_ref().is_some_and(valid_id), "id");
             checks.value(!channel.title.trim().is_empty(), "title");
@@ -293,19 +349,19 @@ pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::Validation
                     )
                 });
                 checks.value(seen.insert(key), "bindings.observation");
-                checks.require(observation(binding.observation.as_ref(), all), "CHANNEL_OBSERVATION_UNRESOLVED", "bindings.observation", "binding must select a persisted AutomationSlice source ReadModel observation with resolvable endpoints");
+                checks.require(observation(binding.observation.as_ref(), context), "CHANNEL_OBSERVATION_UNRESOLVED", "bindings.observation", "binding must select a persisted AutomationSlice source ReadModel observation with resolvable endpoints");
             }
             match channel.broker.as_ref() {
                 Some(pb::channel::Broker::Component(reference)) => checks.target(
                     pb::EntityKind::Component,
                     reference.id.as_ref(),
-                    all,
+                    context,
                     "component",
                 ),
                 Some(pb::channel::Broker::ExternalSystem(reference)) => checks.target(
                     pb::EntityKind::ExternalSystem,
                     reference.id.as_ref(),
-                    all,
+                    context,
                     "external_system",
                 ),
                 None => {}
@@ -316,7 +372,7 @@ pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::Validation
                 pb::EntityKind::DataStore,
                 store.id.as_ref(),
                 store.supersedes.as_ref(),
-                all,
+                context,
             );
             checks.value(store.id.as_ref().is_some_and(valid_id), "id");
             checks.value(!store.title.trim().is_empty(), "title");
@@ -416,7 +472,12 @@ pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::Validation
                     seen.insert(id.map(pb::IdKey::new)),
                     "attachments.read_model",
                 );
-                checks.target(pb::EntityKind::ReadModel, id, all, "attachments.read_model");
+                checks.target(
+                    pb::EntityKind::ReadModel,
+                    id,
+                    context,
+                    "attachments.read_model",
+                );
             }
         }
         _ => {}
