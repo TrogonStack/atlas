@@ -25,13 +25,7 @@ import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { api, type NamespaceRegistryRow } from '@/lib/api';
-
-/** The owner a namespace gets when none is named. Matches the server. */
-const DEFAULT_OWNER = 'default';
-
-function ownerLabel(row: NamespaceRegistryRow): string {
-  return row.parent === '' ? DEFAULT_OWNER : row.parent;
-}
+import { ownerLabel } from '@/lib/namespace-owner';
 
 export function NamespacesPage() {
   const [rows, setRows] = useState<NamespaceRegistryRow[] | null>(null);

@@ -1,8 +1,8 @@
 // Overview, the studio's landing surface (Decision: the studio is navigated,
 // not filtered). One view at a time:
-//   - Models: the EventModel index, grouped by namespace, each card linking
-//     to /em/... This is the landing view, because picking a model is what
-//     most visits are for.
+//   - Models: the EventModel index, grouped by namespace owner and then by
+//     namespace, each card linking to /em/... This is the landing view,
+//     because picking a model is what most visits are for.
 //   - Domain chart: the problem-space knowledge graph (lightweight).
 //   - Contexts: the context map.
 // Renders without loading the whole store: only EventModel entities and
@@ -17,7 +17,7 @@ import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { buttonVariants } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
-import { api } from '@/lib/api';
+import { api, type NamespaceRegistryRow } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
 import {
   asId,
@@ -29,6 +29,7 @@ import {
   realizesOf,
   wireKind,
 } from '@/lib/model';
+import { groupByOwner } from '@/lib/namespace-owner';
 import { cn } from '@/lib/utils';
 
 const STORAGE_KEY = 'overview:filter:domains';
@@ -125,6 +126,7 @@ function persistMode(mode: OverviewMode) {
 export function OverviewPage() {
   const [chart, setChart] = useState<Model>();
   const [eventModels, setEventModels] = useState<Entity[]>([]);
+  const [registry, setRegistry] = useState<NamespaceRegistryRow[]>();
   const [overviewError, setOverviewError] = useState<string>();
   const [searchError, setSearchError] = useState<string>();
   const [searchQuery, setSearchQuery] = useState('');
@@ -180,6 +182,19 @@ export function OverviewPage() {
       });
     return () => ctrl.abort();
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- intentionally mount-only, see above
+  }, []);
+
+  // Owners only shape the grouping, so a failed registry read keeps the
+  // page usable with plain namespace groups.
+  useEffect(() => {
+    const ctrl = new AbortController();
+    api
+      .namespaceRegistry({ signal: ctrl.signal })
+      .then((res) => {
+        if (!ctrl.signal.aborted) setRegistry(res.namespaces ?? []);
+      })
+      .catch(() => {});
+    return () => ctrl.abort();
   }, []);
 
   useEffect(() => {
@@ -351,18 +366,17 @@ export function OverviewPage() {
   }, [chart, selectedDomains]);
 
   // Memoize so `mode` / `error` / unrelated state toggles don't rerun the
-  // O(n) group + sort. Only changes to the actual event-model set should
-  // trigger recompute.
-  const grouped = useMemo(() => {
-    const map = new Map<string, Entity[]>();
-    for (const em of visibleEventModels) {
-      const list = map.get(em.id.namespace) ?? [];
-      list.push(em);
-      map.set(em.id.namespace, list);
-    }
-    return map;
-  }, [visibleEventModels]);
-  const sortedNamespaces = useMemo(() => [...grouped.keys()].sort(), [grouped]);
+  // O(n) group + sort. Only changes to the event-model set or the registry
+  // should trigger recompute.
+  const ownerGroups = useMemo(
+    () =>
+      groupByOwner(
+        [...visibleEventModels].sort((a, b) => a.title.localeCompare(b.title)),
+        (em) => em.id.namespace,
+        registry,
+      ),
+    [visibleEventModels, registry],
+  );
   const chartFocusEntity = chartFocusKey && visibleChart ? visibleChart.byKey.get(chartFocusKey) : undefined;
   const searchOpen = searchQuery.trim().length >= 2;
 
@@ -575,53 +589,72 @@ export function OverviewPage() {
             {selectedDomains.length > 0 ? ` of ${eventModels.length}` : ''})
           </h2>
           <div className="flex flex-col gap-6">
-            {sortedNamespaces.map((ns) => {
-              const list = (grouped.get(ns) ?? []).sort((a, b) => a.title.localeCompare(b.title));
-              return (
-                <div key={ns}>
-                  <h3 className="mb-2 font-mono text-[11px] font-semibold uppercase text-muted-foreground">
-                    {ns}
-                    <span className="ml-2 text-muted-foreground">·</span>
-                    <span className="ml-2 font-sans normal-case">
-                      {list.length} model{list.length === 1 ? '' : 's'}
-                    </span>
-                  </h3>
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                    {list.map((em) => {
-                      const members = Array.isArray(em.raw.members) ? em.raw.members.length : 0;
-                      return (
-                        <a
-                          key={em.key}
-                          href={withBranchQuery(
-                            `/em/${encodeURIComponent(em.id.namespace)}/${encodeURIComponent(em.id.slug)}`,
-                            branch,
-                          )}
-                          className={cn(
-                            'block rounded-lg border border-border bg-card px-3 py-2 text-sm hover:border-indigo-300 hover:bg-indigo-50/40',
-                          )}
-                        >
-                          <div className="truncate font-semibold">{em.title}</div>
-                          <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                            {em.id.namespace}/{em.id.slug}@v{em.id.version}
-                          </div>
-                          <div className="mt-1 text-[10px] text-muted-foreground">
-                            {members} member{members === 1 ? '' : 's'}
-                            {em.doc ? ` · ${em.doc.slice(0, 80)}${em.doc.length > 80 ? '…' : ''}` : ''}
-                          </div>
-                        </a>
-                      );
-                    })}
+            {ownerGroups.map((group) => {
+              const count = group.namespaces.reduce((n, g) => n + g.items.length, 0);
+              const namespaces = group.namespaces.map(({ namespace: ns, items: list }) => {
+                return (
+                  <div key={ns}>
+                    <h3 className="mb-2 font-mono text-[11px] font-semibold uppercase text-muted-foreground">
+                      {ns}
+                      <span className="ml-2 text-muted-foreground">·</span>
+                      <span className="ml-2 font-sans normal-case">
+                        {list.length} model{list.length === 1 ? '' : 's'}
+                      </span>
+                    </h3>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                      {list.map((em) => {
+                        const members = Array.isArray(em.raw.members) ? em.raw.members.length : 0;
+                        return (
+                          <a
+                            key={em.key}
+                            href={withBranchQuery(
+                              `/em/${encodeURIComponent(em.id.namespace)}/${encodeURIComponent(em.id.slug)}`,
+                              branch,
+                            )}
+                            className={cn(
+                              'block rounded-lg border border-border bg-card px-3 py-2 text-sm hover:border-indigo-300 hover:bg-indigo-50/40',
+                            )}
+                          >
+                            <div className="truncate font-semibold">{em.title}</div>
+                            <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                              {em.id.namespace}/{em.id.slug}@v{em.id.version}
+                            </div>
+                            <div className="mt-1 text-[10px] text-muted-foreground">
+                              {members} member{members === 1 ? '' : 's'}
+                              {em.doc ? ` · ${em.doc.slice(0, 80)}${em.doc.length > 80 ? '…' : ''}` : ''}
+                            </div>
+                          </a>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                );
+              });
+              if (registry === undefined)
+                return (
+                  <div key="all" className="flex flex-col gap-6">
+                    {namespaces}
+                  </div>
+                );
+              return (
+                <details key={group.owner === null ? 'no-owner' : `owner:${group.owner}`} open>
+                  <summary className="mb-3 cursor-pointer text-xs font-semibold text-foreground">
+                    {group.owner ?? 'no owner'}
+                    <span className="ml-2 font-normal text-muted-foreground">
+                      {`${group.namespaces.length} namespace${group.namespaces.length === 1 ? '' : 's'} · ${count} model${count === 1 ? '' : 's'}`}
+                    </span>
+                  </summary>
+                  <div className="flex flex-col gap-6 pl-3">{namespaces}</div>
+                </details>
               );
             })}
           </div>
-          {chart && sortedNamespaces.length === 0 ? (
+          {chart && ownerGroups.length === 0 ? (
             <div className="flex flex-1 items-center justify-center">
               {eventModels.length === 0 ? (
                 <EmptyState icon={Boxes} title="No event models yet">
-                  Event models show up here grouped by namespace as soon as the store has one. Each card opens its
-                  board.
+                  Event models show up here grouped by owner and namespace as soon as the store has one. Each card opens
+                  its board.
                 </EmptyState>
               ) : (
                 <EmptyState
