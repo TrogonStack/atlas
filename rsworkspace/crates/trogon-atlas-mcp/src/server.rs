@@ -69,9 +69,12 @@ pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatl
              3. One processor issues exactly one command; branching outcomes are separate \
              automation slices with separate processors. Record 'these ship as one worker' \
              with a Component entity listing them as members, not by sharing entities.\n\
-             4. One automation observes one consumer-shaped read model; different code paths \
-             need different views (an external webhook may project into several ExternalSource \
-             read models). External integrations are declared on BOTH seams: the processor \
+             4. Split read models by shape, not by consumer: add a read model only when a \
+             consumer needs different fields, key or source events. Consumers that read the \
+             same data share one read model; when several automations observe it, declare a \
+             SharedConsumersAnnotation naming them. A command's decision state comes from its \
+             stream (the given events) and is not a read model. Two read models with the same \
+             source events and fields are a duplicate. External integrations are declared on BOTH seams: the processor \
              that performs the call lists the ExternalSystem in Processor.calls (outbound), \
              and the results land in ExternalSource read models pointing at the same system \
              (inbound); the round trip is structural, never prose-only.\n\

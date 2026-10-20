@@ -109,7 +109,7 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
         k(Command, "ENTITY_KIND_COMMAND", "command", "Command", "Commands",
           "An imperative intent issued by a persona or processor. Wrapped by a CommandSlice that lists the events it emits."),
         k(ReadModel, "ENTITY_KIND_READ_MODEL", "readModel", "Read Model", "Read Models",
-          "A projection of one or more events shaped for a single consumer (UI, automation, search). Give each consumer its own read model; declare a SharedConsumersAnnotation when one read model serves several on purpose."),
+          "A projection of one or more events shaped for how it is read (UI, automation, search). Consumers that read the same data share one read model; add another only for a different shape. Declare a SharedConsumersAnnotation when several automations observe one read model."),
         k(Processor, "ENTITY_KIND_PROCESSOR", "processor", "Processor", "Processors",
           "An automated actor. Reads a read model, issues exactly one command. Each branching outcome is its own processor."),
         k(Ui, "ENTITY_KIND_UI", "ui", "UI", "UIs",
