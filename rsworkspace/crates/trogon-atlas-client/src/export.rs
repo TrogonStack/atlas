@@ -7,8 +7,10 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use anyhow::{anyhow, bail, Context as _, Result};
+use prost_reflect::{Kind as FieldKind, MessageDescriptor};
 use serde_json::{Map, Value};
 use trogon_atlas_core::{
+    id_component::is_safe_id_component,
     refs::{self, outbound_refs},
     transcode::TranscodePool,
 };
@@ -16,7 +18,7 @@ use trogon_atlas_proto as pb;
 
 use crate::{
     client::Client,
-    manifest::API_VERSION,
+    manifest::{is_ref_like, shorthand_ref_field, API_VERSION, ID_MESSAGE},
     tenant_types::{self, TypeScope},
 };
 
@@ -67,6 +69,17 @@ pub(crate) fn entity_to_manifest(
         .remove("id")
         .ok_or_else(|| anyhow!("entity body has no id"))?;
     let id = id_from_json(&id_value)?;
+    let body_desc = types
+        .entity_descriptor()
+        .ok()
+        .and_then(|entity| entity.fields().find(|f| f.json_name() == body_key))
+        .and_then(|field| match field.kind() {
+            FieldKind::Message(md) => Some(md),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow!("Entity has no message field {body_key:?}"))?;
+    let mut spec = Value::Object(body);
+    compact_message(&mut spec, &body_desc, &id.namespace);
 
     let mut metadata = Map::new();
     metadata.insert("namespace".into(), Value::String(id.namespace.clone()));
@@ -79,8 +92,93 @@ pub(crate) fn entity_to_manifest(
     doc.insert("apiVersion".into(), Value::String(API_VERSION.into()));
     doc.insert("kind".into(), Value::String(manifest_kind(kind)));
     doc.insert("metadata".into(), Value::Object(metadata));
-    doc.insert("spec".into(), Value::Object(body));
+    doc.insert("spec".into(), spec);
     Ok((kind, id, Value::Object(doc)))
+}
+
+/// Undo `manifest::normalize_message`: write each Id, Ref, Edge and Example
+/// wrapper as the shortest string the parser expands back to the same value.
+/// A wrapper with any other key, or an Id the string grammar can't carry
+/// exactly, stays an object.
+fn compact_message(value: &mut Value, desc: &MessageDescriptor, default_ns: &str) {
+    if desc.full_name() == ID_MESSAGE {
+        if let Some(short) = short_id(value, default_ns) {
+            *value = Value::String(short);
+        }
+        return;
+    }
+    // Any-packed annotations are opaque to the parser's schema walk too.
+    if desc.full_name().starts_with("google.protobuf.") {
+        return;
+    }
+    let Value::Object(map) = value else {
+        return;
+    };
+    for (key, val) in map.iter_mut() {
+        let Some(field) = desc
+            .fields()
+            .find(|f| f.json_name() == key || f.name() == key)
+        else {
+            continue;
+        };
+        let FieldKind::Message(md) = field.kind() else {
+            continue;
+        };
+        if field.is_map() {
+            continue;
+        }
+        match val {
+            Value::Array(items) if field.is_list() => {
+                for item in items {
+                    compact_message(item, &md, default_ns);
+                }
+            }
+            _ if field.is_list() => {}
+            _ => compact_message(val, &md, default_ns),
+        }
+    }
+    // Mirror the parser's order: a Ref-like message takes a string as its
+    // `id`, and only a non-Ref message routes a string to its shorthand field.
+    let wrapped = if is_ref_like(desc) {
+        "id".to_string()
+    } else if let Some(field) = shorthand_ref_field(desc) {
+        field.json_name().to_string()
+    } else {
+        return;
+    };
+    if map.len() == 1 {
+        if let Some(Value::String(short)) = map.get(&wrapped) {
+            *value = Value::String(short.clone());
+        }
+    }
+}
+
+/// `slug`, `ns/slug` or `ns/slug@v`, or None when `expand_id_string` would
+/// not read the string back as exactly this Id.
+fn short_id(value: &Value, default_ns: &str) -> Option<String> {
+    let map = value.as_object()?;
+    if map.len() != 3 {
+        return None;
+    }
+    let namespace = map.get("namespace")?.as_str()?;
+    let slug = map.get("slug")?.as_str()?;
+    let version = match map.get("version")? {
+        Value::String(s) => s.parse::<u64>().ok()?,
+        Value::Number(n) => n.as_u64()?,
+        _ => return None,
+    };
+    if version == 0 || !is_safe_id_component(namespace) || !is_safe_id_component(slug) {
+        return None;
+    }
+    let qualified = if namespace == default_ns {
+        slug.to_string()
+    } else {
+        format!("{namespace}/{slug}")
+    };
+    Some(match version {
+        1 => qualified,
+        v => format!("{qualified}@{v}"),
+    })
 }
 
 // Proto3 JSON renders uint64 as a string; extract the triple by hand
@@ -466,4 +564,67 @@ pub async fn export_namespace_slices(
     }
 
     Ok(ExportOutcome { files, skipped })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn exported_spec(yaml: &str) -> Value {
+        let loaded = crate::manifest::parse_str(yaml, "test.yaml").unwrap();
+        let types = TranscodePool::builtin().unwrap();
+        let (_, _, doc) = entity_to_manifest(&loaded[0].entity, &types).unwrap();
+        doc["spec"].clone()
+    }
+
+    #[test]
+    fn exports_refs_in_short_form() {
+        let spec = exported_spec(
+            r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata: { namespace: acme-storefront, name: add-item-to-cart-slice }
+spec:
+  title: Add item to cart
+  command: add-item-to-cart
+  emittedEvents:
+    - cart.item-added
+    - acme-billing/invoice.raised@2
+    - { event: cart.item-noted, doc: Kept as a mapping because it has a doc. }
+",
+        );
+        assert_eq!(spec["command"], json!("add-item-to-cart"));
+        assert_eq!(
+            spec["emittedEvents"],
+            json!([
+                "cart.item-added",
+                "acme-billing/invoice.raised@2",
+                { "event": "cart.item-noted", "doc": "Kept as a mapping because it has a doc." },
+            ])
+        );
+    }
+
+    #[test]
+    fn keeps_long_form_when_short_form_would_parse_differently() {
+        let desc = crate::manifest::entity_descriptor()
+            .unwrap()
+            .get_field_by_name("command_slice")
+            .map(|f| match f.kind() {
+                prost_reflect::Kind::Message(md) => md,
+                _ => unreachable!(),
+            })
+            .unwrap();
+        // "cart@2" as a string would read back as slug "cart", version 2.
+        let long = json!({
+            "command": { "command": { "id": {
+                "namespace": "acme-storefront", "slug": "cart@2", "version": "1",
+            } } },
+        });
+        let mut value = long.clone();
+        compact_message(&mut value, &desc, "acme-storefront");
+        assert_eq!(value, long);
+    }
 }

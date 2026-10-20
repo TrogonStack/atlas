@@ -87,6 +87,9 @@ Ergonomics, all schema-derived (see `src/manifest.rs`):
 - Wherever the proto expects an `Id`, a `*Ref`, an `*Edge`, or a scenario
   `*Example`, a bare string works: `slug`, `ns/slug`, or `ns/slug@version`.
   Namespace defaults to the manifest's namespace, version to 1.
+  `export` and `fmt` write this short form. They keep the object form when
+  the wrapper has other fields (such as `doc` or `kind`), or when a string
+  would not read back as the same Id.
 - `EntityKind` enum values accept short forms (`storyboard`) in addition to
   proto names (`ENTITY_KIND_STORYBOARD`).
 - Scenario `id` fields are plain strings and are left untouched; the
