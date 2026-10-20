@@ -5003,7 +5003,7 @@ impl Store for NatsStore {
                 Some(be) => {
                     let baseline_entity = decode_entity(&be.value)?;
                     let baseline_etag = be.revision.to_string();
-                    let ours = trogon_atlas_core::connection_persistence::prepare_landing(
+                    let ours = trogon_atlas_core::connection_persistence::prepare_resolution(
                         delta.ours.as_ref(),
                         &baseline_entity,
                     )
@@ -5044,8 +5044,7 @@ impl Store for NatsStore {
         }
 
         // Keep ours: rebase base/base_etag forward to current baseline
-        // (which may be absent if baseline deleted the key), leaving
-        // `ours`/`tombstone` untouched.
+        // (which may be absent if baseline deleted the key).
         let base_key = entity_key(kind, id);
         let base_entry = kv_entry_timeout(&self.kv, base_key).await?;
         let (new_base, new_base_etag) = match live_entry(base_entry) {
@@ -5056,8 +5055,11 @@ impl Store for NatsStore {
             .ours
             .as_ref()
             .map(|ours| {
-                trogon_atlas_core::connection_persistence::prepare_landing(new_base.as_ref(), ours)
-                    .map_err(|error| StoreError::InvalidArgument(error.to_string()))
+                trogon_atlas_core::connection_persistence::prepare_resolution(
+                    new_base.as_ref(),
+                    ours,
+                )
+                .map_err(|error| StoreError::InvalidArgument(error.to_string()))
             })
             .transpose()?;
         let updated = trogon_atlas_proto::BranchDelta {

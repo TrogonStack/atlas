@@ -313,6 +313,29 @@ pub fn renew_retargeted_connection_ids(
     Ok(renewed)
 }
 
+pub(crate) fn renew_connection_ids(
+    entity: &mut Entity,
+    selected: &HashSet<ConnectionId>,
+) -> Result<usize, ConnectionError> {
+    validate_stored_connection_ids(entity)?;
+    let mut normalized = dynamic(entity)?;
+    visit(&mut normalized, "", "", &[], &mut |message, occurrence| {
+        if occurrence.id.is_some_and(|id| selected.contains(&id)) {
+            let field = message
+                .descriptor()
+                .get_field_by_name("connection_id")
+                .ok_or_else(|| {
+                    ConnectionError::Encoding("connection ID descriptor missing".into())
+                })?;
+            message.clear_field(&field);
+        }
+        Ok(())
+    })?;
+    *entity = Entity::decode(normalized.encode_to_vec().as_slice())
+        .map_err(|error| ConnectionError::Encoding(error.to_string()))?;
+    assign_connection_ids(entity)
+}
+
 pub fn connection_occurrences(
     entity: &Entity,
 ) -> Result<Vec<ConnectionOccurrence>, ConnectionError> {

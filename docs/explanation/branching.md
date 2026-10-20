@@ -137,10 +137,15 @@ result instead of a diff and a separate validation call.
 **Resolution happens on the branch, never inside the merge.** Merge is
 all-or-nothing: it either lands everything or reports conflicts and
 changes nothing. Resolving is ordinary branch work, not a special mode:
-take the baseline's version by dropping the branch delta, keep the
+take the baseline's version, keep the
 branch's version, take the structural merge of the two, or write a
 hand-merged entity onto the branch, and in every case the key's recorded
 base refreshes to the current baseline.
+Connection retirement history survives resolution within the same owner
+incarnation. If the discarded side retired an occurrence selected by the
+resolution, that occurrence receives a fresh ID instead of reviving a stale
+reference. Taking the baseline's content can therefore leave an identity delta
+to land. See [connection identity](../reference/connection-identity.md).
 Merge again, now clean. There are no half-merged states, no resolution
 write path distinct from the normal one, and every surface renders the
 same conflict payload: per entity, `{base, ours, theirs}` as canonical

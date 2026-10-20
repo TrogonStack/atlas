@@ -745,10 +745,11 @@ pub trait Store: Send + Sync {
     /// Returns an empty vec (not `NotFound`) for a branch with zero deltas.
     async fn list_branch_deltas(&self, branch: &str) -> StoreResult<Vec<BranchDeltaEntry>>;
 
-    /// Land a set of branch deltas onto baseline verbatim: `BranchLandOp::Put`
-    /// writes `ours` bytes as-is (no `system` re-stamp, no idempotency
-    /// short-circuit -- identity is preserved exactly as authored on the
-    /// branch); `BranchLandOp::Delete` removes the baseline row. Each op is
+    /// Land a set of branch deltas onto baseline. Each `BranchLandOp::Put`
+    /// passes through `prepare_landing` against the baseline row it replaces,
+    /// preserving connection identity and combining retirement history while
+    /// allowing the system stamp to change. There is no idempotency
+    /// short-circuit. `BranchLandOp::Delete` removes the baseline row. Each op is
     /// guarded by the baseline etag captured at diff time: if baseline moved
     /// since then, the whole call fails without applying anything (the
     /// caller is expected to have already re-diffed under the mutation lock
@@ -787,11 +788,14 @@ pub trait Store: Send + Sync {
     /// Resolve a single conflicting entry on `branch`:
     /// - `take_theirs = true`: overwrite the delta with the current
     ///   baseline value (or remove the delta entirely if baseline no
-    ///   longer has the key), clearing the conflict by making `ours`
-    ///   converge with baseline.
+    ///   longer has the key).
     /// - `take_theirs = false` (keep ours): rebase `base`/`base_etag`
-    ///   forward to the current baseline, keeping the branch's `ours`
-    ///   unchanged.
+    ///   forward to the current baseline, keeping the branch's content.
+    ///
+    /// Both choices preserve the selected incarnation. Within the same
+    /// incarnation, combine retirement history and renew selected connections
+    /// whose IDs the discarded side retired. Unaffected IDs remain stable.
+    /// Taking theirs can therefore leave a resolved delta rather than converge.
     ///
     /// Returns `NotFound` if the branch has no delta for this key.
     async fn resolve_branch_entry(

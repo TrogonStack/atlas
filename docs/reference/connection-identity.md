@@ -39,16 +39,22 @@ fall back to another occurrence with matching endpoints.
 | Add another connection to the same target | Give it a distinct ID. |
 | Change a connection's role or endpoint | Replace it with a new ID. Implicit source/consumer endpoints supplied by the owning slice count too. |
 | Remove a connection | Retire its ID in the owning incarnation; existing references become unresolved. |
-| Re-add a removed connection | Use a new ID, even when the endpoints are unchanged. |
+| Re-add a removed connection | Use a new ID, even when the endpoints are unchanged. In the same write as removal, supply a fresh ID explicitly; an id-less matching occurrence is rejected as a stripped ID. |
 | Delete and recreate the owner | The new server-owned UID prevents old references from resolving into the replacement. |
 | Copy to a new owner/version | The owner identity differs. Local IDs may be retained, but references to the old owner do not follow the copy. |
 | Edit on a branch | Preserve the owner's incarnation and connection IDs. Branch selection remains part of the read context. |
+| Resolve a branch conflict | Preserve the selected side's content and incarnation. For the same incarnation, combine retirement history and assign fresh IDs to selected occurrences retired by the discarded side. |
 | Land a branch | Preserve connection identity and retirement history. An intentional owner replacement keeps its new UID; a stale branch must resolve a recreated baseline explicitly. |
 
 For lifecycle transitions the source event is part of the connection. For slice
 connections, changing the paired Command, ReadModel, UI or Processor can change
 the connection even when its explicitly stored target stays the same. Unrelated
 sibling occurrences do not change its identity.
+
+To request a server-generated ID when replacing a connection with the same
+endpoints, remove the old occurrence in one write and add the id-less occurrence
+in a later write. A single write cannot distinguish that replacement from
+stripping the existing occurrence's ID.
 
 Normal writes reject endpoint changes that retain an existing ID. The guarded
 reference-retarget operation renews IDs for the occurrences it changes and the
@@ -60,6 +66,15 @@ metadata cannot erase retirement history. Store preparation runs against the
 value protected by the write's concurrency guard, including branch and batch
 writes. A branch that only adds and removes a connection still carries relevant
 retirement history when it lands.
+
+Explicit keep-ours and take-theirs resolution can restore a connection's
+endpoints, but cannot revive its retired ID. Only those restored occurrences
+receive fresh IDs; unaffected occurrences retain theirs. Taking the baseline's
+content can therefore leave a branch delta carrying new IDs and retirement
+history. It is resolved against the current baseline and can be landed normally.
+Selecting a different owner incarnation does not inherit the discarded
+incarnation's retirement history. Ordinary branch landing remains strict and
+does not renew retired IDs implicitly.
 
 ## Creation and authoring
 

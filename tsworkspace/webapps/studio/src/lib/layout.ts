@@ -1065,7 +1065,7 @@ function buildEdges(occs: OccurrenceMap, _model: Model, slices: Slice[], rmLinks
     if (!a || !b || a.id === b.id) return;
     const occurrence = opts.edge?.connectionId?.value;
     const owner = opts.slice?.key ?? '';
-    const id = `${a.id}->${b.id}${occurrence ? `:${owner}:${occurrence}` : ''}`;
+    const id = occurrence ? `${owner}:${opts.slice?.uid ?? ''}:${occurrence}` : `${a.id}->${b.id}`;
     if (seenEdges.has(id)) return;
     seenEdges.add(id);
     const sourceHandle = OUT[a.entity.kind] ?? 'bs';

@@ -692,3 +692,119 @@ async fn taking_baseline_content_does_not_drop_branch_retirement_history() {
         Code::InvalidArgument
     );
 }
+
+async fn resolve_with_retired_selected_connection(take_theirs: bool) {
+    let service = service().await;
+    let mut destination = screen("destination");
+    ui(&mut destination).transitions.clear();
+    save(&service, destination).await;
+    let original = save(&service, screen("resolution-renewal")).await;
+    let selected = reference(&original, 0);
+    let unaffected = reference(&original, 1);
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut branch = original.clone();
+    ui(&mut branch).doc = "branch choice".into();
+    if take_theirs {
+        ui(&mut branch).transitions.remove(0);
+    }
+    service.put_entity(on_branch(put(branch))).await.unwrap();
+    let mut baseline = original.clone();
+    ui(&mut baseline).doc = "baseline choice".into();
+    if !take_theirs {
+        ui(&mut baseline).transitions.remove(0);
+    }
+    let baseline = save(&service, baseline).await;
+    service
+        .resolve_branch_entry(Request::new(pb::ResolveBranchEntryRequest {
+            name: "identity-work".into(),
+            r#ref: selected.owner.clone(),
+            resolution: if take_theirs {
+                pb::resolve_branch_entry_request::Resolution::TakeTheirs
+            } else {
+                pb::resolve_branch_entry_request::Resolution::KeepOurs
+            } as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut resolved = service
+        .get_entity(on_branch(pb::GetEntityRequest {
+            kind: pb::EntityKind::Ui as i32,
+            id: Some(id("resolution-renewal")),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    assert_eq!(ui(&mut resolved).transitions.len(), 2);
+    assert_eq!(
+        ui(&mut resolved).doc,
+        if take_theirs {
+            "baseline choice"
+        } else {
+            "branch choice"
+        }
+    );
+    assert_eq!(
+        resolved.system.as_ref().unwrap().uid,
+        original.system.as_ref().unwrap().uid
+    );
+    assert!(resolve_connection(&resolved, &selected).is_err());
+    assert!(resolve_connection(&resolved, &unaffected).is_ok());
+    assert!(resolved
+        .system
+        .as_ref()
+        .unwrap()
+        .retired_connection_ids
+        .contains(selected.id.as_ref().unwrap()));
+    assert_eq!(get(&service, "resolution-renewal").await, baseline);
+    let diff = service
+        .diff_branch(Request::new(pb::DiffBranchRequest {
+            name: "identity-work".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(diff.entries.len(), 1);
+    assert_eq!(
+        diff.entries[0].status,
+        pb::branch_diff_entry::Status::Changed as i32
+    );
+    let merged = service
+        .merge_branch(Request::new(pb::MergeBranchRequest {
+            name: "identity-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        merged.status,
+        pb::merge_branch_response::Status::Applied as i32,
+        "{merged:?}"
+    );
+    let landed = get(&service, "resolution-renewal").await;
+    assert!(resolve_connection(&landed, &selected).is_err());
+    assert!(resolve_connection(&landed, &unaffected).is_ok());
+    assert_eq!(
+        connection_occurrences(&landed).unwrap(),
+        connection_occurrences(&resolved).unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn keep_ours_renews_connections_retired_by_baseline() {
+    resolve_with_retired_selected_connection(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn take_theirs_renews_connections_retired_by_branch() {
+    resolve_with_retired_selected_connection(true).await;
+}

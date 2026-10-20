@@ -1,13 +1,14 @@
 //! Backend-owned connection identity continuity, including retired occurrences.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use trogon_atlas_proto::Entity;
 
 use crate::{
     connections::{
         assign_connection_ids, connection_occurrences, equivalent_with_unassigned_ids,
-        reconcile_connection_ids, validate_stored_connection_ids, ConnectionError, ConnectionId,
+        reconcile_connection_ids, renew_connection_ids, validate_stored_connection_ids,
+        ConnectionError, ConnectionId,
     },
     stamp_system,
 };
@@ -44,6 +45,30 @@ pub fn prepare_landing(
         !matches!((old_uid, branch_uid), (Some(old), Some(new)) if !old.is_empty() && !new.is_empty() && old != new)
     });
     prepare(previous, branch, retired, true)
+}
+
+/// Resolve an explicit branch choice without reviving retired occurrence identities.
+pub fn prepare_resolution(
+    discarded: Option<&Entity>,
+    selected: &Entity,
+) -> Result<Entity, ConnectionError> {
+    if let Some(discarded) = discarded {
+        validate_stored_connection_ids(discarded)?;
+    }
+    let discarded = discarded.filter(|entity| {
+        entity.system.as_ref().map(|system| &system.uid)
+            == selected.system.as_ref().map(|system| &system.uid)
+    });
+    let retired = discarded
+        .into_iter()
+        .chain(std::iter::once(selected))
+        .filter_map(|entity| entity.system.as_ref())
+        .flat_map(|system| &system.retired_connection_ids)
+        .map(|id| id.value.parse())
+        .collect::<Result<HashSet<ConnectionId>, ConnectionError>>()?;
+    let mut resolved = selected.clone();
+    renew_connection_ids(&mut resolved, &retired)?;
+    prepare_landing(discarded, &resolved)
 }
 
 fn prepare(
@@ -250,6 +275,30 @@ mod tests {
             prepare_entity(Some(&landed), &branch),
             Err(ConnectionError::RetiredId(id))
         );
+    }
+
+    #[test]
+    fn resolution_rejects_missing_stored_ids_even_for_discarded_incarnation() {
+        let selected = prepare_entity(None, &ui()).unwrap();
+        assert!(matches!(
+            prepare_resolution(Some(&ui()), &selected),
+            Err(ConnectionError::MissingStoredId(_))
+        ));
+    }
+
+    #[test]
+    fn resolution_does_not_carry_retirements_across_owner_incarnations() {
+        let selected = prepare_entity(None, &ui()).unwrap();
+        let selected_id = connection_occurrences(&selected).unwrap()[0].id.unwrap();
+        let mut discarded = prepare_entity(None, &ui()).unwrap();
+        discarded
+            .system
+            .as_mut()
+            .unwrap()
+            .retired_connection_ids
+            .push(selected_id.into());
+        let resolved = prepare_resolution(Some(&discarded), &selected).unwrap();
+        assert_eq!(resolved, selected);
     }
 
     #[test]
