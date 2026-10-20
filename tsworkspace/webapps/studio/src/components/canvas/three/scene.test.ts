@@ -87,9 +87,7 @@ describe('GraphScene plates', () => {
   it('disposes the temporary plane after building a wide header frame', () => {
     const scene = new GraphScene(host, { pick: () => {}, hover: () => {}, lost: () => {} });
     disposeSpy.mockClear();
-    scene.setSpec(
-      emptySpec([{ id: 'p1', center: { x: 0, y: 0, z: 0 }, width: 400, height: 20, title: 'Lane' }]),
-    );
+    scene.setSpec(emptySpec([{ id: 'p1', center: { x: 0, y: 0, z: 0 }, width: 400, height: 20, title: 'Lane' }]));
     expect(disposeSpy).toHaveBeenCalled();
     scene.dispose();
   });
@@ -97,9 +95,7 @@ describe('GraphScene plates', () => {
   it('does not dispose plate meshes while drawing a narrow header', () => {
     const scene = new GraphScene(host, { pick: () => {}, hover: () => {}, lost: () => {} });
     disposeSpy.mockClear();
-    scene.setSpec(
-      emptySpec([{ id: 'p1', center: { x: 0, y: 0, z: 0 }, width: 200, height: 20, title: 'Lane' }]),
-    );
+    scene.setSpec(emptySpec([{ id: 'p1', center: { x: 0, y: 0, z: 0 }, width: 200, height: 20, title: 'Lane' }]));
     expect(disposeSpy).not.toHaveBeenCalled();
     scene.dispose();
   });

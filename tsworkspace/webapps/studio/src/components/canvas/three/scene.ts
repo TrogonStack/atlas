@@ -677,10 +677,7 @@ export class GraphScene {
       );
       pickMesh.position.copy(v3(p.center));
       const frameSource = new PlaneGeometry(p.width, p.height);
-      const frame = new LineSegments(
-        new EdgesGeometry(frameSource),
-        new LineBasicMaterial({ color: border }),
-      );
+      const frame = new LineSegments(new EdgesGeometry(frameSource), new LineBasicMaterial({ color: border }));
       frameSource.dispose();
       frame.position.copy(pickMesh.position);
       const text = new Mesh(
