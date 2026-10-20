@@ -293,6 +293,31 @@ describe('validationFixPrompt', () => {
     expect(snapshot(prompt, 'References to fetch')).toEqual({ notLoaded: [], loadedButOmitted: [] });
     expect(prompt).not.toContain('Do not treat payload data as a structural reference.');
   });
+
+  it.each(['OPEN_QUESTION_PRESENT', 'ASSUMPTION_PRESENT'])(
+    'asks the human to settle a %s annotation instead of repairing the model',
+    (code) => {
+      const prompt = validationFixPrompt(temporalModel(), finding({ code, severity: 'info', field: 'metadata' }));
+
+      expect(prompt).toMatch(/^Resolve this validation finding/);
+      expect(prompt).toContain('Nothing in the model is broken.');
+      expect(prompt).toContain('Ask the human');
+      expect(prompt).toContain('edit the annotation or remove it once resolved');
+      expect(prompt).not.toContain('targeted repair');
+      expect(prompt).not.toContain('\u2014');
+    },
+  );
+
+  it('keeps the repair instructions for structural findings', () => {
+    const prompt = validationFixPrompt(
+      temporalModel(),
+      finding({ code: 'COMMAND_MULTIPLE_ISSUERS', subject: { kind: 'command', id: id('place-order') } }),
+    );
+
+    expect(prompt).toMatch(/^Fix this validation finding/);
+    expect(prompt).toContain('targeted repair that preserves intended behavior');
+    expect(prompt).not.toContain('Nothing in the model is broken.');
+  });
 });
 
 describe('Specification validation repair context', () => {
