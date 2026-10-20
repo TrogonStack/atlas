@@ -234,6 +234,7 @@ fn build_processor(slug: &str, trigger: &str) -> pb::Entity {
 
 fn event_edge(slug: &str) -> pb::EventEdge {
     pb::EventEdge {
+        connection_id: None,
         event: Some(pb::EventRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -244,6 +245,7 @@ fn event_edge(slug: &str) -> pb::EventEdge {
 
 fn command_edge(slug: &str) -> pb::CommandEdge {
     pb::CommandEdge {
+        connection_id: None,
         command: Some(pb::CommandRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -254,6 +256,7 @@ fn command_edge(slug: &str) -> pb::CommandEdge {
 
 fn ui_edge(slug: &str) -> pb::UiEdge {
     pb::UiEdge {
+        connection_id: None,
         ui: Some(pb::UiRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -264,6 +267,7 @@ fn ui_edge(slug: &str) -> pb::UiEdge {
 
 fn persona_edge(slug: &str) -> pb::PersonaEdge {
     pb::PersonaEdge {
+        connection_id: None,
         persona: Some(pb::PersonaRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -274,6 +278,7 @@ fn persona_edge(slug: &str) -> pb::PersonaEdge {
 
 fn read_model_edge(slug: &str) -> pb::ReadModelEdge {
     pb::ReadModelEdge {
+        connection_id: None,
         read_model: Some(pb::ReadModelRef {
             id: Some(id(NS, slug, 1)),
         }),
@@ -284,6 +289,7 @@ fn read_model_edge(slug: &str) -> pb::ReadModelEdge {
 
 fn processor_edge(slug: &str) -> pb::ProcessorEdge {
     pb::ProcessorEdge {
+        connection_id: None,
         processor: Some(pb::ProcessorRef {
             id: Some(id(NS, slug, 1)),
         }),

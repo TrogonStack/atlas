@@ -489,6 +489,8 @@ pub mod swimlane {
             pub doc: ::prost::alloc::string::String,
             #[prost(message, repeated, tag="3")]
             pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+            #[prost(message, optional, tag="4")]
+            pub connection_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::ConnectionId>,
         }
     }
 }
@@ -646,6 +648,8 @@ pub mod ui {
         pub doc: ::prost::alloc::string::String,
         #[prost(message, repeated, tag="3")]
         pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+        #[prost(message, optional, tag="4")]
+        pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1181,6 +1185,8 @@ pub struct EventEdge {
     pub doc: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CommandEdge {
@@ -1190,6 +1196,8 @@ pub struct CommandEdge {
     pub doc: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ReadModelEdge {
@@ -1199,6 +1207,8 @@ pub struct ReadModelEdge {
     pub doc: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProcessorEdge {
@@ -1208,6 +1218,8 @@ pub struct ProcessorEdge {
     pub doc: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UiEdge {
@@ -1217,6 +1229,8 @@ pub struct UiEdge {
     pub doc: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PersonaEdge {
@@ -1226,6 +1240,8 @@ pub struct PersonaEdge {
     pub doc: ::prost::alloc::string::String,
     #[prost(message, repeated, tag="3")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
 }
 /// Concrete instance of a typed payload, used in Given / When / Then sections
 /// and in storyboard traces.
@@ -3233,5 +3249,15 @@ pub mod entity {
         #[prost(message, tag="30")]
         TypeLibrary(super::TypeLibrary),
     }
+}
+/// Field paths are diagnostics only; references survive collection reordering.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConnectionRef {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<EntityRef>,
+    #[prost(message, optional, tag="2")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(string, tag="3")]
+    pub owner_uid: ::prost::alloc::string::String,
 }
 // @@protoc_insertion_point(module)

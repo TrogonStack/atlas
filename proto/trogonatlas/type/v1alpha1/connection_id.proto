@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package trogonatlas.type.v1alpha1;
+
+// Stable occurrence identity, scoped to the exact owning entity version.
+// Values are non-nil lowercase hyphenated UUIDs. Reordering and annotation
+// edits preserve identity; changing the connection endpoint requires a new ID.
+message ConnectionId {
+  string value = 1;
+}
