@@ -68,6 +68,11 @@ pub fn classify(desired: &pb::Entity, current: Option<&pb::Entity>) -> Action {
             if cur.encode_to_vec() == want.encode_to_vec() {
                 return Action::Unchanged;
             }
+            if trogon_atlas_core::connections::equivalent_with_unassigned_ids(&cur, &want)
+                .unwrap_or(false)
+            {
+                return Action::Unchanged;
+            }
             match (entity_json_value(&cur), entity_json_value(&want)) {
                 (Ok(a), Ok(b)) if a == b => Action::Unchanged,
                 _ => Action::Configure,
@@ -427,6 +432,49 @@ mod tests {
     #[test]
     fn classify_missing_is_create() {
         assert_eq!(classify(&event("A"), None), Action::Create);
+    }
+
+    #[test]
+    fn idless_connection_manifest_is_a_noop_only_when_everything_else_matches() {
+        let desired = pb::Entity {
+            kind: Some(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                id: Some(pb::Id {
+                    namespace: "shop".into(),
+                    slug: "place-order".into(),
+                    version: 1,
+                }),
+                command: Some(pb::CommandEdge {
+                    command: Some(pb::CommandRef {
+                        id: Some(pb::Id {
+                            namespace: "shop".into(),
+                            slug: "place".into(),
+                            version: 1,
+                        }),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            system: None,
+        };
+        let mut current = desired.clone();
+        trogon_atlas_core::connections::assign_connection_ids(&mut current).unwrap();
+        assert_eq!(classify(&desired, Some(&current)), Action::Unchanged);
+
+        let mut changed = desired;
+        let Some(pb::entity::Kind::CommandSlice(slice)) = changed.kind.as_mut() else {
+            panic!("expected slice")
+        };
+        slice.command.as_mut().unwrap().doc = "changed connection".into();
+        assert_eq!(classify(&changed, Some(&current)), Action::Configure);
+
+        let mut changed_id = current.clone();
+        let Some(pb::entity::Kind::CommandSlice(slice)) = changed_id.kind.as_mut() else {
+            panic!("expected slice")
+        };
+        slice.command.as_mut().unwrap().connection_id =
+            Some(trogon_atlas_core::connections::ConnectionId::new().into());
+        assert_eq!(classify(&changed_id, Some(&current)), Action::Configure);
     }
 
     #[test]

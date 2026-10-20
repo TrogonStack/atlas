@@ -6936,6 +6936,7 @@ mod transition_tests {
                     next: next
                         .iter()
                         .map(|n| pb::swimlane::transition::Next {
+                            connection_id: None,
                             event: Some(pb::EventRef { id: Some(id(n)) }),
                             doc: "guard".into(),
                             metadata: Vec::new(),
@@ -11038,6 +11039,7 @@ mod previously_untested_rules {
                 doc: String::new(),
                 design_ref: String::new(),
                 transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
                     to: Some(pb::UiRef {
                         id: Some(id(ns, "ghost", 1)),
                     }),
@@ -11057,6 +11059,10 @@ mod previously_untested_rules {
             metadata: Vec::new(),
             supersedes: None,
         };
+        assert_eq!(
+            trogon_atlas_core::connections::validate_stored_connection_ids(&ui),
+            Ok(())
+        );
         let issues = validate_model(&model, &[stored(ui)]);
         let count = issues
             .iter()

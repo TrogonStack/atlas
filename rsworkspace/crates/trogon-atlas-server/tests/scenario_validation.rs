@@ -19,6 +19,7 @@ fn id(slug: &str, version: u64) -> pb::Id {
 
 fn event_edge(slug: &str) -> pb::EventEdge {
     pb::EventEdge {
+        connection_id: None,
         event: Some(pb::EventRef {
             id: Some(id(slug, 1)),
         }),
@@ -29,6 +30,7 @@ fn event_edge(slug: &str) -> pb::EventEdge {
 
 fn command_edge(slug: &str) -> pb::CommandEdge {
     pb::CommandEdge {
+        connection_id: None,
         command: Some(pb::CommandRef {
             id: Some(id(slug, 1)),
         }),
@@ -39,6 +41,7 @@ fn command_edge(slug: &str) -> pb::CommandEdge {
 
 fn ui_edge(slug: &str) -> pb::UiEdge {
     pb::UiEdge {
+        connection_id: None,
         ui: Some(pb::UiRef {
             id: Some(id(slug, 1)),
         }),
@@ -49,6 +52,7 @@ fn ui_edge(slug: &str) -> pb::UiEdge {
 
 fn persona_edge(slug: &str) -> pb::PersonaEdge {
     pb::PersonaEdge {
+        connection_id: None,
         persona: Some(pb::PersonaRef {
             id: Some(id(slug, 1)),
         }),
@@ -359,6 +363,7 @@ fn make_lane_with_transitions(slug: &str, after: &str, next: &[&str]) -> pb::Ent
                 next: next
                     .iter()
                     .map(|n| pb::swimlane::transition::Next {
+                        connection_id: None,
                         event: Some(pb::EventRef { id: Some(id(n, 1)) }),
                         doc: String::new(),
                         metadata: Vec::new(),

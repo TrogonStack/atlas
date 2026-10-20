@@ -75,6 +75,14 @@ pub struct Id {
     #[prost(uint64, tag="3")]
     pub version: u64,
 }
+/// Stable occurrence identity, scoped to the exact owning entity version.
+/// Values are non-nil lowercase hyphenated UUIDs. Reordering and annotation
+/// edits preserve identity; changing the connection endpoint requires a new ID.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConnectionId {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
 /// System-owned incarnation identity, mirroring Kubernetes metadata.uid
 /// (Decision #26). The Id (namespace/slug@version) is the DECLARED identity
 /// that refs and manifests use; `uid` identifies this stored INCARNATION:

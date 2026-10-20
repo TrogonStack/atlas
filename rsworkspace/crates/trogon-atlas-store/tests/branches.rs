@@ -691,6 +691,7 @@ async fn land_branch_merge_put_preserves_ours_bytes_verbatim() {
             &[BranchLandOp::Put {
                 kind: pb::EntityKind::Event,
                 ours: Box::new(ours.clone()),
+                base: None,
                 expected_baseline_etag: None,
             }],
             WriteContext::baseline(),
@@ -812,6 +813,7 @@ async fn land_branch_merge_rejects_stale_baseline_etag() {
             &[BranchLandOp::Put {
                 kind: pb::EntityKind::Event,
                 ours: Box::new(event("p2", "moved", 1, "Branch value")),
+                base: None,
                 expected_baseline_etag: Some("stale-etag-value".to_string()),
             }],
             WriteContext::baseline(),
@@ -862,6 +864,7 @@ async fn land_branch_merge_does_not_stamp_system_and_updates_change_feed() {
             &[BranchLandOp::Put {
                 kind: pb::EntityKind::Event,
                 ours: Box::new(ours.clone()),
+                base: None,
                 expected_baseline_etag: None,
             }],
             WriteContext::baseline(),
@@ -1195,11 +1198,13 @@ async fn land_branch_merge_rolls_back_earlier_op_when_later_op_etag_is_stale() {
         BranchLandOp::Put {
             kind: pb::EntityKind::Event,
             ours: Box::new(event("p2", "rollback-a", 1, "A on branch")),
+            base: None,
             expected_baseline_etag: Some(etag_a.clone()),
         },
         BranchLandOp::Put {
             kind: pb::EntityKind::Event,
             ours: Box::new(event("p2", "rollback-b", 1, "B on branch")),
+            base: None,
             expected_baseline_etag: Some(etag_b.clone()),
         },
     ];

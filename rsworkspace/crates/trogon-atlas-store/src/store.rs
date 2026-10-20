@@ -34,12 +34,14 @@ pub struct BranchDeltaEntry {
 /// rather than silently overwritten).
 #[derive(Debug, Clone)]
 pub enum BranchLandOp {
-    /// Write `ours` to baseline verbatim -- no `system` re-stamping. Used
+    /// Land a trusted branch value while preserving incarnation identity and
+    /// checking connection provenance against its recorded fork snapshot. Used
     /// for ADDED/CHANGED entries (and CONFLICT_DELETE_EDIT resolved via
     /// take-ours, if ever surfaced that way).
     Put {
         kind: EntityKind,
         ours: Box<Entity>,
+        base: Option<Box<Entity>>,
         /// Baseline etag this was diffed against. `None` means baseline
         /// had no row for this key at diff time.
         expected_baseline_etag: Option<String>,
@@ -213,6 +215,15 @@ pub struct ChangesetRef<'a> {
     pub operation_id: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub enum ConnectionAdmission<'a> {
+    #[default]
+    Active,
+    /// Only for server-computed structural merges of stored snapshots while
+    /// holding the writer lease and mutation lock across selection and write.
+    BranchMerge { base: &'a Entity },
+}
+
 /// Scope and attribution for one mutating call.
 ///
 /// This replaces the bare `branch: Option<&str>` that mutating methods used
@@ -227,6 +238,7 @@ pub struct WriteContext<'a> {
     branch: Option<&'a str>,
     changeset: Option<ChangesetRef<'a>>,
     operation_key: Option<&'a str>,
+    connection_admission: ConnectionAdmission<'a>,
 }
 
 impl<'a> WriteContext<'a> {
@@ -243,6 +255,7 @@ impl<'a> WriteContext<'a> {
             branch: Some(name),
             changeset: None,
             operation_key: None,
+            connection_admission: ConnectionAdmission::Active,
         }
     }
 
@@ -254,6 +267,7 @@ impl<'a> WriteContext<'a> {
             branch,
             changeset: None,
             operation_key: None,
+            connection_admission: ConnectionAdmission::Active,
         }
     }
 
@@ -262,6 +276,17 @@ impl<'a> WriteContext<'a> {
     pub fn attributed(mut self, changeset: ChangesetRef<'a>) -> Self {
         self.changeset = Some(changeset);
         self
+    }
+
+    #[must_use]
+    pub fn with_branch_merge_base(mut self, base: &'a Entity) -> Self {
+        self.connection_admission = ConnectionAdmission::BranchMerge { base };
+        self
+    }
+
+    #[must_use]
+    pub fn connection_admission(self) -> ConnectionAdmission<'a> {
+        self.connection_admission
     }
 
     /// Attach the operation-receipt key this write claims, so a journaled
@@ -446,6 +471,14 @@ pub struct ChangesetPage<'a> {
 /// - `delete`: removes the row. `expected_etag = None` is an unconditional
 ///   delete; a `Some(etag)` fails with `EtagMismatch` if the stored etag
 ///   differs. Returns `NotFound` if no row exists.
+///
+/// Connection-bearing writes normalize IDs against the entity actually replaced
+/// before semantic no-op detection. Use
+/// `trogon_atlas_core::connection_persistence::prepare_entity` for ordinary
+/// writes and `prepare_landing` for trusted branch landings. Existing owners
+/// accept supplied IDs only for active occurrences; additions receive fresh IDs.
+/// Branch landing and resolution also consult the recorded common base so
+/// deleted occurrences cannot be restored under their former identity.
 ///
 /// ## Error mapping
 ///
@@ -737,10 +770,11 @@ pub trait Store: Send + Sync {
     /// Returns an empty vec (not `NotFound`) for a branch with zero deltas.
     async fn list_branch_deltas(&self, branch: &str) -> StoreResult<Vec<BranchDeltaEntry>>;
 
-    /// Land a set of branch deltas onto baseline verbatim: `BranchLandOp::Put`
-    /// writes `ours` bytes as-is (no `system` re-stamp, no idempotency
-    /// short-circuit -- identity is preserved exactly as authored on the
-    /// branch); `BranchLandOp::Delete` removes the baseline row. Each op is
+    /// Land a set of branch deltas onto baseline. Each `BranchLandOp::Put`
+    /// passes through `prepare_landing` against the baseline row it replaces,
+    /// preserving connection identity and checking the recorded fork snapshot while
+    /// allowing the system stamp to change. There is no idempotency
+    /// short-circuit. `BranchLandOp::Delete` removes the baseline row. Each op is
     /// guarded by the baseline etag captured at diff time: if baseline moved
     /// since then, the whole call fails without applying anything (the
     /// caller is expected to have already re-diffed under the mutation lock
@@ -779,11 +813,14 @@ pub trait Store: Send + Sync {
     /// Resolve a single conflicting entry on `branch`:
     /// - `take_theirs = true`: overwrite the delta with the current
     ///   baseline value (or remove the delta entirely if baseline no
-    ///   longer has the key), clearing the conflict by making `ours`
-    ///   converge with baseline.
+    ///   longer has the key).
     /// - `take_theirs = false` (keep ours): rebase `base`/`base_etag`
-    ///   forward to the current baseline, keeping the branch's `ours`
-    ///   unchanged.
+    ///   forward to the current baseline, keeping the branch's content.
+    ///
+    /// Both choices preserve the selected incarnation. Within the same
+    /// incarnation, consult the common base and renew selected connections
+    /// whose IDs the discarded side removed. Unaffected IDs remain stable.
+    /// Taking theirs can therefore leave a resolved delta rather than converge.
     ///
     /// Returns `NotFound` if the branch has no delta for this key.
     async fn resolve_branch_entry(
