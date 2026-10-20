@@ -583,12 +583,30 @@ fn sibling_supplied_fields(
         .id
         .as_ref()
         .map(|id| (id.namespace.as_str(), id.slug.as_str()));
-    slices_feeding(read_model_id, by_key)
+    let target = (
+        read_model_id.namespace.as_str(),
+        read_model_id.slug.as_str(),
+    );
+    by_key
+        .values()
+        .filter_map(|entity| match entity.kind.as_ref() {
+            Some(pb::entity::Kind::ReadModelSlice(rs)) => Some(rs),
+            _ => None,
+        })
         .filter(|rs| {
-            rs.id.as_ref().is_some_and(|id| {
-                let name = (id.namespace.as_str(), id.slug.as_str());
-                Some(name) != own && latest.get(&name) == Some(&id.version)
-            }) && rs.projection_role != pb::ProjectionRole::Delete as i32
+            // The target matches by name so a read-model bump keeps siblings, while a
+            // slice whose latest version feeds another read model stops counting.
+            let feeds = rs
+                .read_model
+                .as_ref()
+                .and_then(|re| re.read_model.as_ref()?.id.as_ref())
+                .is_some_and(|id| (id.namespace.as_str(), id.slug.as_str()) == target);
+            feeds
+                && rs.id.as_ref().is_some_and(|id| {
+                    let name = (id.namespace.as_str(), id.slug.as_str());
+                    Some(name) != own && latest.get(&name) == Some(&id.version)
+                })
+                && rs.projection_role != pb::ProjectionRole::Delete as i32
         })
         .flat_map(|rs| rs.source_events.iter())
         .filter_map(|ee| ee.event.as_ref()?.id.as_ref())
@@ -1546,6 +1564,91 @@ mod tests {
             .map(|g| g.field_path.as_str())
             .collect();
         assert_eq!(missing, vec!["shipped_at", "shipped_at"], "{gaps:?}");
+    }
+
+    fn slice_v2(slug: &str, source: &str, read_model: &str, read_model_version: u64) -> pb::Entity {
+        let mut entity = read_model_slice(slug, vec![source], read_model);
+        if let Some(pb::entity::Kind::ReadModelSlice(rs)) = entity.kind.as_mut() {
+            rs.id.as_mut().unwrap().version = 2;
+            let target = rs.read_model.as_mut().unwrap().read_model.as_mut().unwrap();
+            target.id.as_mut().unwrap().version = read_model_version;
+        }
+        entity
+    }
+
+    fn with_shipped_v2(mut all: Vec<StoredEntity>, slice: pb::Entity) -> Vec<StoredEntity> {
+        all.push(stored(slice));
+        all.retain(|se| !matches!(se.entity.kind, Some(pb::entity::Kind::EventModel(_))));
+        let mut model = event_model(
+            "ordering",
+            vec![
+                (pb::EntityKind::ReadModelSlice, "summary-on-placed"),
+                (pb::EntityKind::ReadModelSlice, "summary-on-shipped"),
+            ],
+        );
+        if let Some(pb::entity::Kind::EventModel(em)) = model.kind.as_mut() {
+            em.members[1].id.as_mut().unwrap().version = 2;
+        }
+        all.push(stored(model));
+        all
+    }
+
+    #[test]
+    fn read_model_version_bump_keeps_siblings() {
+        let mut all = sibling_scenario(Vec::new());
+        let mut summary_v2 = keyed(
+            read_model(
+                "order-summary",
+                vec![
+                    field("order_id", string_kind()),
+                    field("total_cents", int_kind()),
+                    field("shipped_at", timestamp_kind()),
+                ],
+                vec!["order-placed", "order-shipped"],
+            ),
+            &["order_id"],
+        );
+        if let Some(pb::entity::Kind::ReadModel(rm)) = summary_v2.kind.as_mut() {
+            rm.id.as_mut().unwrap().version = 2;
+        }
+        all.push(stored(summary_v2));
+        let all = with_shipped_v2(
+            all,
+            slice_v2("summary-on-shipped", "order-shipped", "order-summary", 2),
+        );
+        let (gaps, _) = check_completeness(&event_model_scope("ordering"), &all);
+        assert_eq!(
+            count(&gaps, pb::completeness_gap::Kind::MissingSource),
+            0,
+            "{gaps:?}"
+        );
+    }
+
+    #[test]
+    fn slice_moved_to_another_read_model_stops_supplying() {
+        let mut all = sibling_scenario(Vec::new());
+        all.push(stored(keyed(
+            read_model(
+                "shipment-status",
+                vec![
+                    field("order_id", string_kind()),
+                    field("shipped_at", timestamp_kind()),
+                ],
+                vec!["order-shipped"],
+            ),
+            &["order_id"],
+        )));
+        let all = with_shipped_v2(
+            all,
+            slice_v2("summary-on-shipped", "order-shipped", "shipment-status", 1),
+        );
+        let (gaps, _) = check_completeness(&event_model_scope("ordering"), &all);
+        let missing: Vec<&str> = gaps
+            .iter()
+            .filter(|g| g.kind == pb::completeness_gap::Kind::MissingSource as i32)
+            .map(|g| g.field_path.as_str())
+            .collect();
+        assert_eq!(missing, vec!["shipped_at"], "{gaps:?}");
     }
 
     #[test]
