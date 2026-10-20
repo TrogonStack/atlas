@@ -3,13 +3,19 @@ use std::collections::{HashMap, HashSet};
 use trogon_atlas_store::store::BranchLandOp;
 
 use super::{
-    entity_id, entity_kind, pb, store_err, validation, EventModelServiceImpl, OpMetaLike, Status,
-    StoredEntity, Visibility,
+    entity_id, entity_kind, pb, store_err, validation, EventModelServiceImpl, Lens, OpMetaLike,
+    Status, StoredEntity, Visibility,
 };
 
 struct ArchitectureProposal<'a> {
     overlay: HashMap<pb::EntityKey, Option<&'a pb::Entity>>,
     landing: Option<&'a [BranchLandOp]>,
+}
+
+#[derive(Clone, Copy)]
+enum ArchitectureTargetAccess<'a> {
+    Required(&'a Visibility),
+    Diagnostic(&'a Lens),
 }
 
 impl EventModelServiceImpl {
@@ -40,7 +46,6 @@ impl EventModelServiceImpl {
             Some(&ops),
         )
         .await
-        .map(|_| ())
     }
 
     pub(super) async fn validate_architecture_writes(
@@ -51,7 +56,6 @@ impl EventModelServiceImpl {
     ) -> Result<(), Status> {
         self.validate_architecture_proposal(metas, branch, vis, None)
             .await
-            .map(|_| ())
     }
 
     pub(super) async fn validate_architecture_landing(
@@ -59,7 +63,7 @@ impl EventModelServiceImpl {
         metas: &[OpMetaLike],
         ops: &[BranchLandOp],
         vis: &Visibility,
-    ) -> Result<Vec<StoredEntity>, Status> {
+    ) -> Result<(), Status> {
         self.validate_architecture_proposal(metas, None, vis, Some(ops))
             .await
     }
@@ -70,7 +74,7 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
         landing: Option<&[BranchLandOp]>,
-    ) -> Result<Vec<StoredEntity>, Status> {
+    ) -> Result<(), Status> {
         let resources: Vec<_> = metas
             .iter()
             .filter(|meta| {
@@ -83,7 +87,7 @@ impl EventModelServiceImpl {
             .filter_map(|meta| meta.entity.as_ref())
             .collect();
         if resources.is_empty() {
-            return Ok(Vec::new());
+            return Ok(());
         }
         let overlay: HashMap<_, _> = metas
             .iter()
@@ -105,58 +109,25 @@ impl EventModelServiceImpl {
             );
         }
         let mut loaded = HashSet::new();
-        self.load_architecture_targets(&proposal, branch, vis, required, &mut loaded, &mut world)
-            .await?;
-        let mut endpoints = Vec::new();
-        for resource in &resources {
-            let Some(pb::entity::Kind::Channel(channel)) = resource.kind.as_ref() else {
-                continue;
-            };
-            for binding in &channel.bindings {
-                let Some(observation) = &binding.observation else {
-                    continue;
-                };
-                let Some(owner) = &observation.owner else {
-                    continue;
-                };
-                let Some(id) = &owner.id else {
-                    continue;
-                };
-                if owner.kind != pb::EntityKind::AutomationSlice as i32 {
-                    continue;
-                }
-                let Some(stored) =
-                    world.get(&pb::EntityKey::new(pb::EntityKind::AutomationSlice, id))
-                else {
-                    continue;
-                };
-                let Some(pb::entity::Kind::AutomationSlice(slice)) = stored.entity.kind.as_ref()
-                else {
-                    continue;
-                };
-                if let Some(id) = slice
-                    .source_read_models
-                    .iter()
-                    .find(|edge| {
-                        edge.connection_id.is_some() && edge.connection_id == observation.id
-                    })
-                    .and_then(|edge| edge.read_model.as_ref())
-                    .and_then(|reference| reference.id.as_ref())
-                {
-                    endpoints.push((pb::EntityKind::ReadModel, id.clone()));
-                }
-                if let Some(id) = slice
-                    .processor
-                    .as_ref()
-                    .and_then(|edge| edge.processor.as_ref())
-                    .and_then(|reference| reference.id.as_ref())
-                {
-                    endpoints.push((pb::EntityKind::Processor, id.clone()));
-                }
-            }
-        }
-        self.load_architecture_targets(&proposal, branch, vis, endpoints, &mut loaded, &mut world)
-            .await?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::Required(vis),
+            required,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let endpoints = observation_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::Required(vis),
+            endpoints,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
         let context: Vec<_> = world.into_values().collect();
         for resource in resources {
             let kind = entity_kind(resource)?;
@@ -175,7 +146,64 @@ impl EventModelServiceImpl {
                 )));
             }
         }
-        Ok(context)
+        Ok(())
+    }
+
+    pub(super) async fn architecture_validation_context(
+        &self,
+        snapshot: &[StoredEntity],
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<Vec<StoredEntity>, Status> {
+        let resources: Vec<_> = snapshot
+            .iter()
+            .map(|stored| &stored.entity)
+            .filter(|entity| {
+                matches!(
+                    entity.kind,
+                    Some(pb::entity::Kind::Channel(_) | pb::entity::Kind::DataStore(_))
+                )
+            })
+            .collect();
+        if resources.is_empty() {
+            return Ok(Vec::new());
+        }
+        let proposal = ArchitectureProposal {
+            overlay: HashMap::new(),
+            landing: None,
+        };
+        let lens = self.lens(vis).await?;
+        let access = ArchitectureTargetAccess::Diagnostic(&lens);
+        let required = resources
+            .iter()
+            .flat_map(|entity| {
+                trogon_atlas_core::refs::outbound_refs(entity)
+                    .into_iter()
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
+            })
+            .collect();
+        let mut loaded = HashSet::new();
+        let mut world = HashMap::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            access,
+            required,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let endpoints = observation_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            access,
+            endpoints,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        Ok(world.into_values().collect())
     }
 
     pub(super) async fn architecture_reference_snapshot(
@@ -235,13 +263,25 @@ impl EventModelServiceImpl {
         &self,
         proposal: &ArchitectureProposal<'_>,
         branch: Option<&str>,
-        vis: &Visibility,
+        access: ArchitectureTargetAccess<'_>,
         targets: Vec<(pb::EntityKind, pb::Id)>,
         loaded: &mut HashSet<pb::EntityKey>,
         world: &mut HashMap<pb::EntityKey, StoredEntity>,
     ) -> Result<(), Status> {
         for (kind, id) in targets {
-            self.require_visible(vis, &id.namespace).await?;
+            match access {
+                ArchitectureTargetAccess::Required(vis) => {
+                    self.require_visible(vis, &id.namespace).await?;
+                }
+                ArchitectureTargetAccess::Diagnostic(lens) => {
+                    if !lens.admits(&id.namespace)
+                        || id.version == 0
+                        || super::require_id(Some(&id), "target").is_err()
+                    {
+                        continue;
+                    }
+                }
+            }
             let key = pb::EntityKey::new(kind, &id);
             if !loaded.insert(key.clone()) {
                 continue;
@@ -322,4 +362,55 @@ fn prepare_proposal_entity(
         None => trogon_atlas_core::connection_persistence::prepare_entity(previous, entity),
     }
     .map_err(|error| Status::invalid_argument(error.to_string()))
+}
+
+fn observation_endpoints(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> Vec<(pb::EntityKind, pb::Id)> {
+    let mut endpoints = Vec::new();
+    for resource in resources {
+        let Some(pb::entity::Kind::Channel(channel)) = resource.kind.as_ref() else {
+            continue;
+        };
+        for binding in &channel.bindings {
+            let Some(observation) = &binding.observation else {
+                continue;
+            };
+            let Some(owner) = &observation.owner else {
+                continue;
+            };
+            let Some(id) = &owner.id else {
+                continue;
+            };
+            if owner.kind != pb::EntityKind::AutomationSlice as i32 {
+                continue;
+            }
+            let Some(stored) = world.get(&pb::EntityKey::new(pb::EntityKind::AutomationSlice, id))
+            else {
+                continue;
+            };
+            let Some(pb::entity::Kind::AutomationSlice(slice)) = stored.entity.kind.as_ref() else {
+                continue;
+            };
+            if let Some(id) = slice
+                .source_read_models
+                .iter()
+                .find(|edge| edge.connection_id.is_some() && edge.connection_id == observation.id)
+                .and_then(|edge| edge.read_model.as_ref())
+                .and_then(|reference| reference.id.as_ref())
+            {
+                endpoints.push((pb::EntityKind::ReadModel, id.clone()));
+            }
+            if let Some(id) = slice
+                .processor
+                .as_ref()
+                .and_then(|edge| edge.processor.as_ref())
+                .and_then(|reference| reference.id.as_ref())
+            {
+                endpoints.push((pb::EntityKind::Processor, id.clone()));
+            }
+        }
+    }
+    endpoints
 }

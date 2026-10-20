@@ -6090,8 +6090,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let all = self.snapshot_for(branch.as_deref(), &vis).await?;
 
+        let architecture_context = self
+            .architecture_validation_context(&all, branch.as_deref(), &vis)
+            .await?;
         // Project-level hygiene runs once for the whole call.
-        let mut store_issues = validation::validate_store(all.as_ref());
+        let mut store_issues =
+            validation::validate_store_with_architecture_context(&all, &architecture_context);
 
         // Resolve which Domain(s) belong to the scope, then iterate
         // every stored EventModel whose namespace traces back to one of
@@ -6882,8 +6886,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
-        let architecture_context = self
-            .validate_architecture_landing(&op_metas, &ops, &vis)
+        // Accepted anchor edits may leave unchanged resource declarations unresolved.
+        self.validate_architecture_landing(&op_metas, &ops, &vis)
             .await?;
 
         if req.dry_run {
@@ -6936,10 +6940,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
                 Err(error) => return Err(store_err(error)),
             };
-            let validation_issues = validation::validate_store_with_architecture_context(
-                &post_world,
-                &architecture_context,
-            );
+            let validation_issues = validation::validate_store_hygiene(&post_world);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
@@ -7008,10 +7009,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     projected.push(se);
                 }
             }
-            let validation_issues = validation::validate_store_with_architecture_context(
-                &projected,
-                &architecture_context,
-            );
+            let validation_issues = validation::validate_store_hygiene(&projected);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);

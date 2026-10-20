@@ -1091,6 +1091,12 @@ pub fn validate_store_with_architecture_context(
             ));
         }
     }
+    issues.extend(validate_store_hygiene(all));
+    issues
+}
+
+pub(crate) fn validate_store_hygiene(all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    let mut issues = Vec::new();
     let known: HashSet<pb::EntityKey> = all
         .iter()
         .filter_map(|se| {

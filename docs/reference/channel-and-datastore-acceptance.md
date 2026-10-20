@@ -110,6 +110,9 @@ unauthorized callers must not receive hidden entity data through diagnostics.
 | Create `order-feed@2` | Existing DataStore attachments remain on `order-feed@1`. |
 | Copy the Channel to a new exact owner | Association ownership changes; references to bindings on the original owner do not select the copy. External observation targets remain pinned unless an explicit clone map changes them. |
 | Modify on a branch, preview and land | Reorder preserves IDs and preview makes no durable changes. Land obeys the same identity and reference rules against the current baseline. Conflicts require resolution before application. |
+| Land an accepted behavioral edit or forced target deletion that leaves an unchanged resource unresolved | Preview and landing succeed under the target edit's rules. Preserve the resource for inspection and report its unresolved anchor through validation. |
+| Land a new or edited resource whose anchor does not resolve | Reject without publishing the resource. Unchanged unresolved declarations do not relax admission for selected resource writes. |
+| Validate a retained resource whose anchors are omitted from a capped projection | Resolve exact authorized anchors from the selected branch view. Diagnose genuinely removed or inaccessible anchors without disclosing hidden entity details. |
 | Remove an association on baseline while a branch edits the resource | Apply the connection-identity branch-base rules. Removed IDs cannot silently revive during landing; explicit resolution preserves unaffected occurrences and renews restored ones. |
 | Target a readable entity in another namespace | Allow only with authorization to write the resource and read every referenced owner and resolved endpoint. No write permission to the target namespace is granted or required by the attachment alone. |
 | Target an unreadable namespace | Reject the new association without disclosing the hidden target or its graph. |
@@ -158,6 +161,10 @@ or fitness runtime result is implied by passing this fixture.
 - [Mutation path regressions](../../rsworkspace/crates/trogon-atlas-server/tests/resource_retargeting.rs)
   cover retarget uniqueness and identity, revert and structural-resolution
   admission, and receipt replay after a forced target deletion.
+- [Landing lifecycle regressions](../../rsworkspace/crates/trogon-atlas-server/tests/resource_landing_lifecycle.rs)
+  distinguish permitted unresolved declarations from invalid selected resource
+  writes. [Validation context regressions](../../rsworkspace/crates/trogon-atlas-server/tests/architecture_validation_context.rs)
+  exercise exact anchor resolution outside the model projection.
 - [Scoped deletion regression](../../rsworkspace/crates/trogon-atlas-server/tests/resource_delete_scope.rs)
   covers foreign resource volume, hidden dependencies, batch preview/apply and
   diagnostic privacy. [Store reference guard tests](../../rsworkspace/crates/trogon-atlas-store/tests/reference_guards.rs)

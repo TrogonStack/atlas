@@ -225,6 +225,16 @@ mutation and validation rules still apply to the target edit itself. Reference
 validation must expose those failures through existing diagnostic and impact
 surfaces. This contract adds no automatic garbage collection.
 
+Branch preview and landing apply the same distinction. New or edited resource
+declarations must resolve their anchors. An unchanged resource may remain
+unresolved when a permitted target deletion or behavioral edit lands; its
+diagnostic state does not veto that operation.
+
+Resource diagnostics resolve exact authorized anchors in the selected branch
+view. Absence from a capped model projection does not establish that a target
+is missing. A removed or inaccessible target remains unresolved; validation
+does not restore it from another branch or reveal inaccessible entity details.
+
 ## First-release boundary
 
 The implementation scope is native authoring, persistence, exact reference
