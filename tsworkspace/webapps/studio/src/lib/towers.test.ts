@@ -236,6 +236,20 @@ describe('buildTowers', () => {
     expect(placeOrder?.highlight.facing).toBe('y');
   });
 
+  it('places the step highlight under printed cards, not through them', () => {
+    const spec = buildTowers(storefront());
+    // Cart summary is a read-model-only floor: the band must clear the card height.
+    const cartSummary = spec.steps.find((s) => s.label === 'Cart summary');
+    const summary = node(spec, 'readModel', 'cart-summary');
+    const cardBottom = summary.body.center.y - 16 / 2;
+    expect(cartSummary).toBeDefined();
+    expect(cartSummary!.highlight.center.y).toBeLessThan(cardBottom);
+    // Place order has a command card; the band clears that card too.
+    const placeOrder = spec.steps.find((s) => s.label === 'Place order');
+    const place = node(spec, 'command', 'place-order');
+    expect(placeOrder!.highlight.center.y).toBeLessThan(place.body.center.y - 16 / 2);
+  });
+
   it('draws an empty scene for a model without streams', () => {
     const spec = buildTowers(buildModel([]));
     expect(spec.nodes).toEqual([]);
