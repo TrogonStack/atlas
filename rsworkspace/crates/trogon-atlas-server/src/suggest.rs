@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn a_typo_is_suggested_but_an_unrelated_slug_is_not() {
         let entities = [
-            command_slice("acme-storefront", "place-ordr"),
+            command_slice("acme-storefront", "place_order"),
             command_slice("acme-storefront", "refund-payment"),
         ];
         let got = did_you_mean(
@@ -162,6 +162,6 @@ mod tests {
             &id("acme-storefront", "place-order"),
             &entities,
         );
-        assert_eq!(got, ["place-ordr"]);
+        assert_eq!(got, ["place_order"]);
     }
 }
