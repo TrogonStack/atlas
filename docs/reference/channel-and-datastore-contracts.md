@@ -1,10 +1,11 @@
 # Channel and DataStore contracts
 
-Status: proposed first-release contract. Channel and DataStore are not yet
-entity kinds in the protobuf schema, backend, CLI, MCP or Studio. Field names
-below describe the intended model; they do not reserve protobuf tags, RPCs or
-wire encodings. Implementation must add schema support, authorized reference
-indexing, validation, persistence and client support together.
+Status: native Channel and DataStore support is implemented in the schema,
+backend, CLI/MCP authoring and Studio review surfaces. The protobuf definitions
+in [architecture.proto](../../proto/trogonatlas/eventmodel/v1alpha1/architecture.proto)
+are the wire contract. This reference defines their field and lifecycle rules;
+[acceptance coverage](channel-and-datastore-acceptance.md) distinguishes logical
+fixture requirements from executed tests.
 
 ## Behavioral anchors
 
@@ -238,3 +239,13 @@ it already supports new entity kinds.
 
 Transport delivery, broker configuration, physical storage administration,
 policy enforcement and credential management remain outside Atlas execution.
+
+## Reference scan budget
+
+Resource reference and impact scans use an independent budget of 5,000 Channel
+and DataStore rows, combined, across the caller's visible namespaces. They
+supplement capped model projections so a missing projection row cannot silently
+remove an inbound architecture dependency. The unrestricted safe-deletion guard
+checks dependencies across namespaces without returning hidden referrer data.
+Exceeding the scan budget returns `RESOURCE_EXHAUSTED`; it does not authorize a
+mutation from an incomplete index.

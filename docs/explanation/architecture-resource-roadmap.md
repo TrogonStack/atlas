@@ -1,11 +1,10 @@
 # Architecture resources
 
-Status: proposed resource contracts. Channel and DataStore are not yet entity
-kinds accepted by the schema, server, CLI or MCP. The
-[contract reference](../reference/channel-and-datastore-contracts.md) specifies
-their first implementation boundary; the
-[acceptance fixture](../reference/channel-and-datastore-acceptance.md) defines
-the behavior that implementation must demonstrate.
+Status: the native Channel and DataStore resource slice is implemented. Its
+[contract reference](../reference/channel-and-datastore-contracts.md) describes
+the supported fields and lifecycle. The
+[acceptance fixture](../reference/channel-and-datastore-acceptance.md) links the
+executable coverage and records its verification boundaries.
 
 ## Start with the behavioral model
 
@@ -30,29 +29,28 @@ connection. Reorder preserves identity; retargeting creates a new occurrence.
 Ordinary writes use bounded active state without a deleted-ID ledger.
 
 That foundation does not identify every reference in the model. Raw reference
-lists, repeated storyboard moments, architecture associations and the fitness
-host's reference adapter still need their own supported representations.
+lists, repeated storyboard moments, additional architecture associations and
+the fitness host's reference adapter still need their own supported representations.
 Implementing a new association requires extending reference discovery,
 validation and lifecycle handling together.
 
 ## Deliver a connected resource slice
 
-The next implementation includes Channel and DataStore together with their
-typed values and reference handling. Its own contracts must close before
-schema tags and generated bindings are introduced. The acceptance fixture
-covers repeated observations, exact versions, reference discovery, guarded
-mutations and branch behavior.
+Channel and DataStore include typed values, identified associations and nested
+reference handling. The acceptance fixture covers repeated observations, exact
+versions, reference discovery, guarded mutations and branch behavior.
 
-Implementation remains open:
+Implemented scope:
 
-- [ ] Add entity kinds, typed references and generated bindings.
-- [ ] Admit writes and resolve associations through the authorized backend.
-- [ ] Index nested references for queries, reverse references and impact.
-- [ ] Preserve identity through edit, copy, retarget and branch operations.
-- [ ] Exercise the connected fixture through public service and CLI/MCP paths.
-- [ ] Expose the resources and diagnostics in Studio's review surfaces.
+- [x] Add entity kinds, typed references and generated bindings.
+- [x] Admit writes and resolve associations through the authorized backend.
+- [x] Index nested references for queries, reverse references and impact.
+- [x] Preserve identity through edit, copy, retarget and branch operations.
+- [x] Exercise the connected fixture through public service and CLI/MCP paths.
+- [x] Expose the resources and diagnostics in Studio's review surfaces.
 
-Completing the contract documents does not complete these implementation gates.
+Runtime evidence comes from the linked executable tests. Component review
+coverage does not establish deployed-browser or production readiness.
 
 ## Follow-on contracts
 

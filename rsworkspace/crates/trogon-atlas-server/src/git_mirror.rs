@@ -400,6 +400,8 @@ fn kind_dir(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::AlertPolicy => "alert_policies",
         pb::EntityKind::AlertNotificationTarget => "alert_notification_targets",
         pb::EntityKind::TypeLibrary => "type_libraries",
+        pb::EntityKind::Channel => "channels",
+        pb::EntityKind::DataStore => "data_stores",
         pb::EntityKind::Unspecified => "unspecified",
     }
 }

@@ -22,6 +22,7 @@ The identity fields are:
 | `ProcessorEdge`, `UIEdge`, `PersonaEdge` | `connection_id` |
 | `Swimlane.Transition.Next` | `connection_id` |
 | `UI.Transition` | `connection_id` |
+| `ChannelBinding`, `ReadModelAttachment` | `connection_id` |
 
 The typed edges include slice endpoints and storyboard entry/outcome endpoints.
 Their ownership is the containing entity, not the referenced primitive. A local
@@ -133,8 +134,15 @@ need an explicit connection or moment representation before becoming durable
 selections. Greenfield development permits changing those shapes directly;
 compatibility aliases or migration layers are not a prerequisite. Positional
 reference paths remain diagnostics.
+Channel bindings and DataStore attachments identify their own descriptive
+association occurrences. A binding's observation reference separately pins
+the AutomationSlice source occurrence; those IDs are not interchangeable.
+Generic entity-key retargeting discovers the pinned owner for impact but does
+not rewrite a Channel observation selector. Explicitly select the replacement
+observation instead. See the [resource contracts](channel-and-datastore-contracts.md).
+
 This contract does not claim that every model reference is an individually
-identified connection, or implement architecture resource or fitness subjects.
+identified connection, or implement fitness subjects.
 
 The core resolver is a model helper. It does not bypass backend authorization or
 provide an additional RPC: callers first obtain the owner through the existing

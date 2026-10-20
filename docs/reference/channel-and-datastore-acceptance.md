@@ -1,11 +1,11 @@
 # Channel and DataStore acceptance fixture
 
-Status: proposed acceptance specification for the
-[resource contracts](channel-and-datastore-contracts.md). This is a logical
-fixture, not a manifest accepted by the current server. Implementation must
-materialize it through supported writes and retain the returned entity
-incarnations and occurrence IDs. Passing documentation checks does not satisfy
-runtime acceptance.
+Status: acceptance contract for the
+[resource contracts](channel-and-datastore-contracts.md). The tables are logical
+fixture notation rather than literal manifest syntax. The executable
+[backend fixture](../../rsworkspace/crates/trogon-atlas-server/tests/architecture_fixture.rs)
+materializes the connected graph through supported writes and retains returned
+keys, incarnation UIDs, association IDs and checked snapshot identity.
 
 ## Read context and identifiers
 
@@ -145,3 +145,27 @@ Retain the exact fixture version, returned keys/UIDs/IDs, checked snapshot and
 branch context, query requests/results and mutation outcomes. Evidence must
 identify which cases actually ran. No source importer, external infrastructure
 or fitness runtime result is implied by passing this fixture.
+
+## Executable coverage
+
+- [Resource API and authorization tests](../../rsworkspace/crates/trogon-atlas-server/tests/architecture_resources.rs)
+  cover field failures, exact anchors, optional false, guarded batches,
+  supersession, namespace authorization, capped-snapshot references/impact,
+  safe deletion, recreation and branch preview/landing.
+- [Mutation path regressions](../../rsworkspace/crates/trogon-atlas-server/tests/resource_retargeting.rs)
+  cover retarget uniqueness and identity, revert and structural-resolution
+  admission, and receipt replay after a forced target deletion.
+- [Core association tests](../../rsworkspace/crates/trogon-atlas-core/tests/resource_connections.rs)
+  cover association identity, repeated observation selection, copying and pinned
+  references.
+- [MCP transport tests](../../rsworkspace/crates/trogon-atlas-mcp/tests/mcp_integration.rs)
+  and [CLI integration tests](../../rsworkspace/crates/trogon-atlas-cli/tests/export_cli_integration.rs)
+  exercise resource authoring and reading through their public surfaces.
+- [Studio component tests](../../tsworkspace/webapps/studio/src/components/ArchitectureResourceDetails.test.tsx)
+  cover declarations, exact selectors, repeated observations and optional claim
+  presence. These are component tests, not a deployed-browser acceptance run.
+
+The executable backend fixture verifies the returned snapshot identity and
+round-trips the complete connected model through export and client manifest
+parsing. Tests record their own checked identities; this reference does not pin
+a transient test database or report those values as deployed state.

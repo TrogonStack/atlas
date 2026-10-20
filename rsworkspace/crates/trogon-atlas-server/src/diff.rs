@@ -52,6 +52,8 @@ fn kind_name(e: &pb::Entity) -> &'static str {
         Some(K::AlertPolicy(_)) => "AlertPolicy",
         Some(K::AlertNotificationTarget(_)) => "AlertNotificationTarget",
         Some(K::TypeLibrary(_)) => "TypeLibrary",
+        Some(K::Channel(_)) => "Channel",
+        Some(K::DataStore(_)) => "DataStore",
         None => "<empty>",
     }
 }
@@ -568,7 +570,59 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
             };
             scalar(ops, "dependencies", &deps(x), &deps(y));
         }
+        (Some(K::Channel(x)), Some(K::Channel(y))) => {
+            scalar(ops, "title", &x.title, &y.title);
+            scalar(ops, "doc", &x.doc, &y.doc);
+            diff_id_ref(
+                ops,
+                "supersedes",
+                x.supersedes.as_ref(),
+                y.supersedes.as_ref(),
+            );
+            resource_value(ops, "address", &x.address, &y.address);
+            resource_value(ops, "protocols", &x.protocols, &y.protocols);
+            resource_value(
+                ops,
+                "delivery_guarantee",
+                &x.delivery_guarantee,
+                &y.delivery_guarantee,
+            );
+            resource_value(ops, "broker", &x.broker, &y.broker);
+            resource_value(ops, "bindings", &x.bindings, &y.bindings);
+            resource_value(ops, "metadata", &x.metadata, &y.metadata);
+        }
+        (Some(K::DataStore(x)), Some(K::DataStore(y))) => {
+            scalar(ops, "title", &x.title, &y.title);
+            scalar(ops, "doc", &x.doc, &y.doc);
+            diff_id_ref(
+                ops,
+                "supersedes",
+                x.supersedes.as_ref(),
+                y.supersedes.as_ref(),
+            );
+            resource_value(ops, "store_class", &x.store_class, &y.store_class);
+            resource_value(ops, "technology", &x.technology, &y.technology);
+            resource_value(ops, "purpose", &x.purpose, &y.purpose);
+            resource_value(ops, "authoritative", &x.authoritative, &y.authoritative);
+            resource_value(ops, "access_mode", &x.access_mode, &y.access_mode);
+            resource_value(ops, "classification", &x.classification, &y.classification);
+            resource_value(ops, "residency", &x.residency, &y.residency);
+            resource_value(ops, "retention", &x.retention, &y.retention);
+            resource_value(ops, "attachments", &x.attachments, &y.attachments);
+            resource_value(ops, "metadata", &x.metadata, &y.metadata);
+        }
         _ => {}
+    }
+}
+
+fn resource_value<T: PartialEq + std::fmt::Debug>(
+    ops: &mut Vec<pb::DiffOp>,
+    path: &str,
+    a: &T,
+    b: &T,
+) {
+    if a != b {
+        scalar(ops, path, &format!("{a:?}"), &format!("{b:?}"));
     }
 }
 
@@ -1264,5 +1318,57 @@ mod tests {
             ops.is_empty(),
             "expected no ops for identical schema entities"
         );
+    }
+}
+
+#[cfg(test)]
+mod resource_tests {
+    use super::*;
+
+    #[test]
+    fn storage_diff_preserves_false_claim_presence() {
+        let before = pb::Entity {
+            kind: Some(pb::entity::Kind::DataStore(pb::DataStore::default())),
+            ..Default::default()
+        };
+        let after = pb::Entity {
+            kind: Some(pb::entity::Kind::DataStore(pb::DataStore {
+                authoritative: Some(false),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let ops = diff_entities(&before, &after);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].path, "authoritative");
+        assert_eq!(ops[0].before, "None");
+        assert_eq!(ops[0].after, "Some(false)");
+    }
+
+    #[test]
+    fn channel_diff_reports_binding_parameter_changes() {
+        let before = pb::Entity {
+            kind: Some(pb::entity::Kind::Channel(pb::Channel {
+                bindings: vec![pb::ChannelBinding {
+                    parameter_values: std::collections::HashMap::from([(
+                        "region".into(),
+                        "east".into(),
+                    )]),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert_eq!(diff_entities(&before, &before).len(), 0);
+        let mut after = before.clone();
+        if let Some(pb::entity::Kind::Channel(channel)) = after.kind.as_mut() {
+            channel.bindings[0]
+                .parameter_values
+                .insert("region".into(), "west".into());
+        }
+        let ops = diff_entities(&before, &after);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].path, "bindings");
     }
 }

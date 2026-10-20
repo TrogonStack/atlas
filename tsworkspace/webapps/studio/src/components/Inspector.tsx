@@ -1,5 +1,6 @@
 import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { ArchitectureResourceDetails } from '@/components/ArchitectureResourceDetails';
 import { CopyContextButton } from '@/components/CopyContextButton';
 import { EntityHistory } from '@/components/EntityHistory';
 import { ExampleBlock } from '@/components/ExampleBlock';
@@ -627,6 +628,7 @@ export function Inspector({
               </p>
             </section>
           ) : null}
+          <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}
           <SeamSection entity={entity} model={model} onSelect={onSelect} />
           {(() => {

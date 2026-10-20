@@ -78,6 +78,7 @@ import "trogonatlas/eventmodel/v1alpha1/fields.proto";   // for Schema in the En
 import "trogonatlas/type/v1alpha1/system_meta.proto";    // for SystemMeta
 import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
 import "trogonatlas/eventmodel/v1alpha1/type_library.proto";
+import "trogonatlas/eventmodel/v1alpha1/architecture.proto";
 
 // =============================================================================
 // Event Modeling schema.
@@ -598,6 +599,8 @@ message Entity {
     AlertPolicy alert_policy = 27;
     AlertNotificationTarget alert_notification_target = 28;
     TypeLibrary type_library = 30;
+    Channel channel = 31;
+    DataStore data_store = 32;
   }
   trogonatlas.type.v1alpha1.SystemMeta system = 29;
 }

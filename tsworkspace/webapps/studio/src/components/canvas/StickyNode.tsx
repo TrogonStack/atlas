@@ -56,6 +56,8 @@ const KIND_STYLE: Record<
   eventModel: { bg: 'bg-zinc-200', border: 'border-zinc-400', label: 'Event Model', icon: Layers },
   component: { bg: 'bg-zinc-100', border: 'border-zinc-400', label: 'Component', icon: Boxes },
   externalSystem: { bg: 'bg-fuchsia-100', border: 'border-fuchsia-300', label: 'External System', icon: Globe },
+  channel: { bg: 'bg-cyan-50', border: 'border-cyan-300', label: 'Channel', icon: Globe },
+  dataStore: { bg: 'bg-emerald-50', border: 'border-emerald-300', label: 'DataStore', icon: Database },
   tracker: { bg: 'bg-stone-100', border: 'border-stone-400', label: 'Tracker', icon: ListChecks },
   boundedContext: { bg: 'bg-fuchsia-50', border: 'border-fuchsia-300', label: 'Bounded Context', icon: Globe },
   domain: { bg: 'bg-indigo-50', border: 'border-indigo-300', label: 'Domain', icon: Globe },

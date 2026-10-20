@@ -105,15 +105,22 @@ every surface applies the same rules; the revision constants live next to
 
 ## Stable connection identity
 
-Contract revision 9 requires clients and servers to preserve explicit connection
-IDs. Older writers can drop those fields, and older servers can discard them,
-so both mutation compatibility floors are revision 9. Existing stored entities
+Contract revision 9 introduced the requirement to preserve explicit connection
+IDs. Older writers can drop those fields, and older servers can discard them.
+Existing stored entities
 are not migrated; persisted connections must already carry valid IDs. New
 connections may request server-generated IDs by omitting them on creation.
 Once assigned, updates preserve an occurrence ID through reordering and content
 annotations. Replacing its role or endpoint requires a new ID. Removed IDs are
 retired for that stored entity incarnation, and connection references also pin
 the owner's system UID so delete and recreate cannot revive a stale reference.
+
+Contract revision 10 adds Channel and DataStore entity kinds with identified
+associations and reference admission. Both mutation compatibility floors are
+revision 10: clients and servers must understand these owners and preserve
+their association IDs and pinned observation references. Upgrade the server
+and clients together before authoring these resources. Existing revision-9
+entities retain their stored identities.
 
 ## Supported combinations
 

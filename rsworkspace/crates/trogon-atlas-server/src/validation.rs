@@ -1,3 +1,6 @@
+#[path = "architecture_resources.rs"]
+pub mod architecture_resources;
+
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     fmt,
@@ -157,6 +160,10 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "Conditions that page, ticket, or inform, and the notification targets they route to. Retuning a condition never rewrites a design slice."),
         k(AlertNotificationTarget, "ENTITY_KIND_ALERT_NOTIFICATION_TARGET", "alertNotificationTarget", "Alert Notification Target", "Alert Notification Targets",
           "Where an alert routes (on-call rotation, channel, webhook). Rotating the target never rewrites the policy that points at it."),
+        k(pb::EntityKind::Channel, "ENTITY_KIND_CHANNEL", "channel", "Channel", "Channels",
+          "Declared transport for exact AutomationSlice observations."),
+        k(pb::EntityKind::DataStore, "ENTITY_KIND_DATA_STORE", "dataStore", "Data Store", "Data Stores",
+          "Declared storage attached to exact ReadModels."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -209,6 +216,15 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         category: category.into(),
     };
     vec![
+        r("ARCHITECTURE_VALUE_INVALID", Error, "Invalid architecture declaration",
+          "Transport and storage declarations must satisfy their native typed field contracts.",
+          Unspecified, "", "architecture"),
+        r("ARCHITECTURE_REFERENCE_UNRESOLVED", Error, "Architecture target does not resolve",
+          "Architecture resources require exact readable targets in the current graph.",
+          Unspecified, "", "architecture"),
+        r("CHANNEL_OBSERVATION_UNRESOLVED", Error, "Channel observation does not resolve",
+          "A binding selects an exact AutomationSlice source ReadModel occurrence and its paired Processor.",
+          pb::EntityKind::Channel, "bindings.observation", "architecture"),
         // ----- model invariants (validate_model) ---------------------------------
         r("MISSING_ID", Error, "Member missing id",
           "A member EntityRef has no id; every member of an EventModel must point at a concrete entity.",
@@ -560,6 +576,9 @@ mod catalog_drift_tests {
     // OR remove one, update both the catalog AND this list so the diff
     // test below can guard against drift.
     const EMITTED_CODES: &[&str] = &[
+        "ARCHITECTURE_VALUE_INVALID",
+        "ARCHITECTURE_REFERENCE_UNRESOLVED",
+        "CHANNEL_OBSERVATION_UNRESOLVED",
         "AMBIGUITY_DANGLING_TERM",
         "AMBIGUITY_TOO_FEW_TERMS",
         "AMBIGUITY_UNSPECIFIED_KIND",
@@ -704,6 +723,8 @@ mod catalog_drift_tests {
             pb::EntityKind::AlertPolicy,
             pb::EntityKind::AlertNotificationTarget,
             pb::EntityKind::TypeLibrary,
+            pb::EntityKind::Channel,
+            pb::EntityKind::DataStore,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -1034,6 +1055,8 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::AlertPolicy(x)) => &x.metadata,
         Some(pb::entity::Kind::AlertNotificationTarget(x)) => &x.metadata,
         Some(pb::entity::Kind::TypeLibrary(x)) => &x.metadata,
+        Some(pb::entity::Kind::Channel(x)) => &x.metadata,
+        Some(pb::entity::Kind::DataStore(x)) => &x.metadata,
         None => &[],
     }
 }
@@ -1045,7 +1068,22 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
 // concern is global; otherwise the same finding would be emitted once
 // per model.
 pub fn validate_store(all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    validate_store_with_architecture_context(all, &[])
+}
+
+pub fn validate_store_with_architecture_context(
+    all: &[StoredEntity],
+    architecture_context: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
+    let mut resource_context = all.to_vec();
+    resource_context.extend_from_slice(architecture_context);
+    for stored in all {
+        issues.extend(architecture_resources::validate(
+            &stored.entity,
+            &resource_context,
+        ));
+    }
     let known: HashSet<pb::EntityKey> = all
         .iter()
         .filter_map(|se| {

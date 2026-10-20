@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/connections.proto";
+import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
+
+message ProtocolName { string value = 1; }
+message TechnologyName { string value = 1; }
+message ParameterName { string value = 1; }
+message PolicyText { string value = 1; }
+message RegionCode { string value = 1; }
+message PositiveDuration { uint64 seconds = 1; }
+message StringValues { repeated string values = 1; }
+message RegionCodes { repeated RegionCode values = 1; }
+
+message AddressParameter {
+  ParameterName name = 1;
+  optional string description = 2;
+  StringValues allowed_values = 3;
+  optional string default = 4;
+  repeated string examples = 5;
+}
+
+message ChannelAddress {
+  string template = 1;
+  repeated AddressParameter parameters = 2;
+}
+
+message ChannelBinding {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ConnectionRef observation = 2;
+  map<string, string> parameter_values = 3;
+  string doc = 4;
+}
+
+message Channel {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  ChannelAddress address = 6;
+  repeated ProtocolName protocols = 7;
+  enum DeliveryGuarantee {
+    DELIVERY_GUARANTEE_UNSPECIFIED = 0;
+    DELIVERY_GUARANTEE_AT_MOST_ONCE = 1;
+    DELIVERY_GUARANTEE_AT_LEAST_ONCE = 2;
+    DELIVERY_GUARANTEE_EXACTLY_ONCE = 3;
+  }
+  optional DeliveryGuarantee delivery_guarantee = 8;
+  oneof broker {
+    ComponentRef component = 9;
+    ExternalSystemRef external_system = 10;
+  }
+  repeated ChannelBinding bindings = 11;
+}
+
+message StoreClass {
+  enum Known {
+    KNOWN_UNSPECIFIED = 0;
+    KNOWN_DATABASE = 1;
+    KNOWN_CACHE = 2;
+    KNOWN_OBJECT_STORE = 3;
+    KNOWN_SEARCH_INDEX = 4;
+    KNOWN_WAREHOUSE = 5;
+    KNOWN_EXTERNAL_SERVICE = 6;
+  }
+  oneof kind {
+    Known known = 1;
+    string other = 2;
+  }
+}
+
+message ResidencyPolicy {
+  PolicyText policy = 1;
+  RegionCodes regions = 2;
+}
+
+message RetentionPolicy {
+  PolicyText policy = 1;
+  PositiveDuration duration = 2;
+}
+
+message ReadModelAttachment {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ReadModelRef read_model = 2;
+  string doc = 3;
+}
+
+message DataStore {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  StoreClass store_class = 6;
+  TechnologyName technology = 7;
+  optional string purpose = 8;
+  optional bool authoritative = 9;
+  enum AccessMode {
+    ACCESS_MODE_UNSPECIFIED = 0;
+    ACCESS_MODE_READ = 1;
+    ACCESS_MODE_WRITE = 2;
+    ACCESS_MODE_READ_WRITE = 3;
+    ACCESS_MODE_APPEND_ONLY = 4;
+  }
+  optional AccessMode access_mode = 10;
+  enum Classification {
+    CLASSIFICATION_UNSPECIFIED = 0;
+    CLASSIFICATION_PUBLIC = 1;
+    CLASSIFICATION_INTERNAL = 2;
+    CLASSIFICATION_CONFIDENTIAL = 3;
+    CLASSIFICATION_REGULATED = 4;
+  }
+  optional Classification classification = 11;
+  ResidencyPolicy residency = 12;
+  RetentionPolicy retention = 13;
+  repeated ReadModelAttachment attachments = 14;
+}

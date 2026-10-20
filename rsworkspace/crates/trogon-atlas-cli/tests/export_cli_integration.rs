@@ -837,3 +837,125 @@ spec: { title: Branch edit }
         resolved.stderr
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn architecture_resources_apply_get_and_export_through_cli() {
+    let endpoint = start_server().await;
+    let directory = tempfile_dir();
+    let anchors = directory.path().join("anchors.yaml");
+    std::fs::write(
+        &anchors,
+        r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata: {namespace: cli-architecture, name: order-feed, version: 2}
+spec: {title: Order feed}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Processor
+metadata: {namespace: cli-architecture, name: order-intake}
+spec: {title: Order intake}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata: {namespace: cli-architecture, name: observe-orders, version: 3}
+spec:
+  title: Observe orders
+  sourceReadModels: [order-feed@2]
+  processor: order-intake
+",
+    )
+    .unwrap();
+    let applied = trogon_atlas(&endpoint, &["apply", "-f", anchors.to_str().unwrap()]);
+    assert!(applied.status.success(), "{applied:?}");
+    let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)
+        .await
+        .unwrap();
+    let owner = client
+        .get_entity(pb::GetEntityRequest {
+            kind: pb::EntityKind::AutomationSlice as i32,
+            id: Some(pb::Id {
+                namespace: "cli-architecture".into(),
+                slug: "observe-orders".into(),
+                version: 3,
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let Some(pb::entity::Kind::AutomationSlice(slice)) = &owner.kind else {
+        panic!("expected automation")
+    };
+    let observation = serde_json::json!({
+        "owner": {"kind": "ENTITY_KIND_AUTOMATION_SLICE", "id": {"namespace": "cli-architecture", "slug": "observe-orders", "version": "3"}},
+        "ownerUid": owner.system.as_ref().unwrap().uid,
+        "id": {"value": slice.source_read_models[0].connection_id.as_ref().unwrap().value}
+    });
+    let resources = directory.path().join("resources.yaml");
+    let channel = serde_json::json!({
+        "apiVersion": "eventmodel.atlas.trogonstack.com/v1alpha1", "kind": "Channel",
+        "metadata": {"namespace": "cli-architecture", "name": "delivery"},
+        "spec": {"title": "Order delivery", "bindings": [{"observation": observation}]}
+    });
+    let store = serde_json::json!({
+        "apiVersion": "eventmodel.atlas.trogonstack.com/v1alpha1", "kind": "DataStore",
+        "metadata": {"namespace": "cli-architecture", "name": "cache"},
+        "spec": {"title": "Order cache", "storeClass": {"known": "KNOWN_CACHE"}, "authoritative": false,
+            "attachments": [{"readModel": "order-feed@2"}]}
+    });
+    std::fs::write(&resources, format!("{channel}\n---\n{store}\n")).unwrap();
+    let applied = trogon_atlas(&endpoint, &["apply", "-f", resources.to_str().unwrap()]);
+    assert!(applied.status.success(), "{applied:?}");
+    for (kind, slug) in [("channel", "delivery"), ("data_store", "cache")] {
+        let key = format!("{kind}/cli-architecture/{slug}@1");
+        let got = trogon_atlas(&endpoint, &["get", &key]);
+        assert!(got.status.success(), "{got:?}");
+        let parsed = trogon_atlas_client::manifest::parse_str(&got.stdout, "get.yaml").unwrap();
+        match parsed[0].entity.kind.as_ref().unwrap() {
+            pb::entity::Kind::Channel(resource) => {
+                let binding = &resource.bindings[0];
+                assert!(binding.connection_id.is_some());
+                let selector = binding.observation.as_ref().unwrap();
+                assert_eq!(selector.owner_uid, owner.system.as_ref().unwrap().uid);
+                assert_eq!(selector.id, slice.source_read_models[0].connection_id);
+                assert_eq!(selector.owner.as_ref().unwrap().id, slice.id);
+            }
+            pb::entity::Kind::DataStore(resource) => {
+                assert_eq!(resource.authoritative, Some(false));
+                assert!(resource.attachments[0].connection_id.is_some());
+                assert_eq!(
+                    resource.attachments[0]
+                        .read_model
+                        .as_ref()
+                        .unwrap()
+                        .id
+                        .as_ref()
+                        .unwrap()
+                        .version,
+                    2
+                );
+            }
+            _ => panic!("expected architecture resource"),
+        }
+    }
+    let output = directory.path().join("exported");
+    let exported = trogon_atlas(
+        &endpoint,
+        &[
+            "export",
+            "--namespace",
+            "cli-architecture",
+            "-o",
+            output.to_str().unwrap(),
+        ],
+    );
+    assert!(exported.status.success(), "{exported:?}");
+    assert!(output.join("channel.yaml").exists());
+    assert!(output.join("data-store.yaml").exists());
+    let reapplied = trogon_atlas(&endpoint, &["apply", "-f", output.to_str().unwrap()]);
+    assert!(reapplied.status.success(), "{reapplied:?}");
+    assert!(!reapplied.stdout.contains("created"), "{reapplied:?}");
+    assert!(!reapplied.stdout.contains("updated"), "{reapplied:?}");
+}

@@ -83,6 +83,8 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::AlertPolicy(x) => x.supersedes.as_ref(),
         EntityOneof::AlertNotificationTarget(x) => x.supersedes.as_ref(),
         EntityOneof::TypeLibrary(x) => x.supersedes.as_ref(),
+        EntityOneof::Channel(x) => x.supersedes.as_ref(),
+        EntityOneof::DataStore(x) => x.supersedes.as_ref(),
     };
     if let Some(s) = supersedes_of {
         if let Some(self_kind) = entity_kind(entity) {
@@ -756,6 +758,52 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::AlertNotificationTarget(x) => {
             let _ = x;
         }
+        EntityOneof::Channel(x) => {
+            let broker = match x.broker.as_ref() {
+                Some(trogon_atlas_proto::channel::Broker::Component(r)) => {
+                    r.id.as_ref()
+                        .map(|id| (EntityKind::Component, id, "component"))
+                }
+                Some(trogon_atlas_proto::channel::Broker::ExternalSystem(r)) => {
+                    r.id.as_ref()
+                        .map(|id| (EntityKind::ExternalSystem, id, "external_system"))
+                }
+                None => None,
+            };
+            if let Some((kind, id, field)) = broker {
+                out.push(OutboundRef {
+                    to_kind: Some(kind),
+                    to_id: id.clone(),
+                    from_field: field.into(),
+                });
+            }
+            for (i, binding) in x.bindings.iter().enumerate() {
+                if let Some(owner) = binding.observation.as_ref().and_then(|r| r.owner.as_ref()) {
+                    if let (Ok(kind), Some(id)) =
+                        (EntityKind::try_from(owner.kind), owner.id.as_ref())
+                    {
+                        if kind != EntityKind::Unspecified {
+                            out.push(OutboundRef {
+                                to_kind: Some(kind),
+                                to_id: id.clone(),
+                                from_field: format!("bindings[{i}].observation.owner"),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        EntityOneof::DataStore(x) => {
+            for (i, attachment) in x.attachments.iter().enumerate() {
+                if let Some(id) = attachment.read_model.as_ref().and_then(|r| r.id.as_ref()) {
+                    out.push(OutboundRef {
+                        to_kind: Some(EntityKind::ReadModel),
+                        to_id: id.clone(),
+                        from_field: format!("attachments[{i}].read_model"),
+                    });
+                }
+            }
+        }
         EntityOneof::TypeLibrary(x) => {
             for (i, r) in x.dependencies.iter().enumerate() {
                 if let Some(id) = &r.id {
@@ -1027,6 +1075,8 @@ pub fn entity_kind(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::AlertPolicy(_) => EntityKind::AlertPolicy,
         EntityOneof::AlertNotificationTarget(_) => EntityKind::AlertNotificationTarget,
         EntityOneof::TypeLibrary(_) => EntityKind::TypeLibrary,
+        EntityOneof::Channel(_) => EntityKind::Channel,
+        EntityOneof::DataStore(_) => EntityKind::DataStore,
     })
 }
 
@@ -1065,6 +1115,8 @@ pub fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::AlertPolicy(x) => x.id.as_ref(),
         EntityOneof::AlertNotificationTarget(x) => x.id.as_ref(),
         EntityOneof::TypeLibrary(x) => x.id.as_ref(),
+        EntityOneof::Channel(x) => x.id.as_ref(),
+        EntityOneof::DataStore(x) => x.id.as_ref(),
     }
 }
 
@@ -1074,8 +1126,8 @@ pub fn entity_id(entity: &Entity) -> Option<&Id> {
 /// Returns the list of `from_field` paths that were rewritten. An empty return
 /// means no pointers matched. The entity is mutated in place.
 ///
-/// This function is the mutable mirror of `outbound_refs`: it walks the same
-/// structural sites in the same order, so the two cannot drift.
+/// Entity references follow the replacement key. Channel observations retain
+/// their exact incarnation and occurrence selectors until explicitly rebound.
 pub fn retarget_refs(
     entity: &mut Entity,
     from_kind: EntityKind,
@@ -1123,6 +1175,8 @@ pub fn retarget_refs(
             EntityOneof::AlertPolicy(x) => x.supersedes.as_mut(),
             EntityOneof::AlertNotificationTarget(x) => x.supersedes.as_mut(),
             EntityOneof::TypeLibrary(x) => x.supersedes.as_mut(),
+            EntityOneof::Channel(x) => x.supersedes.as_mut(),
+            EntityOneof::DataStore(x) => x.supersedes.as_mut(),
         };
         if self_kind_matches {
             if let Some(s) = supersedes_opt {
@@ -1864,6 +1918,40 @@ pub fn retarget_refs(
         EntityOneof::AlertNotificationTarget(x) => {
             let _ = x;
         }
+        EntityOneof::Channel(x) => {
+            let broker = match x.broker.as_mut() {
+                Some(trogon_atlas_proto::channel::Broker::Component(r))
+                    if from_kind == EntityKind::Component =>
+                {
+                    r.id.as_mut().map(|id| (id, "component"))
+                }
+                Some(trogon_atlas_proto::channel::Broker::ExternalSystem(r))
+                    if from_kind == EntityKind::ExternalSystem =>
+                {
+                    r.id.as_mut().map(|id| (id, "external_system"))
+                }
+                _ => None,
+            };
+            if let Some((id, field)) = broker {
+                if id == from_id {
+                    *id = to_id.clone();
+                    rewritten.push(field.into());
+                }
+            }
+            // An observation pins an incarnation and occurrence, so changing only its owner key cannot select a replacement.
+        }
+        EntityOneof::DataStore(x) => {
+            if from_kind == EntityKind::ReadModel {
+                for (i, attachment) in x.attachments.iter_mut().enumerate() {
+                    if let Some(id) = attachment.read_model.as_mut().and_then(|r| r.id.as_mut()) {
+                        if id == from_id {
+                            *id = to_id.clone();
+                            rewritten.push(format!("attachments[{i}].read_model"));
+                        }
+                    }
+                }
+            }
+        }
         EntityOneof::TypeLibrary(x) => {
             if from_kind == EntityKind::TypeLibrary {
                 for (i, r) in x.dependencies.iter_mut().enumerate() {
@@ -2047,6 +2135,8 @@ fn matches_kind(kind: &EntityOneof, ek: EntityKind) -> bool {
                 EntityKind::AlertNotificationTarget
             )
             | (EntityOneof::TypeLibrary(_), EntityKind::TypeLibrary)
+            | (EntityOneof::Channel(_), EntityKind::Channel)
+            | (EntityOneof::DataStore(_), EntityKind::DataStore)
     )
 }
 

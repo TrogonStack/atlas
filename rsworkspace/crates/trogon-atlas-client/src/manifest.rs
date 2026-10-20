@@ -545,6 +545,92 @@ mod tests {
     }
 
     #[test]
+    fn architecture_resources_roundtrip_exact_selectors_and_optional_claims() {
+        let source = r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Channel
+metadata: { namespace: shop, name: delivery, version: 2 }
+spec:
+  title: Order delivery
+  supersedes: delivery@1
+  protocols: [{value: nats}]
+  externalSystem: broker@3
+  bindings:
+    - connectionId: {value: '01963410-1000-7000-8000-000000000001'}
+      observation:
+        owner: {kind: automation_slice, id: observe-orders@4}
+        ownerUid: owner-incarnation
+        id: {value: '01963410-1000-7000-8000-000000000002'}
+      parameterValues: {region: west}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: DataStore
+metadata: { namespace: shop, name: order-cache }
+spec:
+  title: Order cache
+  storeClass: {known: KNOWN_CACHE}
+  authoritative: false
+  attachments:
+    - connectionId: {value: '01963410-1000-7000-8000-000000000003'}
+      readModel: order-feed@3
+";
+        let resources = parse_str(source, "resources.yaml").unwrap();
+        assert_eq!(resources[0].kind, pb::EntityKind::Channel);
+        assert_eq!(resources[1].kind, pb::EntityKind::DataStore);
+        let Some(pb::entity::Kind::Channel(channel)) = &resources[0].entity.kind else {
+            panic!("expected Channel");
+        };
+        let selector = channel.bindings[0].observation.as_ref().unwrap();
+        assert_eq!(selector.owner_uid, "owner-incarnation");
+        assert_eq!(
+            selector
+                .owner
+                .as_ref()
+                .unwrap()
+                .id
+                .as_ref()
+                .unwrap()
+                .version,
+            4
+        );
+        assert_eq!(channel.supersedes.as_ref().unwrap().version, 1);
+        let Some(pb::entity::Kind::DataStore(store)) = &resources[1].entity.kind else {
+            panic!("expected DataStore");
+        };
+        assert_eq!(store.authoritative, Some(false));
+        assert_eq!(
+            store.attachments[0]
+                .read_model
+                .as_ref()
+                .unwrap()
+                .id
+                .as_ref()
+                .unwrap()
+                .version,
+            3
+        );
+        let types = TranscodePool::builtin().unwrap();
+        let rendered = crate::export::render_board(
+            &resources
+                .iter()
+                .map(|resource| resource.entity.clone())
+                .collect::<Vec<_>>(),
+            &[],
+            &types,
+        )
+        .unwrap();
+        assert_eq!(rendered.skipped, [] as [pb::SkippedEntity; 0]);
+        let roundtrip = parse_str(&rendered.manifests, "export.yaml").unwrap();
+        for resource in resources {
+            let exported = roundtrip
+                .iter()
+                .find(|candidate| candidate.kind == resource.kind)
+                .unwrap();
+            assert_eq!(exported.entity, resource.entity);
+        }
+    }
+
+    #[test]
     fn parses_command_slice_with_shorthand_refs() {
         let m = one(r"
 apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1

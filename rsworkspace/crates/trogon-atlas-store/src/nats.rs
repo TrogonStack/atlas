@@ -2142,6 +2142,8 @@ fn kind_of(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::AlertPolicy(_) => EntityKind::AlertPolicy,
         EntityOneof::AlertNotificationTarget(_) => EntityKind::AlertNotificationTarget,
         EntityOneof::TypeLibrary(_) => EntityKind::TypeLibrary,
+        EntityOneof::Channel(_) => EntityKind::Channel,
+        EntityOneof::DataStore(_) => EntityKind::DataStore,
     })
 }
 
@@ -2176,6 +2178,8 @@ fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::AlertPolicy(x) => x.id.as_ref(),
         EntityOneof::AlertNotificationTarget(x) => x.id.as_ref(),
         EntityOneof::TypeLibrary(x) => x.id.as_ref(),
+        EntityOneof::Channel(x) => x.id.as_ref(),
+        EntityOneof::DataStore(x) => x.id.as_ref(),
     }
 }
 

@@ -420,6 +420,8 @@ fn kind_label(entity: &pb::Entity) -> String {
         Some(K::AlertPolicy(_)) => "alert_policy",
         Some(K::AlertNotificationTarget(_)) => "alert_notification_target",
         Some(K::TypeLibrary(_)) => "type_library",
+        Some(K::Channel(_)) => "channel",
+        Some(K::DataStore(_)) => "data_store",
         None => "",
     }
     .to_string()
@@ -457,6 +459,8 @@ pub fn kind_label_for(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::AlertPolicy => "alert_policy",
         pb::EntityKind::AlertNotificationTarget => "alert_notification_target",
         pb::EntityKind::TypeLibrary => "type_library",
+        pb::EntityKind::Channel => "channel",
+        pb::EntityKind::DataStore => "data_store",
         pb::EntityKind::Unspecified => "",
     }
 }
@@ -499,6 +503,8 @@ fn title_of(entity: &pb::Entity) -> String {
         Some(K::AlertPolicy(x)) => x.title.clone(),
         Some(K::AlertNotificationTarget(x)) => x.title.clone(),
         Some(K::TypeLibrary(x)) => x.title.clone(),
+        Some(K::Channel(x)) => x.title.clone(),
+        Some(K::DataStore(x)) => x.title.clone(),
         None => String::new(),
     }
 }
@@ -573,6 +579,13 @@ fn body_of(entity: &pb::Entity) -> String {
         Some(K::AlertNotificationTarget(x)) => {
             push(&mut s, &x.doc);
             push(&mut s, &x.target);
+        }
+        Some(K::Channel(x)) => push(&mut s, &x.doc),
+        Some(K::DataStore(x)) => {
+            push(&mut s, &x.doc);
+            if let Some(purpose) = &x.purpose {
+                push(&mut s, purpose);
+            }
         }
         Some(K::TypeLibrary(x)) => {
             push(&mut s, &x.doc);

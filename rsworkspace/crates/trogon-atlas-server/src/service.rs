@@ -1,3 +1,6 @@
+#[path = "architecture_admission.rs"]
+mod architecture_admission;
+
 use std::{
     collections::{BTreeMap, HashMap},
     pin::Pin,
@@ -917,7 +920,10 @@ impl EventModelServiceImpl {
                 }
             }
             let snap = self.snapshot(vis).await?;
-            let idx = Arc::new(graph::ReverseIndex::build(&snap));
+            let complete = self
+                .architecture_reference_snapshot(&snap, None, vis)
+                .await?;
+            let idx = Arc::new(graph::ReverseIndex::build(&complete));
             self.owner_reverse_index_cache
                 .write()
                 .await
@@ -935,7 +941,10 @@ impl EventModelServiceImpl {
         if let Some(idx) = guard.clone() {
             return Ok(idx);
         }
-        let idx = Arc::new(graph::ReverseIndex::build(&snap));
+        let complete = self
+            .architecture_reference_snapshot(&snap, None, vis)
+            .await?;
+        let idx = Arc::new(graph::ReverseIndex::build(&complete));
         *guard = Some(idx.clone());
         Ok(idx)
     }
@@ -953,7 +962,10 @@ impl EventModelServiceImpl {
             return self.reverse_index(vis).await;
         };
         let snap = self.snapshot_for(Some(branch), vis).await?;
-        Ok(Arc::new(graph::ReverseIndex::build(&snap)))
+        let complete = self
+            .architecture_reference_snapshot(&snap, Some(branch), vis)
+            .await?;
+        Ok(Arc::new(graph::ReverseIndex::build(&complete)))
     }
 
     /// Refuses ops that remove a type library an entity schema would still
@@ -3387,7 +3399,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         );
         let offset = parse_page_token(&req.page_token)?;
 
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let snapshot = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let all = self
+            .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
+            .await?;
         let mut all_nodes = graph::impact(&all, kind, &id, max_depth, true);
 
         if !req.filter_kinds.is_empty() {
@@ -3557,6 +3572,22 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
+        let metas: Vec<OpMetaLike> = staged
+            .iter()
+            .map(|(kind, entity)| {
+                let id = entity_id(entity).cloned().unwrap_or_default();
+                OpMetaLike {
+                    kind: *kind,
+                    id,
+                    is_put: true,
+                    entity: Some(entity.clone()),
+                }
+            })
+            .collect();
+
+        self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
+            .await?;
+
         let staged_count = u32::try_from(staged.len()).unwrap_or(u32::MAX);
 
         if req.dry_run || staged.is_empty() {
@@ -3576,19 +3607,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 entity: entity.clone(),
                 if_match: None,
                 force: false,
-            })
-            .collect();
-
-        let metas: Vec<OpMetaLike> = staged
-            .iter()
-            .map(|(kind, entity)| {
-                let id = entity_id(entity).cloned().unwrap_or_default();
-                OpMetaLike {
-                    kind: *kind,
-                    id,
-                    is_put: true,
-                    entity: Some(entity.clone()),
-                }
             })
             .collect();
 
@@ -4056,6 +4074,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         if req.validate_only {
+            self.validate_architecture_write(&entity, branch.as_deref(), &vis)
+                .await?;
             let previous = match self.store.get(kind, &id, branch.as_deref()).await {
                 Ok(stored) => Some(stored.entity),
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
@@ -4076,6 +4096,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let _guard = self.lock_mutations().await;
+
         for admission in type_library.iter().chain(&schema_types) {
             self.type_libraries
                 .confirm(&*self.store, admission, branch.as_deref())
@@ -4146,6 +4167,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             }
         };
+
+        if let Err(status) = self
+            .validate_architecture_write(&entity, branch.as_deref(), &vis)
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
 
         let mut changeset = PendingChangeset::mint("PutEntity", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
@@ -4700,6 +4731,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // back, so nothing may interleave with it, and concurrent batches
         // must not interleave with each other.
         let _guard = self.lock_mutations().await;
+        if dry_run {
+            self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                .await?;
+        }
         for admission in &type_library_admissions {
             self.type_libraries
                 .confirm(&*self.store, admission, branch.as_deref())
@@ -5019,6 +5054,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     }
                 }
             };
+
+            if let Err(status) = self
+                .validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
 
             let mut changeset = PendingChangeset::mint("BatchMutate", &author, branch.as_deref())
                 .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
@@ -5498,7 +5543,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         req: Request<pb::RevertChangesetRequest>,
     ) -> Result<Response<pb::RevertChangesetResponse>, Status> {
         // A changeset has no owner, so a revert cannot be bounded to one.
-        Self::refuse_unpartitioned(&Self::visibility_of(&req), "reverting a changeset")?;
+        let vis = Self::visibility_of(&req);
+        Self::refuse_unpartitioned(&vis, "reverting a changeset")?;
         let author = Self::author_from_metadata(&req);
         let branch = Self::branch_from_metadata(&req)?;
         let principal = Self::principal_from_metadata(&req);
@@ -5608,6 +5654,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             })
             .collect();
 
+        if req.dry_run {
+            self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                .await?;
+        }
+
         let attempt = if req.operation_id.is_empty() {
             None
         } else {
@@ -5678,6 +5729,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let _guard = self.lock_mutations().await;
+        if let Err(status) = self
+            .validate_architecture_writes(&metas, branch.as_deref(), &vis)
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
         let mut changeset = PendingChangeset::mint("RevertChangeset", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
             .with_operation_key(claim_key.as_deref());
@@ -6808,6 +6868,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
+        let architecture_context = self
+            .validate_architecture_landing(&op_metas, &ops, &vis)
+            .await?;
+
         if req.dry_run {
             // Full detection already ran above; validate the post-merge
             // world via an in-memory overlay without persisting anything.
@@ -6858,7 +6922,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
                 Err(error) => return Err(store_err(error)),
             };
-            let validation_issues = validation::validate_store(&post_world);
+            let validation_issues = validation::validate_store_with_architecture_context(
+                &post_world,
+                &architecture_context,
+            );
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
@@ -6927,7 +6994,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     projected.push(se);
                 }
             }
-            let validation_issues = validation::validate_store(&projected);
+            let validation_issues = validation::validate_store_with_architecture_context(
+                &projected,
+                &architecture_context,
+            );
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
@@ -7190,6 +7260,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::ResolveBranchEntryRequest>,
     ) -> Result<Response<pb::ResolveBranchEntryResponse>, Status> {
+        let vis = Self::visibility_of(&req);
         let author = Self::author_from_metadata(&req);
         let principal = Self::principal_from_metadata(&req);
         let req = req.into_inner();
@@ -7211,6 +7282,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .ok_or_else(|| Status::invalid_argument("ref is required"))?;
         let kind = kind_from_i32(entity_ref.kind, "ref.kind")?;
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
+        if matches!(kind, pb::EntityKind::Channel | pb::EntityKind::DataStore) {
+            self.authorize_write(
+                principal.as_ref(),
+                Some(&req.name),
+                &WriteTargets::of(&id.namespace),
+            )
+            .await?;
+        }
         let resolution = pb::resolve_branch_entry_request::Resolution::try_from(req.resolution)
             .map_err(|_| Status::invalid_argument("unknown resolution"))?;
         if matches!(
@@ -7318,6 +7397,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 &merged,
             )
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if let Err(status) = self
+                .validate_architecture_selection(&merged, fork, &req.name, &vis)
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
             let changeset =
                 PendingChangeset::mint("ResolveBranchEntry", &author, Some(req.name.as_str()))
                     .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))

@@ -1,0 +1,426 @@
+use std::collections::{HashMap, HashSet};
+
+use trogon_atlas_proto as pb;
+use trogon_atlas_store::{
+    refs::{entity_id, entity_kind},
+    StoredEntity,
+};
+
+struct Checks {
+    subject: Option<pb::EntityRef>,
+    issues: Vec<pb::ValidationIssue>,
+}
+
+impl Checks {
+    fn require(&mut self, valid: bool, code: &str, field: &str, message: &str) {
+        if !valid {
+            self.issues.push(super::issue_error(
+                code,
+                message.into(),
+                self.subject.clone(),
+                field,
+            ));
+        }
+    }
+
+    fn value(&mut self, valid: bool, field: &str) {
+        self.require(
+            valid,
+            "ARCHITECTURE_VALUE_INVALID",
+            field,
+            "invalid architecture resource declaration",
+        );
+    }
+
+    fn supersedes(
+        &mut self,
+        kind: pb::EntityKind,
+        current: Option<&pb::Id>,
+        prior: Option<&pb::Id>,
+        all: &[StoredEntity],
+    ) {
+        if let Some(prior) = prior {
+            self.value(
+                current.is_some_and(|current| {
+                    valid_id(prior)
+                        && prior.namespace == current.namespace
+                        && prior.slug == current.slug
+                        && prior.version < current.version
+                }),
+                "supersedes",
+            );
+            self.target(kind, Some(prior), all, "supersedes");
+        }
+    }
+
+    fn target(
+        &mut self,
+        kind: pb::EntityKind,
+        id: Option<&pb::Id>,
+        all: &[StoredEntity],
+        field: &str,
+    ) {
+        self.require(
+            id.is_some_and(|id| valid_id(id) && find(all, kind, id).is_some()),
+            "ARCHITECTURE_REFERENCE_UNRESOLVED",
+            field,
+            "architecture resource target is absent or invalid",
+        );
+    }
+}
+
+fn valid_id(id: &pb::Id) -> bool {
+    id.version > 0
+        && trogon_atlas_core::validate_id_component(&id.namespace).is_ok()
+        && trogon_atlas_core::validate_id_component(&id.slug).is_ok()
+}
+
+fn find<'a>(all: &'a [StoredEntity], kind: pb::EntityKind, id: &pb::Id) -> Option<&'a pb::Entity> {
+    all.iter()
+        .rev()
+        .find(|se| entity_kind(&se.entity) == Some(kind) && entity_id(&se.entity) == Some(id))
+        .map(|se| &se.entity)
+}
+
+fn parameter_name(value: &str) -> bool {
+    let mut chars = value.bytes();
+    chars
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && chars.all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
+fn protocol_name(value: &str) -> bool {
+    let mut chars = value.bytes();
+    chars.next().is_some_and(|b| b.is_ascii_lowercase())
+        && chars.all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b".+-".contains(&b))
+}
+
+fn placeholders(template: &str) -> Option<HashSet<&str>> {
+    let mut rest = template;
+    let mut names = HashSet::new();
+    while let Some(index) = rest.find(['{', '}']) {
+        if rest.as_bytes()[index] != b'{' {
+            return None;
+        }
+        rest = &rest[index + 1..];
+        let end = rest.find('}')?;
+        let name = &rest[..end];
+        if !parameter_name(name) {
+            return None;
+        }
+        names.insert(name);
+        rest = &rest[end + 1..];
+    }
+    Some(names)
+}
+
+fn address(channel: &pb::Channel, checks: &mut Checks) {
+    let Some(address) = channel.address.as_ref() else {
+        checks.value(
+            channel
+                .bindings
+                .iter()
+                .all(|b| b.parameter_values.is_empty()),
+            "bindings.parameter_values",
+        );
+        return;
+    };
+    checks.value(!address.template.trim().is_empty(), "address.template");
+    let placeholders = placeholders(&address.template);
+    checks.value(placeholders.is_some(), "address.template");
+    let mut parameters = HashMap::new();
+    for parameter in &address.parameters {
+        let name = parameter.name.as_ref().map_or("", |n| n.value.as_str());
+        checks.value(
+            parameter_name(name) && parameters.insert(name, parameter).is_none(),
+            "address.parameters.name",
+        );
+        if let Some(allowed) = &parameter.allowed_values {
+            checks.value(
+                !allowed.values.is_empty()
+                    && allowed.values.iter().collect::<HashSet<_>>().len() == allowed.values.len(),
+                "address.parameters.allowed_values",
+            );
+            checks.value(
+                parameter
+                    .default
+                    .as_ref()
+                    .is_none_or(|value| allowed.values.contains(value))
+                    && parameter
+                        .examples
+                        .iter()
+                        .all(|value| allowed.values.contains(value)),
+                "address.parameters.default",
+            );
+        }
+        checks.value(
+            parameter.examples.iter().collect::<HashSet<_>>().len() == parameter.examples.len(),
+            "address.parameters.examples",
+        );
+    }
+    if let Some(placeholders) = placeholders {
+        checks.value(
+            placeholders.len() == parameters.len()
+                && placeholders
+                    .iter()
+                    .all(|name| parameters.contains_key(name)),
+            "address.parameters",
+        );
+    }
+    for binding in &channel.bindings {
+        checks.value(
+            binding
+                .parameter_values
+                .keys()
+                .all(|name| parameters.contains_key(name.as_str())),
+            "bindings.parameter_values",
+        );
+        for (name, parameter) in &parameters {
+            let value = binding
+                .parameter_values
+                .get(*name)
+                .or(parameter.default.as_ref());
+            checks.value(
+                value.is_some_and(|value| {
+                    parameter
+                        .allowed_values
+                        .as_ref()
+                        .is_none_or(|allowed| allowed.values.contains(value))
+                }),
+                "bindings.parameter_values",
+            );
+        }
+    }
+}
+
+fn observation(reference: Option<&pb::ConnectionRef>, all: &[StoredEntity]) -> bool {
+    let Some(reference) = reference else {
+        return false;
+    };
+    let Some(owner_ref) = reference.owner.as_ref() else {
+        return false;
+    };
+    if owner_ref.kind != pb::EntityKind::AutomationSlice as i32 {
+        return false;
+    }
+    let Some(owner_id) = owner_ref.id.as_ref().filter(|id| valid_id(id)) else {
+        return false;
+    };
+    let Some(owner) = find(all, pb::EntityKind::AutomationSlice, owner_id) else {
+        return false;
+    };
+    let Ok(occurrence) = trogon_atlas_core::connections::resolve_connection(owner, reference)
+    else {
+        return false;
+    };
+    let Some(pb::entity::Kind::AutomationSlice(slice)) = owner.kind.as_ref() else {
+        return false;
+    };
+    let selected = slice
+        .source_read_models
+        .iter()
+        .find(|edge| edge.connection_id.as_ref() == reference.id.as_ref());
+    let Some(read_model) = selected
+        .and_then(|edge| edge.read_model.as_ref())
+        .and_then(|r| r.id.as_ref())
+    else {
+        return false;
+    };
+    let Some(processor) = slice
+        .processor
+        .as_ref()
+        .and_then(|edge| edge.processor.as_ref())
+        .and_then(|r| r.id.as_ref())
+    else {
+        return false;
+    };
+    occurrence
+        .target
+        .as_ref()
+        .is_some_and(|target| target.kind == pb::EntityKind::ReadModel as i32)
+        && valid_id(read_model)
+        && valid_id(processor)
+        && find(all, pb::EntityKind::ReadModel, read_model).is_some()
+        && find(all, pb::EntityKind::Processor, processor).is_some()
+}
+
+#[must_use]
+pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    let mut checks = Checks {
+        subject: super::slice_ref(entity),
+        issues: Vec::new(),
+    };
+    match entity.kind.as_ref() {
+        Some(pb::entity::Kind::Channel(channel)) => {
+            checks.supersedes(
+                pb::EntityKind::Channel,
+                channel.id.as_ref(),
+                channel.supersedes.as_ref(),
+                all,
+            );
+            checks.value(channel.id.as_ref().is_some_and(valid_id), "id");
+            checks.value(!channel.title.trim().is_empty(), "title");
+            checks.value(
+                channel.protocols.iter().all(|p| protocol_name(&p.value))
+                    && channel
+                        .protocols
+                        .iter()
+                        .map(|p| &p.value)
+                        .collect::<HashSet<_>>()
+                        .len()
+                        == channel.protocols.len(),
+                "protocols",
+            );
+            checks.value(
+                channel.delivery_guarantee.is_none_or(|value| {
+                    pb::channel::DeliveryGuarantee::try_from(value)
+                        .is_ok_and(|value| value != pb::channel::DeliveryGuarantee::Unspecified)
+                }),
+                "delivery_guarantee",
+            );
+            address(channel, &mut checks);
+            checks.value(!channel.bindings.is_empty(), "bindings");
+            let mut seen = HashSet::new();
+            for binding in &channel.bindings {
+                let key = binding.observation.as_ref().map(|reference| {
+                    let owner = reference.owner.as_ref();
+                    (
+                        owner.map(|o| o.kind),
+                        owner.and_then(|o| o.id.as_ref()).map(pb::IdKey::new),
+                        &reference.owner_uid,
+                        reference.id.as_ref().map(|id| &id.value),
+                    )
+                });
+                checks.value(seen.insert(key), "bindings.observation");
+                checks.require(observation(binding.observation.as_ref(), all), "CHANNEL_OBSERVATION_UNRESOLVED", "bindings.observation", "binding must select a persisted AutomationSlice source ReadModel observation with resolvable endpoints");
+            }
+            match channel.broker.as_ref() {
+                Some(pb::channel::Broker::Component(reference)) => checks.target(
+                    pb::EntityKind::Component,
+                    reference.id.as_ref(),
+                    all,
+                    "component",
+                ),
+                Some(pb::channel::Broker::ExternalSystem(reference)) => checks.target(
+                    pb::EntityKind::ExternalSystem,
+                    reference.id.as_ref(),
+                    all,
+                    "external_system",
+                ),
+                None => {}
+            }
+        }
+        Some(pb::entity::Kind::DataStore(store)) => {
+            checks.supersedes(
+                pb::EntityKind::DataStore,
+                store.id.as_ref(),
+                store.supersedes.as_ref(),
+                all,
+            );
+            checks.value(store.id.as_ref().is_some_and(valid_id), "id");
+            checks.value(!store.title.trim().is_empty(), "title");
+            checks.value(
+                match store
+                    .store_class
+                    .as_ref()
+                    .and_then(|class| class.kind.as_ref())
+                {
+                    Some(pb::store_class::Kind::Known(value)) => {
+                        pb::store_class::Known::try_from(*value)
+                            .is_ok_and(|value| value != pb::store_class::Known::Unspecified)
+                    }
+                    Some(pb::store_class::Kind::Other(name)) => !name.trim().is_empty(),
+                    None => false,
+                },
+                "store_class",
+            );
+            checks.value(
+                store
+                    .technology
+                    .as_ref()
+                    .is_none_or(|technology| !technology.value.trim().is_empty()),
+                "technology",
+            );
+            checks.value(
+                store
+                    .purpose
+                    .as_ref()
+                    .is_none_or(|purpose| !purpose.trim().is_empty()),
+                "purpose",
+            );
+            checks.value(
+                store.access_mode.is_none_or(|value| {
+                    pb::data_store::AccessMode::try_from(value)
+                        .is_ok_and(|value| value != pb::data_store::AccessMode::Unspecified)
+                }),
+                "access_mode",
+            );
+            checks.value(
+                store.classification.is_none_or(|value| {
+                    pb::data_store::Classification::try_from(value)
+                        .is_ok_and(|value| value != pb::data_store::Classification::Unspecified)
+                }),
+                "classification",
+            );
+            if let Some(residency) = &store.residency {
+                checks.value(
+                    residency
+                        .policy
+                        .as_ref()
+                        .is_some_and(|policy| !policy.value.trim().is_empty()),
+                    "residency.policy",
+                );
+                if let Some(regions) = &residency.regions {
+                    checks.value(
+                        !regions.values.is_empty()
+                            && regions
+                                .values
+                                .iter()
+                                .all(|region| !region.value.trim().is_empty())
+                            && regions
+                                .values
+                                .iter()
+                                .map(|region| &region.value)
+                                .collect::<HashSet<_>>()
+                                .len()
+                                == regions.values.len(),
+                        "residency.regions",
+                    );
+                }
+            }
+            if let Some(retention) = &store.retention {
+                checks.value(
+                    retention
+                        .policy
+                        .as_ref()
+                        .is_some_and(|policy| !policy.value.trim().is_empty()),
+                    "retention.policy",
+                );
+                checks.value(
+                    retention
+                        .duration
+                        .as_ref()
+                        .is_none_or(|duration| duration.seconds > 0),
+                    "retention.duration",
+                );
+            }
+            checks.value(!store.attachments.is_empty(), "attachments");
+            let mut seen = HashSet::new();
+            for attachment in &store.attachments {
+                let id = attachment
+                    .read_model
+                    .as_ref()
+                    .and_then(|reference| reference.id.as_ref());
+                checks.value(
+                    seen.insert(id.map(pb::IdKey::new)),
+                    "attachments.read_model",
+                );
+                checks.target(pb::EntityKind::ReadModel, id, all, "attachments.read_model");
+            }
+        }
+        _ => {}
+    }
+    super::enrich_issues_with_catalog(&mut checks.issues);
+    checks.issues
+}

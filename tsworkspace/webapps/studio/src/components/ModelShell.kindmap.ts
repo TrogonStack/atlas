@@ -29,4 +29,6 @@ export const KIND_SHORT_TO_CAMEL: Record<string, string> = {
   alert_policy: 'alertPolicy',
   alert_notification_target: 'alertNotificationTarget',
   type_library: 'typeLibrary',
+  channel: 'channel',
+  data_store: 'dataStore',
 };

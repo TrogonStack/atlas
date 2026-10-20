@@ -344,6 +344,8 @@ fn kind_from_short(s: &str) -> Option<EntityKind> {
         "alert_policy" => EntityKind::AlertPolicy,
         "alert_notification_target" => EntityKind::AlertNotificationTarget,
         "type_library" => EntityKind::TypeLibrary,
+        "channel" => EntityKind::Channel,
+        "data_store" => EntityKind::DataStore,
         _ => return None,
     })
 }
@@ -359,6 +361,21 @@ mod tests {
             namespace: ns.into(),
             slug: slug.into(),
             version,
+        }
+    }
+
+    #[test]
+    fn resource_keys_roundtrip_through_baseline_and_branch_keys() {
+        for kind in [EntityKind::Channel, EntityKind::DataStore] {
+            let id = id("shop", "order-feed", 2);
+            assert_eq!(
+                parse_entity_key(&entity_key(kind, &id)),
+                Some((kind, id.clone()))
+            );
+            assert_eq!(
+                parse_branch_delta_key("feature", &branch_delta_key("feature", kind, &id)),
+                Some((kind, id)),
+            );
         }
     }
 

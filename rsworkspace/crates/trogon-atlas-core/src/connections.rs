@@ -113,11 +113,17 @@ fn wrapper_target(name: &str) -> Option<(&'static str, trogon_atlas_proto::Entit
         "trogonatlas.eventmodel.v1alpha1.EventEdge"
         | "trogonatlas.eventmodel.v1alpha1.Swimlane.Transition.Next" => Some(("event", K::Event)),
         "trogonatlas.eventmodel.v1alpha1.CommandEdge" => Some(("command", K::Command)),
-        "trogonatlas.eventmodel.v1alpha1.ReadModelEdge" => Some(("read_model", K::ReadModel)),
+        "trogonatlas.eventmodel.v1alpha1.ReadModelEdge"
+        | "trogonatlas.eventmodel.v1alpha1.ReadModelAttachment" => {
+            Some(("read_model", K::ReadModel))
+        }
         "trogonatlas.eventmodel.v1alpha1.ProcessorEdge" => Some(("processor", K::Processor)),
         "trogonatlas.eventmodel.v1alpha1.UIEdge" => Some(("ui", K::Ui)),
         "trogonatlas.eventmodel.v1alpha1.PersonaEdge" => Some(("persona", K::Persona)),
         "trogonatlas.eventmodel.v1alpha1.UI.Transition" => Some(("to", K::Ui)),
+        "trogonatlas.eventmodel.v1alpha1.ChannelBinding" => {
+            Some(("observation", K::AutomationSlice))
+        }
         _ => None,
     }
 }
@@ -197,7 +203,15 @@ fn visit(
     if let Some((field, kind)) = wrapper_target(descriptor.full_name()) {
         let endpoint = message.get_field_by_name(field);
         let target_message = endpoint.as_deref().and_then(Value::as_message);
-        let target_id = target_message
+        let reference_owner = target_message
+            .filter(|target| {
+                target.descriptor().full_name() == "trogonatlas.eventmodel.v1alpha1.ConnectionRef"
+            })
+            .and_then(|target| target.get_field_by_name("owner"))
+            .and_then(|value| value.as_message().cloned());
+        let target_id = reference_owner
+            .as_ref()
+            .or(target_message)
             .and_then(|target| target.get_field_by_name("id"))
             .and_then(|value| value.as_message().map(Message::encode_to_vec));
         let target = target_id
