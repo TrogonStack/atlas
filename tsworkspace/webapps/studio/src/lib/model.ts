@@ -133,8 +133,13 @@ export interface Entity {
 
 // A slice endpoint is a typed Edge in the proto: a pointer plus design data
 // attached to the connection itself (doc, Any annotations).
+export interface ConnectionId {
+  value: string;
+}
+
 export interface EdgeRef {
   id: EntityId;
+  connectionId?: ConnectionId;
   doc: string;
   metadata: unknown[];
 }
@@ -281,6 +286,7 @@ export function subdomainsOf(model: Model, domain: Entity): Entity[] {
 export interface UiTransitionView {
   to: EntityId;
   doc: string;
+  connectionId?: ConnectionId;
 }
 
 // A command is intent; events are the facts. Mirrors the server-side rule
@@ -350,7 +356,11 @@ export function uiTransitionsOf(entity: Entity): UiTransitionView[] {
   if (entity.kind !== 'ui') return [];
   const raw = Array.isArray(entity.raw.transitions) ? (entity.raw.transitions as Record<string, unknown>[]) : [];
   return raw
-    .map((t) => ({ to: asId((t.to as Record<string, unknown> | undefined)?.id), doc: String(t.doc ?? '') }))
+    .map((t) => ({
+      to: asId((t.to as Record<string, unknown> | undefined)?.id),
+      doc: String(t.doc ?? ''),
+      connectionId: connectionIdOf(t),
+    }))
     .filter((t) => t.to.slug);
 }
 
@@ -361,6 +371,7 @@ export interface ContinuationView {
   // Any annotations on the transition's Next: the fork branch is a real
   // connection and carries design data like every other edge.
   metadata: unknown[];
+  connectionId?: ConnectionId;
   afterEvent: EntityId;
 }
 
@@ -547,6 +558,12 @@ export function asId(raw: unknown): EntityId {
   };
 }
 
+function connectionIdOf(body: Record<string, unknown>): ConnectionId | undefined {
+  const id = body.connectionId;
+  if (!id || typeof id !== 'object' || !('value' in id) || typeof id.value !== 'string' || !id.value) return undefined;
+  return { value: id.value };
+}
+
 function refEdge(edge: unknown, refField: string): EdgeRef | undefined {
   if (!edge || typeof edge !== 'object') return undefined;
   const body = edge as Record<string, unknown>;
@@ -556,6 +573,7 @@ function refEdge(edge: unknown, refField: string): EdgeRef | undefined {
   if (!id) return undefined;
   return {
     id: asId(id),
+    connectionId: connectionIdOf(body),
     doc: String(body.doc ?? ''),
     metadata: Array.isArray(body.metadata) ? body.metadata : [],
   };
@@ -856,6 +874,7 @@ function buildContinuations(
           to,
           doc: String(next.doc ?? ''),
           metadata: Array.isArray(next.metadata) ? next.metadata : [],
+          connectionId: connectionIdOf(next),
           afterEvent: afterId,
         });
       }

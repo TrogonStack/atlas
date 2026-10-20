@@ -370,6 +370,9 @@ pub fn entity_to_ref(entity: &pb::Entity) -> Result<pb::EntityRef, Status> {
 pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
     use pb::entity::Kind as K;
 
+    trogon_atlas_core::connections::validate_connection_ids(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+
     let (title, doc, fields_len, metadata_len) = match entity.kind.as_ref() {
         Some(K::Event(x)) => (
             x.title.as_str(),

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+
+// Field paths are diagnostics only; references survive collection reordering.
+message ConnectionRef {
+  EntityRef owner = 1;
+  trogonatlas.type.v1alpha1.ConnectionId id = 2;
+  string owner_uid = 3;
+}

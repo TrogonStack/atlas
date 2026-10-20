@@ -1728,6 +1728,7 @@ fn make_command_slice_referencing_event(
             ui: None,
             command: None,
             emitted_events: vec![pb::EventEdge {
+                connection_id: None,
                 event: Some(pb::EventRef {
                     id: Some(id(ns, event_slug, 1)),
                 }),
@@ -2604,6 +2605,7 @@ fn make_command_slice_with_event_ref(ns: &str, slug: &str, event_slug: &str) -> 
             ui: None,
             command: None,
             emitted_events: vec![pb::EventEdge {
+                connection_id: None,
                 event: Some(pb::EventRef {
                     id: Some(id(ns, event_slug, 1)),
                 }),

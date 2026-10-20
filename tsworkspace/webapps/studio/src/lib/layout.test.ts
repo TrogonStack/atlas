@@ -5,7 +5,7 @@
 // keep occurrence columns monotonically non-decreasing on storyboard
 // slice order.
 import { describe, expect, it } from 'vitest';
-import { layoutBoard, NODE_H } from './layout';
+import { type BoardEdgeData, layoutBoard, NODE_H } from './layout';
 import { buildModel } from './model';
 
 const id = (namespace: string, slug: string, version = '1'): Record<string, unknown> => ({
@@ -76,6 +76,73 @@ function fixtureEntities(): Record<string, unknown>[] {
     },
   ];
 }
+
+it('keeps distinct persisted connections to the same endpoint through reorder', () => {
+  const wire = fixtureEntities();
+  const slice = wire.find((entity) => entity.commandSlice)?.commandSlice as Record<string, unknown>;
+  const endpoint = (slice.emittedEvents as Record<string, unknown>[])[0];
+  slice.emittedEvents = [
+    { ...endpoint, connectionId: { value: '01930000-0000-7000-8000-000000000001' } },
+    { ...endpoint, connectionId: { value: '01930000-0000-7000-8000-000000000002' } },
+  ];
+  const connections = () =>
+    layoutBoard(buildModel(wire))
+      .edges.filter(
+        (edge) => edge.data?.relation === 'emits' && (edge.data as BoardEdgeData).slice?.id.slug === 's1-open',
+      )
+      .map((edge) => ({ id: edge.id, connectionId: edge.data?.connectionId }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  const before = connections();
+  expect(before).toHaveLength(2);
+  expect(before[0].id).not.toBe(before[1].id);
+  expect(before.map((edge) => edge.connectionId)).toEqual([
+    { value: '01930000-0000-7000-8000-000000000001' },
+    { value: '01930000-0000-7000-8000-000000000002' },
+  ]);
+  (slice.emittedEvents as unknown[]).reverse();
+  expect(connections()).toEqual(before);
+});
+
+it('preserves persisted board edge identity when storyboard order changes', () => {
+  const wire = fixtureEntities();
+  const owner = wire.find((entity) => entity.commandSlice)!;
+  owner.system = { uid: '01930000-0000-7000-8000-000000000003' };
+  const slice = owner.commandSlice as Record<string, unknown>;
+  (slice.command as Record<string, unknown>).connectionId = { value: '01930000-0000-7000-8000-000000000001' };
+  const connection = () =>
+    layoutBoard(buildModel(wire)).edges.find(
+      (edge) => edge.data?.relation === 'triggers' && (edge.data as BoardEdgeData).slice?.id.slug === 's1-open',
+    )!;
+  const before = connection();
+  expect(before).toBeDefined();
+  const storyboard = wire.find((entity) => entity.storyboard)?.storyboard as Record<string, unknown>;
+  const slices = storyboard.slices as unknown[];
+  [slices[0], slices[1]] = [slices[1], slices[0]];
+  const after = connection();
+  expect(after.source).not.toBe(before.source);
+  expect(after.id).toBe(before.id);
+});
+
+it('distinguishes owner versions and incarnations for persisted board edge identity', () => {
+  const wire = fixtureEntities();
+  const owner = wire.find((entity) => entity.commandSlice)!;
+  owner.system = { uid: '01930000-0000-7000-8000-000000000003' };
+  const slice = owner.commandSlice as Record<string, unknown>;
+  (slice.emittedEvents as Record<string, unknown>[])[0].connectionId = {
+    value: '01930000-0000-7000-8000-000000000001',
+  };
+  const connection = () =>
+    layoutBoard(buildModel(wire)).edges.find(
+      (edge) => edge.data?.relation === 'emits' && (edge.data as BoardEdgeData).slice?.id.slug === 's1-open',
+    )!;
+  const before = connection();
+  expect(before).toBeDefined();
+  owner.system = { uid: '01930000-0000-7000-8000-000000000004' };
+  expect(connection().id).not.toBe(before.id);
+  owner.system = { uid: '01930000-0000-7000-8000-000000000003' };
+  slice.id = id('shop', 's1-open', '2');
+  expect(connection().id).not.toBe(before.id);
+});
 
 function multiEmitEntities(): Record<string, unknown>[] {
   const ns = 'shop';

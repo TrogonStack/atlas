@@ -514,6 +514,9 @@
             "command": {
               "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CommandRef"
             },
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
             "doc": {
               "type": "string"
             },
@@ -1354,6 +1357,9 @@
         {
           "additionalProperties": false,
           "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
             "doc": {
               "type": "string"
             },
@@ -2080,6 +2086,9 @@
         {
           "additionalProperties": false,
           "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
             "doc": {
               "type": "string"
             },
@@ -2167,6 +2176,9 @@
         {
           "additionalProperties": false,
           "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
             "doc": {
               "type": "string"
             },
@@ -2358,6 +2370,9 @@
         {
           "additionalProperties": false,
           "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
             "doc": {
               "type": "string"
             },
@@ -3223,6 +3238,9 @@
         {
           "additionalProperties": false,
           "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
             "doc": {
               "type": "string"
             },
@@ -3904,6 +3922,9 @@
         {
           "additionalProperties": false,
           "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
             "doc": {
               "type": "string"
             },
@@ -3937,6 +3958,9 @@
         {
           "additionalProperties": false,
           "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
             "doc": {
               "type": "string"
             },
@@ -4015,6 +4039,15 @@
         },
         "ui": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.UIEdge"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.type.v1alpha1.ConnectionId": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
         }
       },
       "type": "object"
