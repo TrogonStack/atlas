@@ -1073,8 +1073,32 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
     }
 }
 
+/// `CONTEXT_SLUG_MISMATCH`: the context's root document names its boundary,
+/// so its slug must equal its namespace (Decision #27). That keeps one
+/// context per namespace.
+pub(crate) fn context_slug_mismatch(bc: &pb::BoundedContext) -> Option<pb::ValidationIssue> {
+    let id = bc.id.as_ref()?;
+    if id.slug == id.namespace {
+        return None;
+    }
+    Some(pb::ValidationIssue {
+        severity: pb::validation_issue::Severity::Error as i32,
+        code: "CONTEXT_SLUG_MISMATCH".into(),
+        message: format!(
+            "bounded context slug {:?} must equal its namespace {:?}; the context IS the namespace, and slug == namespace keeps it one per context",
+            id.slug, id.namespace,
+        ),
+        subject: Some(pb::EntityRef {
+            kind: pb::EntityKind::BoundedContext as i32,
+            id: Some(id.clone()),
+        }),
+        subject_field: "id.slug".into(),
+        ..Default::default()
+    })
+}
+
 // Store-level hygiene that doesn't fit inside a single EventModel scope:
-// project identity (namespace == slug), Domains declaring their project,
+// project and context identity (namespace == slug), Domains declaring their project,
 // and cross-project collisions on BoundedContext ids. Called from
 // ValidateProject. Per-model ValidateEventModel skips this because the
 // concern is global; otherwise the same finding would be emitted once
@@ -1139,6 +1163,12 @@ pub(crate) fn validate_store_hygiene(all: &[StoredEntity]) -> Vec<pb::Validation
                 subject_field: "id".into(),
                 ..pb::ValidationIssue::default()
             });
+        }
+    }
+
+    for se in all {
+        if let Some(pb::entity::Kind::BoundedContext(bc)) = se.entity.kind.as_ref() {
+            issues.extend(context_slug_mismatch(bc));
         }
     }
 
@@ -1929,21 +1959,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
         // The context's root document names its boundary: slug == namespace
         // (Decision #27), which also makes it naturally unique per context.
         Some(pb::entity::Kind::BoundedContext(bc)) => {
-            if let Some(id) = bc.id.as_ref() {
-                if id.slug != id.namespace {
-                    issues.push(pb::ValidationIssue {
-                        severity: pb::validation_issue::Severity::Error as i32,
-                        code: "CONTEXT_SLUG_MISMATCH".into(),
-                        message: format!(
-                            "bounded context slug {:?} must equal its namespace {:?}; the context IS the namespace, and slug == namespace keeps it one per context",
-                            id.slug, id.namespace,
-                        ),
-                        subject: subject.clone(),
-                        subject_field: "id.slug".into(),
-                        ..Default::default()
-                    });
-                }
-            }
+            issues.extend(context_slug_mismatch(bc));
             for (i, r) in bc.realizes.iter().enumerate() {
                 let Some(sid) = r.id.as_ref() else {
                     issues.push(issue_error(
@@ -7514,6 +7530,38 @@ mod context_root_tests {
                 .filter(|i| i.code == "CONTEXT_SLUG_MISMATCH")
                 .count(),
             1
+        );
+    }
+
+    fn stored(entity: pb::Entity) -> StoredEntity {
+        StoredEntity {
+            entity,
+            etag: "1".into(),
+        }
+    }
+
+    #[test]
+    fn store_flags_only_the_diverging_context() {
+        let all = vec![
+            stored(bc("acme-probe", "acme-probe")),
+            stored(bc("acme-probe", "billing")),
+        ];
+        let flagged: Vec<_> = validate_store(&all)
+            .into_iter()
+            .filter(|i| i.code == "CONTEXT_SLUG_MISMATCH")
+            .collect();
+        assert_eq!(flagged.len(), 1, "{flagged:?}");
+        assert_eq!(
+            flagged[0]
+                .subject
+                .as_ref()
+                .and_then(|s| s.id.as_ref())
+                .map(|id| id.slug.as_str()),
+            Some("billing"),
+        );
+        assert_eq!(
+            flagged[0].severity,
+            pb::validation_issue::Severity::Error as i32
         );
     }
 }

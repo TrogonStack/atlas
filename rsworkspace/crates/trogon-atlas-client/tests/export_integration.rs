@@ -626,9 +626,11 @@ async fn export_reports_skipped_label_for_every_entity_kind() {
             }),
         ),
         (
-            "bounded-context",
+            // The server rejects a context whose slug differs from its
+            // namespace, so this entry is matched by its kind prefix.
+            "bounded_context:",
             K::BoundedContext(pb::BoundedContext {
-                id: Some(id(ns, "bounded-context")),
+                id: Some(id(ns, ns)),
                 metadata: poisoned_metadata(),
                 ..Default::default()
             }),
