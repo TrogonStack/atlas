@@ -378,9 +378,7 @@ impl EventModelServiceImpl {
                     for dependency in &library.dependencies {
                         if let Some(target) = &dependency.id {
                             if target.namespace != id.namespace {
-                                return Err(Status::invalid_argument(
-                                    "type library imports must remain in their owning namespace",
-                                ));
+                                continue;
                             }
                             pending.push((pb::EntityKind::TypeLibrary, target.clone()));
                         }

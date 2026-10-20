@@ -523,6 +523,419 @@ async fn exact_selected_library_message_compiles_with_own_namespace_imports_beyo
 }
 
 #[tokio::test]
+async fn typed_library_imports_use_batch_overlays_and_branch_tombstones_beyond_projection() {
+    let service = service().await.with_snapshot_cap(0);
+    let mut selected = library("orders", "Order");
+    selected.id.as_mut().unwrap().namespace = "types".into();
+    save_library(&service, selected.clone()).await;
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "contract-work".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut imported = library("extra", "Extra");
+    imported.id.as_mut().unwrap().namespace = "types".into();
+    service
+        .put_entity(branch(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::TypeLibrary(imported.clone())),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    selected.dependencies.push(pb::TypeLibraryRef {
+        id: imported.id.clone(),
+    });
+    selected.files[0].content = "syntax = \"proto3\"; package orders.v1; import \"extra.proto\"; message Order { string id = 1; } message BranchOnly { extra.v1.Extra value = 1; }".into();
+    let mut value = typed_declaration("branch-typed", &selected);
+    if let Some(pb::schema_binding::Type::LibraryType(reference)) =
+        value.messages[0].schemas[0].r#type.as_mut()
+    {
+        reference.message.as_mut().unwrap().value = "orders.v1.BranchOnly".into();
+    }
+    for validate_only in [true, false] {
+        let response = service
+            .batch_mutate(branch(pb::BatchMutateRequest {
+                ops: vec![
+                    entity(value.clone()),
+                    pb::Entity {
+                        kind: Some(pb::entity::Kind::TypeLibrary(selected.clone())),
+                        ..Default::default()
+                    },
+                ]
+                .into_iter()
+                .map(|entity| pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                        entity: Some(entity),
+                        ..Default::default()
+                    })),
+                })
+                .collect(),
+                validate_only,
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.failure.is_empty(), "{response:?}");
+        assert_eq!(
+            response.status,
+            if validate_only {
+                pb::batch_mutate_response::Status::Validated as i32
+            } else {
+                pb::batch_mutate_response::Status::Applied as i32
+            },
+            "{response:?}"
+        );
+    }
+    invalid_every_surface(&service, value.clone()).await;
+    service
+        .delete_entity(branch(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::TypeLibrary as i32,
+            id: selected.id.clone(),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    for validate_only in [true, false] {
+        let mut missing = typed_declaration("missing", &selected);
+        missing.doc = Some("Baseline still has Order, but this branch deleted its library".into());
+        let error = service
+            .put_entity(branch(pb::PutEntityRequest {
+                entity: Some(entity(missing)),
+                validate_only,
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument, "{error:?}");
+    }
+}
+
+#[tokio::test]
+async fn retained_cross_namespace_imports_are_diagnosed_without_blocking_unrelated_landing() {
+    use trogon_atlas_store::{Store, WriteContext};
+
+    for transitive in [false, true] {
+        let nats = trogon_atlas_testsupport::shared().await;
+        let store = Arc::new(nats.store().await);
+        let service =
+            EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+        let mut selected = library("orders", "Order");
+        selected.id.as_mut().unwrap().namespace = "types".into();
+        let mut imported = library("imported", "Imported");
+        imported.id.as_mut().unwrap().namespace = "types".into();
+        save_library(&service, imported.clone()).await;
+        if transitive {
+            selected.dependencies.push(pb::TypeLibraryRef {
+                id: imported.id.clone(),
+            });
+        }
+        save_library(&service, selected.clone()).await;
+        let value = typed_declaration("typed", &selected);
+        let persisted = save(&service, value.clone()).await;
+        let mut malformed = if transitive {
+            imported
+        } else {
+            selected.clone()
+        };
+        malformed.dependencies.push(pb::TypeLibraryRef {
+            id: Some(pb::Id {
+                namespace: "private-types".into(),
+                slug: "privateimport".into(),
+                version: 1,
+            }),
+        });
+        store
+            .put(
+                pb::EntityKind::TypeLibrary,
+                &pb::Entity {
+                    kind: Some(pb::entity::Kind::TypeLibrary(malformed)),
+                    ..Default::default()
+                },
+                false,
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+        let report = service
+            .validate_project(Request::new(pb::ValidateProjectRequest {
+                scope: Some(pb::validate_project_request::Scope::Namespace(
+                    "contracts".into(),
+                )),
+            }))
+            .await
+            .expect("retained bad imports must not abort ValidateProject")
+            .into_inner();
+        let failures: Vec<_> = report
+            .reports
+            .iter()
+            .flat_map(|r| &r.issues)
+            .filter(|i| i.subject_field == "messages.schemas.library_type")
+            .collect();
+        assert_eq!(failures.len(), 1, "{report:?}");
+        assert_eq!(failures[0].code, "SPECIFICATION_REFERENCE_UNRESOLVED");
+        assert_eq!(
+            failures[0]
+                .subject
+                .as_ref()
+                .unwrap()
+                .id
+                .as_ref()
+                .unwrap()
+                .slug,
+            "typed"
+        );
+        for private in ["private-types", "privateimport", "orders.proto"] {
+            assert!(!format!("{:?}", failures[0]).contains(private));
+        }
+        let mut new_selection = value;
+        new_selection.id = Some(id("new-typed"));
+        let mut edited = spec(&persisted);
+        edited.doc = Some("Recheck typed selection".into());
+        for rejected in [new_selection, edited] {
+            for validate_only in [true, false] {
+                let put = pb::PutEntityRequest {
+                    entity: Some(entity(rejected.clone())),
+                    validate_only,
+                    ..Default::default()
+                };
+                let errors = [
+                    service
+                        .put_entity(Request::new(put.clone()))
+                        .await
+                        .unwrap_err(),
+                    service
+                        .batch_mutate(Request::new(pb::BatchMutateRequest {
+                            ops: vec![pb::BatchMutateOp {
+                                op: Some(pb::batch_mutate_op::Op::Put(put)),
+                            }],
+                            validate_only,
+                            ..Default::default()
+                        }))
+                        .await
+                        .unwrap_err(),
+                ];
+                for error in errors {
+                    assert_eq!(
+                        error.code(),
+                        if transitive {
+                            Code::FailedPrecondition
+                        } else {
+                            Code::InvalidArgument
+                        },
+                        "{error:?}"
+                    );
+                }
+            }
+        }
+        service
+            .create_branch(Request::new(pb::CreateBranchRequest {
+                name: "contract-work".into(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        service
+            .put_entity(branch(pb::PutEntityRequest {
+                entity: Some(entity(declaration("unrelated"))),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        for dry_run in [true, false] {
+            service
+                .merge_branch(Request::new(pb::MergeBranchRequest {
+                    name: "contract-work".into(),
+                    dry_run,
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+        }
+        assert_eq!(get(&service, "typed").await, persisted);
+    }
+}
+
+fn typed_declaration(slug: &str, library: &pb::TypeLibrary) -> pb::Specification {
+    let mut value = declaration(slug);
+    value.messages[0].schemas.push(pb::SchemaBinding {
+        role: pb::schema_binding::Role::Payload as i32,
+        r#type: Some(pb::schema_binding::Type::LibraryType(
+            pb::TypeLibraryTypeRef {
+                library: Some(pb::TypeLibraryRef {
+                    id: library.id.clone(),
+                }),
+                message: Some(pb::QualifiedProtoName {
+                    value: "orders.v1.Order".into(),
+                }),
+            },
+        )),
+        ..Default::default()
+    });
+    value
+}
+
+#[tokio::test]
+async fn descriptive_library_dependency_does_not_compile_or_authorize_cross_namespace_imports() {
+    use trogon_atlas_store::{Store, WriteContext};
+
+    let nats = trogon_atlas_testsupport::shared().await;
+    let store = Arc::new(nats.store().await);
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let own = service
+        .register_namespace(Request::new(pb::RegisterNamespaceRequest {
+            name: "contracts".into(),
+            parent: "owned".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let hidden = service
+        .register_namespace(Request::new(pb::RegisterNamespaceRequest {
+            name: "private-types".into(),
+            parent: "other".into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let mut selected = library("orders", "Order");
+    selected.id.as_mut().unwrap().namespace = own.clone();
+    save_library(&service, selected.clone()).await;
+    let mut retained = typed_declaration("retained", &selected);
+    retained.id.as_mut().unwrap().namespace = own.clone();
+    save(&service, retained).await;
+    let mut private_library = library("privateimport", "Private");
+    private_library.id.as_mut().unwrap().namespace = hidden.clone();
+    save_library(&service, private_library.clone()).await;
+    selected.dependencies.push(pb::TypeLibraryRef {
+        id: Some(pb::Id {
+            namespace: hidden.clone(),
+            slug: "privateimport".into(),
+            version: 1,
+        }),
+    });
+    store
+        .put(
+            pb::EntityKind::TypeLibrary,
+            &pb::Entity {
+                kind: Some(pb::entity::Kind::TypeLibrary(selected.clone())),
+                ..Default::default()
+            },
+            false,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let mut value = declaration("descriptive");
+    value.id.as_mut().unwrap().namespace = own.clone();
+    value.dependencies.push(pb::ContractDependency {
+        target: Some(pb::contract_dependency::Target::TypeLibrary(
+            pb::TypeLibraryRef {
+                id: selected.id.clone(),
+            },
+        )),
+        ..Default::default()
+    });
+    let mut typed = typed_declaration("typed", &selected);
+    typed.id.as_mut().unwrap().namespace = own.clone();
+    let mut client = authenticated_client(service).await;
+    for validate_only in [true, false] {
+        client
+            .put_entity(authed(
+                pb::PutEntityRequest {
+                    entity: Some(entity(value.clone())),
+                    validate_only,
+                    ..Default::default()
+                },
+                false,
+            ))
+            .await
+            .expect(
+                "descriptive dependencies require readable exact existence, not valid compilation",
+            );
+        let error = client
+            .put_entity(authed(
+                pb::PutEntityRequest {
+                    entity: Some(entity(typed.clone())),
+                    validate_only,
+                    ..Default::default()
+                },
+                false,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument, "{error:?}");
+    }
+    let mut forbidden_dependency = value;
+    forbidden_dependency.id.as_mut().unwrap().slug = "hidden-dependency".into();
+    forbidden_dependency.dependencies[0].target = Some(
+        pb::contract_dependency::Target::TypeLibrary(pb::TypeLibraryRef {
+            id: private_library.id.clone(),
+        }),
+    );
+    let mut forbidden_type = typed_declaration("hidden-type", &private_library);
+    forbidden_type.id.as_mut().unwrap().namespace = own.clone();
+    for forbidden in [forbidden_dependency, forbidden_type] {
+        let error = client
+            .put_entity(authed(
+                pb::PutEntityRequest {
+                    entity: Some(entity(forbidden)),
+                    ..Default::default()
+                },
+                false,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::NotFound, "{error:?}");
+        assert!(!error.message().contains("privateimport"), "{error:?}");
+    }
+    let report = client
+        .validate_project(authed(
+            pb::ValidateProjectRequest {
+                scope: Some(pb::validate_project_request::Scope::Namespace(own)),
+            },
+            true,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let details = format!("{report:?}");
+    assert!(!details.contains(&hidden), "{details}");
+    assert!(!details.contains("privateimport"), "{details}");
+    let failures: Vec<_> = report
+        .reports
+        .iter()
+        .flat_map(|r| &r.issues)
+        .filter(|i| i.subject_field == "messages.schemas.library_type")
+        .collect();
+    assert_eq!(failures.len(), 1, "{report:?}");
+    assert_eq!(failures[0].code, "SPECIFICATION_REFERENCE_UNRESOLVED");
+    assert_eq!(
+        failures[0]
+            .subject
+            .as_ref()
+            .unwrap()
+            .id
+            .as_ref()
+            .unwrap()
+            .slug,
+        "retained"
+    );
+}
+
+#[tokio::test]
 async fn breaking_library_edit_is_guarded_and_forced_removal_is_diagnosed_without_blocking_landing()
 {
     let service = service().await;
