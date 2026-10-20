@@ -62,7 +62,7 @@ export function GraphBoard({
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
-    let scene: GraphScene;
+    let scene: GraphScene | undefined;
     try {
       scene = new GraphScene(host, {
         pick: (pick, additive) => {
@@ -91,22 +91,24 @@ export function GraphBoard({
           tip.style.top = `${at.y - box.top + 16}px`;
         },
         lost: () => {
-          scene.dispose();
+          scene?.dispose();
           sceneRef.current = undefined;
           builtRef.current = undefined;
           setFailure('lost');
         },
       });
+      sceneRef.current = scene;
+      builtRef.current = specRef.current;
+      scene.setSpec(specRef.current, 'overview');
+      scene.setFocus(focusStateRef.current);
     } catch {
+      scene?.dispose();
+      sceneRef.current = undefined;
+      builtRef.current = undefined;
       setFailure('unavailable');
-      return;
     }
-    sceneRef.current = scene;
-    builtRef.current = specRef.current;
-    scene.setSpec(specRef.current, 'overview');
-    scene.setFocus(focusStateRef.current);
     return () => {
-      scene.dispose();
+      scene?.dispose();
       sceneRef.current = undefined;
       builtRef.current = undefined;
     };

@@ -676,10 +676,12 @@ export class GraphScene {
         new MeshBasicMaterial({ color: bg, transparent: true }),
       );
       pickMesh.position.copy(v3(p.center));
+      const frameSource = new PlaneGeometry(p.width, p.height);
       const frame = new LineSegments(
-        new EdgesGeometry(new PlaneGeometry(p.width, p.height)),
+        new EdgesGeometry(frameSource),
         new LineBasicMaterial({ color: border }),
       );
+      frameSource.dispose();
       frame.position.copy(pickMesh.position);
       const text = new Mesh(
         new PlaneGeometry(textW, p.height),

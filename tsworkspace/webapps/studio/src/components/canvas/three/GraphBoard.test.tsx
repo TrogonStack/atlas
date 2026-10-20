@@ -6,6 +6,7 @@ import type { SceneEvents } from './scene';
 // scene is drawn and checked in the browser.
 const fake = vi.hoisted(() => ({
   fail: false,
+  failOnSetSpec: false,
   events: undefined as SceneEvents | undefined,
   calls: [] as [string, unknown?][],
 }));
@@ -17,6 +18,7 @@ vi.mock('./scene', () => ({
       fake.events = events;
     }
     setSpec(_spec: unknown, pose?: unknown) {
+      if (fake.failOnSetSpec) throw new Error('setSpec failed');
       fake.calls.push(['setSpec', pose]);
     }
     setFocus(focus: { selected: Set<string> }) {
@@ -50,6 +52,7 @@ const calls = (name: string) => fake.calls.filter(([n]) => n === name).map(([, a
 describe('GraphBoard', () => {
   beforeEach(() => {
     fake.fail = false;
+    fake.failOnSetSpec = false;
     fake.events = undefined;
     fake.calls = [];
   });
@@ -66,6 +69,15 @@ describe('GraphBoard', () => {
     render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
     act(() => fake.events?.lost());
     expect(screen.getByText('The 3D view stopped')).toBeDefined();
+  });
+
+  it('frees the scene when setup fails after WebGL starts', () => {
+    fake.failOnSetSpec = true;
+    const { unmount } = render(<GraphBoard spec={spec} selections={[]} onSelect={() => {}} />);
+    expect(screen.getByText('This view needs WebGL')).toBeDefined();
+    expect(calls('dispose')).toHaveLength(1);
+    unmount();
+    expect(calls('dispose')).toHaveLength(2);
   });
 
   it('opens on the overview and frees the scene on unmount', () => {
