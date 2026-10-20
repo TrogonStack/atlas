@@ -2382,22 +2382,38 @@ impl ReadModelShape {
         }
         source_events.sort_by(id_key_order);
         source_events.dedup();
-        let mut fields: Vec<pb::FieldSpec> = fields
-            .iter()
-            .map(|f| pb::FieldSpec {
-                doc: String::new(),
-                metadata: Vec::new(),
-                ..f.clone()
-            })
-            .collect();
-        fields.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut key = rm.key.clone();
+        key.sort_unstable();
         Some(Self {
             namespace: id.namespace.clone(),
-            key: rm.key.clone(),
-            fields,
+            key,
+            fields: shape_fields(fields),
             source_events,
         })
     }
+}
+
+/// Fields with docs and annotations removed at every nesting level, sorted
+/// by name, so only the data a consumer reads is compared.
+fn shape_fields(fields: &[pb::FieldSpec]) -> Vec<pb::FieldSpec> {
+    let mut out: Vec<pb::FieldSpec> = fields
+        .iter()
+        .map(|f| pb::FieldSpec {
+            doc: String::new(),
+            metadata: Vec::new(),
+            r#type: f.r#type.as_ref().map(|t| match t.kind.as_ref() {
+                Some(pb::field_type::Kind::Object(object)) => pb::FieldType {
+                    kind: Some(pb::field_type::Kind::Object(pb::field_type::ObjectType {
+                        fields: shape_fields(&object.fields),
+                    })),
+                },
+                _ => t.clone(),
+            }),
+            ..f.clone()
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
 }
 
 pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
@@ -13918,6 +13934,67 @@ mod read_model_shape_tests {
         );
         assert!(found[0].message.contains("acme/expired-reservations@1"));
         assert!(found[0].message.contains("acme/reservations-to-confirm@1"));
+    }
+
+    #[test]
+    fn key_order_does_not_hide_a_duplicate() {
+        let mut first = read_model("acme", "reservations-to-confirm", FIELDS, EVENTS, None);
+        let mut second = read_model("acme", "expired-reservations", FIELDS, EVENTS, None);
+        set_key(&mut first, &["reservation_id", "expires_at"]);
+        set_key(&mut second, &["expires_at", "reservation_id"]);
+        let issues = validate(vec![first, second]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 1);
+    }
+
+    #[test]
+    fn nested_field_docs_do_not_hide_a_duplicate() {
+        let issues = validate(vec![
+            with_nested_field(
+                read_model("acme", "reservations-to-confirm", FIELDS, EVENTS, None),
+                "guest",
+                "name",
+                "Name on the booking.",
+            ),
+            with_nested_field(
+                read_model("acme", "expired-reservations", FIELDS, EVENTS, None),
+                "guest",
+                "name",
+                "",
+            ),
+        ]);
+        assert_eq!(issues_with(&issues, "READ_MODEL_DUPLICATE_SHAPE").len(), 1);
+    }
+
+    fn set_key(entity: &mut pb::Entity, key: &[&str]) {
+        if let Some(pb::entity::Kind::ReadModel(rm)) = entity.kind.as_mut() {
+            rm.key = key.iter().map(|k| (*k).into()).collect();
+        }
+    }
+
+    fn with_nested_field(
+        mut entity: pb::Entity,
+        object: &str,
+        field: &str,
+        doc: &str,
+    ) -> pb::Entity {
+        if let Some(pb::entity::Kind::ReadModel(rm)) = entity.kind.as_mut() {
+            let mut fields = trogon_atlas_core::schema::schema_fields(rm.schema.as_ref());
+            fields.push(pb::FieldSpec {
+                name: object.into(),
+                r#type: Some(pb::FieldType {
+                    kind: Some(pb::field_type::Kind::Object(pb::field_type::ObjectType {
+                        fields: vec![pb::FieldSpec {
+                            name: field.into(),
+                            doc: doc.into(),
+                            ..Default::default()
+                        }],
+                    })),
+                }),
+                ..Default::default()
+            });
+            rm.schema = Some(trogon_atlas_core::schema::pack_fields(fields));
+        }
+        entity
     }
 
     #[test]
