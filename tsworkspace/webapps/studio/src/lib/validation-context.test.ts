@@ -492,3 +492,110 @@ it('copies Team/Person membership and all exact responsibility selectors without
   }[];
   expect(definitions[0].raw.responsibilities.map((item) => item.subject)).toEqual(selectors);
 });
+
+describe('validationFixPrompt for strategic findings', () => {
+  const sid = (namespace: string, slug: string) => id(slug, '1', namespace);
+  const strategicModel = () =>
+    buildModel([
+      { project: { id: sid('acme', 'acme'), title: 'Acme' } },
+      { domain: { id: sid('acme', 'acme'), title: 'Acme', project: { id: sid('acme', 'acme') } } },
+      { domain: { id: sid('accounts', 'accounts'), title: 'Stray', doc: 'Declared in a context namespace.' } },
+      { subdomain: { id: sid('acme', 'identity'), domain: { id: sid('acme', 'acme') }, classification: 'CORE' } },
+      { subdomain: { id: sid('acme', 'billing'), domain: { id: sid('acme', 'acme') }, classification: 'GENERIC' } },
+      { boundedContext: { id: sid('accounts', 'accounts'), realizes: [{ id: sid('acme', 'identity') }] } },
+      { boundedContext: { id: sid('payments', 'payments'), realizes: [{ id: sid('acme', 'identity') }] } },
+      { boundedContext: { id: sid('unrelated', 'unrelated') } },
+    ]);
+  const strategicFinding = (subject: NonNullable<Issue['subject']>, code = 'DOMAIN_IN_CONTEXT_NAMESPACE') =>
+    finding({ code, subject, ruleCategory: 'strategic', field: '' });
+  const loaded = (prompt: string) =>
+    (snapshot(prompt, 'Loaded subject and related definitions') as { identity: string }[]).map((d) => d.identity);
+
+  it('swaps the temporal guidance for the strategic repair instructions', () => {
+    const prompt = validationFixPrompt(
+      strategicModel(),
+      strategicFinding({ kind: 'domain', id: sid('accounts', 'accounts') }),
+    );
+    expect(prompt).toContain('whose slug equals the Domain');
+    expect(prompt).toContain('never create a Domain per context namespace');
+    expect(prompt).toContain('split the context along classification lines instead of reclassifying');
+    expect(prompt).toContain('Studio is a review surface');
+    expect(prompt).toContain('`validate_project`');
+    expect(prompt).toContain('docs/how-to/repair-validation-findings.md');
+    expect(prompt).toContain('One problem space, contexts realize across namespaces');
+    expect(prompt).not.toContain('For temporal findings');
+    expect(prompt).not.toContain('\u2014');
+  });
+
+  it('keeps the temporal guidance for non-strategic findings', () => {
+    const prompt = validationFixPrompt(temporalModel(), finding());
+    expect(prompt).toContain('For temporal findings');
+    expect(prompt).not.toContain('whose slug equals the Domain');
+  });
+
+  it('includes the contexts sharing a Domain namespace and the subdomains pointing at the Domain', () => {
+    const prompt = validationFixPrompt(
+      strategicModel(),
+      strategicFinding({ kind: 'domain', id: sid('accounts', 'accounts') }),
+    );
+    expect(prompt).not.toContain('The subject is not loaded');
+    expect(loaded(prompt)).toEqual(
+      expect.arrayContaining(['domain:accounts/accounts@1', 'boundedContext:accounts/accounts@1']),
+    );
+    expect(loaded(prompt)).not.toContain('boundedContext:unrelated/unrelated@1');
+
+    const parent = validationFixPrompt(strategicModel(), strategicFinding({ kind: 'domain', id: sid('acme', 'acme') }));
+    expect(loaded(parent)).toEqual(
+      expect.arrayContaining([
+        'subdomain:acme/identity@1',
+        'subdomain:acme/billing@1',
+        'boundedContext:accounts/accounts@1',
+        'boundedContext:payments/payments@1',
+        'project:acme/acme@1',
+      ]),
+    );
+    expect(loaded(parent)).not.toContain('boundedContext:unrelated/unrelated@1');
+  });
+
+  it('includes the contexts realizing a subdomain', () => {
+    const prompt = validationFixPrompt(
+      strategicModel(),
+      strategicFinding({ kind: 'subdomain', id: sid('acme', 'identity') }, 'SUBDOMAIN_UNREALIZED'),
+    );
+    expect(loaded(prompt)).toEqual(
+      expect.arrayContaining([
+        'subdomain:acme/identity@1',
+        'boundedContext:accounts/accounts@1',
+        'boundedContext:payments/payments@1',
+        'domain:acme/acme@1',
+      ]),
+    );
+    expect(loaded(prompt)).not.toContain('boundedContext:unrelated/unrelated@1');
+  });
+
+  it('includes the realized subdomains, their domains, the stray domain and sibling contexts of a context', () => {
+    const prompt = validationFixPrompt(
+      strategicModel(),
+      strategicFinding({ kind: 'boundedContext', id: sid('accounts', 'accounts') }, 'REALIZES_MIXED_CLASSIFICATIONS'),
+    );
+    expect(loaded(prompt)).toEqual(
+      expect.arrayContaining([
+        'boundedContext:accounts/accounts@1',
+        'subdomain:acme/identity@1',
+        'domain:acme/acme@1',
+        'domain:accounts/accounts@1',
+        'boundedContext:payments/payments@1',
+      ]),
+    );
+    expect(loaded(prompt)).not.toContain('boundedContext:unrelated/unrelated@1');
+  });
+
+  it('treats the project reference of a domain as a reference to fetch', () => {
+    const model = buildModel([{ domain: { id: sid('acme', 'acme'), project: { id: sid('acme', 'acme') } } }]);
+    const prompt = validationFixPrompt(model, strategicFinding({ kind: 'domain', id: sid('acme', 'acme') }));
+    expect(snapshot(prompt, 'References to fetch')).toEqual({
+      notLoaded: ['project:acme/acme@1'],
+      loadedButOmitted: [],
+    });
+  });
+});
