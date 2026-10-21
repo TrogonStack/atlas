@@ -92,6 +92,156 @@ pub mod event_model_service_client {
             self
         }
         ///
+        pub async fn list_subject_assignments(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListSubjectAssignmentsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSubjectAssignmentsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSubjectAssignments",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListSubjectAssignments",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn list_assignee_responsibilities(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListAssigneeResponsibilitiesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListAssigneeResponsibilitiesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListAssigneeResponsibilities",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListAssigneeResponsibilities",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn list_team_members(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListTeamMembersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTeamMembersResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTeamMembers",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListTeamMembers",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn list_person_teams(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListPersonTeamsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListPersonTeamsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListPersonTeams",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListPersonTeams",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn get_team_contacts(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetTeamContactsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetTeamContactsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetTeamContacts",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetTeamContacts",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn inspect_data_product(
             &mut self,
             request: impl tonic::IntoRequest<super::InspectDataProductRequest>,
@@ -1723,6 +1873,46 @@ pub mod event_model_service_server {
     #[async_trait]
     pub trait EventModelService: std::marker::Send + std::marker::Sync + 'static {
         ///
+        async fn list_subject_assignments(
+            &self,
+            request: tonic::Request<super::ListSubjectAssignmentsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSubjectAssignmentsResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn list_assignee_responsibilities(
+            &self,
+            request: tonic::Request<super::ListAssigneeResponsibilitiesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListAssigneeResponsibilitiesResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn list_team_members(
+            &self,
+            request: tonic::Request<super::ListTeamMembersRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTeamMembersResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn list_person_teams(
+            &self,
+            request: tonic::Request<super::ListPersonTeamsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListPersonTeamsResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn get_team_contacts(
+            &self,
+            request: tonic::Request<super::GetTeamContactsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetTeamContactsResponse>,
+            tonic::Status,
+        >;
+        ///
         async fn inspect_data_product(
             &self,
             request: tonic::Request<super::InspectDataProductRequest>,
@@ -2277,6 +2467,247 @@ pub mod event_model_service_server {
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             match req.uri().path() {
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSubjectAssignments" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListSubjectAssignmentsSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::ListSubjectAssignmentsRequest>
+                    for ListSubjectAssignmentsSvc<T> {
+                        type Response = super::ListSubjectAssignmentsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListSubjectAssignmentsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_subject_assignments(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListSubjectAssignmentsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListAssigneeResponsibilities" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListAssigneeResponsibilitiesSvc<T: EventModelService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<
+                        super::ListAssigneeResponsibilitiesRequest,
+                    > for ListAssigneeResponsibilitiesSvc<T> {
+                        type Response = super::ListAssigneeResponsibilitiesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ListAssigneeResponsibilitiesRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_assignee_responsibilities(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListAssigneeResponsibilitiesSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTeamMembers" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListTeamMembersSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::ListTeamMembersRequest>
+                    for ListTeamMembersSvc<T> {
+                        type Response = super::ListTeamMembersResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListTeamMembersRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_team_members(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListTeamMembersSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListPersonTeams" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListPersonTeamsSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::ListPersonTeamsRequest>
+                    for ListPersonTeamsSvc<T> {
+                        type Response = super::ListPersonTeamsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListPersonTeamsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_person_teams(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListPersonTeamsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetTeamContacts" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetTeamContactsSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::GetTeamContactsRequest>
+                    for GetTeamContactsSvc<T> {
+                        type Response = super::GetTeamContactsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetTeamContactsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::get_team_contacts(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetTeamContactsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/InspectDataProduct" => {
                     #[allow(non_camel_case_types)]
                     struct InspectDataProductSvc<T: EventModelService>(pub Arc<T>);

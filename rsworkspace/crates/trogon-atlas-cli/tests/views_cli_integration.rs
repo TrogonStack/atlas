@@ -114,6 +114,19 @@ async fn get_describe_and_tree_read_a_seeded_namespace() {
     )
     .await;
 
+    let slice = client
+        .get_entity(pb::GetEntityRequest {
+            kind: pb::EntityKind::CommandSlice as i32,
+            id: Some(id("place-order-slice")),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let slice_uid = slice.system.unwrap().uid;
+    assert_ne!(slice_uid, "");
+
     let got = trogon_atlas(&endpoint, &["get", "event/cli-views/order.placed"]);
     assert!(got.status.success(), "{got:?}");
     let yaml = stdout(&got);
@@ -137,6 +150,12 @@ async fn get_describe_and_tree_read_a_seeded_namespace() {
         serde_json::json!({
             "field": "emitted_events[0]",
             "entity": "command_slice:cli-views/place-order-slice@1",
+            "provenance": {
+                "from": {"kind": "ENTITY_KIND_COMMAND_SLICE", "id": {"namespace": NS, "slug": "place-order-slice", "version": "1"}},
+                "fromField": "emitted_events[0]",
+                "fromUid": slice_uid,
+                "to": {"kind": "ENTITY_KIND_EVENT", "id": {"namespace": NS, "slug": "order.placed", "version": "1"}},
+            },
         }),
         "{outcome}"
     );

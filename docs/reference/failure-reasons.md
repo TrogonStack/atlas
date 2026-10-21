@@ -87,6 +87,12 @@ raised directly by request validation, for instance) still classifies
 correctly from its gRPC code alone -- `ErrorInfo` exists to disambiguate
 within a code, not to replace the code.
 
+A bare `RESOURCE_EXHAUSTED` status produces client category `validation`,
+next action `fix_input` and stable client code `RESOURCE_EXHAUSTED`. The client
+uses the safe message `request resource limit exhausted` rather than exposing
+arbitrary backend details. This fallback code is not a new server `ErrorInfo`
+reason. Reduce the requested work or adjust its configured budget before retrying.
+
 ## `BatchMutateResponse.failure[].code`
 
 A batch op failure is reported as data on an otherwise-successful RPC, so

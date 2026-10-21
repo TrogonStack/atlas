@@ -54,6 +54,8 @@ export type EntityKind =
   | 'typeLibrary'
   | 'channel'
   | 'dataStore'
+  | 'team'
+  | 'person'
   | 'dataProduct'
   | 'specification';
 
@@ -432,6 +434,8 @@ const KIND_SET: ReadonlySet<string> = new Set([
   'typeLibrary',
   'channel',
   'dataStore',
+  'team',
+  'person',
   'dataProduct',
   'specification',
 ]);
@@ -468,6 +472,8 @@ const WIRE_KIND: Record<string, EntityKind> = {
   ENTITY_KIND_TYPE_LIBRARY: 'typeLibrary',
   ENTITY_KIND_CHANNEL: 'channel',
   ENTITY_KIND_DATA_STORE: 'dataStore',
+  ENTITY_KIND_TEAM: 'team',
+  ENTITY_KIND_PERSON: 'person',
   ENTITY_KIND_DATA_PRODUCT: 'dataProduct',
   ENTITY_KIND_SPECIFICATION: 'specification',
 };
@@ -632,9 +638,15 @@ function normalizeEntity(wire: WireEntity): Entity | undefined {
     kind,
     id,
     key: entityKey(kind, id),
-    title: String(bodyObj.title ?? id.slug),
+    title: String(
+      (kind === 'team' || kind === 'person'
+        ? (bodyObj.title as { value?: string } | undefined)?.value
+        : bodyObj.title) ?? id.slug,
+    ),
     doc: String(bodyObj.doc ?? ''),
-    role: bodyObj.role ? String(bodyObj.role) : undefined,
+    role: bodyObj.role
+      ? String(kind === 'person' ? ((bodyObj.role as { value?: string }).value ?? '') : bodyObj.role)
+      : undefined,
     order: bodyObj.order !== undefined ? Number(bodyObj.order) : undefined,
     color: bodyObj.color ? String(bodyObj.color) : undefined,
     swimlane: swimlaneRef?.id ? asId(swimlaneRef.id) : undefined,

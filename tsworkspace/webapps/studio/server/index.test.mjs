@@ -164,7 +164,14 @@ vi.mock('@grpc/grpc-js', async (importOriginal) => {
   return { ...mocked, default: mocked };
 });
 
-vi.mock('protobufjs', () => {
+vi.mock('protobufjs', async (importOriginal) => {
+  const actual = (await importOriginal()).default;
+  const nativePath = await import('node:path');
+  const nativeUrl = await import('node:url');
+  const protoRoot = nativePath.resolve(nativePath.dirname(nativeUrl.fileURLToPath(import.meta.url)), '../../../../proto');
+  const responsibilityRoot = new actual.Root();
+  responsibilityRoot.resolvePath = (_origin, target) => nativePath.resolve(protoRoot, target);
+  responsibilityRoot.loadSync(nativePath.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'));
   const fakeEntityKindValues = {
     ENTITY_KIND_UNSPECIFIED: 0, ENTITY_KIND_EVENT: 1, ENTITY_KIND_COMMAND: 2,
     ENTITY_KIND_READ_MODEL: 3, ENTITY_KIND_PROCESSOR: 4, ENTITY_KIND_UI: 5,
@@ -180,10 +187,10 @@ vi.mock('protobufjs', () => {
   const fakeRoot = {
     resolvePath: () => '',
     load: () => Promise.resolve(fakeRoot),
-    lookupType: () => ({
-      decode: () => ({}),
-      toObject: () => ({}),
-    }),
+    lookupType: (name) => {
+      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts)Request$/.test(name)) return responsibilityRoot.lookupType(name);
+      return { decode: () => ({}), toObject: () => ({}) };
+    },
     lookupEnum: (name) => {
       if (name === 'trogonatlas.eventmodel.v1alpha1.EntityKind') {
         return { values: fakeEntityKindValues };
@@ -193,6 +200,7 @@ vi.mock('protobufjs', () => {
   };
   return {
     default: {
+      ...actual,
       Root: class {
         constructor() {
           Object.assign(this, fakeRoot);
@@ -2243,4 +2251,122 @@ describe('GET DataProduct backend inspection', () => {
     expect(res.body.error).toContain('backend unavailable');
     delete fakeClient.inspectDataProduct;
   });
+});
+
+describe('GET responsibility queries', () => {
+  const id = { namespace: 'acme', slug: 'catalog', version: '7' };
+  const member = { member: { specification: { id }, ownerUid: 'exact-owner', kind: 'CONTRACT_MEMBER_KIND_ARTIFACT', memberId: { value: 'member-id' }, expectedDigest: { sha256: 'a'.repeat(64) } } };
+  it.each([
+    ['subject-assignments', 'listSubjectAssignments', { subject: member, kind: 'RESPONSIBILITY_KIND_STEWARD' }],
+    ['subject-assignments', 'listSubjectAssignments', { subject: { connection: { owner: { kind: 'ENTITY_KIND_AUTOMATION_SLICE', id }, ownerUid: 'occurrence-owner', id: { value: 'edge-b' } } } }],
+    ['subject-assignments', 'listSubjectAssignments', { subject: { port: { product: { id }, ownerUid: 'product-owner', direction: 'DATA_PORT_DIRECTION_INPUT', portId: { value: 'input-b' } } } }],
+    ['assignee-responsibilities', 'listAssigneeResponsibilities', { assignee: { person: { id } } }],
+    ['team-members', 'listTeamMembers', { team: { id } }],
+    ['person-teams', 'listPersonTeams', { person: { id } }],
+    ['team-contacts', 'getTeamContacts', { team: { id }, includeMembers: true }],
+  ])('forwards %s with exact typed request, authorization and checked context', async (route, method, input) => {
+    const invoke = vi.fn((req, meta, _opts, cb) => cb(null, { scope: { branch: 'review', revision: 'checked', visitedSubjects: [member] }, incomplete: true, subjectState: 'RESPONSIBILITY_RESOLUTION_STATE_INACCESSIBLE' }));
+    fakeClient[method] = invoke;
+    process.env.TROGON_ATLAS_AUTH_PASSTHROUGH = 'true';
+    const module = await import('./index.mjs?t=responsibility-passthrough');
+    delete process.env.TROGON_ATLAS_AUTH_PASSTHROUGH;
+    try {
+      const response = await request(module.app).get(`/api/responsibility/${route}`).query({ request: JSON.stringify(input), branch: 'review' }).set('Authorization', 'Bearer caller-token');
+      expect(response.status).toBe(200);
+      expect(invoke.mock.calls[0][0]).toEqual(input);
+      expect(invoke.mock.calls[0][1].get('authorization')).toEqual(['Bearer caller-token']);
+      expect(invoke.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['review']);
+      expect(response.body).toMatchObject({ incomplete: true, scope: { revision: 'checked', visitedSubjects: [member] }, subjectState: 'RESPONSIBILITY_RESOLUTION_STATE_INACCESSIBLE' });
+    } finally { delete fakeClient[method]; }
+  });
+  it.each(['', '[]', 'null', 'broken'])('rejects malformed request %s', async (input) => {
+    const response = await request(app).get('/api/responsibility/subject-assignments').query({ request: input });
+    expect(response.status).toBe(400);
+  });
+  it('refuses unsupported queries, historical hydration and writes', async () => {
+    expect((await request(app).get('/api/responsibility/putEntity').query({ request: '{}' })).status).toBe(400);
+    expect((await request(app).get('/api/responsibility/team-members').query({ request: '{}', asOf: 'historical' })).status).toBe(400);
+    expect((await request(app).post('/api/responsibility/team-members').send({ team: { id } })).status).toBe(403);
+  });
+  it.each([[14, 503], [8, 429], [7, 403], [5, 404]])('preserves public backend error class %s', async (code, expected) => {
+    fakeClient.listSubjectAssignments = (_req, _meta, _opts, cb) => cb(Object.assign(new Error('query failed'), { code }));
+    try {
+      const response = await request(app).get('/api/responsibility/subject-assignments').query({ request: JSON.stringify({ subject: member }) });
+      expect(response.status).toBe(expected);
+      expect(response.body.error).toContain('query failed');
+      expect(response.body.assignments).toBeUndefined();
+    } finally { delete fakeClient.listSubjectAssignments; }
+  });
+});
+
+
+describe('responsibility strict production serializer boundary', () => {
+  const id = { namespace: 'acme', slug: 'catalog', version: '9007199254740993' };
+  const subject = { entity: { kind: 'ENTITY_KIND_EVENT', id } };
+  const team = { id };
+  const invalid = [
+    ['unknown filter name', 'subject-assignments', 'ListSubjectAssignments', { subject, kind: 'TYPO' }],
+    ['unknown numeric filter', 'subject-assignments', 'ListSubjectAssignments', { subject, kind: 999 }],
+    ['boolean filter', 'subject-assignments', 'ListSubjectAssignments', { subject, kind: true }],
+    ['string false expansion', 'team-contacts', 'GetTeamContacts', { team, includeMembers: 'false' }],
+    ['numeric expansion', 'team-contacts', 'GetTeamContacts', { team, includeMembers: 0 }],
+    ['null expansion', 'team-contacts', 'GetTeamContacts', { team, includeMembers: null }],
+    ['unknown request field', 'team-contacts', 'GetTeamContacts', { team, includeMembers: false, unknown: true }],
+    ['unknown nested field', 'team-members', 'ListTeamMembers', { team: { id, extra: 'ignored' } }],
+    ['multiple subject alternatives', 'subject-assignments', 'ListSubjectAssignments', { subject: { ...subject, port: {} } }],
+    ['multiple assignee alternatives', 'assignee-responsibilities', 'ListAssigneeResponsibilities', { assignee: { team, person: team } }],
+    ['null selector alternative', 'subject-assignments', 'ListSubjectAssignments', { subject: { entity: null } }],
+    ['unknown entity kind', 'subject-assignments', 'ListSubjectAssignments', { subject: { entity: { kind: 'TYPO', id } } }],
+    ['unknown direction', 'subject-assignments', 'ListSubjectAssignments', { subject: { port: { product: team, direction: 'TYPO' } } }],
+    ['unknown member kind', 'subject-assignments', 'ListSubjectAssignments', { subject: { member: { specification: team, kind: 99 } } }],
+    ['numeric owner UID', 'subject-assignments', 'ListSubjectAssignments', { subject: { connection: { owner: subject.entity, ownerUid: 1, id: { value: 'edge' } } } }],
+    ['snake case pin silently lost', 'subject-assignments', 'ListSubjectAssignments', { subject: { member: { specification: team, kind: 'CONTRACT_MEMBER_KIND_ARTIFACT', expected_digest: { sha256: 'a'.repeat(64) } } } }],
+    ['unsafe numeric version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: 9007199254740992 } } }],
+    ['fractional version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: 1.5 } } }],
+    ['overflow version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: '18446744073709551616' } } }],
+    ['negative version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: -1 } } }],
+    ['boolean version', 'team-members', 'ListTeamMembers', { team: { id: { ...id, version: true } } }],
+  ];
+  it.each(invalid)('rejects %s before permissive production serialization', async (_label, route, rpc, input) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const protoRoot = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find((value) => value.path.endsWith(`/${rpc}`));
+    const codec = definitions[`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`];
+    const serialize = vi.fn((req, _meta, _opts, cb) => {
+      try { cb(null, { received: codec.deserialize(method.requestSerialize(req)) }); }
+      catch (error) { cb(error); }
+    });
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = serialize;
+    try {
+      const response = await request(app).get(`/api/responsibility/${route}`).query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(400);
+      expect(serialize).not.toHaveBeenCalled();
+    } finally { delete fakeClient[name]; }
+  });
+  it.each([
+    ['subject-assignments', 'ListSubjectAssignments', { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }, { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }],
+    ['subject-assignments', 'ListSubjectAssignments', { subject: { entity: { kind: 1, id } }, kind: 4 }, { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }],
+    ['subject-assignments', 'ListSubjectAssignments', { subject, kind: 0 }, { subject, kind: 'RESPONSIBILITY_KIND_UNSPECIFIED' }],
+    ['team-contacts', 'GetTeamContacts', { team, includeMembers: false }, { team, includeMembers: false }],
+    ['team-contacts', 'GetTeamContacts', { team }, { team }],
+  ])('preserves valid %s through the actual gateway and production serializer', async (route, rpc, input, expected) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const protoRoot = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find((value) => value.path.endsWith(`/${rpc}`));
+    const codec = definitions[`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`];
+    const invoke = vi.fn((req, _meta, _opts, cb) => cb(null, { received: codec.deserialize(method.requestSerialize(req)) }));
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = invoke;
+    try {
+      const response = await request(app).get(`/api/responsibility/${route}`).query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(200);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0][0]).toEqual(input);
+      expect(response.body.received).toEqual(expected);
+    } finally { delete fakeClient[name]; }
+  });
+
 });

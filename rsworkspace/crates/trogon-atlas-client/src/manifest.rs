@@ -440,6 +440,7 @@ pub(crate) fn shorthand_ref_field(
         md.full_name(),
         "trogonatlas.eventmodel.v1alpha1.ChannelAccess"
             | "trogonatlas.eventmodel.v1alpha1.StoreAccess"
+            | "trogonatlas.eventmodel.v1alpha1.ResponsibilitySubject"
     ) {
         return None;
     }

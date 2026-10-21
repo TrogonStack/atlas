@@ -86,6 +86,8 @@ impl EventModelServiceImpl {
                             | pb::EntityKind::DataStore
                             | pb::EntityKind::Specification
                             | pb::EntityKind::DataProduct
+                            | pb::EntityKind::Team
+                            | pb::EntityKind::Person
                     )
             })
             .filter_map(|meta| meta.entity.as_ref())
@@ -126,6 +128,7 @@ impl EventModelServiceImpl {
         endpoints.extend(crate::data_product_resources::selected_endpoints(
             &resources, &world,
         ));
+        endpoints.extend(responsibility_endpoints(&resources, &world));
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -221,6 +224,8 @@ impl EventModelServiceImpl {
                             | pb::entity::Kind::DataStore(_)
                             | pb::entity::Kind::Specification(_)
                             | pb::entity::Kind::DataProduct(_)
+                            | pb::entity::Kind::Team(_)
+                            | pb::entity::Kind::Person(_)
                     )
                 )
             })
@@ -257,6 +262,7 @@ impl EventModelServiceImpl {
         endpoints.extend(crate::data_product_resources::selected_endpoints(
             &resources, &world,
         ));
+        endpoints.extend(responsibility_endpoints(&resources, &world));
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -338,6 +344,8 @@ impl EventModelServiceImpl {
                         pb::EntityKind::DataStore,
                         pb::EntityKind::Specification,
                         pb::EntityKind::DataProduct,
+                        pb::EntityKind::Team,
+                        pb::EntityKind::Person,
                     ],
                     namespaces: &namespaces,
                     ..Default::default()
@@ -552,6 +560,8 @@ impl EventModelServiceImpl {
                     | pb::entity::Kind::DataStore(_)
                     | pb::entity::Kind::Specification(_)
                     | pb::entity::Kind::DataProduct(_)
+                    | pb::entity::Kind::Team(_)
+                    | pb::entity::Kind::Person(_)
             )
         ) {
             return Ok(());
@@ -645,6 +655,31 @@ fn observation_endpoints(
         }
     }
     endpoints
+}
+
+fn responsibility_endpoints(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> Vec<(pb::EntityKind, pb::Id)> {
+    resources
+        .iter()
+        .flat_map(|entity| crate::responsibility_resources::assignments(entity))
+        .filter_map(|assignment| assignment.subject.as_ref())
+        .flat_map(|subject| {
+            crate::responsibility_resources::subject_owner(subject)
+                .and_then(|reference| {
+                    Some(pb::EntityKey::new(
+                        pb::EntityKind::try_from(reference.kind).ok()?,
+                        reference.id.as_ref()?,
+                    ))
+                })
+                .and_then(|key| world.get(&key))
+                .map(|stored| {
+                    crate::responsibility_resources::selected_endpoints(subject, &stored.entity)
+                })
+                .unwrap_or_default()
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -424,6 +424,8 @@ fn kind_label(entity: &pb::Entity) -> String {
         Some(K::DataStore(_)) => "data_store",
         Some(K::Specification(_)) => "specification",
         Some(K::DataProduct(_)) => "data_product",
+        Some(K::Team(_)) => "team",
+        Some(K::Person(_)) => "person",
         None => "",
     }
     .to_string()
@@ -465,6 +467,8 @@ pub fn kind_label_for(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::DataStore => "data_store",
         pb::EntityKind::Specification => "specification",
         pb::EntityKind::DataProduct => "data_product",
+        pb::EntityKind::Team => "team",
+        pb::EntityKind::Person => "person",
         pb::EntityKind::Unspecified => "",
     }
 }
@@ -511,6 +515,14 @@ fn title_of(entity: &pb::Entity) -> String {
         Some(K::DataStore(x)) => x.title.clone(),
         Some(K::Specification(x)) => x.title.clone(),
         Some(K::DataProduct(x)) => x.title.clone(),
+        Some(K::Team(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |value| value.value.clone()),
+        Some(K::Person(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |value| value.value.clone()),
         None => String::new(),
     }
 }
@@ -587,6 +599,16 @@ fn body_of(entity: &pb::Entity) -> String {
             push(&mut s, &x.target);
         }
         Some(K::Channel(x)) => push(&mut s, &x.doc),
+        Some(K::Team(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            push(&mut s, x.purpose.as_deref().unwrap_or_default());
+        }
+        Some(K::Person(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            if let Some(role) = &x.role {
+                push(&mut s, &role.value);
+            }
+        }
         Some(K::DataProduct(x)) => {
             push(&mut s, x.doc.as_deref().unwrap_or_default());
             if let Some(purpose) = &x.purpose {

@@ -1,5 +1,6 @@
 import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { ResponsibilityInspector } from '@/components/ResponsibilityInspector';
 import { DataProductInspector } from '@/components/DataProductInspector';
 import { ArchitectureResourceDetails } from '@/components/ArchitectureResourceDetails';
 import { SpecificationDetails } from '@/components/SpecificationDetails';
@@ -450,6 +451,7 @@ export function Inspector({
   model,
   entity,
   instanceUid,
+  asOf,
   momentKey,
   issues = EMPTY_ISSUE_INDEX,
   tab,
@@ -459,6 +461,7 @@ export function Inspector({
 }: {
   model: Model;
   entity: Entity;
+  asOf?: string;
   /** Validator findings for the whole model; this panel reads only its own. */
   issues?: IssueIndex;
   // The clicked moment's machine id: uuidv5(type uid / defining-slice uid).
@@ -630,9 +633,10 @@ export function Inspector({
               </p>
             </section>
           ) : null}
+          <ResponsibilityInspector entity={entity} asOf={asOf} />
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />
-          {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} />}
+          {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} asOf={asOf} />}
           {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}
           <SeamSection entity={entity} model={model} onSelect={onSelect} />
           {(() => {

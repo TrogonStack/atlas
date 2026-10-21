@@ -1,16 +1,14 @@
 # Responsibility acceptance
 
-Status: draft acceptance requirements for the proposed
-[responsibility contract](responsibility-contracts.md). These cases are not
-implemented Team/Person fixtures, executed test results or release approval.
-Existing native fixture links anchor future work; they do not prove the new
-contract. Wire allocation and responsibility query RPC/CLI/MCP names remain
-pending. Native schema, backend, authoring and review changes need separate
-implementation and evidence.
+Status: acceptance requirements and executable coverage for the native
+[responsibility contract](responsibility-contracts.md). The coverage section
+links implemented regressions; the requirements tables also retain cases that
+need further evidence. A source link alone is not an executed result or release
+approval. Deployed-browser acceptance remains unverified.
 
 ## Fixture anchors and evidence context
 
-| Existing source anchor | Required future responsibility extension |
+| Existing source anchor | Responsibility acceptance target |
 | --- | --- |
 | [Connected product fixture](../../rsworkspace/crates/trogon-atlas-server/tests/data_product_fixture.rs) | Reuse exact version `1` in `product-fixture`: ReadModels `submitted`/`receipt`, Event `placed`, slices and returned product ports, access associations and selected occurrences. Assign a Team to the product, a Person directly to an output port, and another assignment to one particular access association. |
 | [Specification fixture](../../rsworkspace/crates/trogon-atlas-server/tests/specification_fixture.rs) | Reuse native artifacts, schemas, messages, operations and exposures created through the server in namespace `contracts`. Assign different kinds to the Specification entity, each member kind and selected associations; distinguish member responsibility from provider exposure and API usage. |
@@ -18,7 +16,7 @@ implementation and evidence.
 | [Branch lifecycle](../../rsworkspace/crates/trogon-atlas-server/tests/resource_landing_lifecycle.rs), [retargeting](../../rsworkspace/crates/trogon-atlas-server/tests/resource_retargeting.rs) and [delete scope](../../rsworkspace/crates/trogon-atlas-server/tests/resource_delete_scope.rs) | Extend accepted removal/retarget, unchanged dangling landing, hidden inbound deletion protection and batch/final-view coverage to the new references. |
 | [Connection identities](../../rsworkspace/crates/trogon-atlas-server/tests/connection_ids.rs) | Extend identity restoration, repeated endpoints, exact owner UID and branch conflict cases to membership/responsibility associations. |
 
-Future fixtures must create native Team/Person entities through public backend
+Fixtures must create native Team/Person entities through public backend
 writes. Seed a Team with authored contacts, a Person with a minimal profile and
 optional pointer, another Person sharing a contact without identity merging,
 an empty Team, and explicit same-slug alternative versions. Add authorized and
@@ -36,7 +34,7 @@ evidence that the selected native identity exists.
 
 ## Profiles, membership and authority
 
-| Case | Required future result |
+| Case | Required result |
 | --- | --- |
 | Minimal Person and empty Team | Accept required shared values with absent role/pointer and empty contacts, members and responsibilities. Distinguish no authored members from external-directory truth. |
 | Typed optional contacts/pointer | Round-trip presence, values and authored order; reject empty supplied records, unknown alternatives, invalid email/URL/provider/key and size limits. No network fetch occurs. |
@@ -51,7 +49,7 @@ evidence that the selected native identity exists.
 
 ## Exact subjects and selector inventory
 
-| Case | Required future result |
+| Case | Required result |
 | --- | --- |
 | Entity inventory | Exercise every allowed entity kind from the contract; reject unspecified/unknown kinds, non-entities and exact self-assignment. Mutual responsibility between distinct Team/Person entities remains descriptive and nonrecursive. |
 | Version selection | A version `1` assignment never follows version `2` or `supersedes`. Another version needs an explicit new selector. Nonbreaking same-version edits remain visible under normal concurrency guards. |
@@ -70,7 +68,7 @@ evidence that the selected native identity exists.
 
 ## Association identity, branches and mutation
 
-| Case | Required future result |
+| Case | Required result |
 | --- | --- |
 | Create/add and retry | Omitted IDs receive actual persisted UUIDv7; new-owner supplied valid IDs follow native rules. Additions to existing owners must omit IDs; any caller-supplied ID on a new association rejects, including a known active ID. Unchanged retained associations preserve their IDs. Retry preserves operation receipt/idempotency behavior. |
 | Duplicate/stripped IDs | Reject duplicate IDs across membership and responsibility collections, nil/malformed IDs and stripped retained identities atomically. |
@@ -91,25 +89,27 @@ evidence that the selected native identity exists.
 
 ## Authorization, references, queries and deletion
 
-| Case | Required future result |
+| Case | Required result |
 | --- | --- |
 | Authorized cross-namespace write | Owner write plus selected target/owner and required endpoint read/reference access admits. Selected target need not be writable. Catalog assignment changes no authorization policy. |
+| Selected connection context | Check only the selected occurrence's native endpoint/identity context. A CommandSlice emission with readable Event/Command remains selectable despite unrelated hidden UI. A Storyboard entry ReadModel selection needs no observer access, while a human observer Persona edge requires its paired UI context. Hidden required endpoints still prevent admission or resolved disclosure. |
 | Reader mutation and hidden target | Reader write returns `PERMISSION_DENIED`; hidden direct target access follows `NOT_FOUND`. No hidden namespace/title/member/contact/bytes/path details through diagnostics or hydration. |
 | Authorized reverse/reference queries | Discover membership and every responsibility alternative, including nested selected owners, with original full selector, kind, assignee UID and association ID. No broad entity-to-member expansion. |
 | Partial access | Keep owner-visible authored declarations without revealing newly hydrated hidden details. Hidden referrer counts, totals and pagination do not leak their existence. Inaccessible lookup never becomes confirmed empty. |
 | Guarded single/batched safe delete | Incoming membership and entity/member/port/connection-owner assignments block deletion, including hidden referrers. Check all requested targets together across namespaces in the final merged graph. |
 | Final-graph batch removal | Explicitly remove/replace referrers and delete targets atomically when the complete final graph permits. Branch tombstones and replacements suppress obsolete baseline references. |
 | Forced deletion | Remove only chosen entities, retaining unresolved assignments/membership on other owners. Deleting Team/Person preserves its subjects/Persons. A same-key recreation obeys the selector's native incarnation policy. |
-| Visible scan budget | Enforce combined 5,000 resource rows including new Teams/Persons, and proposed 10,000 examined occurrences/4,096 output records per request. Pagination and batches do not reset budgets. No partial success masquerades as complete empty. |
+| Visible scan budget | Enforce combined 5,000 resource rows including new Teams/Persons, and 10,000 examined occurrences/4,096 output records per request. Pagination and batches do not reset budgets. No partial success masquerades as complete empty. |
 | Impact/closure | Preserve exact visited typed subjects and repeated occurrences with checked scope. Mark partial bounded traversal incomplete; no negative responsibility or execution claims. |
 | Safe-delete completeness | Independently scan all needed incoming references without visible resource-row ceiling, with bounded concurrency and total timeout. Incomplete scan/backend failure refuses deletion; capped visible reporting never authorizes it. |
 | Historical context | Native history/branch inspection identifies its actual checked context and coverage. Current directory hydration is never shown as a historical observation or a retained snapshot guarantee. |
 
 ## Rejections and operational failures
 
-Required diagnostic names/codes are pending implementation. Acceptance records
-must retain the actual public status and structured field/association details,
-not invent an executable diagnostic registry from this reference.
+`RESPONSIBILITY_VALUE_INVALID` and `RESPONSIBILITY_REFERENCE_UNRESOLVED`
+identify value and exact-selection diagnostics. Acceptance records must retain
+the actual public status and structured field/association details rather than
+infer success from a diagnostic name.
 
 | Failure class | Required distinction |
 | --- | --- |
@@ -121,12 +121,12 @@ not invent an executable diagnostic registry from this reference.
 
 ## Authoring, transport and review evidence
 
-| Surface | Required future acceptance evidence |
+| Surface | Required acceptance evidence |
 | --- | --- |
 | Backend public writes/reads | Persist and retrieve the fixture through public service paths, with exact IDs and guards; prove rejections leave stored state unchanged. Core helper tests alone cannot establish persistence or authorization. |
 | References/impact/authorized closure | Exercise every nested selector, privacy boundary, branch view and exact-query classification through actual authorized service requests. |
-| CLI native authoring | Create/update/read/export/reapply Team/Person with preserved presence and returned identities; reject stale/unknown IDs and unsupported selectors through the service. No handwritten client identity rematching. Command names remain pending. |
-| MCP native authoring | Exercise equivalent native operations and typed queries over the MCP transport, preserving request guards, structured error classes and exact selectors. Tool names remain pending. |
+| CLI native authoring | Create/update/read/export/reapply Team/Person with preserved presence and returned identities; reject stale/unknown IDs and unsupported selectors through the service. No handwritten client identity rematching. Use the commands in the contract's typed-query table. |
+| MCP native authoring | Exercise equivalent native operations and typed queries over the MCP transport, preserving request guards, structured error classes and exact selectors. Use the tools in the contract's typed-query table. |
 | Native copy/delete/branch commands | Prove preview/apply, safe/force deletion, clone mappings, merge/conflict identity and unchanged dangling landing through public surfaces. |
 | Studio review | Render backend assignments by full subject and kind; separate Team contacts from direct Person assignments. Show stale/inaccessible/incomplete states, historical context and exact member/port/occurrence identity without client-inferred ownership or authorization. |
 | Connected browser | Execute review with authorized deployed service/browser context and retain exact result evidence. Component-only rendering checks do not establish deployed behavior. |
@@ -137,3 +137,23 @@ checked branch/revisions and authorization context. Unexecuted cases remain
 requirements. A passing scoped documentation check or existing native fixture
 is not evidence of Team/Person implementation, end-user acceptance or release
 readiness.
+
+## Executable coverage and remaining evidence
+
+| Source | Implemented coverage |
+| --- | --- |
+| [Connected responsibility fixture](../../rsworkspace/crates/trogon-atlas-server/tests/responsibility_fixture.rs) | Uses exact version `1` in `responsibility-fixture`. ReadModel `receipt` connects Specification `receipt-contract` message mapping, DataProduct `receipts` output and distinct repeated sources in AutomationSlice `observe`. Person `maintainer` selects the message and output port; `receipts-team` selects the product and one observation. `support-team` shares that Person without inherited assignments. Checks typed lookup, membership/contact provenance, generic reference/impact selectors, cap-zero hydration, reorder and retained unresolved member after force deletion. |
+| [Authenticated backend regressions](../../rsworkspace/crates/trogon-atlas-server/tests/responsibility_backend.rs) | Public service tests cover authorization and hidden-referrer protection, branch/tombstone and unchanged dangling behavior, exact member/port/connection selection, final-batch safe-delete preview/apply with exact guard hydration, retarget refusal and supported retargeting, generic graph provenance and occurrence/output budgets. Generic discovery tests cover baseline/branch and warmed caches, hidden-owner isolation, targeted reads, closure truncation and independent safe deletion under unrelated graph excess. |
+| [Core identity tests](../../rsworkspace/crates/trogon-atlas-core/tests/responsibility.rs) | Profile/value limits, optional presence, exact selector and complete sibling identity validation, role/full-subject fingerprints, reorder/reapply/retarget/removal/clone/branch restoration and generic Reference wire provenance. |
+| [Complete store reference guards](../../rsworkspace/crates/trogon-atlas-store/tests/reference_guards.rs) | Uncapped final-overlay scan suppresses replaced/deleted owners, includes newly created owners, checks branch state and untyped slice precedence, and rejects duplicate/mismatched overlay keys. |
+| [Manifest round trips](../../rsworkspace/crates/trogon-atlas-client/tests/responsibility_manifest.rs), [typed transport](../../rsworkspace/crates/trogon-atlas-client/tests/responsibility_transport.rs) and [CLI integration](../../rsworkspace/crates/trogon-atlas-cli/tests/responsibility_cli_integration.rs) | Typed profiles/selectors, native authoring/export/reapply, query metadata/status preservation, structured budget failures, malformed requests and identity-stripping/unknown-ID refusal. |
+| [MCP integration](../../rsworkspace/crates/trogon-atlas-mcp/tests/mcp_integration.rs) | Native Team/Person authoring and typed queries preserve actual IDs, scope, exact reapply values and structured errors through the MCP transport. |
+| [Studio inspector](../../tsworkspace/webapps/studio/src/components/ResponsibilityInspector.test.tsx), [subject selectors](../../tsworkspace/webapps/studio/src/lib/responsibility.test.ts), [gateway requests](../../tsworkspace/webapps/studio/server/index.test.mjs) and [production codec contract](../../tsworkspace/webapps/studio/server/responsibility-contract.test.mjs) | Read-only exact subject selection, assignee/membership/contact presentation, stale/inaccessible/incomplete states and historical context. Real serializer-boundary cases reject malformed enum, boolean, oneof and nested values before normalization can change query intent, while preserving valid typed requests. Component/transport coverage does not establish deployed-browser behavior. |
+
+These focused tests establish the behavior they exercise, not exhaustive proof
+of every requirement row. Exhaustive entity/connection inventory permutations,
+all clone/merge and cross-namespace combinations, the resource-row budget at
+production graph sizes, historical retention operations and deployed-browser
+acceptance still need their own case-to-evidence records. Directory sync,
+external import/export fidelity and runtime execution remain outside this
+native slice.

@@ -94,4 +94,9 @@ enum EntityKind {
   ENTITY_KIND_DATA_STORE = 31;
   ENTITY_KIND_SPECIFICATION = 32;
   ENTITY_KIND_DATA_PRODUCT = 33;
+  ENTITY_KIND_TEAM = 34;
+  ENTITY_KIND_PERSON = 35;
 }
+
+message TeamRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message PersonRef { trogonatlas.type.v1alpha1.Id id = 1; }

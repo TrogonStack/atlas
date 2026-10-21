@@ -132,9 +132,9 @@ function Port({ port, state, input }: { port: Record<string, unknown>; state?: D
     </section>
   );
 }
-export function DataProductInspector({ entity }: { entity: Entity }) {
-  const branch = readBranchFromUrl();
-  const asOf = readAsOfFromUrl();
+export function DataProductInspector({ entity, asOf: historicalAsOf }: { entity: Entity; asOf?: string }) {
+  const asOf = historicalAsOf ?? readAsOfFromUrl();
+  const branch = asOf ? undefined : readBranchFromUrl();
   const [result, setResult] = useState<{ key: string; inspection?: DataProductInspection; error?: string }>();
   const key = `${entity.key}:${JSON.stringify(entity.raw)}:${branch ?? ''}:${asOf ?? ''}`;
   useEffect(() => {
@@ -164,7 +164,7 @@ export function DataProductInspector({ entity }: { entity: Entity }) {
       )}
       <dl className="flex flex-col gap-2">
         <Detail label="Purpose">{value(product.purpose)}</Detail>
-        <Detail label="Ownership">Undeclared pending responsibility layer</Detail>
+        <Detail label="Responsibility">See the separate backend responsibility inspection for exact subjects.</Detail>
         <Detail label="Checked context">
           {inspection?.scope ? <ExactContent value={{ ...inspection.scope, etag: inspection.etag }} /> : 'Unknown'}
         </Detail>

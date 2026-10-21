@@ -532,6 +532,8 @@ struct FailingBatchStore {
     inner: NatsStore,
     failure: fn() -> StoreError,
     fail_batches: bool,
+    get_failure: Option<(pb::Id, Arc<std::sync::atomic::AtomicBool>)>,
+    resource_scan_overflow: Arc<std::sync::atomic::AtomicBool>,
     resource_scan_gate: Option<Arc<ResourceScanGate>>,
     reference_scans: std::sync::atomic::AtomicUsize,
 }
@@ -554,6 +556,8 @@ impl FailingBatchStore {
             inner: nats.store().await,
             failure,
             fail_batches: true,
+            get_failure: None,
+            resource_scan_overflow: Arc::default(),
             resource_scan_gate: None,
             reference_scans: std::sync::atomic::AtomicUsize::new(0),
         }
@@ -638,6 +642,11 @@ impl Store for FailingBatchStore {
         id: &pb::Id,
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<StoredEntity> {
+        if self.get_failure.as_ref().is_some_and(|(target, armed)| {
+            target == id && armed.load(std::sync::atomic::Ordering::SeqCst)
+        }) {
+            return Err((self.failure)());
+        }
         self.inner.get(kind, id, branch).await
     }
 
@@ -701,6 +710,19 @@ impl Store for FailingBatchStore {
         self.inner.referenced_targets(targets, branch).await
     }
 
+    async fn referenced_targets_with_overlay(
+        &self,
+        targets: &[pb::EntityKey],
+        branch: Option<&str>,
+        overlay: &[(pb::EntityKey, Option<pb::Entity>)],
+    ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
+        self.reference_scans
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner
+            .referenced_targets_with_overlay(targets, branch, overlay)
+            .await
+    }
+
     async fn list(
         &self,
         filter: ListFilter<'_>,
@@ -710,6 +732,24 @@ impl Store for FailingBatchStore {
         let resource_scan = filter.kinds.contains(&pb::EntityKind::Channel)
             || filter.kinds.contains(&pb::EntityKind::DataStore)
             || filter.kinds.contains(&pb::EntityKind::Specification);
+        if resource_scan
+            && self
+                .resource_scan_overflow
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok((0..=5000)
+                .map(|index| StoredEntity {
+                    entity: pb::Entity {
+                        kind: Some(pb::entity::Kind::Person(pb::Person {
+                            id: Some(id("overflow", &format!("person-{index}"), 1)),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    },
+                    etag: index.to_string(),
+                })
+                .collect());
+        }
         let rows = self.inner.list(filter, limit, branch).await?;
         if let Some(gate) = &self.resource_scan_gate {
             if resource_scan && gate.armed.swap(false, std::sync::atomic::Ordering::SeqCst) {
@@ -4055,4 +4095,138 @@ async fn batch_delete_checks_all_targets_in_one_reference_scan() {
             .load(std::sync::atomic::Ordering::SeqCst),
         0
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn responsibility_root_closure_propagates_dependency_read_failures() {
+    let failures: [(fn() -> StoreError, tonic::Code); 3] = [
+        (
+            || StoreError::Unavailable("injected dependency outage".into()),
+            tonic::Code::Unavailable,
+        ),
+        (
+            || StoreError::Backend("injected dependency failure".into()),
+            tonic::Code::Internal,
+        ),
+        (
+            || StoreError::CorruptEntry {
+                key: "dependency".into(),
+                reason: "injected decode failure".into(),
+            },
+            tonic::Code::Internal,
+        ),
+    ];
+    for (failure, expected) in failures {
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let target = id("closure-errors", "dependency", 1);
+        let mut backend = FailingBatchStore::with_failure(failure).await;
+        backend.get_failure = Some((target.clone(), armed.clone()));
+        let service = EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+            .unwrap()
+            .with_snapshot_cap(0);
+        service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(make_event("closure-errors", "dependency", 1)),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        let root = pb::EntityRef {
+            kind: pb::EntityKind::Team as i32,
+            id: Some(id("closure-errors", "root", 1)),
+        };
+        service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(pb::Entity {
+                    kind: Some(pb::entity::Kind::Team(pb::Team {
+                        id: root.id.clone(),
+                        title: Some(pb::DirectoryDisplayName {
+                            value: "Root".into(),
+                        }),
+                        responsibilities: vec![pb::Responsibility {
+                            kind: pb::ResponsibilityKind::Owner as i32,
+                            subject: Some(pb::ResponsibilitySubject {
+                                selection: Some(pb::responsibility_subject::Selection::Entity(
+                                    pb::EntityRef {
+                                        kind: pb::EntityKind::Event as i32,
+                                        id: Some(target),
+                                    },
+                                )),
+                            }),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let error = service
+            .extract_subgraph(Request::new(pb::ExtractSubgraphRequest {
+                scope: Some(pb::AnalysisScope {
+                    scope: Some(pb::analysis_scope::Scope::Slice(root)),
+                }),
+                include_cross_model: true,
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), expected, "{error:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn retarget_references_rejects_incomplete_resource_scan_before_preview_or_apply() {
+    let backend = FailingBatchStore::new().await;
+    let overflow = backend.resource_scan_overflow.clone();
+    let service = EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(0);
+    for slug in ["original", "replacement"] {
+        service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(make_event("overflow", slug, 1)),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+    }
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "overflow-branch".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    overflow.store(true, std::sync::atomic::Ordering::SeqCst);
+    for branch in [None, Some("overflow-branch")] {
+        for preview in [true, false] {
+            let mut request = Request::new(pb::RetargetReferencesRequest {
+                from: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Event as i32,
+                    id: Some(id("overflow", "original", 1)),
+                }),
+                to: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Event as i32,
+                    id: Some(id("overflow", "replacement", 1)),
+                }),
+                dry_run: preview,
+                ..Default::default()
+            });
+            if let Some(branch) = branch {
+                request
+                    .metadata_mut()
+                    .insert("x-trogon-atlas-branch", branch.parse().unwrap());
+            }
+            let error = service.retarget_references(request).await.unwrap_err();
+            assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+            assert_eq!(
+                error.message(),
+                "architecture reference scan exceeds its entity budget"
+            );
+        }
+    }
 }

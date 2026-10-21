@@ -53,13 +53,15 @@ vi.mock('@/components/Inspector', () => ({
     tab,
     onTabChange,
     onClose,
+    asOf,
   }: {
     entity: { title: string };
+    asOf?: string;
     tab?: string;
     onTabChange?: (tab: string) => void;
     onClose: () => void;
   }) => (
-    <div data-testid="inspector" data-tab={tab}>
+    <div data-testid="inspector" data-tab={tab} data-as-of={asOf}>
       {entity.title}
       <button type="button" aria-label="Close inspector" onClick={onClose} />
       <button type="button" aria-label="Inspector tab details" onClick={() => onTabChange?.('details')} />
@@ -90,6 +92,17 @@ describe('ModelShell selection drawer routing', () => {
     (api.changeset as ReturnType<typeof vi.fn>).mockResolvedValue({ changeset: null });
   });
   afterEach(cleanup);
+
+  it('passes retained historical context to the inspector before the URL catches up', async () => {
+    const model = buildModel([
+      { event: { id: { namespace: 'shop', slug: 'order.placed', version: '1' }, title: 'Retained event' } },
+    ]);
+    const asOf = '11111111-1111-4111-8111-111111111111';
+    rtlRender(<ModelShell model={model} scopedTitle="History" asOf={asOf} />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: '?selected=event:shop/order.placed@1' }),
+    });
+    await waitFor(() => expect(screen.getByTestId('inspector').getAttribute('data-as-of')).toBe(asOf));
+  });
 
   it('opens finding details and jumps to its entity using the shared focus request', async () => {
     const id = { namespace: 'shop', slug: 'order.placed', version: '1' };

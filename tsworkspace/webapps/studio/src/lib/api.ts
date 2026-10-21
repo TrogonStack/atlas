@@ -1,5 +1,13 @@
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
+import type {
+  AssigneeResponsibilitiesRequest,
+  DirectoryRef,
+  ResponsibilityAssignments,
+  ResponsibilityContacts,
+  ResponsibilityMemberships,
+  SubjectAssignmentsRequest,
+} from '@/lib/responsibility';
 import { activeSnapshot, notInSnapshot, snapshotResponse } from '@/lib/snapshot';
 
 // Hard ceiling on every browser → gateway request. Long-running RPCs are
@@ -448,4 +456,23 @@ export function inspectDataProduct(id: EntityId, opts: FetchOptions = {}): Promi
     `/api/data-product/${encodeURIComponent(id.namespace)}/${encodeURIComponent(id.slug)}/inspect?version=${encodeURIComponent(id.version)}`,
     opts,
   );
+}
+
+function responsibilityQuery<T>(query: string, request: unknown, opts: FetchOptions): Promise<T> {
+  return getJson(`/api/responsibility/${query}?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function listSubjectAssignments(request: SubjectAssignmentsRequest, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityAssignments>('subject-assignments', request, opts);
+}
+export function listAssigneeResponsibilities(request: AssigneeResponsibilitiesRequest, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityAssignments>('assignee-responsibilities', request, opts);
+}
+export function listTeamMembers(team: DirectoryRef, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityMemberships>('team-members', { team }, opts);
+}
+export function listPersonTeams(person: DirectoryRef, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityMemberships>('person-teams', { person }, opts);
+}
+export function getTeamContacts(team: DirectoryRef, includeMembers = false, opts: FetchOptions = {}) {
+  return responsibilityQuery<ResponsibilityContacts>('team-contacts', { team, includeMembers }, opts);
 }

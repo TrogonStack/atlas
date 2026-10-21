@@ -1835,3 +1835,115 @@ async fn data_product_mcp_authoring_export_reapply_and_checked_inspection() {
     assert_eq!(before, after);
     service.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn responsibility_mcp_native_authoring_queries_and_reapply_preserve_provenance() {
+    let (client, service, _) = start_mcp_client().await;
+    let ns = "mcp-directory";
+    let id = |slug| serde_json::json!({"namespace":ns,"slug":slug,"version":"1"});
+    let person = serde_json::json!({"id":id("person")});
+    let team = serde_json::json!({"id":id("team")});
+    call_ok(&client,"put_entity_json",put_entity_json_args(&serde_json::json!({"person":{"id":id("person"),"title":{"value":"Person"},"contacts":[{"email":{"value":"catalog@example.test"}}]}}).to_string())).await;
+    call_ok(&client,"put_entity_json",put_entity_json_args(&serde_json::json!({"team":{"id":id("team"),"title":{"value":"Team"},"members":[{"person":person}],"responsibilities":[{"kind":"RESPONSIBILITY_KIND_CONTACT","subject":{"entity":{"kind":"ENTITY_KIND_PERSON","id":id("person")}}}]}}).to_string())).await;
+    let args = args_obj(&[
+        ("kind", serde_json::json!("team")),
+        ("namespace", serde_json::json!(ns)),
+        ("slug", serde_json::json!("team")),
+        ("version", serde_json::json!(1)),
+    ]);
+    let before = call_tool_result_text(&call_ok(&client, "get_entity_json", args.clone()).await);
+    assert!(before["json"]["team"]["members"][0]["connectionId"]["value"].is_string());
+    for (tool, request, field) in [
+        (
+            "list_subject_assignments",
+            serde_json::json!({"subject":{"entity":{"kind":"ENTITY_KIND_PERSON","id":id("person")}}}),
+            "assignments",
+        ),
+        (
+            "list_assignee_responsibilities",
+            serde_json::json!({"assignee":{"team":team}}),
+            "assignments",
+        ),
+        (
+            "list_team_members",
+            serde_json::json!({"team":team}),
+            "memberships",
+        ),
+        (
+            "list_person_teams",
+            serde_json::json!({"person":person}),
+            "memberships",
+        ),
+        (
+            "get_team_contacts",
+            serde_json::json!({"team":team,"includeMembers":true}),
+            "memberContacts",
+        ),
+    ] {
+        let result = call_tool_result_text(
+            &call_ok(&client, tool, args_obj(&[("request_json", request)])).await,
+        );
+        assert_eq!(
+            result[field].as_array().unwrap().len(),
+            1,
+            "{tool}: {result}"
+        );
+        assert!(result["scope"].is_object());
+    }
+    let exported = call_tool_result_text(
+        &call_ok(
+            &client,
+            "export_namespace",
+            args_obj(&[("namespace", serde_json::json!(ns))]),
+        )
+        .await,
+    );
+    let yaml = exported["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    call_ok(
+        &client,
+        "apply_manifests",
+        args_obj(&[("manifests_yaml", serde_json::json!(yaml))]),
+    )
+    .await;
+    assert_eq!(
+        before,
+        call_tool_result_text(&call_ok(&client, "get_entity_json", args).await)
+    );
+    for request in [
+        serde_json::json!({"unknown":true}),
+        serde_json::json!({"team":{"id":{"namespace":ns,"slug":"team","version":"0"}}}),
+        serde_json::json!({"team":{"id":{"namespace":ns,"slug":"team","version":"1"}},"padding":"x".repeat(trogon_atlas_mcp::server::MAX_JSON_BYTES)}),
+    ] {
+        let error = client
+            .call_tool(
+                rmcp::model::CallToolRequestParams::new("list_team_members")
+                    .with_arguments(args_obj(&[("request_json", request)])),
+            )
+            .await
+            .unwrap_err();
+        match error {
+            rmcp::ServiceError::McpError(error) => {
+                assert_eq!(error.code, ErrorCode::INVALID_PARAMS, "{error:?}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+    service.cancel().await.unwrap();
+}
+
+#[test]
+fn responsibility_query_budget_error_preserves_structured_public_classification() {
+    let error = classify_status(&tonic::Status::resource_exhausted("private backend detail"));
+    assert_eq!(error.code, ErrorCode::INVALID_PARAMS);
+    let data = error.data.unwrap();
+    assert_eq!(data["code"], "RESOURCE_EXHAUSTED");
+    assert_eq!(data["category"], "validation");
+    assert_eq!(data["next_action"], "fix_input");
+    assert!(!error.message.contains("private backend detail"));
+}

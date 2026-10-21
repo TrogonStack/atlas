@@ -34,6 +34,8 @@ const ALL_ENTITY_KINDS: EntityKind[] = [
   'typeLibrary',
   'channel',
   'dataStore',
+  'team',
+  'person',
   'dataProduct',
   'specification',
 ];

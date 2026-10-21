@@ -17,6 +17,7 @@ import protoLoader from "@grpc/proto-loader";
 import express from "express";
 import { rateLimit as expressRateLimit } from "express-rate-limit";
 import protobuf from "protobufjs";
+import { validateResponsibilityRequest } from "./responsibility-request.mjs";
 import { isChangesetId, isSafeBranchName, isSafeNamespace } from "../shared/safe-namespace.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -321,6 +322,11 @@ const READ_RPCS = new Set([
   "exportEventModelManifests",
   "getEntity",
   "inspectDataProduct",
+  "listSubjectAssignments",
+  "listAssigneeResponsibilities",
+  "listTeamMembers",
+  "listPersonTeams",
+  "getTeamContacts",
   "getChangeset",
   "getEntityHistory",
   "getEventModelProjection",
@@ -1802,6 +1808,39 @@ app.get(
       namespaces,
       limit: 25,
     });
+  }),
+);
+
+const RESPONSIBILITY_QUERIES = new Map([
+  ["subject-assignments", "listSubjectAssignments"],
+  ["assignee-responsibilities", "listAssigneeResponsibilities"],
+  ["team-members", "listTeamMembers"],
+  ["person-teams", "listPersonTeams"],
+  ["team-contacts", "getTeamContacts"],
+]);
+
+app.get(
+  "/api/responsibility/:query",
+  branchHandler((req) => {
+    const method = RESPONSIBILITY_QUERIES.get(String(req.params.query));
+    /** @param {string} message */
+    const reject = (message) => {
+      const error = /** @type {HttpError} */ (new Error(message));
+      error.status = 400;
+      throw error;
+    };
+    if (!method) return reject("unknown responsibility query");
+    if (req.query.asOf !== undefined) return reject("historical responsibility inspection unavailable");
+    let input;
+    try {
+      input = JSON.parse(String(req.query.request ?? ""));
+    } catch {
+      return reject("request must be a JSON object");
+    }
+    if (!input || typeof input !== "object" || Array.isArray(input)) return reject("request must be a JSON object");
+    const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
+    validateResponsibilityRequest(requestType, input);
+    return call(method, input);
   }),
 );
 

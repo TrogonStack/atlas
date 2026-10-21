@@ -127,6 +127,8 @@ pub(super) fn is_resource(entity: &pb::Entity) -> bool {
                 | pb::entity::Kind::DataStore(_)
                 | pb::entity::Kind::Specification(_)
                 | pb::entity::Kind::DataProduct(_)
+                | pb::entity::Kind::Team(_)
+                | pb::entity::Kind::Person(_)
         )
     )
 }
@@ -313,6 +315,12 @@ pub(super) fn validate_in_context(
     }
     if matches!(entity.kind, Some(pb::entity::Kind::Specification(_))) {
         return crate::specification_resources::validate_in_context(entity, context);
+    }
+    if matches!(
+        entity.kind,
+        Some(pb::entity::Kind::Team(_) | pb::entity::Kind::Person(_))
+    ) {
+        return crate::responsibility_resources::validate_in_context(entity, context);
     }
     let mut checks = Checks {
         subject: super::slice_ref(entity),
