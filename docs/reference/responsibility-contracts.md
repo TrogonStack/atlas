@@ -269,7 +269,7 @@ closure surfaces rather than form an independent directory index.
 | --- | --- |
 | Direct assignments for subject | Exact `ResponsibilitySubject`, optional typed responsibility-kind filter. Return authorized assignee TeamRef/PersonRef, assignee UID, assignment ConnectionId, kind and original full subject. No expansion to owner/member/port/endpoint/family. |
 | Assignee responsibilities | Exact TeamRef or PersonRef. Return each authored assignment and separate resolved, retained-unresolved or inaccessible hydration state. |
-| Membership/reverse membership | Exact TeamRef or PersonRef. Return Team-owned membership identities and exact Person refs, with checked authorization/scope. No external-directory completeness claim. |
+| Membership/reverse membership | Exact TeamRef or PersonRef. Return each containing TeamRef and Team owner UID, membership ConnectionId and exact PersonRef, with checked authorization/scope. No external-directory completeness claim. |
 | Team contacts | Exact TeamRef and explicit `include_members` boolean, default false. Return team contacts separately from authorized member contacts, each with provenance and membership identity. Never present these as member responsibility assignments. |
 
 All results identify branch, checked authorized scope, etags/revision digest,

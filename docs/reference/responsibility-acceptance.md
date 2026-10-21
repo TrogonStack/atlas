@@ -43,7 +43,7 @@ evidence that the selected native identity exists.
 | Contact normalization/deduplication | Preserve authored spelling. Reject exact duplicate contacts within an owner; permit shared contacts/pointers across people without merge, principal lookup or uniqueness claim. |
 | Raw directory data and credentials | No directory snapshot, arbitrary profile payload or principal-binding field is accepted as part of this contract. Free text/registered metadata are not represented as automatic personal-data detection or erasure. |
 | Person, Persona and principal | Reject wrong-kind membership. A Person assignment creates no Persona edge, authenticated identity or authorization grant. OWNER and other kinds remain catalog descriptions. |
-| Membership | Only Team-to-exact-Person is authored. Reverse membership is derived; duplicate same-exact-Person membership rejects, distinct versions remain distinct. No nested Teams or membership roles. |
+| Membership | Only Team-to-exact-Person is authored. Reverse membership is derived; duplicate same-exact-Person membership rejects, distinct versions remain distinct. Each membership result includes the containing exact TeamRef, Team owner UID, membership ConnectionId and exact PersonRef. Query a Person belonging to multiple Teams and distinguish each containing Team and occurrence. No nested Teams or membership roles. |
 | Direct versus Team responsibility | A Team assignment does not appear as a member's direct assignment; a Person assignment does not appear as a Team assignment. Multiple assignees/kinds for a subject remain independent. |
 | Team contact expansion | Default returns Team contacts only. Explicit member expansion returns separately attributed authorized member contacts, not inherited assignments. Empty, hidden and incomplete expansion remain distinguishable. |
 | Metadata and supersession | Registered-type validation and server-owned system fields match native rules. Invalid same-family supersession, wrong-kind versions and cycles reject. Metadata does not replace typed subjects or grant permissions. |
@@ -72,7 +72,7 @@ evidence that the selected native identity exists.
 
 | Case | Required future result |
 | --- | --- |
-| Create/add and retry | Omitted IDs receive actual persisted UUIDv7; new-owner supplied valid IDs follow native rules. Existing-owner unknown supplied IDs reject. Retry preserves operation receipt/idempotency behavior. |
+| Create/add and retry | Omitted IDs receive actual persisted UUIDv7; new-owner supplied valid IDs follow native rules. Additions to existing owners must omit IDs; any caller-supplied ID on a new association rejects, including a known active ID. Unchanged retained associations preserve their IDs. Retry preserves operation receipt/idempotency behavior. |
 | Duplicate/stripped IDs | Reject duplicate IDs across membership and responsibility collections, nil/malformed IDs and stripped retained identities atomically. |
 | Reorder/profile/doc edit | Preserve all unchanged membership and assignment IDs. Native unchanged id-less reapply is a no-op; edited identity-stripping manifests reject. |
 | Responsibility role/subject change | OWNER-to-MAINTAINER, entity-to-port, exact version, member kind/digest presence, direction, UID or local selector changes require fresh association IDs. Retaining the former ID rejects. |
