@@ -81,8 +81,9 @@ enum Cmd {
         /// Run server-side validation for every change without persisting.
         /// Reports the request-time findings for each write, including the
         /// strategic ones (BoundedContext, Domain, Subdomain rules), which
-        /// are warnings and never block the apply. Findings that need the
-        /// whole model in view come from `validate` and `validate-project`.
+        /// never block the apply at any severity, so it still exits 0.
+        /// Findings that need the whole model in view come from `validate`
+        /// and `validate-project`.
         #[arg(long)]
         dry_run: bool,
         /// Idempotency key for the batch this apply sends; omit to mint a
@@ -467,8 +468,8 @@ fn summary_json(counts: branch::SeverityCounts) -> Value {
 }
 
 /// Exit code for a command whose output reports something short of success
-/// without being an error: drift a diff found, issues apply reported, a
-/// branch's remaining conflicts. Also used by `trogon-atlas fmt --check`.
+/// without being an error: drift a diff found, a branch's remaining
+/// conflicts. Also used by `trogon-atlas fmt --check`.
 const EXIT_FINDINGS: u8 = 1;
 
 /// A clap usage error (missing/conflicting flags) exits 2 on its own,
@@ -760,24 +761,11 @@ async fn run(
                     }
                 }
             }
-            let has_errors = outcome.issues.iter().any(|issue| {
-                matches!(
-                    pb::validation_issue::Severity::try_from(issue.severity),
-                    Ok(pb::validation_issue::Severity::Error)
-                )
-            });
             let data = json!({
                 "lines": outcome.lines,
                 "issues": outcome.issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
             });
-            Ok((
-                if has_errors {
-                    ExitCode::from(EXIT_FINDINGS)
-                } else {
-                    ExitCode::SUCCESS
-                },
-                Some(data),
-            ))
+            Ok((ExitCode::SUCCESS, Some(data)))
         }
         Cmd::Diff { filenames } => {
             let files = manifest::read_paths(&filenames)?;

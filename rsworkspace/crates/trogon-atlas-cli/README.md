@@ -46,8 +46,9 @@ event model: the model-level rules (storyboard entries, projection order,
 field provenance) and the strategic chain of the model's namespace, meaning
 its BoundedContext, the Subdomains it realizes, their Domains, and any Domain
 declared in the namespace. `apply --dry-run` returns only the request-time
-findings for each write, strategic warnings included (they never block the
-apply), so run `validate` after an apply to see the whole-model findings.
+findings for each write, strategic ones included. They never block the
+apply at any severity, so an apply that succeeds exits `0`; run `validate`
+after an apply to see the whole-model findings.
 With `--branch`, it validates the branch's view of the model. It exits `1`
 when any finding is an error and `6` when the model does not exist.
 
