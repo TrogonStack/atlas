@@ -27,17 +27,15 @@ message MixedSurfaceAnnotation {
   string doc = 1;
 }
 
-// Decision #34. The "at most one automation per read model" rule is
-// a useful default -- different automations usually consume
-// differently-shaped data, and splitting RMs per consumer keeps the
-// coupling explicit. But sometimes one RM legitimately serves
-// several consumers: a captured-payment row read by the ledger
-// recorder and the refund processor and the treasury UI carries the
-// same data; forcing a clone per consumer just multiplies the same
-// sticky on the board. Declare the multi-consumer case explicitly
-// with SharedConsumersAnnotation; the validator's
-// READ_MODEL_MULTIPLE_AUTOMATIONS rule downgrades from Error to
-// Info when this annotation is present and its doc is non-empty.
+// Decision #34. Read models split by shape, not by consumer: a
+// captured-payment row read by the ledger recorder, the refund
+// processor and the treasury UI is one read model, and a clone per
+// consumer just multiplies the same sticky on the board
+// (READ_MODEL_DUPLICATE_SHAPE warns about such clones). This
+// annotation names the consumers of a shared read model; the
+// validator reports READ_MODEL_SHARED_CONSUMERS instead of
+// READ_MODEL_MULTIPLE_AUTOMATIONS, both Info, and an empty doc is an
+// Error.
 message SharedConsumersAnnotation {
   // Free-form explanation naming the consumers and why they share
   // the same RM rather than each owning a per-consumer view.
