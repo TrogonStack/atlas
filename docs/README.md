@@ -44,6 +44,8 @@ Resource contracts and acceptance:
 - [Specification and API acceptance criteria](reference/specification-and-api-acceptance.md)
 - [DataProduct contracts](reference/data-product-contracts.md)
 - [DataProduct acceptance criteria](reference/data-product-acceptance.md)
+- [Responsibility contract proposal](reference/responsibility-contracts.md)
+- [Responsibility acceptance criteria](reference/responsibility-acceptance.md)
 
 ## Explanation
 
