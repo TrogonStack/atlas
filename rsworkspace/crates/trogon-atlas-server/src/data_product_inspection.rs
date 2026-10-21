@@ -27,10 +27,10 @@ impl EventModelServiceImpl {
     ) -> Result<pb::InspectDataProductResponse, Status> {
         let id = super::require_id(product.id.as_ref(), "product")?;
         self.require_visible(vis, &id.namespace).await?;
+        let guard = self.lock_mutations().await;
         if let Some(branch) = branch {
             self.require_branch(branch).await?;
         }
-        let _guard = self.lock_mutations().await;
         let stored = self
             .store
             .get(pb::EntityKind::DataProduct, id, branch)
@@ -170,9 +170,11 @@ impl EventModelServiceImpl {
                 Err(error) => return Err(store_err(error)),
             }
         }
+        drop(guard);
         let context = ArchitectureContext::new(world.values());
         let issues = crate::data_product_resources::validate_in_context(&stored.entity, &context);
         let mut compiled = HashMap::new();
+        let world_rows: Vec<_> = world.values().cloned().collect();
         for selection in crate::data_product_resources::library_types(authored) {
             let (Some(id), Some(message)) = (
                 selection.library.as_ref().and_then(|r| r.id.as_ref()),
@@ -185,10 +187,9 @@ impl EventModelServiceImpl {
                 message.value.clone(),
             );
             if let std::collections::hash_map::Entry::Vacant(entry) = compiled.entry(key) {
-                let rows: Vec<_> = world.values().cloned().collect();
                 let state = match self
                     .type_libraries
-                    .check_contract_type(id, &message.value, &rows)
+                    .check_contract_type(id, &message.value, &world_rows)
                     .await
                 {
                     Ok(()) => State::Resolved,
@@ -890,6 +891,174 @@ fn paths_from(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn inspection_compiler_wait_does_not_block_authenticated_mutation() {
+        use std::{sync::Arc, time::Duration};
+
+        use pb::{
+            event_model_service_client::EventModelServiceClient,
+            event_model_service_server::{EventModelService, EventModelServiceServer},
+        };
+        use tonic::{service::interceptor::InterceptedService, Request};
+        use trogon_atlas_types::CompileRunner;
+
+        use crate::{
+            auth::{AuthzLayer, BearerAuth, TokenRegistry},
+            metrics::ServerMetrics,
+            type_libraries::TypeLibraryGate,
+        };
+
+        fn request<T>(body: T, token: &str) -> Request<T> {
+            let mut request = Request::new(body);
+            request
+                .metadata_mut()
+                .insert("authorization", format!("Bearer {token}").parse().unwrap());
+            request
+        }
+        let id = |slug: &str| pb::Id {
+            namespace: "compiler-lock".into(),
+            slug: slug.into(),
+            version: 1,
+        };
+        let mut service = EventModelServiceImpl::try_new(
+            Arc::new(trogon_atlas_testsupport::shared().await.store().await),
+            ServerMetrics::default(),
+        )
+        .unwrap();
+        for kind in [
+            pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                id: Some(id("types")),
+                title: "Types".into(),
+                files: vec![pb::ProtoSourceFile {
+                    path: "types.proto".into(),
+                    content: "syntax = \"proto3\"; package types.v1; message Result {}".into(),
+                }],
+                ..Default::default()
+            }),
+            pb::entity::Kind::DataProduct(pb::DataProduct {
+                id: Some(id("product")),
+                title: "Product".into(),
+                outputs: vec![pb::DataOutputPort {
+                    name: Some(pb::PortName {
+                        value: "Result".into(),
+                    }),
+                    contract: Some(pb::OutputContract {
+                        r#type: Some(pb::output_contract::Type::LibraryType(
+                            pb::TypeLibraryTypeRef {
+                                library: Some(pb::TypeLibraryRef {
+                                    id: Some(id("types")),
+                                }),
+                                message: Some(pb::QualifiedProtoName {
+                                    value: "types.v1.Result".into(),
+                                }),
+                            },
+                        )),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        ] {
+            service
+                .put_entity(Request::new(pb::PutEntityRequest {
+                    entity: Some(pb::Entity {
+                        kind: Some(kind),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }))
+                .await
+                .unwrap();
+        }
+        let gate =
+            TypeLibraryGate::with_compile_runner(CompileRunner::new(0, Duration::from_secs(60)));
+        service.type_libraries = gate.clone();
+        let registry = TokenRegistry::from_file_contents(
+            toml::from_str(
+                r#"
+[principals.admin]
+role = "admin"
+tokens = ["compiler-admin"]
+[principals.reader]
+role = "reader"
+tokens = ["compiler-reader"]
+"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(InterceptedService::new(
+                    tower::ServiceBuilder::new()
+                        .layer(AuthzLayer)
+                        .service(EventModelServiceServer::new(service)),
+                    BearerAuth::new(Arc::new(registry)),
+                ))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+        let mut client = EventModelServiceClient::connect(format!("http://{address}"))
+            .await
+            .unwrap();
+        let mut reader = client.clone();
+        let inspection = tokio::spawn(async move {
+            reader
+                .inspect_data_product(request(
+                    pb::InspectDataProductRequest {
+                        product: Some(pb::DataProductRef {
+                            id: Some(pb::Id {
+                                namespace: "compiler-lock".into(),
+                                slug: "product".into(),
+                                version: 1,
+                            }),
+                        }),
+                    },
+                    "compiler-reader",
+                ))
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while gate.contract_compile_calls() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!inspection.is_finished());
+        let mutation = tokio::time::timeout(
+            Duration::from_secs(1),
+            client.put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(pb::Entity {
+                        kind: Some(pb::entity::Kind::Command(pb::Command {
+                            id: Some(id("concurrent")),
+                            title: "Concurrent".into(),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                "compiler-admin",
+            )),
+        )
+        .await;
+        let compiler_still_waiting = !inspection.is_finished();
+        inspection.abort();
+        server.abort();
+        assert!(
+            mutation.is_ok(),
+            "authenticated mutation blocked after inspection reached the controlled compiler wait"
+        );
+        assert!(mutation.unwrap().is_ok());
+        assert!(compiler_still_waiting);
+    }
+
     fn key(index: usize) -> pb::EntityKey {
         pb::EntityKey::new(
             pb::EntityKind::ReadModel,

@@ -360,6 +360,10 @@ the entire admission request atomically. A diagnostic query marks that evidence
 incomplete, without asserting a missing emission or confirmed lineage. Backend
 failures retain their operational error instead of becoming model findings.
 
+Producing graph construction separately permits 5,000 source or emission
+occurrence examinations. A CommandSlice examined in both phases incurs work
+in each; reusing its fetched row does not exempt producing construction work.
+
 Deletion reporting may use the existing capped-projection fallback only for
 visible resource-budget exhaustion, with incomplete reporting explicit. Other
 scanner errors remain errors. Safe-delete separately requires a complete

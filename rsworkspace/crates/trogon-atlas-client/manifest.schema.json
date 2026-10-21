@@ -587,26 +587,19 @@
       "type": "string"
     },
     "trogonatlas.eventmodel.v1alpha1.ChannelAccess": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/_ShorthandRef"
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "binding": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
-            },
-            "channel": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelRef"
-            },
-            "observation": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
-            }
-          },
-          "type": "object"
+        "channel": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelRef"
+        },
+        "observation": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
         }
-      ]
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.ChannelAddress": {
       "additionalProperties": false,
@@ -4497,23 +4490,16 @@
       ]
     },
     "trogonatlas.eventmodel.v1alpha1.StoreAccess": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/_ShorthandRef"
+      "additionalProperties": false,
+      "properties": {
+        "attachment": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "attachment": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
-            },
-            "store": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataStoreRef"
-            }
-          },
-          "type": "object"
+        "store": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataStoreRef"
         }
-      ]
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.StoreClass": {
       "additionalProperties": false,

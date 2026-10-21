@@ -1,6 +1,6 @@
 use std::{path::PathBuf, process::ExitCode};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use trogon_atlas_client::{
@@ -122,13 +122,13 @@ enum Cmd {
         /// or an id that `describe` prints.
         entity: String,
     },
-    /// Print one entity as readable text: title, doc, schema fields, and
-    /// the references it holds and receives.
     /// Inspect authoritative DataProduct selections and checked model evidence.
     InspectDataProduct {
         /// Exact `data_product/<namespace>/<slug>@<version>` address.
         entity: String,
     },
+    /// Print one entity as readable text: title, doc, schema fields, and
+    /// the references it holds and receives.
     Describe {
         /// `<kind>/<namespace>/<slug>[@version]`, e.g. `command_slice/shop/place-order-slice`,
         /// or an id that `describe` prints.
@@ -725,11 +725,11 @@ async fn run(
         Cmd::InspectDataProduct { entity } => {
             let address = view::parse_address(&entity)?;
             if address.kind != pb::EntityKind::DataProduct {
-                anyhow::bail!("expected a data_product address");
+                trogon_atlas_client::invalid_input!("expected a data_product address");
             }
-            let version = address
-                .version
-                .context("inspection requires an exact version")?;
+            let version = address.version.ok_or_else(|| {
+                trogon_atlas_client::failure::invalid_input("inspection requires an exact version")
+            })?;
             let mut client =
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
             let result = trogon_atlas_client::data_product::inspect(

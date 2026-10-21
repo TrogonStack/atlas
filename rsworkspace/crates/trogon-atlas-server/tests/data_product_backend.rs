@@ -1818,3 +1818,221 @@ async fn producing_scope_reachable_hidden_endpoint_is_incomplete_without_leaking
     assert_eq!(authorized.producing.len(), 1);
     assert!(!authorized.incomplete, "{authorized:?}");
 }
+
+async fn event_scan_budget_product(client: &mut Client, event_ports: usize) -> pb::DataProduct {
+    scope_emitter(client, "offering", "budget").await;
+    for slug in ["source", "result"] {
+        put(
+            client,
+            pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id(slug)),
+                title: slug.into(),
+                ..Default::default()
+            }),
+        )
+        .await;
+    }
+    scope_automation(client, "offering", "budget", "source").await;
+    scope_projection(
+        client,
+        "offering",
+        "budget-projection",
+        "fact-budget",
+        id("result"),
+    )
+    .await;
+    let mut value = product("event-budget");
+    value.inputs = vec![pb::DataInputPort {
+        name: Some(pb::PortName {
+            value: "Source".into(),
+        }),
+        data: Some(pb::InputDataSelection {
+            target: Some(pb::input_data_selection::Target::ReadModel(
+                pb::ReadModelRef {
+                    id: Some(id("source")),
+                },
+            )),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }];
+    value
+        .inputs
+        .extend((0..event_ports).map(|index| pb::DataInputPort {
+            name: Some(pb::PortName {
+                value: format!("Fact {index}"),
+            }),
+            ..Default::default()
+        }));
+    let Some(pb::entity::Kind::DataProduct(value)) =
+        put(client, pb::entity::Kind::DataProduct(value)).await.kind
+    else {
+        panic!("DataProduct")
+    };
+    value
+}
+
+async fn event_scan_budget_emissions(client: &mut Client, count: usize) {
+    let stored = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::CommandSlice as i32,
+                id: Some(id("emit-budget")),
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let Some(pb::entity::Kind::CommandSlice(mut slice)) = stored.entity.unwrap().kind else {
+        panic!("CommandSlice")
+    };
+    assert_eq!(slice.emitted_events.len(), 1);
+    let mut repeated = slice.emitted_events[0].clone();
+    repeated.connection_id = None;
+    slice.emitted_events.extend(vec![repeated; count - 1]);
+    put(client, pb::entity::Kind::CommandSlice(slice)).await;
+}
+
+fn event_scan_budget_enable_inputs(value: &mut pb::DataProduct) {
+    for port in &mut value.inputs[1..] {
+        port.data = Some(pb::InputDataSelection {
+            target: Some(pb::input_data_selection::Target::Event(pb::EventRef {
+                id: Some(id("fact-budget")),
+            })),
+            ..Default::default()
+        });
+    }
+}
+
+fn event_scan_budget_root_path<'a>(
+    report: &'a pb::InspectDataProductResponse,
+    input: &pb::DataInputPort,
+) -> &'a [pb::ConnectionRef] {
+    &report
+        .producing
+        .iter()
+        .find(|evidence| {
+            evidence
+                .input
+                .as_ref()
+                .and_then(|port| port.port_id.as_ref())
+                == input.port_id.as_ref()
+        })
+        .unwrap()
+        .path
+}
+
+fn event_scan_budget_assert_slice_rows(report: &pb::InspectDataProductResponse) {
+    let visited = &report.scope.as_ref().unwrap().visited;
+    assert_eq!(
+        visited
+            .iter()
+            .filter(|entity| entity.kind == pb::EntityKind::CommandSlice as i32)
+            .count(),
+        1
+    );
+    assert_eq!(
+        visited
+            .iter()
+            .filter(|entity| [
+                pb::EntityKind::CommandSlice as i32,
+                pb::EntityKind::ReadModelSlice as i32,
+                pb::EntityKind::AutomationSlice as i32
+            ]
+            .contains(&entity.kind))
+            .count(),
+        3
+    );
+}
+
+async fn event_scan_budget_construction_boundary(emissions: usize, complete: bool) {
+    let mut client = client().await;
+    let mut value = event_scan_budget_product(&mut client, 1).await;
+    event_scan_budget_emissions(&mut client, emissions).await;
+    let without_event = inspect(&mut client, "event-budget", None).await;
+    assert_eq!(without_event.incomplete, !complete);
+    assert_eq!(
+        without_event.emissions,
+        Vec::<pb::DataProductEmissionEvidence>::new()
+    );
+    event_scan_budget_assert_slice_rows(&without_event);
+    event_scan_budget_enable_inputs(&mut value);
+    put(&mut client, pb::entity::Kind::DataProduct(value.clone())).await;
+    let with_event = inspect(&mut client, "event-budget", None).await;
+    assert_eq!(with_event.incomplete, without_event.incomplete);
+    assert_eq!(with_event.emissions.len(), emissions);
+    assert_eq!(
+        with_event.ports[1].data,
+        pb::DataProductSelectionState::Resolved as i32
+    );
+    event_scan_budget_assert_slice_rows(&with_event);
+    if complete {
+        let baseline = event_scan_budget_root_path(&without_event, &value.inputs[0]);
+        assert_eq!(baseline.len(), 7);
+        assert_eq!(
+            event_scan_budget_root_path(&with_event, &value.inputs[0]),
+            baseline
+        );
+        assert_eq!(with_event.producing.len(), 2);
+        assert!(with_event.ports.iter().all(|port| !port.incomplete));
+    } else {
+        assert_eq!(
+            without_event.producing,
+            Vec::<pb::DataProductProducingEvidence>::new()
+        );
+        assert_eq!(
+            with_event.producing,
+            Vec::<pb::DataProductProducingEvidence>::new()
+        );
+        assert!(with_event.ports.iter().all(|port| port.incomplete));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn event_scan_budget_at_graph_construction_limit_is_independent_of_event_confirmation() {
+    event_scan_budget_construction_boundary(4_998, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn event_scan_budget_above_graph_construction_limit_is_incomplete_even_without_event_input() {
+    event_scan_budget_construction_boundary(4_999, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn event_scan_budget_confirmation_exhaustion_preserves_complete_read_model_path() {
+    let mut client = client().await;
+    let baseline = event_scan_budget_product(&mut client, 3).await;
+    let mut selected = baseline.clone();
+    selected.id = Some(id("confirmed-budget"));
+    event_scan_budget_enable_inputs(&mut selected);
+    put(&mut client, pb::entity::Kind::DataProduct(selected.clone())).await;
+    event_scan_budget_emissions(&mut client, 2_500).await;
+    let without_event = inspect(&mut client, "event-budget", None).await;
+    let with_event = inspect(&mut client, "confirmed-budget", None).await;
+    assert!(!without_event.incomplete);
+    assert!(with_event.incomplete);
+    assert!(!with_event.ports[0].incomplete);
+    assert_eq!(
+        with_event.ports[1].data,
+        pb::DataProductSelectionState::Resolved as i32
+    );
+    assert_eq!(
+        with_event.ports[2].data,
+        pb::DataProductSelectionState::Resolved as i32
+    );
+    assert_eq!(
+        with_event.ports[3].data,
+        pb::DataProductSelectionState::Unknown as i32
+    );
+    assert!(with_event.ports[3].incomplete);
+    assert_eq!(with_event.emissions.len(), 5_000);
+    assert_eq!(with_event.producing.len(), 3);
+    assert_eq!(
+        event_scan_budget_root_path(&without_event, &baseline.inputs[0]),
+        event_scan_budget_root_path(&with_event, &selected.inputs[0])
+    );
+    event_scan_budget_assert_slice_rows(&without_event);
+    event_scan_budget_assert_slice_rows(&with_event);
+}
