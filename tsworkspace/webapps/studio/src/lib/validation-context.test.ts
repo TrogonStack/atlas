@@ -533,6 +533,20 @@ describe('validationFixPrompt for strategic findings', () => {
     expect(prompt).not.toContain('whose slug equals the Domain');
   });
 
+  it('keeps the general repair guidance for a non-strategic finding on a strategic entity', () => {
+    const prompt = validationFixPrompt(
+      strategicModel(),
+      finding({
+        code: 'DANGLING_REF',
+        ruleCategory: 'reference',
+        field: 'realizes',
+        subject: { kind: 'boundedContext', id: sid('accounts', 'accounts') },
+      }),
+    );
+    expect(prompt).toContain('Apply a targeted repair that preserves intended behavior');
+    expect(prompt).not.toContain('whose slug equals the Domain');
+  });
+
   it('includes the contexts sharing a Domain namespace and the subdomains pointing at the Domain', () => {
     const prompt = validationFixPrompt(
       strategicModel(),

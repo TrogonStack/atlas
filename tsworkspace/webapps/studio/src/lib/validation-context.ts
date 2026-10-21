@@ -195,8 +195,7 @@ export function validationFixPrompt(
   options: { branch?: string; momentKey?: string; scopePath?: string } = {},
 ): string {
   const annotation = annotationCodes.has(issue.code);
-  const strategic =
-    Boolean(issue.subject && strategicKinds.has(issue.subject.kind)) || issue.ruleCategory === 'strategic';
+  const strategic = issue.ruleCategory === 'strategic';
   const selected = new Map<string, Entity>();
   const referenced = new Map<string, ContextRef>();
   const refsByKey = new Map(model.entities.map((entity) => [entity.key, references(entity)]));
