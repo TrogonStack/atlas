@@ -4474,6 +4474,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // is transiently dangling and rejecting it would make the model
         // impossible to build one call at a time. They ride the response.
         if is_strategic_kind(kind) {
+            if branch.is_none() {
+                self.invalidate_snapshot().await;
+            }
             let all = self.snapshot_for(branch.as_deref(), &vis).await?;
             let world = world_after(&all, &[(kind, &id, Some(&entity))]);
             scenario_issues.extend(
@@ -5201,10 +5204,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // the op that caused it when that entity is not in the batch.
         let mut per_op_validation: Vec<Vec<pb::ValidationIssue>> =
             std::iter::repeat_with(Vec::new).take(metas.len()).collect();
-        if has_strategic_puts || has_strategic_deletes {
-            if branch.is_none() && !has_slice_puts {
-                self.invalidate_snapshot().await;
-            }
+        let has_strategic_ops = has_strategic_puts || has_strategic_deletes;
+        if branch.is_none() && (has_strategic_ops || has_slice_puts) {
+            self.invalidate_snapshot().await;
+        }
+        if has_strategic_ops {
             let base = self.snapshot_for(branch.as_deref(), &vis).await?;
             let world_changes: Vec<(pb::EntityKind, &pb::Id, Option<&pb::Entity>)> = metas
                 .iter()
@@ -5253,9 +5257,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
         if has_slice_puts {
-            if branch.is_none() {
-                self.invalidate_snapshot().await;
-            }
             let pre_all_for_validation = self.snapshot_for(branch.as_deref(), &vis).await?;
             let mut validation_ctx: Vec<StoredEntity> = (*pre_all_for_validation).clone();
             validation_ctx.extend(metas.iter().filter(|m| m.is_put).filter_map(|m| {

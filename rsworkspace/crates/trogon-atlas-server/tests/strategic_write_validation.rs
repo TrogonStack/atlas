@@ -294,6 +294,65 @@ async fn an_applied_batch_carries_the_same_findings_and_persists() {
     assert!(exists(&svc, pb::EntityKind::BoundedContext, id("sw-app", "sw-app")).await);
 }
 
+fn command_slice(ns: &str, slug: &str) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+            id: Some(id(ns, slug)),
+            ..Default::default()
+        })),
+    }
+}
+
+/// Two services over one store, the first with a warm baseline cache, as
+/// two server replicas would be after the first one served a read.
+async fn replicas(warm_ns: &str) -> (EventModelServiceImpl, EventModelServiceImpl) {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let store = Arc::new(nats.store().await);
+    let replica = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let other = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
+    let warm = batch(&replica, vec![context(warm_ns, &[])], true).await;
+    assert_eq!(
+        warm.status,
+        pb::batch_mutate_response::Status::Validated as i32,
+        "{warm:?}"
+    );
+    (replica, other)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_with_slices_sees_strategic_writes_from_another_replica() {
+    let (replica, other) = replicas("sw-rep").await;
+    put(&other, domain("sw-rep-ps", "sw-rep-ps")).await;
+    put(
+        &other,
+        subdomain("sw-rep-ps", "ordering", Classification::Core),
+    )
+    .await;
+
+    let resp = batch(
+        &replica,
+        vec![
+            context("sw-rep", &[("sw-rep-ps", "ordering")]),
+            command_slice("sw-rep", "checkout"),
+        ],
+        true,
+    )
+    .await;
+
+    assert_eq!(
+        resp.status,
+        pb::batch_mutate_response::Status::Validated as i32,
+        "{resp:?}"
+    );
+    let context_issues = op_validation(&resp, 0);
+    assert_eq!(
+        count(context_issues, "REALIZES_DANGLING"),
+        0,
+        "{context_issues:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_batch_finding_about_a_stored_entity_rides_the_op_that_caused_it() {
     let svc = svc().await;
@@ -831,4 +890,39 @@ async fn merging_a_deletion_reports_the_finding_it_leaves_behind() {
         );
     }
     assert!(!exists(&svc, pb::EntityKind::BoundedContext, id("sw-md", "sw-md")).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_put_sees_strategic_writes_from_another_replica() {
+    let (replica, other) = replicas("sw-rep-put").await;
+    put(&other, domain("sw-rep-put-ps", "sw-rep-put-ps")).await;
+    put(
+        &other,
+        subdomain("sw-rep-put-ps", "ordering", Classification::Core),
+    )
+    .await;
+
+    let issues = put(
+        &replica,
+        context("sw-rep-put", &[("sw-rep-put-ps", "ordering")]),
+    )
+    .await;
+
+    assert_eq!(count(&issues, "REALIZES_DANGLING"), 0, "{issues:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delete_sees_strategic_writes_from_another_replica() {
+    let (replica, other) = replicas("sw-rep-del-warm").await;
+    realized_chain(&other, "sw-rep-del-ps", "sw-rep-del").await;
+
+    let issues = delete(
+        &replica,
+        pb::EntityKind::Subdomain,
+        id("sw-rep-del-ps", "ordering"),
+        Mode::DryRun,
+    )
+    .await;
+
+    assert_eq!(count(&issues, "REALIZES_DANGLING"), 1, "{issues:?}");
 }
