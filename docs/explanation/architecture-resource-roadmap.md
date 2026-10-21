@@ -71,16 +71,29 @@ fixtures and their limits. Port membership and access declarations do not
 introduce producing behavior. Backend inspection reports checked model paths
 separately from declared lineage and runtime execution evidence.
 
+## Next resource contract: responsibility
+
+The [responsibility contract proposal](../reference/responsibility-contracts.md)
+defines Team and Person directory records, identified membership and explicit
+responsibility for exact native subjects. Its
+[acceptance criteria](../reference/responsibility-acceptance.md) connect these
+declarations to entities, connection occurrences, Specification members and
+DataProduct ports. Team membership and catalog responsibility grant no
+authorization and introduce no producing behavior.
+
+The first native scope uses exact versions and existing incarnation selectors;
+it does not silently extend responsibility to a version family or every member
+of a resource. Retained directory information and its history remain distinct
+from authentication identities and external directory synchronization. These
+are design and acceptance references; schema, runtime and executable acceptance
+remain pending.
+
 ## Follow-on contracts
 
-Team and Person need exact-version versus family responsibility, retained
-directory data and a clear
-separation from authorization principals. DataProduct responsibility will use
-that shared ownership layer rather than a competing owner list.
-
-Those resources also need per-relation cycle rules, cross-namespace permissions
-and deletion/copy/merge semantics. They should extend the connected fixture as
-they become implementable rather than silently inheriting undefined behavior.
+Decision and Document resources still need their own subjects, artifact and
+navigation rules, cross-namespace permissions and deletion/copy/merge semantics.
+They should extend the connected fixture as they become implementable rather
+than silently inheriting undefined behavior.
 
 Fitness functions use the WebAssembly Component Model and WIT. Their remaining
 contracts include the authorized snapshot projection, lossless entity and exact
