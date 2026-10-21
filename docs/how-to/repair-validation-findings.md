@@ -102,6 +102,30 @@ storyboard's declared entry view. The
 shows the evidence required for that distinction. Removing a member is not
 a general solution to a validation error.
 
+For strategic findings such as `DOMAIN_IN_CONTEXT_NAMESPACE` and
+`REALIZES_MIXED_CLASSIFICATIONS`, repair the shape of the problem space,
+not the individual entity. The
+[problem space pattern](../explanation/validation-repair-patterns.md#one-problem-space-contexts-realize-across-namespaces)
+records the evidence and the decision. Never silence `DOMAIN_MISSING_PROJECT`
+with a Project and a Domain in each context namespace.
+
+To move a problem space that was declared inside context namespaces:
+
+1. Put the Project, the Domain and every Subdomain in one problem-space
+   namespace, with the Project and Domain slugs equal to that namespace.
+   Copy each Subdomain's classification and doc unchanged.
+2. Run `retarget_references` from each old Subdomain to its replacement,
+   with `filter_kinds` set to `bounded_context`, so every `realizes`
+   points across namespaces. Preview with `dry_run: true` first.
+3. Delete the old Subdomains, Domains and Projects with `delete_entity` in
+   its default `fail_if_referenced` mode. A refusal names a referrer that
+   still needs retargeting.
+4. If a context still realizes Subdomains of different classifications,
+   split it along the classification line. Reclassifying a Subdomain to
+   match the other half misstates where the business invests.
+5. Run `validate_project` with the problem-space `namespace`, then with the
+   Project scope. Strategic findings appear once, on the store-level report.
+
 Sometimes the model is right and the rule is wrong. Check the rule's
 description against the definitions you fetched. If the finding
 contradicts a fact that the model states on purpose, such as an external
@@ -152,8 +176,8 @@ errors and `isError` before reading that envelope.
 | --- | --- |
 | `get_entity_json` | `{ "etag": "...", "json": { ... } }` with an object-valued entity. |
 | `validate_event_model` with `json: true` | `{ "json": "..." }` with a JSON-encoded response string. |
-| Reference tools, `get_impact`, `batch_mutate_json` | `{ "binpb_base64": "..." }` with the protobuf response. |
-| `put_entity`, `delete_entity`, `batch_mutate`, `batch_mutate_json` | `{ "scope": "branch" or "baseline", "branch": "..." or null, "binpb_base64": "..." }`. Use `scope` and `branch` to confirm which store took the write. |
+| Reference tools, `get_impact` | `{ "binpb_base64": "..." }` with the protobuf response. |
+| `put_entity`, `put_entity_json`, `delete_entity`, `batch_mutate`, `batch_mutate_json`, `merge_branch`, `apply_manifests` | The `scope`, `branch` and `binpb_base64` envelope plus an `issues` array. Use `scope` and `branch` to confirm which store took the write. Each issue has `severity`, `code`, `subject`, `field` and `message`; batch and apply issues add `op_index` and `op_entity`, for delete ops as well as puts. Strategic findings arrive here without blocking the write, and a `delete_entity` `dry_run` previews them. |
 
 The JSON response helper can fall back to `binpb_base64` if reflection
 rendering fails. Decode binary responses using the matching RPC response
@@ -191,9 +215,10 @@ That check verifies manifest admissibility, not full scoped validation.
 When the seed itself is the thing to repair, edit the YAML, run
 `trogon-atlas fmt -w` on the touched files, and run
 `cargo test -p trogon-atlas-server --test example_manifests_validate`. That
-test applies every example namespace to an ephemeral store and lists each
-warning or error by code and subject, so it doubles as the before and after
-record. Finish with `mise run manifests:verify -- bootstrap`.
+test applies the `acme` problem space and every example namespace to an
+ephemeral store and lists each warning or error by code and subject, so it
+doubles as the before and after record. Finish with
+`mise run manifests:verify -- bootstrap`.
 
 ## Keep the result available to the next session
 

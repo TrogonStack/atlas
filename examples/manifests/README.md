@@ -4,12 +4,17 @@ Event models for a fictional retailer, Acme, written as declarative
 manifests. Each directory is one namespace, with one multi-document YAML file
 per entity kind.
 
-| Namespace                     | Models                                                            |
+| Namespace                     | Contents                                                          |
 |-------------------------------|-------------------------------------------------------------------|
-| `acme-storefront`             | Cart, checkout, payment capture, and carrier fulfillment          |
+| `acme`                        | The problem space: the project, the domain, and its subdomains    |
+| `acme-storefront`             | Cart, checkout, and payment capture                               |
+| `acme-fulfillment`            | Carrier dispatch, delivery confirmation, and order tracking       |
 | `acme-reviews`                | Review eligibility and review submission for delivered orders     |
 | `acme-customer-data-deletion` | A customer data deletion request, across every downstream vendor  |
 | `acme-wishlist`               | The smallest valid model: a shopper saves a product to a wishlist |
+
+`acme` holds no bounded context. Every other namespace is one bounded
+context that realizes one `acme` subdomain across namespaces.
 
 Apply a namespace in one atomic batch, check it without writing, or detect
 drift between the files and a running server:
@@ -20,16 +25,28 @@ trogon-atlas apply -f examples/manifests/acme-storefront/ --dry-run  # validate 
 trogon-atlas diff  -f examples/manifests/acme-storefront/            # exit 1 on drift
 ```
 
-`acme-reviews` references entities in `acme-storefront`, so apply them
-together or apply the storefront first. To build `acme-wishlist` step by
-step, follow
+Apply `acme` first, because every context realizes one of its subdomains.
+`acme-fulfillment` references entities in `acme-storefront`, and
+`acme-reviews` references entities in `acme-fulfillment`, so apply them
+together or in that order: `acme`, `acme-storefront`, `acme-fulfillment`,
+then `acme-reviews`. `-f` takes several paths, so one command applies
+them together:
+
+```sh
+trogon-atlas apply -f examples/manifests/acme/ examples/manifests/acme-storefront/ \
+  examples/manifests/acme-fulfillment/ examples/manifests/acme-reviews/
+```
+
+`acme-customer-data-deletion` and `acme-wishlist` only need `acme`. To
+build `acme-wishlist` step by step, follow
 [start an event model from scratch](../../docs/how-to/start-a-model-from-scratch.md).
 
 Every file here is checked against the generated manifest schema by the
 `trogon-atlas-client` tests, and the server's account deletion fixture test
-applies `acme-customer-data-deletion` end to end. The server's
-`example_manifests_validate` test checks that each namespace validates
-with no errors or warnings.
+applies `acme` and `acme-customer-data-deletion` end to end. The server's
+`example_manifests_validate` test checks that each model validates with no
+errors or warnings, and that validating the `acme` project reports a model
+for every context with no errors or warnings either.
 
 ## Legacy `fields` lists
 

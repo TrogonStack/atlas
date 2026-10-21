@@ -4,18 +4,22 @@ Build the smallest event model that validates with no errors or warnings:
 one human-issued command, one event, and one read model, tied together by
 one storyboard. The
 [`acme-wishlist`](../../examples/manifests/acme-wishlist/) namespace is
-the finished result; each step below names the file it adds.
+the finished result, and the [`acme`](../../examples/manifests/acme/)
+namespace holds the problem space it realizes. Each step below names the
+file it adds.
 
 Create the entities in the order below. Each entity refers only to
 entities from earlier steps, so every check runs against a complete set.
 
 ## Check each step
 
-Keep the files for one namespace in one directory. After each step, check
-everything written so far in one batch:
+Keep the files for one namespace in one directory: the problem space in
+`acme/` and the model in `acme-wishlist/`. After each step, check
+everything written so far in one batch. `-f` takes several paths, and the
+batch is applied atomically:
 
 ```sh
-trogon-atlas apply -f acme-wishlist/ --dry-run
+trogon-atlas apply -f acme/ acme-wishlist/ --dry-run
 ```
 
 `--dry-run` runs request-time validation only. It checks each manifest,
@@ -23,31 +27,65 @@ and it rejects a slice whose scenario refers to an entity that is not in
 the store or in the same batch (`SCENARIO_DANGLING_REF`). It does not run
 model validation, so the last step checks the whole model.
 
-## 1. Describe the problem space
+## 1. Describe the problem space and the context
+
+The problem space (the business) and the bounded context (one boundary
+that realizes part of it) live in different namespaces. The Project, the
+Domain and the Subdomains go in `acme/`. The context's namespace holds its
+BoundedContext and nothing from the problem space.
 
 | File | Kind | Fields the rules check |
 | --- | --- | --- |
-| `project.yaml` | `Project` | slug equal to the namespace |
-| `domain.yaml` | `Domain` | `project` |
-| `subdomain.yaml` | `Subdomain` | `domain`, `classification` |
-| `bounded-context.yaml` | `BoundedContext` | slug equal to the namespace, `realizes` |
+| `acme/project.yaml` | `Project` | slug equal to the namespace |
+| `acme/domain.yaml` | `Domain` | slug equal to the namespace, `project` |
+| `acme/subdomain.yaml` | `Subdomain` | `domain`, `classification` |
+| `acme-wishlist/bounded-context.yaml` | `BoundedContext` | slug equal to the namespace, `realizes` |
+
+The Project and the Domain are both named `acme`, so each slug equals its
+namespace. This walkthrough needs one Subdomain, `wishlists`. The finished
+`acme/subdomain.yaml` declares one Subdomain for each context that realizes
+part of the business.
 
 - A Project's slug must equal its namespace (`PROJECT_SLUG_MISMATCH`,
   Error).
+- A Domain's slug must equal its namespace (`DOMAIN_SLUG_MISMATCH`,
+  Error): the namespace is the domain identity.
 - A Domain without `project` warns (`DOMAIN_MISSING_PROJECT`). The server
-  rejects a Domain whose `project` is in another namespace.
+  rejects a Domain whose `project` is in another namespace, so the Project
+  sits beside the Domain in `acme/`. Do not silence this warning by
+  creating a Project and a Domain in each context namespace.
+- A Domain declared in a namespace that also holds a BoundedContext warns
+  (`DOMAIN_IN_CONTEXT_NAMESPACE`). The domain is the business, not one
+  context's property, so it keeps its own namespace and contexts realize
+  its subdomains across namespaces.
 - The rule catalog requires a Subdomain to name its Domain in the same
-  namespace (`SUBDOMAIN_MISSING_DOMAIN`, `SUBDOMAIN_FOREIGN_DOMAIN`) and to
-  carry a `classification` (`SUBDOMAIN_UNCLASSIFIED`).
+  namespace (`SUBDOMAIN_MISSING_DOMAIN`, `SUBDOMAIN_FOREIGN_DOMAIN`,
+  `SUBDOMAIN_DANGLING_DOMAIN`) and to carry a `classification`
+  (`SUBDOMAIN_UNCLASSIFIED`). A Subdomain that no context realizes yet is
+  reported (`SUBDOMAIN_UNREALIZED`, Info).
 - A namespace is a bounded context, and the BoundedContext slug equals the
   namespace (`CONTEXT_SLUG_MISMATCH`).
-- A BoundedContext that realizes no Subdomain is reported
+- `realizes` names the Subdomain in `acme`, so the reference crosses
+  namespaces. A BoundedContext that realizes no Subdomain is reported
   (`BC_REALIZES_NOTHING`, Info).
+- A BoundedContext whose Subdomains differ in classification warns
+  (`REALIZES_MIXED_CLASSIFICATIONS`): one boundary then carries two
+  investment levels, so split it along the classification line. Realizing
+  several Subdomains of one classification is only informational
+  (`REALIZES_MULTIPLE`).
 
 `validate_project` with a `project_id` scope finds an EventModel only
 through this chain: the model's namespace, then the BoundedContext in that
 namespace, its first `realizes` Subdomain, that Subdomain's Domain, and the
-Domain's `project`. Without the chain, the project report is empty.
+Domain's `project`. Without the chain, the project report is empty. Model
+and project validation also check this strategic chain, so the rules above
+report findings there.
+
+A context that subscribes to another context's events also declares a
+relationship toward it (`SEAM_WITHOUT_RELATIONSHIP`). The wishlist has no
+such seam. See
+[`acme-fulfillment`](../../examples/manifests/acme-fulfillment/bounded-context.yaml)
+for one.
 
 ## 2. Add the stream
 
@@ -157,18 +195,21 @@ storyboard entry (`UI_NO_PERSONA`, Error).
 | `event-model.yaml` | `EventModel` | `members` |
 
 The validator only checks members of the EventModel. List every entity
-from steps 1 to 7 except the Project, with its `kind`. Every member must
-exist (`MEMBER_NOT_FOUND`, Error), and every slice in a storyboard must be
-a member (`STORYBOARD_SLICE_NOT_MEMBER`, Warning). Every event, command,
+from steps 2 to 7, plus the BoundedContext, the Subdomain it realizes and
+that Subdomain's Domain, each with its `kind`. The Domain and the Subdomain
+keep their `acme` namespace, and the Project is not a member. Every member
+must exist (`MEMBER_NOT_FOUND`, Error), and every slice in a storyboard must
+be a member (`STORYBOARD_SLICE_NOT_MEMBER`, Warning). Every event, command,
 read model, persona, and UI must be wired to a slice or the storyboard
 (`ORPHAN_NOT_FLAGGED`, Warning).
 
 ## Apply and validate
 
-Apply the namespace:
+Apply the problem space and the context in one batch, or apply `acme/`
+first:
 
 ```sh
-trogon-atlas apply -f acme-wishlist/
+trogon-atlas apply -f acme/ acme-wishlist/
 ```
 
 Run model validation through the `validate_event_model` MCP tool:
@@ -177,10 +218,12 @@ Run model validation through the `validate_event_model` MCP tool:
 { "namespace": "acme-wishlist", "slug": "acme-wishlist-model", "version": 1 }
 ```
 
-Then run `validate_project` with `project_id` set to the Project. The
-finished model reports no errors or warnings, and two Info findings:
-`CROSS_MODEL_REF` for the Domain's reference to the Project, which is not a
-member, and `SLICE_NO_SCENARIOS` for the read model slice.
+Then run `validate_project` with `project_id` set to the Project,
+`acme/acme`. It reports the strategic findings once, beside the store-wide
+ones, instead of in every model. The finished model reports no errors or
+warnings. Its Info findings include `CROSS_MODEL_REF` for the Domain's
+reference to the Project, which is not a member, and `SLICE_NO_SCENARIOS`
+for the read model slice.
 
 As the model grows, run `validate_event_model` after every batch and fix
 all errors. To find what a code means, call `list_validation_rules`; to
