@@ -633,7 +633,7 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
                     ("contacts", "contacts"),
                     ("responsibilities", "responsibilities"),
                     ("role", "role"),
-                    ("directory_pointer", "directory_pointer"),
+                    ("directory_pointer", "directoryPointer"),
                 ],
             );
             resource_metadata(ops, &x.metadata, &y.metadata);

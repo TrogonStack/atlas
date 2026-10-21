@@ -1029,67 +1029,7 @@ async fn responsibility_branch_tombstone_and_unrelated_landing_preserve_dangling
 #[tokio::test(flavor = "multi_thread")]
 async fn responsibility_generic_retarget_refuses_to_guess_local_selector_replacements() {
     let mut client = client().await;
-    let spec = |version| {
-        entity(pb::entity::Kind::Specification(pb::Specification {
-            id: Some(pb::Id {
-                version,
-                ..id("retarget-api")
-            }),
-            title: "API".into(),
-            messages: vec![pb::ContractMessage {
-                name: Some(pb::MemberName {
-                    value: "Message".into(),
-                }),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }))
-    };
-    let original = put(&mut client, spec(1), None).await.entity.unwrap();
-    let replacement = put(&mut client, spec(2), None).await.entity.unwrap();
-    let Some(pb::entity::Kind::Specification(value)) = &original.kind else {
-        panic!("spec")
-    };
-    let pinned_subject = pb::ResponsibilitySubject {
-        selection: Some(pb::responsibility_subject::Selection::Member(
-            pb::ContractMemberRef {
-                specification: Some(pb::SpecificationRef {
-                    id: reference(&original).id,
-                }),
-                owner_uid: original.system.as_ref().unwrap().uid.clone(),
-                kind: pb::ContractMemberKind::Message as i32,
-                member_id: value.messages[0].member_id.clone(),
-                expected_digest: None,
-            },
-        )),
-    };
-    let owner = put(&mut client, team("pinned", &[], &[pinned_subject]), None)
-        .await
-        .entity
-        .unwrap();
-    for preview in [true, false] {
-        let error = client
-            .retarget_references(request(
-                pb::RetargetReferencesRequest {
-                    from: Some(reference(&original)),
-                    to: Some(reference(&replacement)),
-                    dry_run: preview,
-                    ..Default::default()
-                },
-                ADMIN,
-                None,
-            ))
-            .await
-            .unwrap_err();
-        assert_eq!(error.code(), Code::FailedPrecondition);
-    }
-    assert_eq!(
-        get(&mut client, pb::EntityKind::Team, id("pinned"), None)
-            .await
-            .entity
-            .unwrap(),
-        owner
-    );
+    assert_generic_retarget_preserves_local_selectors(&mut client).await;
     let original_person = put(&mut client, person("retarget-person"), None)
         .await
         .entity
@@ -1271,55 +1211,7 @@ async fn responsibility_query_occurrence_and_contact_output_budgets_are_shared_p
             .len(),
         1
     );
-    let mut owners = Vec::new();
-    for index in 0..10 {
-        let mut value = team(&format!("budget-owner-{index}"), &[], &[]);
-        if let Some(pb::entity::Kind::Team(value)) = &mut value.kind {
-            for person in 0..256 {
-                for kind in [
-                    pb::ResponsibilityKind::Owner,
-                    pb::ResponsibilityKind::Maintainer,
-                    pb::ResponsibilityKind::Steward,
-                    pb::ResponsibilityKind::Contact,
-                ] {
-                    value.responsibilities.push(pb::Responsibility {
-                        kind: kind as i32,
-                        subject: Some(subject(
-                            pb::EntityKind::Person,
-                            id(&format!("member-{person}")),
-                        )),
-                        ..Default::default()
-                    });
-                }
-            }
-        }
-        owners.push(value);
-    }
-    let response = client
-        .batch_mutate(request(
-            pb::BatchMutateRequest {
-                ops: owners
-                    .into_iter()
-                    .map(|value| pb::BatchMutateOp {
-                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
-                            entity: Some(value),
-                            ..Default::default()
-                        })),
-                    })
-                    .collect(),
-                ..Default::default()
-            },
-            ADMIN,
-            None,
-        ))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(
-        response.status,
-        pb::batch_mutate_response::Status::Applied as i32,
-        "{response:?}"
-    );
+    seed_responsibility_budget_owners(&mut client).await;
     let error = client
         .list_subject_assignments(request(
             pb::ListSubjectAssignmentsRequest {
@@ -1533,6 +1425,148 @@ async fn responsibility_query_occurrence_and_contact_output_budgets_are_shared_p
         .unwrap()
         .into_inner();
     assert!(closure.truncated);
+    let original = get(&mut client, pb::EntityKind::Person, id("member-0"), None)
+        .await
+        .entity
+        .unwrap();
+    let mut replacement = person("member-0");
+    if let Some(pb::entity::Kind::Person(value)) = &mut replacement.kind {
+        value.id.as_mut().unwrap().version = 2;
+    }
+    let replacement = put(&mut client, replacement, None).await.entity.unwrap();
+    let mut migrations = Vec::new();
+    for branch in [Some("budget-branch"), None] {
+        let before = get(
+            &mut client,
+            pb::EntityKind::Team,
+            id("budget-owner-0"),
+            branch,
+        )
+        .await
+        .entity
+        .unwrap();
+        for preview in [true, false] {
+            let result = client
+                .retarget_references(request(
+                    pb::RetargetReferencesRequest {
+                        from: Some(reference(&original)),
+                        to: Some(reference(&replacement)),
+                        dry_run: preview,
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    branch,
+                ))
+                .await
+                .map(tonic::Response::into_inner);
+            if preview {
+                assert_eq!(
+                    get(
+                        &mut client,
+                        pb::EntityKind::Team,
+                        id("budget-owner-0"),
+                        branch
+                    )
+                    .await
+                    .entity
+                    .as_ref(),
+                    Some(&before)
+                );
+            }
+            migrations.push(result);
+        }
+    }
+    let statuses: Vec<_> = migrations
+        .iter()
+        .map(|result| {
+            result
+                .as_ref()
+                .map(|value| value.rewritten)
+                .map_err(tonic::Status::code)
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![Ok(11); 4],
+        "branch/baseline preview/apply: {statuses:?}"
+    );
+    for migration in migrations {
+        let migration = migration.unwrap();
+        assert_eq!(migration.failed, 0);
+        assert_eq!(migration.results.len(), 11);
+        assert_eq!(
+            migration
+                .results
+                .iter()
+                .map(|result| result.fields.len())
+                .sum::<usize>(),
+            41
+        );
+        assert!(migration
+            .results
+            .iter()
+            .all(|result| result.error.is_empty()));
+    }
+    for branch in [None, Some("budget-branch")] {
+        for index in 0..10 {
+            let owner = get(
+                &mut client,
+                pb::EntityKind::Team,
+                id(&format!("budget-owner-{index}")),
+                branch,
+            )
+            .await
+            .entity
+            .unwrap();
+            let Some(pb::entity::Kind::Team(owner)) = owner.kind else {
+                panic!("team")
+            };
+            assert_eq!(owner.responsibilities.len(), 1024);
+            assert_eq!(
+                owner
+                    .responsibilities
+                    .iter()
+                    .filter(|assignment| assignment.subject.as_ref()
+                        == Some(&subject(
+                            pb::EntityKind::Person,
+                            reference(&replacement).id.unwrap()
+                        )))
+                    .count(),
+                4
+            );
+            assert!(owner
+                .responsibilities
+                .iter()
+                .all(|assignment| assignment.subject.as_ref()
+                    != Some(&subject(pb::EntityKind::Person, id("member-0")))));
+        }
+        let contacts = get(&mut client, pb::EntityKind::Team, id("contacts"), branch)
+            .await
+            .entity
+            .unwrap();
+        let Some(pb::entity::Kind::Team(contacts)) = contacts.kind else {
+            panic!("team")
+        };
+        assert_eq!(contacts.members.len(), 256);
+        assert_eq!(
+            contacts.members[0].person.as_ref().unwrap().id,
+            reference(&replacement).id
+        );
+        let error = client
+            .get_incoming_references(request(
+                pb::GetReferencesRequest {
+                    kind: pb::EntityKind::Person as i32,
+                    id: reference(&replacement).id,
+                    ..Default::default()
+                },
+                READER,
+                branch,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::ResourceExhausted);
+    }
+    assert_generic_retarget_preserves_local_selectors(&mut client).await;
     let probe = put(&mut client, person("safe-delete-probe"), None)
         .await
         .entity
@@ -1852,4 +1886,295 @@ async fn responsibility_connection_admission_reads_selected_context_without_unre
             assert_eq!(response.unwrap_err().code(), Code::NotFound);
         }
     }
+}
+
+async fn seed_responsibility_budget_owners(client: &mut Client) {
+    let mut owners = Vec::new();
+    for index in 0..10 {
+        let mut value = team(&format!("budget-owner-{index}"), &[], &[]);
+        if let Some(pb::entity::Kind::Team(value)) = &mut value.kind {
+            for person in 0..256 {
+                for kind in [
+                    pb::ResponsibilityKind::Owner,
+                    pb::ResponsibilityKind::Maintainer,
+                    pb::ResponsibilityKind::Steward,
+                    pb::ResponsibilityKind::Contact,
+                ] {
+                    value.responsibilities.push(pb::Responsibility {
+                        kind: kind as i32,
+                        subject: Some(subject(
+                            pb::EntityKind::Person,
+                            id(&format!("member-{person}")),
+                        )),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+        owners.push(value);
+    }
+    let response = client
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops: owners
+                    .into_iter()
+                    .map(|value| pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(value),
+                            ..Default::default()
+                        })),
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.status,
+        pb::batch_mutate_response::Status::Applied as i32,
+        "{response:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn responsibility_root_closure_truncates_reachable_occurrences_at_zero_snapshot_cap() {
+    let mut client = client().await;
+    let response = client
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops: (0..256)
+                    .map(|index| pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(person(&format!("member-{index}"))),
+                            ..Default::default()
+                        })),
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.status,
+        pb::batch_mutate_response::Status::Applied as i32,
+        "{response:?}"
+    );
+    seed_responsibility_budget_owners(&mut client).await;
+    let root = put(
+        &mut client,
+        team(
+            "closure-root",
+            &[],
+            &(0..10)
+                .map(|index| subject(pb::EntityKind::Team, id(&format!("budget-owner-{index}"))))
+                .collect::<Vec<_>>(),
+        ),
+        None,
+    )
+    .await
+    .entity
+    .unwrap();
+    let mut person_root = person("closure-person");
+    if let Some(pb::entity::Kind::Person(value)) = &mut person_root.kind {
+        value.responsibilities.push(pb::Responsibility {
+            kind: pb::ResponsibilityKind::Owner as i32,
+            subject: Some(subject(pb::EntityKind::Team, id("closure-root"))),
+            ..Default::default()
+        });
+    }
+    let person_root = put(&mut client, person_root, None).await.entity.unwrap();
+    let mut root = root;
+    if let Some(pb::entity::Kind::Team(value)) = &mut root.kind {
+        value.members.push(pb::TeamMember {
+            person: Some(pb::PersonRef {
+                id: Some(id("closure-person")),
+            }),
+            ..Default::default()
+        });
+    }
+    let root = put(&mut client, root, None).await.entity.unwrap();
+    client
+        .create_branch(request(
+            pb::CreateBranchRequest {
+                name: "closure-budget-branch".into(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    for (token, expected) in [
+        ("invalid-token", Code::Unauthenticated),
+        (LIMITED, Code::NotFound),
+    ] {
+        let error = client
+            .extract_subgraph(request(
+                pb::ExtractSubgraphRequest {
+                    scope: Some(pb::AnalysisScope {
+                        scope: Some(pb::analysis_scope::Scope::Slice(reference(&root))),
+                    }),
+                    include_cross_model: true,
+                    ..Default::default()
+                },
+                token,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), expected);
+    }
+    let mut results = Vec::new();
+    for branch in [None, Some("closure-budget-branch")] {
+        for root in [&root, &person_root] {
+            results.push(
+                client
+                    .extract_subgraph(request(
+                        pb::ExtractSubgraphRequest {
+                            scope: Some(pb::AnalysisScope {
+                                scope: Some(pb::analysis_scope::Scope::Slice(reference(root))),
+                            }),
+                            include_cross_model: true,
+                            ..Default::default()
+                        },
+                        READER,
+                        branch,
+                    ))
+                    .await
+                    .map(tonic::Response::into_inner),
+            );
+        }
+    }
+    let statuses: Vec<_> = results
+        .iter()
+        .map(|result| {
+            result
+                .as_ref()
+                .map(|value| value.truncated)
+                .map_err(tonic::Status::code)
+        })
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![Ok(true); 4],
+        "baseline/branch Team/Person closures: {statuses:?}"
+    );
+    for result in results {
+        let closure = result.unwrap();
+        assert!(closure.entities.values().any(|value| value == &root));
+        assert!(closure.entities.values().any(|value| value == &person_root));
+        let owners = closure.entities.values().filter(|value| matches!(&value.kind,
+            Some(pb::entity::Kind::Team(team)) if team.id.as_ref().is_some_and(|id| id.slug.starts_with("budget-owner-")))).count();
+        assert_eq!(
+            owners, 9,
+            "the owner that exceeds the budget must remain outside the partial closure"
+        );
+    }
+    let mut last_owner = get(
+        &mut client,
+        pb::EntityKind::Team,
+        id("budget-owner-9"),
+        Some("closure-budget-branch"),
+    )
+    .await
+    .entity
+    .unwrap();
+    if let Some(pb::entity::Kind::Team(value)) = &mut last_owner.kind {
+        value.responsibilities.truncate(772);
+    }
+    put(&mut client, last_owner, Some("closure-budget-branch")).await;
+    for root in [&root, &person_root] {
+        let closure = client
+            .extract_subgraph(request(
+                pb::ExtractSubgraphRequest {
+                    scope: Some(pb::AnalysisScope {
+                        scope: Some(pb::analysis_scope::Scope::Slice(reference(root))),
+                    }),
+                    include_cross_model: true,
+                    ..Default::default()
+                },
+                READER,
+                Some("closure-budget-branch"),
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            !closure.truncated,
+            "exactly 10,000 occurrences with cycles must fit"
+        );
+        assert_eq!(closure.entities.len(), 268);
+    }
+}
+
+async fn assert_generic_retarget_preserves_local_selectors(client: &mut Client) {
+    let spec = |version| {
+        entity(pb::entity::Kind::Specification(pb::Specification {
+            id: Some(pb::Id {
+                version,
+                ..id("retarget-api")
+            }),
+            title: "API".into(),
+            messages: vec![pb::ContractMessage {
+                name: Some(pb::MemberName {
+                    value: "Message".into(),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }))
+    };
+    let original = put(client, spec(1), None).await.entity.unwrap();
+    let replacement = put(client, spec(2), None).await.entity.unwrap();
+    let Some(pb::entity::Kind::Specification(value)) = &original.kind else {
+        panic!("spec")
+    };
+    let pinned_subject = pb::ResponsibilitySubject {
+        selection: Some(pb::responsibility_subject::Selection::Member(
+            pb::ContractMemberRef {
+                specification: Some(pb::SpecificationRef {
+                    id: reference(&original).id,
+                }),
+                owner_uid: original.system.as_ref().unwrap().uid.clone(),
+                kind: pb::ContractMemberKind::Message as i32,
+                member_id: value.messages[0].member_id.clone(),
+                expected_digest: None,
+            },
+        )),
+    };
+    let owner = put(client, team("pinned", &[], &[pinned_subject]), None)
+        .await
+        .entity
+        .unwrap();
+    for preview in [true, false] {
+        let error = client
+            .retarget_references(request(
+                pb::RetargetReferencesRequest {
+                    from: Some(reference(&original)),
+                    to: Some(reference(&replacement)),
+                    dry_run: preview,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::FailedPrecondition);
+    }
+    assert_eq!(
+        get(client, pb::EntityKind::Team, id("pinned"), None)
+            .await
+            .entity
+            .unwrap(),
+        owner
+    );
 }

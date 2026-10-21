@@ -123,7 +123,7 @@ UI, Persona, Swimlane, CommandSlice, ReadModelSlice, AutomationSlice, UiSlice,
 Storyboard, EventModel, Component, ExternalSystem, Tracker, BoundedContext,
 Domain, Subdomain, Schema, Project, Screen, Term, Ambiguity,
 ServiceLevelIndicator, ServiceLevelObjective, AlertPolicy,
-AlertNotificationTarget, TypeLibrary, Channel, DataStore, Specification and
+AlertNotificationTarget, TypeLibrary, Channel, DataStore, Specification,
 DataProduct, Team and Person. Unspecified/unknown kinds and
 non-entity values are rejected. An assignment to the assignee's own exact
 kind/key/version is rejected as a redundant self-target. Assignments between

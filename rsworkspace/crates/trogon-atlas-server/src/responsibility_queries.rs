@@ -26,9 +26,13 @@ pub(super) struct ResponsibilityQuery {
 }
 
 impl ResponsibilityQuery {
-    fn examine(&mut self, count: usize) -> Result<(), Status> {
+    fn examine_within_budget(&mut self, count: usize) -> bool {
         self.examined = self.examined.saturating_add(count);
-        if self.examined > MAX_RESPONSIBILITY_OCCURRENCES {
+        self.examined <= MAX_RESPONSIBILITY_OCCURRENCES
+    }
+
+    fn examine(&mut self, count: usize) -> Result<(), Status> {
+        if !self.examine_within_budget(count) {
             return Err(Status::resource_exhausted(
                 "responsibility occurrence budget exceeded",
             ));
@@ -180,6 +184,7 @@ impl EventModelServiceImpl {
         let mut pending = VecDeque::from([root.clone()]);
         let mut seen = HashSet::new();
         let mut incomplete = false;
+        let mut rows = Vec::new();
         while let Some(reference) = pending.pop_front() {
             let kind = super::kind_from_i32(reference.kind, "closure.kind")?;
             let id = super::require_id(reference.id.as_ref(), "closure.id")?;
@@ -198,7 +203,10 @@ impl EventModelServiceImpl {
                 incomplete = true;
                 continue;
             };
-            query.examine(occurrences(&row.entity))?;
+            if !query.examine_within_budget(occurrences(&row.entity)) {
+                incomplete = true;
+                break;
+            }
             for target in trogon_atlas_core::refs::outbound_refs(&row.entity) {
                 if let Some(kind) = target.to_kind {
                     pending.push_back(pb::EntityRef {
@@ -234,8 +242,9 @@ impl EventModelServiceImpl {
                     incomplete |= !resolved;
                 }
             }
+            rows.push(row);
         }
-        Ok((query.world.into_values().flatten().collect(), incomplete))
+        Ok((rows, incomplete))
     }
 
     async fn responsibility_query(

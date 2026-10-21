@@ -53,21 +53,21 @@ use crate::{
 #[derive(Clone, Copy)]
 enum ReferenceIndexPurpose {
     Discovery,
-    DeleteReporting,
+    CompleteReferrers,
 }
 
 impl ReferenceIndexPurpose {
     fn check(self, index: &graph::ReverseIndex) -> Result<(), Status> {
         match self {
             Self::Discovery => index.check_discovery_budget(),
-            Self::DeleteReporting => Ok(()),
+            Self::CompleteReferrers => Ok(()),
         }
     }
 
     fn build(self, all: &[StoredEntity]) -> Result<Arc<graph::ReverseIndex>, Status> {
         Ok(Arc::new(match self {
             Self::Discovery => graph::ReverseIndex::build_discovery(all)?,
-            Self::DeleteReporting => graph::ReverseIndex::build(all),
+            Self::CompleteReferrers => graph::ReverseIndex::build(all),
         }))
     }
 }
@@ -1038,7 +1038,7 @@ impl EventModelServiceImpl {
         vis: &Visibility,
     ) -> Result<Arc<graph::ReverseIndex>, Status> {
         match self
-            .reference_index_for(branch, vis, ReferenceIndexPurpose::DeleteReporting)
+            .reference_index_for(branch, vis, ReferenceIndexPurpose::CompleteReferrers)
             .await
         {
             Ok(index) => Ok(index),
@@ -3738,7 +3738,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             self.invalidate_snapshot().await;
         }
 
-        let index = self.reverse_index_for(branch.as_deref(), &vis).await?;
+        let index = self
+            .reference_index_for(
+                branch.as_deref(),
+                &vis,
+                ReferenceIndexPurpose::CompleteReferrers,
+            )
+            .await?;
         let referrers: Vec<pb::Reference> = index.incoming(from_kind, &from_id).to_vec();
 
         let referrers: Vec<pb::Reference> = if filter_kinds.is_empty() {
