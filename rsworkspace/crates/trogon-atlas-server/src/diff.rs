@@ -56,6 +56,8 @@ fn kind_name(e: &pb::Entity) -> &'static str {
         Some(K::DataStore(_)) => "DataStore",
         Some(K::Specification(_)) => "Specification",
         Some(K::DataProduct(_)) => "DataProduct",
+        Some(K::Team(_)) => "Team",
+        Some(K::Person(_)) => "Person",
         None => "<empty>",
     }
 }
@@ -596,6 +598,42 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
                     ("delivery_guarantee", "deliveryGuarantee"),
                     ("broker", "broker"),
                     ("bindings", "bindings"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
+        (Some(K::Team(x)), Some(K::Team(y))) => {
+            resource_fields(
+                ops,
+                "Team",
+                x,
+                y,
+                &[
+                    ("title", "title"),
+                    ("doc", "doc"),
+                    ("supersedes", "supersedes"),
+                    ("contacts", "contacts"),
+                    ("responsibilities", "responsibilities"),
+                    ("purpose", "purpose"),
+                    ("members", "members"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
+        (Some(K::Person(x)), Some(K::Person(y))) => {
+            resource_fields(
+                ops,
+                "Person",
+                x,
+                y,
+                &[
+                    ("title", "title"),
+                    ("doc", "doc"),
+                    ("supersedes", "supersedes"),
+                    ("contacts", "contacts"),
+                    ("responsibilities", "responsibilities"),
+                    ("role", "role"),
+                    ("directory_pointer", "directory_pointer"),
                 ],
             );
             resource_metadata(ops, &x.metadata, &y.metadata);

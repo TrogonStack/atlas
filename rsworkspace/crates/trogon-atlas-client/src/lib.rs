@@ -23,6 +23,7 @@ pub mod openslo_bindings;
 pub mod operation;
 pub mod outcome;
 pub mod precondition;
+pub mod responsibility;
 pub mod tenant_types;
 pub mod validate;
 pub mod view;

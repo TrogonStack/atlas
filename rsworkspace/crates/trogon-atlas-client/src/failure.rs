@@ -420,6 +420,13 @@ impl Failure {
     /// carries no `ErrorInfo` this client recognizes (most `InvalidArgument`
     /// statuses raised directly by request validation, for instance).
     fn from_code(status: &Status) -> Self {
+        if status.code() == Code::ResourceExhausted {
+            return Self::new(
+                FailureCategory::Validation,
+                "request resource limit exhausted",
+            )
+            .with_code(FailureCode::known("RESOURCE_EXHAUSTED"));
+        }
         let category = match status.code() {
             Code::Aborted => FailureCategory::StaleState,
             Code::FailedPrecondition | Code::AlreadyExists => FailureCategory::Precondition,

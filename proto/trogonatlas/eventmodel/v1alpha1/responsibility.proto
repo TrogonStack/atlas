@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/connections.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
+
+message DirectoryDisplayName { string value = 1; }
+message DirectoryRoleText { string value = 1; }
+message EmailAddress { string value = 1; }
+message ContactUrl { string value = 1; }
+message DirectoryProvider { string value = 1; }
+message OpaqueDirectoryKey { string value = 1; }
+
+message ChatContact {
+  DirectoryProvider service = 1;
+  OpaqueDirectoryKey handle = 2;
+}
+message ExternalDirectoryPointer {
+  DirectoryProvider provider = 1;
+  OpaqueDirectoryKey key = 2;
+}
+message ContactPoint {
+  oneof channel {
+    EmailAddress email = 1;
+    ContactUrl web = 2;
+    ChatContact chat = 3;
+  }
+  optional string label = 4;
+}
+enum ResponsibilityKind {
+  RESPONSIBILITY_KIND_UNSPECIFIED = 0;
+  RESPONSIBILITY_KIND_OWNER = 1;
+  RESPONSIBILITY_KIND_MAINTAINER = 2;
+  RESPONSIBILITY_KIND_STEWARD = 3;
+  RESPONSIBILITY_KIND_CONTACT = 4;
+}
+message ResponsibilitySubject {
+  oneof selection {
+    EntityRef entity = 1;
+    ConnectionRef connection = 2;
+    ContractMemberRef member = 3;
+    DataPortRef port = 4;
+  }
+}
+message Responsibility {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ResponsibilityKind kind = 2;
+  ResponsibilitySubject subject = 3;
+  optional string doc = 4;
+}
+message TeamMember {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  PersonRef person = 2;
+  optional string doc = 3;
+}
+message Team {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  DirectoryDisplayName title = 2;
+  optional string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  repeated ContactPoint contacts = 6;
+  repeated Responsibility responsibilities = 7;
+  optional string purpose = 8;
+  repeated TeamMember members = 9;
+}
+message Person {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  DirectoryDisplayName title = 2;
+  optional string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  repeated ContactPoint contacts = 6;
+  repeated Responsibility responsibilities = 7;
+  DirectoryRoleText role = 8;
+  ExternalDirectoryPointer directory_pointer = 9;
+}

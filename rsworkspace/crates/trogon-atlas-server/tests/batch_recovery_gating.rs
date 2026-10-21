@@ -198,6 +198,17 @@ impl Store for GatedRecoveryStore {
         self.inner.referenced_targets(targets, branch).await
     }
 
+    async fn referenced_targets_with_overlay(
+        &self,
+        targets: &[pb::EntityKey],
+        branch: Option<&str>,
+        overlay: &[(pb::EntityKey, Option<pb::Entity>)],
+    ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
+        self.inner
+            .referenced_targets_with_overlay(targets, branch, overlay)
+            .await
+    }
+
     async fn list(
         &self,
         filter: ListFilter<'_>,

@@ -121,3 +121,11 @@ describe('DataProduct backend inspection', () => {
     expect(offeringLabel({ product: { outputs: [{ data: {} }] } })).toContain('Unknown');
   });
 });
+
+it('uses retained historical context before the URL catches up', () => {
+  window.history.replaceState({}, '', '/?branch=review');
+  const fetch = vi.spyOn(api, 'inspectDataProduct');
+  render(<DataProductInspector entity={entity()} asOf="11111111-1111-4111-8111-111111111111" />);
+  expect(screen.getByText(/Historical inspection unavailable/)).toBeDefined();
+  expect(fetch).not.toHaveBeenCalled();
+});

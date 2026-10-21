@@ -431,3 +431,64 @@ it('collects exact DataProduct nested data/type/access owners without following 
   );
   expect(refs.notLoaded.join()).not.toContain('secret');
 });
+
+it('copies Team/Person membership and all exact responsibility selectors without following profile metadata', () => {
+  const selectors = [
+    { entity: { kind: 'ENTITY_KIND_TEAM', id: id('another-team', '2') } },
+    {
+      connection: {
+        owner: { kind: 'ENTITY_KIND_AUTOMATION_SLICE', id: id('observer', '3') },
+        ownerUid: 'edge-owner',
+        id: { value: 'edge-b' },
+      },
+    },
+    {
+      member: {
+        specification: { id: id('api', '4') },
+        ownerUid: 'member-owner',
+        kind: 'CONTRACT_MEMBER_KIND_ARTIFACT',
+        memberId: { value: 'artifact-b' },
+        expectedDigest: { sha256: 'a'.repeat(64) },
+      },
+    },
+    {
+      port: {
+        product: { id: id('offering', '5') },
+        ownerUid: 'port-owner',
+        direction: 'DATA_PORT_DIRECTION_OUTPUT',
+        portId: { value: 'output-b' },
+      },
+    },
+  ];
+  const model = buildModel([
+    {
+      team: {
+        id: id('team'),
+        title: { value: 'Team' },
+        members: [{ person: { id: id('person', '6') }, connectionId: { value: 'membership-a' } }],
+        responsibilities: selectors.map((subject, index) => ({
+          connectionId: { value: `assignment-${index}` },
+          kind: 'RESPONSIBILITY_KIND_CONTACT',
+          subject,
+        })),
+        metadata: [{ person: { id: id('opaque-person') } }],
+      },
+    },
+  ]);
+  const prompt = validationFixPrompt(model, finding({ subject: { kind: 'team', id: id('team') } }));
+  const refs = snapshot(prompt, 'References to fetch') as { notLoaded: string[] };
+  expect(refs.notLoaded).toEqual(
+    expect.arrayContaining([
+      'team:shop/another-team@2',
+      'automationSlice:shop/observer@3',
+      'specification:shop/api@4',
+      'dataProduct:shop/offering@5',
+      'person:shop/person@6',
+    ]),
+  );
+  expect(refs.notLoaded.join()).not.toContain('opaque-person');
+  const definitions = snapshot(prompt, 'Loaded subject and related definitions') as {
+    raw: { responsibilities: { subject: unknown }[] };
+  }[];
+  expect(definitions[0].raw.responsibilities.map((item) => item.subject)).toEqual(selectors);
+});

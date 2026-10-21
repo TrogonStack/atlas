@@ -22,9 +22,10 @@ This release is native first. Source overlays, source handles, source import,
 sync, remote fetching, automatic format parsers, schema conversion, deployment
 and runtime data delivery are excluded. Native manifest import/export means
 round-tripping Atlas entities; it does not claim external-source fidelity.
-Team/Person implementation is outside this slice. Ownership remains undeclared
-until the pending responsibility layer supplies it; there is no duplicate owner
-list or inferred owner from provider, namespace or producing slice.
+The [responsibility layer](responsibility-contracts.md) supplies explicit
+Team/Person assignments to products and exact ports or associations. There is
+no duplicate product owner list or inferred owner from provider, namespace or
+producing slice.
 
 ## Entity and port values
 
@@ -317,7 +318,7 @@ producing-path claims. Event confirmation witnesses remain a separate result.
 | Access | Undeclared when empty; each authored occurrence separately resolved or stale/inaccessible. OPERATION access separately reports selected provider or provider undeclared. |
 | Lineage | Absent/unknown, explicit empty declaration, declared inputs, separately checked producing evidence, incomplete traversal or operational error. |
 | Offering | Unresolved when any supplied data, contract, access or local lineage selection fails validation. Otherwise draft when any output data is undeclared; confirmed mapped only when every output selects resolving data. Undeclared input data remains visible and does not assert complete lineage. Empty optional access does not assert deployment. |
-| Ownership | Undeclared pending the responsibility layer. |
+| Responsibility | Inspect explicit assignments separately through exact-subject responsibility queries. Product, port and connection assignments remain distinct; they do not change offering, access or lineage classification. |
 
 These dimensions are derived from authored declarations and authorized checked
 state, not editable status enums. Classification must not expose hidden target

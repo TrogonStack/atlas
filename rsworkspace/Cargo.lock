@@ -4358,6 +4358,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "trogon-atlas-proto",
+ "url",
  "uuid",
 ]
 

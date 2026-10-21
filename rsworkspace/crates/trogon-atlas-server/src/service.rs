@@ -4,6 +4,8 @@ mod architecture_admission;
 mod data_product_events;
 #[path = "data_product_inspection.rs"]
 mod data_product_inspection;
+#[path = "responsibility_queries.rs"]
+mod responsibility_queries;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -47,6 +49,28 @@ use crate::{
     scope::{BaselineProtection, OutOfScope, WriteTargets},
     validation,
 };
+
+#[derive(Clone, Copy)]
+enum ReferenceIndexPurpose {
+    Discovery,
+    DeleteReporting,
+}
+
+impl ReferenceIndexPurpose {
+    fn check(self, index: &graph::ReverseIndex) -> Result<(), Status> {
+        match self {
+            Self::Discovery => index.check_discovery_budget(),
+            Self::DeleteReporting => Ok(()),
+        }
+    }
+
+    fn build(self, all: &[StoredEntity]) -> Result<Arc<graph::ReverseIndex>, Status> {
+        Ok(Arc::new(match self {
+            Self::Discovery => graph::ReverseIndex::build_discovery(all)?,
+            Self::DeleteReporting => graph::ReverseIndex::build(all),
+        }))
+    }
+}
 
 pub const MAX_PROJECTION_ENTITIES: usize = 5000;
 
@@ -915,11 +939,16 @@ impl EventModelServiceImpl {
     /// is rebuilt only when the snapshot was just loaded (cache miss path) or
     /// after a mutation invalidates both caches. Concurrent readers that hit the
     /// populated cache pay only a `RwLock` read-lock and an Arc clone.
-    async fn reverse_index(&self, vis: &Visibility) -> Result<Arc<graph::ReverseIndex>, Status> {
+    async fn reverse_index(
+        &self,
+        vis: &Visibility,
+        purpose: ReferenceIndexPurpose,
+    ) -> Result<Arc<graph::ReverseIndex>, Status> {
         if let Some(owner) = vis.owner() {
             let lens = self.lens(vis).await?;
             if let Some((cached, idx)) = self.owner_reverse_index_cache.read().await.get(owner) {
                 if cached == &lens {
+                    purpose.check(idx)?;
                     return Ok(idx.clone());
                 }
             }
@@ -927,10 +956,11 @@ impl EventModelServiceImpl {
             let complete = self
                 .architecture_reference_snapshot(&snap, None, vis)
                 .await?;
-            let idx = Arc::new(graph::ReverseIndex::build(&complete));
+            let idx = purpose.build(&complete)?;
             let mut indexes = self.owner_reverse_index_cache.write().await;
             if let Some((cached, current)) = indexes.get(owner) {
                 if cached == &lens {
+                    purpose.check(current)?;
                     return Ok(current.clone());
                 }
             }
@@ -941,9 +971,11 @@ impl EventModelServiceImpl {
             {
                 indexes.insert(owner.clone(), (lens, idx.clone()));
             }
+            purpose.check(&idx)?;
             return Ok(idx);
         }
         if let Some(idx) = self.reverse_index_cache.read().await.clone() {
+            purpose.check(&idx)?;
             return Ok(idx);
         }
         // Load the snapshot first (which may itself be cached).
@@ -955,9 +987,10 @@ impl EventModelServiceImpl {
         // index while we were loading the snapshot.
         let mut guard = self.reverse_index_cache.write().await;
         if let Some(idx) = guard.clone() {
+            purpose.check(&idx)?;
             return Ok(idx);
         }
-        let idx = Arc::new(graph::ReverseIndex::build(&complete));
+        let idx = purpose.build(&complete)?;
         if self
             .snapshot_cache
             .read()
@@ -979,14 +1012,24 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<Arc<graph::ReverseIndex>, Status> {
+        self.reference_index_for(branch, vis, ReferenceIndexPurpose::Discovery)
+            .await
+    }
+
+    async fn reference_index_for(
+        &self,
+        branch: Option<&str>,
+        vis: &Visibility,
+        purpose: ReferenceIndexPurpose,
+    ) -> Result<Arc<graph::ReverseIndex>, Status> {
         let Some(branch) = branch else {
-            return self.reverse_index(vis).await;
+            return self.reverse_index(vis, purpose).await;
         };
         let snap = self.snapshot_for(Some(branch), vis).await?;
         let complete = self
             .architecture_reference_snapshot(&snap, Some(branch), vis)
             .await?;
-        Ok(Arc::new(graph::ReverseIndex::build(&complete)))
+        purpose.build(&complete)
     }
 
     async fn delete_reporting_index(
@@ -994,7 +1037,10 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<Arc<graph::ReverseIndex>, Status> {
-        match self.reverse_index_for(branch, vis).await {
+        match self
+            .reference_index_for(branch, vis, ReferenceIndexPurpose::DeleteReporting)
+            .await
+        {
             Ok(index) => Ok(index),
             Err(status)
                 if status.code() == tonic::Code::ResourceExhausted
@@ -2793,6 +2839,108 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }))
     }
 
+    async fn list_subject_assignments(
+        &self,
+        req: Request<pb::ListSubjectAssignmentsRequest>,
+    ) -> Result<Response<pb::ListSubjectAssignmentsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.subject_assignments(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn list_assignee_responsibilities(
+        &self,
+        req: Request<pb::ListAssigneeResponsibilitiesRequest>,
+    ) -> Result<Response<pb::ListAssigneeResponsibilitiesResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.assignee_responsibilities(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn list_team_members(
+        &self,
+        req: Request<pb::ListTeamMembersRequest>,
+    ) -> Result<Response<pb::ListTeamMembersResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.team_members(
+            req.into_inner()
+                .team
+                .ok_or_else(|| Status::invalid_argument("team is required"))?,
+            branch.as_deref(),
+            &vis,
+        )
+        .await
+        .map(Response::new)
+    }
+
+    async fn list_person_teams(
+        &self,
+        req: Request<pb::ListPersonTeamsRequest>,
+    ) -> Result<Response<pb::ListPersonTeamsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.person_teams(
+            req.into_inner()
+                .person
+                .ok_or_else(|| Status::invalid_argument("person is required"))?,
+            branch.as_deref(),
+            &vis,
+        )
+        .await
+        .map(Response::new)
+    }
+
+    async fn get_team_contacts(
+        &self,
+        req: Request<pb::GetTeamContactsRequest>,
+    ) -> Result<Response<pb::GetTeamContactsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.team_contacts(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
     async fn inspect_data_product(
         &self,
         req: Request<pb::InspectDataProductRequest>,
@@ -3367,6 +3515,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let req = req.into_inner();
         let kind = kind_from_i32(req.kind, "kind")?;
         let id = require_id(req.id.as_ref(), "")?.clone();
+        self.require_visible(&vis, &id.namespace).await?;
         let mut filter_kinds: Vec<pb::EntityKind> = Vec::with_capacity(req.filter_kinds.len());
         for k in &req.filter_kinds {
             filter_kinds.push(kind_from_i32(*k, "filter_kinds[]")?);
@@ -3427,6 +3576,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .get(kind, id, branch.as_deref())
             .await
             .map_err(store_err)?;
+        graph::validate_responsibility_discovery_budget(std::slice::from_ref(&stored))?;
         let snap = self.snapshot_for(branch.as_deref(), &vis).await?;
         let known: std::collections::HashSet<_> = snap
             .iter()
@@ -3471,6 +3621,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .ok_or_else(|| Status::invalid_argument("root is required"))?;
         let kind = kind_from_i32(root.kind, "root.kind")?;
         let id = require_id(root.id.as_ref(), "root")?.clone();
+        self.require_visible(&vis, &id.namespace).await?;
         let max_depth = if req.max_depth == 0 {
             ADVERTISED_MAX_IMPACT_DEPTH
         } else {
@@ -3487,6 +3638,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let all = self
             .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
             .await?;
+        graph::validate_responsibility_discovery_budget(&all)?;
         let mut all_nodes = graph::impact(&all, kind, &id, max_depth, true);
 
         if !req.filter_kinds.is_empty() {
@@ -3636,6 +3788,26 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             };
 
+            if crate::responsibility_resources::assignments(&stored.entity)
+                .iter()
+                .any(|assignment| {
+                    assignment.subject.as_ref().is_some_and(|subject| {
+                        !matches!(
+                            subject.selection,
+                            Some(pb::responsibility_subject::Selection::Entity(_))
+                        ) && crate::responsibility_resources::subject_owner(subject).is_some_and(
+                            |owner| {
+                                owner.kind == from_kind as i32
+                                    && owner.id.as_ref() == Some(&from_id)
+                            },
+                        )
+                    })
+                })
+            {
+                return Err(Status::failed_precondition(
+                    "Responsibility local selectors require an explicit guarded replacement using returned owner and local identities",
+                ));
+            }
             let mut entity = stored.entity.clone();
             let fields =
                 trogon_atlas_core::refs::retarget_refs(&mut entity, from_kind, &from_id, &to_id);
@@ -3943,7 +4115,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let _ = kind_from_i32(root_ref.kind, "scope")?;
         let _ = require_id(root_ref.id.as_ref(), "scope")?;
 
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, responsibility_incomplete) = if matches!(
+            pb::EntityKind::try_from(root_ref.kind),
+            Ok(pb::EntityKind::Team | pb::EntityKind::Person)
+        ) {
+            let id = require_id(root_ref.id.as_ref(), "scope")?;
+            self.require_visible(&vis, &id.namespace).await?;
+            let (rows, incomplete) = self
+                .responsibility_closure_rows(&root_ref, branch.as_deref(), &vis)
+                .await?;
+            (Arc::new(rows), incomplete)
+        } else {
+            (self.snapshot_for(branch.as_deref(), &vis).await?, false)
+        };
         let graph::Closure {
             entities,
             truncated,
@@ -4005,7 +4189,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 supersedes: None,
             }),
             entities: filtered,
-            truncated,
+            truncated: truncated || responsibility_incomplete,
         }))
     }
 
@@ -4923,8 +5107,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let referenced = if guarded_targets.is_empty() {
                 std::collections::HashSet::new()
             } else {
+                let overlay: Vec<_> = metas
+                    .iter()
+                    .map(|meta| {
+                        (
+                            pb::EntityKey::new(meta.kind, &meta.id),
+                            meta.entity.clone().filter(|_| meta.is_put),
+                        )
+                    })
+                    .collect();
                 self.store
-                    .referenced_targets(&guarded_targets, branch.as_deref())
+                    .referenced_targets_with_overlay(&guarded_targets, branch.as_deref(), &overlay)
                     .await
                     .map_err(store_err)?
             };
@@ -4975,7 +5168,32 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if branch.is_none() {
                 self.invalidate_snapshot().await;
             }
-            let pre_all_arc = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let snapshot = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let mut exact: HashMap<_, _> = snapshot
+                .iter()
+                .filter_map(|stored| {
+                    Some((
+                        pb::EntityKey::new(
+                            entity_kind(&stored.entity).ok()?,
+                            entity_id(&stored.entity).ok()?,
+                        ),
+                        stored.clone(),
+                    ))
+                })
+                .collect();
+            for meta in &metas {
+                let key = pb::EntityKey::new(meta.kind, &meta.id);
+                match self.store.get(meta.kind, &meta.id, branch.as_deref()).await {
+                    Ok(stored) => {
+                        exact.insert(key, stored);
+                    }
+                    Err(trogon_atlas_store::error::StoreError::NotFound) => {
+                        exact.remove(&key);
+                    }
+                    Err(error) => return Err(store_err(error)),
+                }
+            }
+            let pre_all_arc: Vec<_> = exact.into_values().collect();
             // The overlay's etags are not the live store's, so if_match
             // guards must be checked against the snapshot's etags here and
             // stripped before the overlay apply.
@@ -7381,6 +7599,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 | pb::EntityKind::DataStore
                 | pb::EntityKind::Specification
                 | pb::EntityKind::DataProduct
+                | pb::EntityKind::Team
+                | pb::EntityKind::Person
         ) {
             self.authorize_write(
                 principal.as_ref(),

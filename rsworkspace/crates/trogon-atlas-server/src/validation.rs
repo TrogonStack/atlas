@@ -168,6 +168,10 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "Retained interface and schema declarations with exact message, operation, provider and usage selections."),
         k(pb::EntityKind::DataProduct, "ENTITY_KIND_DATA_PRODUCT", "dataProduct", "Data Product", "Data Products",
           "A discoverable offering of exact data through explicit input and output ports."),
+        k(pb::EntityKind::Team, "ENTITY_KIND_TEAM", "team", "Team", "Teams",
+          "A retained team profile with explicit membership and catalog responsibility."),
+        k(pb::EntityKind::Person, "ENTITY_KIND_PERSON", "person", "Person", "People",
+          "A retained directory profile with explicit catalog responsibility."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -220,6 +224,12 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         category: category.into(),
     };
     vec![
+        r("RESPONSIBILITY_VALUE_INVALID", Error, "Invalid responsibility declaration",
+          "Profiles and assignments must satisfy the native responsibility contract.",
+          pb::EntityKind::Team, "", "architecture"),
+        r("RESPONSIBILITY_REFERENCE_UNRESOLVED", Error, "Responsibility selection does not resolve",
+          "An exact responsibility or membership selection is absent, stale or inaccessible.",
+          pb::EntityKind::Team, "", "architecture"),
         r("DATA_PRODUCT_VALUE_INVALID", Error, "Invalid data product declaration",
           "Port values and local identities must satisfy the native data product contract.",
           pb::EntityKind::DataProduct, "", "architecture"),
@@ -598,6 +608,8 @@ mod catalog_drift_tests {
     // OR remove one, update both the catalog AND this list so the diff
     // test below can guard against drift.
     const EMITTED_CODES: &[&str] = &[
+        "RESPONSIBILITY_VALUE_INVALID",
+        "RESPONSIBILITY_REFERENCE_UNRESOLVED",
         "DATA_PRODUCT_VALUE_INVALID",
         "DATA_PRODUCT_REFERENCE_UNRESOLVED",
         "DATA_PRODUCT_CONFIRMATION_INCOMPLETE",
@@ -755,6 +767,8 @@ mod catalog_drift_tests {
             pb::EntityKind::DataStore,
             pb::EntityKind::Specification,
             pb::EntityKind::DataProduct,
+            pb::EntityKind::Team,
+            pb::EntityKind::Person,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -1125,6 +1139,8 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::DataStore(x)) => &x.metadata,
         Some(pb::entity::Kind::Specification(x)) => &x.metadata,
         Some(pb::entity::Kind::DataProduct(x)) => &x.metadata,
+        Some(pb::entity::Kind::Team(x)) => &x.metadata,
+        Some(pb::entity::Kind::Person(x)) => &x.metadata,
         None => &[],
     }
 }

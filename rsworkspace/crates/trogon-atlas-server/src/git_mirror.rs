@@ -404,6 +404,8 @@ fn kind_dir(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::DataStore => "data_stores",
         pb::EntityKind::Specification => "specifications",
         pb::EntityKind::DataProduct => "data_products",
+        pb::EntityKind::Team => "teams",
+        pb::EntityKind::Person => "persons",
         pb::EntityKind::Unspecified => "unspecified",
     }
 }

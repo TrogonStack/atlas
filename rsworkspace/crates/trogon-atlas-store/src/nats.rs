@@ -2147,6 +2147,8 @@ fn kind_of(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::DataStore(_) => EntityKind::DataStore,
         EntityOneof::DataProduct(_) => EntityKind::DataProduct,
         EntityOneof::Specification(_) => EntityKind::Specification,
+        EntityOneof::Team(_) => EntityKind::Team,
+        EntityOneof::Person(_) => EntityKind::Person,
     })
 }
 
@@ -2185,6 +2187,8 @@ fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::DataStore(x) => x.id.as_ref(),
         EntityOneof::DataProduct(x) => x.id.as_ref(),
         EntityOneof::Specification(x) => x.id.as_ref(),
+        EntityOneof::Team(x) => x.id.as_ref(),
+        EntityOneof::Person(x) => x.id.as_ref(),
     }
 }
 
@@ -3325,6 +3329,17 @@ impl Store for NatsStore {
         targets: &[EntityKey],
         branch: Option<&str>,
     ) -> StoreResult<HashSet<EntityKey>> {
+        self.referenced_targets_with_overlay(targets, branch, &[])
+            .await
+    }
+
+    #[tracing::instrument(skip(self, targets, overlay))]
+    async fn referenced_targets_with_overlay(
+        &self,
+        targets: &[EntityKey],
+        branch: Option<&str>,
+        overlay: &[(EntityKey, Option<Entity>)],
+    ) -> StoreResult<HashSet<EntityKey>> {
         if targets.is_empty() {
             return Ok(HashSet::new());
         }
@@ -3333,6 +3348,22 @@ impl Store for NatsStore {
                 let metadata = kv_entry_timeout(&self.branches_kv, branch_meta_key(branch)).await?;
                 if live_entry(metadata).is_none() {
                     return Err(StoreError::NotFound);
+                }
+            }
+            let mut replacements = HashMap::new();
+            for (key, value) in overlay {
+                if let Some(entity) = value {
+                    let id = Self::validate(key.kind, entity)?;
+                    if EntityKey::new(key.kind, id) != *key {
+                        return Err(StoreError::InvalidArgument(
+                            "overlay entity key mismatch".into(),
+                        ));
+                    }
+                }
+                if replacements.insert(key.clone(), value.as_ref()).is_some() {
+                    return Err(StoreError::InvalidArgument(
+                        "duplicate overlay owner".into(),
+                    ));
                 }
             }
             let targets: HashSet<_> = targets.iter().cloned().collect();
@@ -3357,17 +3388,62 @@ impl Store for NatsStore {
                     EntityKind::AutomationSlice,
                     EntityKind::UiSlice,
                 ] {
+                    let key = EntityKey::new(candidate, &id_key.id());
+                    if let Some(value) = replacements.get(&key) {
+                        if value.is_some() {
+                            untyped_kinds.insert(id_key.clone(), candidate);
+                            break;
+                        }
+                        continue;
+                    }
                     match self.get(candidate, &id_key.id(), branch).await {
                         Ok(_) => {
-                            untyped_kinds.insert(id_key, candidate);
+                            untyped_kinds.insert(id_key.clone(), candidate);
                             break;
                         }
                         Err(StoreError::NotFound) => {}
                         Err(error) => return Err(error),
                     }
                 }
+                // A retained raw ref cannot authorize deletion of its last selected slice.
+                if !untyped_kinds.contains_key(&id_key) {
+                    for candidate in [
+                        EntityKind::CommandSlice,
+                        EntityKind::ReadModelSlice,
+                        EntityKind::AutomationSlice,
+                        EntityKind::UiSlice,
+                    ] {
+                        let key = EntityKey::new(candidate, &id_key.id());
+                        if replacements.get(&key).is_some_and(Option::is_none) {
+                            match self.get(candidate, &id_key.id(), branch).await {
+                                Ok(_) => {
+                                    untyped_kinds.insert(id_key.clone(), candidate);
+                                    break;
+                                }
+                                Err(StoreError::NotFound) => {}
+                                Err(error) => return Err(error),
+                            }
+                        }
+                    }
+                }
             }
+            let references = |entity: &Entity| {
+                trogon_atlas_core::refs::outbound_refs(entity)
+                    .iter()
+                    .filter_map(|reference| {
+                        let kind = reference.to_kind.or_else(|| {
+                            untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
+                        })?;
+                        let target = EntityKey::new(kind, &reference.to_id);
+                        targets.contains(&target).then_some(target)
+                    })
+                    .collect::<Vec<_>>()
+            };
             let mut referenced = HashSet::new();
+            for entity in replacements.values().flatten() {
+                referenced.extend(references(entity));
+            }
+
             for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
                 if delta_keys && branch.is_none() {
                     continue;
@@ -3376,8 +3452,8 @@ impl Store for NatsStore {
                     .await
                     .map_err(|_| StoreError::Backend("reference key scan: timeout".into()))?
                     .map_err(|error| StoreError::Backend(format!("reference key scan: {error}")))?;
-                let targets = &targets;
-                let untyped_kinds = &untyped_kinds;
+                let replacements = &replacements;
+                let references = &references;
                 let mut checks = keys
                     .map(|item| async move {
                         let key = item.map_err(|error| {
@@ -3392,22 +3468,16 @@ impl Store for NatsStore {
                         let Some((owner_kind, owner_id)) = owner else {
                             return Ok(Vec::new());
                         };
+                        if replacements.contains_key(&EntityKey::new(owner_kind, &owner_id)) {
+                            return Ok(Vec::new());
+                        }
                         // Merged gets suppress tombstones and replaced baseline references.
                         let stored = match self.get(owner_kind, &owner_id, branch).await {
                             Ok(stored) => stored,
                             Err(StoreError::NotFound) => return Ok(Vec::new()),
                             Err(error) => return Err(error),
                         };
-                        Ok(trogon_atlas_core::refs::outbound_refs(&stored.entity)
-                            .iter()
-                            .filter_map(|reference| {
-                                let kind = reference.to_kind.or_else(|| {
-                                    untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
-                                })?;
-                                let target = EntityKey::new(kind, &reference.to_id);
-                                targets.contains(&target).then_some(target)
-                            })
-                            .collect::<Vec<_>>())
+                        Ok(references(&stored.entity))
                     })
                     .buffer_unordered(LIST_FETCH_CONCURRENCY);
                 while let Some(found) = checks.next().await {

@@ -127,6 +127,31 @@ enum Cmd {
         /// Exact `data_product/<namespace>/<slug>@<version>` address.
         entity: String,
     },
+    /// Query backend checked responsibility context using proto3 JSON `ListSubjectAssignmentsRequest`.
+    ListSubjectAssignments {
+        #[arg(long)]
+        request: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `ListAssigneeResponsibilitiesRequest`.
+    ListAssigneeResponsibilities {
+        #[arg(long)]
+        request: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `ListTeamMembersRequest`.
+    ListTeamMembers {
+        #[arg(long)]
+        request: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `ListPersonTeamsRequest`.
+    ListPersonTeams {
+        #[arg(long)]
+        request: String,
+    },
+    /// Query backend checked responsibility context using proto3 JSON `GetTeamContactsRequest`.
+    GetTeamContacts {
+        #[arg(long)]
+        request: String,
+    },
     /// Print one entity as readable text: title, doc, schema fields, and
     /// the references it holds and receives.
     Describe {
@@ -746,6 +771,108 @@ async fn run(
             }
             Ok((ExitCode::SUCCESS, Some(result)))
         }
+        Cmd::ListSubjectAssignments { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "ListSubjectAssignmentsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::responsibility::list_subject_assignments(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListAssigneeResponsibilities { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "ListAssigneeResponsibilitiesRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::responsibility::list_assignee_responsibilities(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListTeamMembers { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "ListTeamMembersRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::responsibility::list_team_members(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListPersonTeams { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "ListPersonTeamsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::responsibility::list_person_teams(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetTeamContacts { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::responsibility::parse_request(
+                "GetTeamContactsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::responsibility::get_team_contacts(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
         Cmd::Get { entity } => {
             let address = view::parse_address(&entity)?;
             let mut client =
@@ -768,7 +895,7 @@ async fn run(
             let incoming =
                 view::fetch_references(&mut client, &entity, view::Direction::Incoming).await?;
             let types = view::entity_types(&mut client, &entity).await?;
-            let description = view::describe(&entity, &types, &outgoing, &incoming);
+            let description = view::describe(&entity, &types, &outgoing, &incoming)?;
             if text {
                 print!("{}", view::render_description(&description));
             }

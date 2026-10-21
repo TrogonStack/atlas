@@ -28,6 +28,8 @@ const referenceFields: Record<string, ContextRef['kind']> = {
   schema: 'schema',
   channel: 'channel',
   store: 'dataStore',
+  team: 'team',
+  person: 'person',
   product: 'dataProduct',
   library: 'typeLibrary',
   typeLibrary: 'typeLibrary',
@@ -107,6 +109,7 @@ const annotationInstructions = [
 ];
 
 const repairInstructions = [
+  'For responsibility findings, preserve the complete typed selector, exact version, owner UID, member kind and ID, port direction and ID, occurrence ID and optional artifact digest. Fetch current authorized native content before repairing stale selections; never infer replacements or inherited ownership from membership.',
   'Fetch referenced definitions that are missing or omitted, including their exact pinned versions. Apply a targeted repair that preserves intended behavior, event causality, and existing contracts. Do not merely suppress the rule, downgrade its severity, or delete valid behavior to hide the finding.',
   'For temporal findings, inspect the full ordered storyboard, fetch the definitions of the slices and events it lists that bear on the finding, and check the source and emitted events before deciding whether to change ordering, references, or modeling. Do not assume an event missing from this snapshot does not exist.',
   'Apply the repair, rerun validation for the affected scope, and report the entities changed, the reason for the repair, and the validation results, including any remaining findings. If the model lacks enough information to choose a behavior-preserving repair, explain the specific ambiguity instead of inventing domain behavior.',

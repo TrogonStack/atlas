@@ -31,9 +31,9 @@ use crate::{
         ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams, MergeBranchParams,
         MoveNamespaceParams, ProjectionParams, PutEntityJsonParams, PutEntityParams,
         ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
-        RetargetReferencesParams, RevertChangesetParams, SearchParams, SliceProjectionParams,
-        SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
-        ValidateProjectParams,
+        ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
+        SliceProjectionParams, SupersessionChainParams, UpdateBranchParams,
+        ValidateEventModelParams, ValidateProjectParams,
     },
 };
 
@@ -239,6 +239,31 @@ pub struct ToolPolicy {
 }
 
 pub const TOOL_POLICIES: &[ToolPolicy] = &[
+    ToolPolicy {
+        tool: "list_subject_assignments",
+        rpcs: &["ListSubjectAssignments"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_assignee_responsibilities",
+        rpcs: &["ListAssigneeResponsibilities"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_team_members",
+        rpcs: &["ListTeamMembers"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_person_teams",
+        rpcs: &["ListPersonTeams"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "get_team_contacts",
+        rpcs: &["GetTeamContacts"],
+        min_role: ToolRole::Reader,
+    },
     ToolPolicy {
         tool: "inspect_data_product",
         rpcs: &[
@@ -1270,6 +1295,189 @@ impl McpServer {
             .map_err(tool_err("list_entities"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "ListSubjectAssignments: return backend checked exact responsibility declarations and provenance. Incomplete or inaccessible results never prove absence. Team contact member expansion requires explicit includeMembers; no inheritance or authorization grants.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_subject_assignments(
+        &self,
+        Parameters(p): Parameters<ResponsibilityQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::responsibility::parse_request(
+            "ListSubjectAssignmentsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::responsibility::list_subject_assignments(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListAssigneeResponsibilities: return backend checked exact responsibility declarations and provenance. Incomplete or inaccessible results never prove absence. Team contact member expansion requires explicit includeMembers; no inheritance or authorization grants.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_assignee_responsibilities(
+        &self,
+        Parameters(p): Parameters<ResponsibilityQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::responsibility::parse_request(
+            "ListAssigneeResponsibilitiesRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::responsibility::list_assignee_responsibilities(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListTeamMembers: return backend checked exact responsibility declarations and provenance. Incomplete or inaccessible results never prove absence. Team contact member expansion requires explicit includeMembers; no inheritance or authorization grants.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_team_members(
+        &self,
+        Parameters(p): Parameters<ResponsibilityQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request =
+            trogon_atlas_client::responsibility::parse_request("ListTeamMembersRequest", &json)
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result =
+            trogon_atlas_client::responsibility::list_team_members(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListPersonTeams: return backend checked exact responsibility declarations and provenance. Incomplete or inaccessible results never prove absence. Team contact member expansion requires explicit includeMembers; no inheritance or authorization grants.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_person_teams(
+        &self,
+        Parameters(p): Parameters<ResponsibilityQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request =
+            trogon_atlas_client::responsibility::parse_request("ListPersonTeamsRequest", &json)
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result =
+            trogon_atlas_client::responsibility::list_person_teams(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetTeamContacts: return backend checked exact responsibility declarations and provenance. Incomplete or inaccessible results never prove absence. Team contact member expansion requires explicit includeMembers; no inheritance or authorization grants.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_team_contacts(
+        &self,
+        Parameters(p): Parameters<ResponsibilityQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request =
+            trogon_atlas_client::responsibility::parse_request("GetTeamContactsRequest", &json)
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result =
+            trogon_atlas_client::responsibility::get_team_contacts(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
     }
 
     #[tool(

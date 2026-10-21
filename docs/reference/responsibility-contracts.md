@@ -1,11 +1,13 @@
 # Responsibility contracts
 
-Status: draft native design, pending review and implementation. Team, Person,
-responsibility admission and responsibility queries are proposed here, not
-implemented capabilities. Field names are candidate wire names. Entity-kind
-numbers, union tags, contract revision/floors and RPC/CLI/MCP names remain
-pending allocation. The [acceptance reference](responsibility-acceptance.md)
-records required future evidence, not executable proof.
+Status: native Team/Person schema, responsibility admission, typed queries and
+native client surfaces are implemented. The
+[acceptance reference](responsibility-acceptance.md) separates executable
+coverage from remaining acceptance requirements and deployed-browser evidence.
+
+Team and Person use entity kinds 34 and 35 and union fields 35 and 36.
+Contract revision and minimum client/server mutation revisions are 13;
+upgrade connected clients and servers together.
 
 ## Scope and authority
 
@@ -34,7 +36,7 @@ fidelity. Greenfield wire breaks remain permitted under the existing
 Existing entity concurrency, registered metadata, server-owned system metadata
 and namespace authorization rules apply.
 
-| Shared field | Candidate contract |
+| Shared field | Contract |
 | --- | --- |
 | `id` | Required existing `Id`: namespace, slug and exact positive breaking-change version. |
 | `title` | Required `DirectoryDisplayName`, used as the Team label or Person display name. |
@@ -44,12 +46,12 @@ and namespace authorization rules apply.
 | `contacts` | Collection of `ContactPoint`; empty means no authored contact. |
 | `responsibilities` | Collection of identified `Responsibility` associations; empty means no direct authored assignment. |
 
-| Team field | Candidate contract |
+| Team field | Contract |
 | --- | --- |
 | `purpose` | Optional nonblank prose describing the team's catalog purpose. |
 | `members` | Collection of identified `TeamMember` associations to exact Persons. No nested Team membership or membership role field. |
 
-| Person field | Candidate contract |
+| Person field | Contract |
 | --- | --- |
 | `role` | Optional `DirectoryRoleText`, an unverified directory job/role description. It has no Persona or authorization semantics. |
 | `directory_pointer` | Optional opaque `ExternalDirectoryPointer`; no automatic resolution. |
@@ -75,7 +77,7 @@ but supplies no identity. Removing and reordering contacts requires only the
 normal owner write guard. Different owners may retain the same contact or
 directory pointer without deduplication or a uniqueness claim.
 
-The proposed ceilings are 16 contacts per owner, 1,024 members per Team,
+The ceilings are 16 contacts per owner, 1,024 members per Team,
 1,024 responsibilities per owner, 2,048 total identified associations per
 owner and 1 MiB for the entire protobuf-encoded entity. Lower existing entity,
 RPC or store ceilings still apply. Exceeding a ceiling rejects the complete
@@ -99,7 +101,7 @@ authorization rules and must not be replaced by current profile hydration.
 
 ## Membership and responsibility values
 
-| Association | Candidate fields and rules |
+| Association | Fields and rules |
 | --- | --- |
 | `TeamMember` | Persisted `connection_id`, required exact `person: PersonRef`, optional `doc`. Same exact Person may appear only once per Team. Different Person versions are different selections. |
 | `Responsibility` | Persisted `connection_id`, required `kind` from OWNER, MAINTAINER, STEWARD or CONTACT, required `subject: ResponsibilitySubject`, optional `doc`. Same kind and full typed subject may appear only once per owner. |
@@ -122,7 +124,7 @@ Storyboard, EventModel, Component, ExternalSystem, Tracker, BoundedContext,
 Domain, Subdomain, Schema, Project, Screen, Term, Ambiguity,
 ServiceLevelIndicator, ServiceLevelObjective, AlertPolicy,
 AlertNotificationTarget, TypeLibrary, Channel, DataStore, Specification and
-DataProduct, plus proposed Team and Person. Unspecified/unknown kinds and
+DataProduct, Team and Person. Unspecified/unknown kinds and
 non-entity values are rejected. An assignment to the assignee's own exact
 kind/key/version is rejected as a redundant self-target. Assignments between
 different Team/Person entities, including mutual descriptive cycles, are valid.
@@ -150,7 +152,7 @@ Connection subjects allow only persisted occurrences in this closed inventory:
 | Specification | `SchemaDefinition`, `SchemaBinding`, `MessageReadModelMapping`, `OperationMessage`, `ChannelOperationBinding`, `ProviderExposure`, `ApiUsage`, `ContractDependency` occurrences. |
 | DataProduct | `InputDataSelection`, `OutputDataSelection`, `OutputContract`, `OutputAccess`, `LineageInput` occurrences. |
 
-All other connection owners and paths are excluded, including the proposed
+All other connection owners and paths are excluded, including the
 Team membership and Team/Person responsibility associations themselves. Those
 associations are identified and discoverable but are not responsibility
 subjects in this release. Raw reference lists such as `Processor.calls`,
@@ -230,7 +232,11 @@ invalid declaration; report that declaration's diagnostics separately.
 
 Cross-namespace selections require owner write access and authorized
 read/reference access to the selected entity/owner and any endpoints required
-to resolve or disclose the selected occurrence. Reference access grants no
+to resolve or disclose the selected occurrence. Connection context follows
+that occurrence's native role and identity fingerprint, not every reference
+on its owner. An emitted Event selects its Command context; unrelated UI or
+Persona declarations do not become additional permission requirements.
+Reference access grants no
 write access. Readable Team/Person declarations grant no access to hidden
 Persons, subjects, member names, contacts, bytes or graph paths. Public direct
 reads preserve the existing hidden-target `NOT_FOUND` policy, with Reader
@@ -261,9 +267,24 @@ a successful preflight does not authorize a stale write.
 
 ## Typed queries and bounds
 
-The following are proposed query capabilities; RPC and client command names
-remain pending. They must join existing reference, impact and authorized
-closure surfaces rather than form an independent directory index.
+Typed queries join the existing reference, impact and authorized closure
+surfaces. They use the normal branch metadata and authorization context.
+
+| RPC | CLI command | MCP tool |
+| --- | --- | --- |
+| `ListSubjectAssignments` | `list-subject-assignments` | `list_subject_assignments` |
+| `ListAssigneeResponsibilities` | `list-assignee-responsibilities` | `list_assignee_responsibilities` |
+| `ListTeamMembers` | `list-team-members` | `list_team_members` |
+| `ListPersonTeams` | `list-person-teams` | `list_person_teams` |
+| `GetTeamContacts` | `get-team-contacts` | `get_team_contacts` |
+
+CLI commands accept `--request` proto3 JSON; MCP tools accept `request_json`.
+Native Team/Person authoring uses existing entity and manifest operations.
+No ambiguous bare-string shorthand is accepted for a ResponsibilitySubject.
+Generic `Reference` records retain the original `responsibility` or
+`membership` declaration and containing `from_uid`, alongside `from`,
+`from_field` and `to`. Impact paths preserve those records without replacing a
+local subject with its owner's EntityRef.
 
 | Query | Typed input and required output |
 | --- | --- |
@@ -279,15 +300,14 @@ hydration must not be attached to a historical declaration as historical fact.
 Missing/unresolved retained data, inaccessible data, complete visible empty
 results, budget-incomplete traversal and operational failure remain distinct.
 
-Proposed visible discovery shares the current 5,000-row resource scan ceiling
+Visible discovery shares the current 5,000-row resource scan ceiling
 across Channels, DataStores, Specifications, DataProducts and new Teams/Persons
 in visible namespaces. Count each exact kind/key/version once in the selected
 view per request; pagination, per-subject loops and batches do not reset it.
 Additionally cap examined membership/responsibility occurrences at 10,000 and
 returned assignment/membership/contact records at 4,096 per request. Contact
 expansion consumes occurrence/output budgets and never recursively expands
-responsibilities. These additional ceilings are proposed policy, not existing
-implementation. Exact requested owner reads still obey entity/RPC limits.
+responsibilities. Exact requested owner reads still obey entity/RPC limits.
 
 Exceeding visible discovery limits returns `RESOURCE_EXHAUSTED`, never an empty
 or falsely complete result. Existing bounded impact traversals may report
@@ -296,6 +316,11 @@ neither absence of responsibility nor deletion safety. Backend, authorization
 service, decoding, timeout and worker failures remain operational errors, not
 missing-subject diagnostics. Validation distinguishes model rejections from
 `DeadlineExceeded`/`Unavailable` and other operational failures.
+
+Closure-backed projections, exports and subgraph extraction also use their
+existing `truncated` flag when the traversed responsibility-occurrence budget
+is exceeded. That flag can describe traversal-budget truncation as well as
+entity-cap clipping; callers must not interpret the returned closure as complete.
 
 Safe-delete uses the existing independent incoming-reference guard across
 namespaces with bounded concurrent reads and a total timeout, not the visible

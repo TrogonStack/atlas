@@ -31,6 +31,8 @@ export const KIND_SHORT_TO_CAMEL: Record<string, string> = {
   type_library: 'typeLibrary',
   channel: 'channel',
   data_store: 'dataStore',
+  team: 'team',
+  person: 'person',
   data_product: 'dataProduct',
   specification: 'specification',
 };

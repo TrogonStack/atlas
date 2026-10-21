@@ -18,6 +18,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/batch.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/entity_kinds.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
 
 
 // =============================================================================
@@ -1141,6 +1142,11 @@ message ResolveBranchEntryResponse {
 //     DeleteBranch                       : branch lifecycle (Phase 1: Isolation)
 
 service EventModelService {
+  rpc ListSubjectAssignments(ListSubjectAssignmentsRequest) returns (ListSubjectAssignmentsResponse);
+  rpc ListAssigneeResponsibilities(ListAssigneeResponsibilitiesRequest) returns (ListAssigneeResponsibilitiesResponse);
+  rpc ListTeamMembers(ListTeamMembersRequest) returns (ListTeamMembersResponse);
+  rpc ListPersonTeams(ListPersonTeamsRequest) returns (ListPersonTeamsResponse);
+  rpc GetTeamContacts(GetTeamContactsRequest) returns (GetTeamContactsResponse);
   rpc InspectDataProduct(InspectDataProductRequest) returns (InspectDataProductResponse);
   // Bootstrap. Clients SHOULD call GetServerInfo on connect to learn
   // which optional features and limits apply (Decision #22).

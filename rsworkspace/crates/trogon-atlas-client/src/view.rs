@@ -174,6 +174,8 @@ pub struct FieldLine {
 pub struct RefLine {
     pub field: String,
     pub entity: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Value>,
 }
 
 /// `types` must know the entity's tenant types, or a tenant-typed schema
@@ -183,7 +185,7 @@ pub fn describe(
     types: &TranscodePool,
     outgoing: &[pb::Reference],
     incoming: &[pb::Reference],
-) -> Description {
+) -> Result<Description> {
     let has_schema = matches!(
         entity_kind(entity),
         Some(pb::EntityKind::Event | pb::EntityKind::Command | pb::EntityKind::ReadModel)
@@ -208,20 +210,35 @@ pub fn describe(
             })
             .collect()
     });
-    let line = |r: &pb::Reference, other: Option<&pb::EntityRef>| RefLine {
-        field: r.from_field.clone(),
-        entity: ref_label(other),
+    let line = |r: &pb::Reference, other: Option<&pb::EntityRef>| -> Result<RefLine> {
+        let provenance = (!r.from_uid.is_empty()
+            || r.responsibility.is_some()
+            || r.membership.is_some())
+        .then(|| types.message_json_value("trogonatlas.api.eventmodel.v1alpha1.Reference", r))
+        .transpose()
+        .context("encode exact reference provenance")?;
+        Ok(RefLine {
+            field: r.from_field.clone(),
+            entity: ref_label(other),
+            provenance,
+        })
     };
-    let mut incoming: Vec<RefLine> = incoming.iter().map(|r| line(r, r.from.as_ref())).collect();
+    let mut incoming = incoming
+        .iter()
+        .map(|r| line(r, r.from.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
     incoming.sort_by(|a, b| (&a.entity, &a.field).cmp(&(&b.entity, &b.field)));
-    Description {
+    Ok(Description {
         id: export::entity_label(entity),
         title: text_field(entity, "title"),
         doc: text_field(entity, "doc"),
         fields,
-        outgoing: outgoing.iter().map(|r| line(r, r.to.as_ref())).collect(),
+        outgoing: outgoing
+            .iter()
+            .map(|r| line(r, r.to.as_ref()))
+            .collect::<Result<_>>()?,
         incoming,
-    }
+    })
 }
 
 pub fn render_description(d: &Description) -> String {
@@ -245,6 +262,11 @@ pub fn render_description(d: &Description) -> String {
         .iter()
         .map(|r| (r.entity.as_str(), r.field.as_str()));
     push_section(&mut out, "Referenced by:", rows);
+    for line in d.outgoing.iter().chain(&d.incoming) {
+        if let Some(provenance) = &line.provenance {
+            let _ = writeln!(out, "Exact reference provenance: {provenance}");
+        }
+    }
     out
 }
 
@@ -533,11 +555,14 @@ fn text_field(entity: &pb::Entity, name: &str) -> String {
         .fields()
         .filter(|(field, _)| field.containing_oneof().is_some())
         .find_map(|(_, value)| {
-            value
-                .as_message()?
-                .get_field_by_name(name)?
-                .as_str()
-                .map(str::to_owned)
+            let field = value.as_message()?.get_field_by_name(name)?;
+            field.as_str().map(str::to_owned).or_else(|| {
+                field
+                    .as_message()?
+                    .get_field_by_name("value")?
+                    .as_str()
+                    .map(str::to_owned)
+            })
         });
     text.unwrap_or_default()
 }
@@ -594,6 +619,7 @@ mod tests {
                 kind: to.0 as i32,
                 id: Some(id(to.1, 1)),
             }),
+            ..Default::default()
         }
     }
 
@@ -707,7 +733,7 @@ mod tests {
                 (pb::EntityKind::Event, "order.placed"),
             ),
         ];
-        let d = describe(&placed, &builtin(), &outgoing, &incoming);
+        let d = describe(&placed, &builtin(), &outgoing, &incoming).unwrap();
         assert_eq!(
             render_description(&d),
             "\
@@ -763,7 +789,10 @@ Referenced by:
             });
         }
         let tenant = builtin().with_files([file]).unwrap();
-        let fields = describe(&placed, &tenant, &[], &[]).fields.unwrap();
+        let fields = describe(&placed, &tenant, &[], &[])
+            .unwrap()
+            .fields
+            .unwrap();
         assert_eq!(
             fields,
             vec![FieldLine {
@@ -771,13 +800,16 @@ Referenced by:
                 field_type: "string".into(),
             }]
         );
-        assert_eq!(describe(&placed, &builtin(), &[], &[]).fields, Some(vec![]));
+        assert_eq!(
+            describe(&placed, &builtin(), &[], &[]).unwrap().fields,
+            Some(vec![])
+        );
     }
 
     #[test]
     fn describe_omits_fields_for_kinds_without_a_schema() {
         let slice = command_slice("place-order-slice", "place-order", &[]);
-        let d = describe(&slice, &builtin(), &[], &[]);
+        let d = describe(&slice, &builtin(), &[], &[]).unwrap();
         assert_eq!(d.fields, None);
         assert!(serde_json::to_value(&d).unwrap().get("fields").is_none());
         assert!(

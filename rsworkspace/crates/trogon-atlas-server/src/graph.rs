@@ -19,11 +19,26 @@ use crate::{conv::store_err, metrics::ServerMetrics};
 #[derive(Debug, Clone)]
 pub struct ReverseIndex {
     pub by_target: HashMap<pb::EntityKey, Vec<pb::Reference>>,
+    responsibility_occurrences: usize,
 }
 
 impl ReverseIndex {
     #[must_use]
     pub fn build(all: &[StoredEntity]) -> Self {
+        Self::build_counted(all, responsibility_occurrence_count(all))
+    }
+
+    pub(crate) fn build_discovery(all: &[StoredEntity]) -> Result<Self, Status> {
+        let occurrences = responsibility_occurrence_count(all);
+        check_responsibility_occurrence_count(occurrences)?;
+        Ok(Self::build_counted(all, occurrences))
+    }
+
+    pub(crate) fn check_discovery_budget(&self) -> Result<(), Status> {
+        check_responsibility_occurrence_count(self.responsibility_occurrences)
+    }
+
+    fn build_counted(all: &[StoredEntity], responsibility_occurrences: usize) -> Self {
         // Known keys let untyped Storyboard slice refs resolve the same way
         // `closure()` does: probe CommandSlice / ReadModelSlice / AutomationSlice.
         let known: HashSet<pb::EntityKey> = all
@@ -48,6 +63,8 @@ impl ReverseIndex {
             for o in outbound_refs(&se.entity) {
                 for to_kind in resolve_to_kinds(o.to_kind, &o.to_id, &known) {
                     let key = pb::EntityKey::new(to_kind, &o.to_id);
+                    let (responsibility, membership) =
+                        responsibility_provenance(&se.entity, &o.from_field);
                     by_target.entry(key).or_default().push(pb::Reference {
                         from: Some(from_ref.clone()),
                         from_field: o.from_field.clone(),
@@ -55,6 +72,9 @@ impl ReverseIndex {
                             kind: to_kind as i32,
                             id: Some(o.to_id.clone()),
                         }),
+                        responsibility,
+                        membership,
+                        from_uid: entity_uid(&se.entity),
                     });
                 }
             }
@@ -68,7 +88,10 @@ impl ReverseIndex {
                     .push(r);
             }
         }
-        Self { by_target }
+        Self {
+            by_target,
+            responsibility_occurrences,
+        }
     }
 
     #[must_use]
@@ -78,6 +101,37 @@ impl ReverseIndex {
             .get(&key)
             .map_or(&[], std::vec::Vec::as_slice)
     }
+}
+
+fn responsibility_occurrence_count(all: &[StoredEntity]) -> usize {
+    let mut seen = HashSet::new();
+    all.iter()
+        .filter_map(|stored| {
+            let entity = &stored.entity;
+            if !matches!(
+                entity.kind,
+                Some(pb::entity::Kind::Team(_) | pb::entity::Kind::Person(_))
+            ) {
+                return None;
+            }
+            let key = pb::EntityKey::new(ref_entity_kind(entity)?, ref_entity_id(entity)?);
+            seen.insert(key)
+                .then(|| crate::responsibility_resources::occurrence_count(entity))
+        })
+        .fold(0, usize::saturating_add)
+}
+
+fn check_responsibility_occurrence_count(count: usize) -> Result<(), Status> {
+    if count > crate::responsibility_resources::MAX_RESPONSIBILITY_OCCURRENCES {
+        return Err(Status::resource_exhausted(
+            "responsibility occurrence budget exceeded",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_responsibility_discovery_budget(all: &[StoredEntity]) -> Result<(), Status> {
+    check_responsibility_occurrence_count(responsibility_occurrence_count(all))
 }
 
 /// The live type library that owns each tenant message, so an Event,
@@ -149,6 +203,8 @@ impl TypeOwners {
                 kind: pb::EntityKind::TypeLibrary as i32,
                 id: Some(owner.clone()),
             }),
+            from_uid: entity_uid(entity),
+            ..Default::default()
         })
     }
 }
@@ -279,6 +335,7 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
     let mut out = Vec::new();
     for o in outbound_refs(entity) {
         for to_kind in resolve_to_kinds(o.to_kind, &o.to_id, known) {
+            let (responsibility, membership) = responsibility_provenance(entity, &o.from_field);
             out.push(pb::Reference {
                 from: Some(from_ref.clone()),
                 from_field: o.from_field.clone(),
@@ -286,6 +343,9 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
                     kind: to_kind as i32,
                     id: Some(o.to_id.clone()),
                 }),
+                responsibility,
+                membership,
+                from_uid: entity_uid(entity),
             });
         }
     }
@@ -453,6 +513,7 @@ pub fn closure(
     let by_key = entity_lookup(all);
     let mut out: HashMap<String, pb::Entity> = HashMap::new();
     let mut truncated = false;
+    let mut responsibility_occurrences = 0usize;
     let mut missing: Vec<(pb::EntityKind, pb::Id)> = Vec::new();
     let mut missing_seen: HashSet<pb::EntityKey> = HashSet::new();
     let mut queue: VecDeque<(pb::EntityKind, pb::Id)> = VecDeque::new();
@@ -479,6 +540,12 @@ pub fn closure(
             }
             continue;
         };
+        responsibility_occurrences = responsibility_occurrences
+            .saturating_add(crate::responsibility_resources::occurrence_count(entity));
+        if check_responsibility_occurrence_count(responsibility_occurrences).is_err() {
+            truncated = true;
+            break;
+        }
         out.insert(canon, entity.clone());
         for o in outbound_refs(entity) {
             match o.to_kind {
@@ -722,6 +789,8 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
         K::DataStore(x) => x.supersedes.as_ref(),
         K::Specification(x) => x.supersedes.as_ref(),
         K::DataProduct(x) => x.supersedes.as_ref(),
+        K::Team(x) => x.supersedes.as_ref(),
+        K::Person(x) => x.supersedes.as_ref(),
     }
 }
 
@@ -828,6 +897,38 @@ pub fn impact(
         }
     }
     out
+}
+
+fn entity_uid(entity: &pb::Entity) -> String {
+    entity
+        .system
+        .as_ref()
+        .map_or_else(String::new, |system| system.uid.clone())
+}
+
+fn responsibility_provenance(
+    entity: &pb::Entity,
+    field: &str,
+) -> (Option<pb::Responsibility>, Option<pb::TeamMember>) {
+    fn index(field: &str, collection: &str) -> Option<usize> {
+        field
+            .strip_prefix(collection)?
+            .strip_prefix('[')?
+            .split_once(']')?
+            .0
+            .parse()
+            .ok()
+    }
+    let assignment = index(field, "responsibilities")
+        .and_then(|index| crate::responsibility_resources::assignments(entity).get(index))
+        .cloned();
+    let membership = match &entity.kind {
+        Some(pb::entity::Kind::Team(team)) => index(field, "members")
+            .and_then(|index| team.members.get(index))
+            .cloned(),
+        _ => None,
+    };
+    (assignment, membership)
 }
 
 #[cfg(test)]

@@ -36,6 +36,8 @@ const KINDS: Record<EntityKind, true> = {
   typeLibrary: true,
   channel: true,
   dataStore: true,
+  team: true,
+  person: true,
   dataProduct: true,
   specification: true,
 };

@@ -488,6 +488,12 @@ pub struct Reference {
     pub from_field: ::prost::alloc::string::String,
     #[prost(message, optional, tag="3")]
     pub to: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(message, optional, tag="4")]
+    pub responsibility: ::core::option::Option<super::super::super::eventmodel::v1alpha1::Responsibility>,
+    #[prost(message, optional, tag="5")]
+    pub membership: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TeamMember>,
+    #[prost(string, tag="6")]
+    pub from_uid: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImpactNode {
@@ -677,6 +683,183 @@ pub struct ExtractSubgraphResponse {
     /// `GetServerInfo.limits.max_projection_entities` and `entities` was clipped.
     #[prost(bool, tag="3")]
     pub truncated: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResponsibilityAssignee {
+    #[prost(oneof="responsibility_assignee::Selection", tags="1, 2")]
+    pub selection: ::core::option::Option<responsibility_assignee::Selection>,
+}
+/// Nested message and enum types in `ResponsibilityAssignee`.
+pub mod responsibility_assignee {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Selection {
+        #[prost(message, tag="1")]
+        Team(super::super::super::super::eventmodel::v1alpha1::TeamRef),
+        #[prost(message, tag="2")]
+        Person(super::super::super::super::eventmodel::v1alpha1::PersonRef),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResponsibilityCheckedScope {
+    #[prost(string, optional, tag="1")]
+    pub branch: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag="2")]
+    pub authorized_namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag="3")]
+    pub revision: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub visited: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(message, repeated, tag="5")]
+    pub visited_subjects: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::ResponsibilitySubject>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResponsibilityAssignment {
+    #[prost(message, optional, tag="1")]
+    pub assignee: ::core::option::Option<ResponsibilityAssignee>,
+    #[prost(string, tag="2")]
+    pub assignee_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub assignment: ::core::option::Option<super::super::super::eventmodel::v1alpha1::Responsibility>,
+    #[prost(enumeration="ResponsibilityResolutionState", tag="4")]
+    pub state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResponsibilityMembership {
+    #[prost(message, optional, tag="1")]
+    pub team: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TeamRef>,
+    #[prost(string, tag="2")]
+    pub team_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub membership: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TeamMember>,
+    #[prost(enumeration="ResponsibilityResolutionState", tag="4")]
+    pub state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResponsibilityContact {
+    #[prost(message, optional, tag="1")]
+    pub team: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TeamRef>,
+    #[prost(string, tag="2")]
+    pub team_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub membership_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="4")]
+    pub person: ::core::option::Option<super::super::super::eventmodel::v1alpha1::PersonRef>,
+    #[prost(message, optional, tag="5")]
+    pub contact: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ContactPoint>,
+    #[prost(enumeration="ResponsibilityResolutionState", tag="6")]
+    pub state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListSubjectAssignmentsRequest {
+    #[prost(message, optional, tag="1")]
+    pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ResponsibilitySubject>,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::ResponsibilityKind", optional, tag="2")]
+    pub kind: ::core::option::Option<i32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSubjectAssignmentsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub assignments: ::prost::alloc::vec::Vec<ResponsibilityAssignment>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<ResponsibilityCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(enumeration="ResponsibilityResolutionState", tag="4")]
+    pub subject_state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListAssigneeResponsibilitiesRequest {
+    #[prost(message, optional, tag="1")]
+    pub assignee: ::core::option::Option<ResponsibilityAssignee>,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::ResponsibilityKind", optional, tag="2")]
+    pub kind: ::core::option::Option<i32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListAssigneeResponsibilitiesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub assignments: ::prost::alloc::vec::Vec<ResponsibilityAssignment>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<ResponsibilityCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListTeamMembersRequest {
+    #[prost(message, optional, tag="1")]
+    pub team: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TeamRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListTeamMembersResponse {
+    #[prost(message, repeated, tag="1")]
+    pub memberships: ::prost::alloc::vec::Vec<ResponsibilityMembership>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<ResponsibilityCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListPersonTeamsRequest {
+    #[prost(message, optional, tag="1")]
+    pub person: ::core::option::Option<super::super::super::eventmodel::v1alpha1::PersonRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListPersonTeamsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub memberships: ::prost::alloc::vec::Vec<ResponsibilityMembership>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<ResponsibilityCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetTeamContactsRequest {
+    #[prost(message, optional, tag="1")]
+    pub team: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TeamRef>,
+    #[prost(bool, tag="2")]
+    pub include_members: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetTeamContactsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub team_contacts: ::prost::alloc::vec::Vec<ResponsibilityContact>,
+    #[prost(message, repeated, tag="2")]
+    pub member_contacts: ::prost::alloc::vec::Vec<ResponsibilityContact>,
+    #[prost(message, optional, tag="3")]
+    pub scope: ::core::option::Option<ResponsibilityCheckedScope>,
+    #[prost(bool, tag="4")]
+    pub incomplete: bool,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ResponsibilityResolutionState {
+    Unspecified = 0,
+    Resolved = 1,
+    Unresolved = 2,
+    Inaccessible = 3,
+}
+impl ResponsibilityResolutionState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "RESPONSIBILITY_RESOLUTION_STATE_UNSPECIFIED",
+            Self::Resolved => "RESPONSIBILITY_RESOLUTION_STATE_RESOLVED",
+            Self::Unresolved => "RESPONSIBILITY_RESOLUTION_STATE_UNRESOLVED",
+            Self::Inaccessible => "RESPONSIBILITY_RESOLUTION_STATE_INACCESSIBLE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "RESPONSIBILITY_RESOLUTION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "RESPONSIBILITY_RESOLUTION_STATE_RESOLVED" => Some(Self::Resolved),
+            "RESPONSIBILITY_RESOLUTION_STATE_UNRESOLVED" => Some(Self::Unresolved),
+            "RESPONSIBILITY_RESOLUTION_STATE_INACCESSIBLE" => Some(Self::Inaccessible),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SearchResult {

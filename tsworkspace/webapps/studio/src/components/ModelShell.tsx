@@ -783,6 +783,7 @@ export function ModelShell({
           <Inspector
             model={model}
             entity={soleEntity}
+            asOf={asOf}
             instanceUid={soleSelection?.instanceUid}
             momentKey={soleSelection?.momentKey}
             issues={issues}

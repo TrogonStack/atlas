@@ -1283,3 +1283,12 @@ pub struct ResolveTypeParams {
     )]
     pub type_url: String,
 }
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResponsibilityQueryParams {
+    #[schemars(
+        description = "Exact proto3 JSON request for this query RPC. Preserve typed subject alternatives, owner UID, local IDs, direction and optional digest pins. No shorthand or inferred ownership."
+    )]
+    pub request_json: JsonPayload,
+}

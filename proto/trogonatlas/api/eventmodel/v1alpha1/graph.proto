@@ -3,6 +3,7 @@ syntax = "proto3";
 package trogonatlas.api.eventmodel.v1alpha1;
 
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/responsibility.proto";
 
 // A typed pointer hit. `from` is the entity that holds the pointer (e.g. a
 // slice), `from_field` is the structural path inside that entity to the
@@ -11,6 +12,9 @@ message Reference {
   trogonatlas.eventmodel.v1alpha1.EntityRef from = 1;
   string from_field = 2;
   trogonatlas.eventmodel.v1alpha1.EntityRef to = 3;
+  trogonatlas.eventmodel.v1alpha1.Responsibility responsibility = 4;
+  trogonatlas.eventmodel.v1alpha1.TeamMember membership = 5;
+  string from_uid = 6;
 }
 
 message ImpactNode {

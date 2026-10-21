@@ -668,3 +668,166 @@ async fn data_product_nested_target_set_guard_uses_merged_view_without_visible_n
     assert_eq!(store.referenced_targets(&targets, None).await.unwrap(), all);
     assert!(stored.entity.system.is_some());
 }
+
+#[tokio::test]
+async fn final_overlay_reference_guard_replaces_deletes_and_scans_new_owners() {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    store
+        .create(
+            pb::EntityKind::Processor,
+            &processor("old", "consumer"),
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    store.create_branch("final-view", "").await.unwrap();
+    let old = pb::EntityKey::new(pb::EntityKind::ExternalSystem, &id("old"));
+    let new = pb::EntityKey::new(pb::EntityKind::ExternalSystem, &id("new"));
+    let owner = pb::EntityKey::new(pb::EntityKind::Processor, &id("consumer"));
+    let added = pb::EntityKey::new(pb::EntityKind::Processor, &id("added"));
+    let targets = [old.clone(), new.clone()];
+    assert_eq!(
+        store
+            .referenced_targets_with_overlay(
+                &targets,
+                Some("final-view"),
+                &[(owner.clone(), Some(processor("new", "consumer")))]
+            )
+            .await
+            .unwrap(),
+        std::collections::HashSet::from([new.clone()])
+    );
+    assert!(store
+        .referenced_targets_with_overlay(&targets, Some("final-view"), &[(owner.clone(), None)])
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        store
+            .referenced_targets_with_overlay(
+                &targets,
+                Some("final-view"),
+                &[(owner, None), (added, Some(processor("new", "added")))]
+            )
+            .await
+            .unwrap(),
+        std::collections::HashSet::from([new])
+    );
+    assert_eq!(
+        store
+            .referenced_targets(&targets, Some("final-view"))
+            .await
+            .unwrap(),
+        std::collections::HashSet::from([old])
+    );
+    let duplicate = pb::EntityKey::new(pb::EntityKind::Processor, &id("duplicate"));
+    assert!(matches!(
+        store
+            .referenced_targets_with_overlay(
+                &targets,
+                None,
+                &[(duplicate.clone(), None), (duplicate.clone(), None)]
+            )
+            .await,
+        Err(StoreError::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        store
+            .referenced_targets_with_overlay(
+                &targets,
+                None,
+                &[(duplicate, Some(processor("new", "wrong-key")))]
+            )
+            .await,
+        Err(StoreError::InvalidArgument(_))
+    ));
+}
+
+#[tokio::test]
+async fn final_overlay_untyped_slice_precedence_and_last_selection_fail_closed() {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let slice_id = id("slice");
+    let command = pb::Entity {
+        kind: Some(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+            id: Some(slice_id.clone()),
+            title: "Command".into(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let automation = pb::Entity {
+        kind: Some(pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+            id: Some(slice_id.clone()),
+            title: "Automation".into(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    store
+        .create(
+            pb::EntityKind::AutomationSlice,
+            &automation,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let storyboard = pb::Entity {
+        kind: Some(pb::entity::Kind::Storyboard(pb::Storyboard {
+            id: Some(id("journey")),
+            title: "Journey".into(),
+            slices: vec![pb::SliceRef {
+                id: Some(slice_id.clone()),
+            }],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    store
+        .create(
+            pb::EntityKind::Storyboard,
+            &storyboard,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let command_key = pb::EntityKey::new(pb::EntityKind::CommandSlice, &slice_id);
+    let automation_key = pb::EntityKey::new(pb::EntityKind::AutomationSlice, &slice_id);
+    let targets = [command_key.clone(), automation_key.clone()];
+    assert_eq!(
+        store
+            .referenced_targets_with_overlay(
+                &targets,
+                None,
+                &[(command_key.clone(), Some(command.clone()))]
+            )
+            .await
+            .unwrap(),
+        std::collections::HashSet::from([command_key.clone()])
+    );
+    store
+        .create(
+            pb::EntityKind::CommandSlice,
+            &command,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .referenced_targets_with_overlay(&targets, None, &[(command_key.clone(), None)])
+            .await
+            .unwrap(),
+        std::collections::HashSet::from([automation_key.clone()])
+    );
+    assert_eq!(
+        store
+            .referenced_targets_with_overlay(
+                &targets,
+                None,
+                &[(command_key.clone(), None), (automation_key, None)]
+            )
+            .await
+            .unwrap(),
+        std::collections::HashSet::from([command_key])
+    );
+}

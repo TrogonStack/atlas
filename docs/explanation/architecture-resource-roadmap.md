@@ -71,9 +71,9 @@ fixtures and their limits. Port membership and access declarations do not
 introduce producing behavior. Backend inspection reports checked model paths
 separately from declared lineage and runtime execution evidence.
 
-## Next resource contract: responsibility
+## Implemented responsibility resources
 
-The [responsibility contract proposal](../reference/responsibility-contracts.md)
+The [responsibility contract](../reference/responsibility-contracts.md)
 defines Team and Person directory records, identified membership and explicit
 responsibility for exact native subjects. Its
 [acceptance criteria](../reference/responsibility-acceptance.md) connect these
@@ -84,9 +84,10 @@ authorization and introduce no producing behavior.
 The first native scope uses exact versions and existing incarnation selectors;
 it does not silently extend responsibility to a version family or every member
 of a resource. Retained directory information and its history remain distinct
-from authentication identities and external directory synchronization. These
-are design and acceptance references; schema, runtime and executable acceptance
-remain pending.
+from authentication identities and external directory synchronization. Native
+schema, backend admission and typed queries, CLI/MCP authoring and Studio review
+preserve these exact selections. The acceptance reference links executable
+coverage and records its deployment and acceptance limits.
 
 ## Follow-on contracts
 

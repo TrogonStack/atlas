@@ -643,6 +643,22 @@ pub trait Store: Send + Sync {
         branch: Option<&str>,
     ) -> StoreResult<HashSet<EntityKey>>;
 
+    /// Complete incoming-reference guard over the final proposed owner replacements and deletions.
+    /// Callers hold the same writer lease and mutation lock as `referenced_targets`.
+    async fn referenced_targets_with_overlay(
+        &self,
+        targets: &[EntityKey],
+        branch: Option<&str>,
+        overlay: &[(EntityKey, Option<Entity>)],
+    ) -> StoreResult<HashSet<EntityKey>> {
+        if !overlay.is_empty() {
+            return Err(StoreError::Backend(
+                "final-view reference scanning is unsupported".into(),
+            ));
+        }
+        self.referenced_targets(targets, branch).await
+    }
+
     /// Whether any entity in the merged view explicitly references this exact target.
     async fn has_incoming_reference(
         &self,
