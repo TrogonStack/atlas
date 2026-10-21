@@ -302,6 +302,14 @@ message DeleteEntityResponse {
   repeated Reference referrers = 1;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 2;
+  // Strategic findings the delete causes on the entities left behind, for
+  // example REALIZES_DANGLING on a bounded context whose subdomain is gone or
+  // SUBDOMAIN_UNREALIZED on a subdomain whose only realizing context is gone.
+  // Populated when the delete proceeds (including FORCE) and, for DRY_RUN, as
+  // a preview of what the delete would leave. Advisory at every severity: they
+  // never block the delete. Empty on an operation_id replay, which has no
+  // current view to judge.
+  repeated ValidationIssue validation = 3;
 }
 
 // ---------- Batch mutation (atomic multi-entity write) -----------------------
@@ -1028,17 +1036,21 @@ message MergeBranchResponse {
     // At least one entry is a conflict class; nothing was persisted.
     // See `conflicts`.
     STATUS_CONFLICTS = 3;
-    // No conflicts, but the post-merge world fails validation with at
-    // least one Error-severity issue; nothing was persisted. See
-    // `validation`.
+    // No conflicts, but the post-merge world fails a blocking validation
+    // check with at least one Error-severity issue; nothing was persisted.
+    // See `validation`. Strategic findings never cause this status.
     STATUS_INVALID = 4;
   }
   Status status = 1;
   repeated trogonatlas.catalog.v1alpha1.BranchDiffEntry conflicts = 2;
-  // Post-merge validation findings. STATUS_INVALID carries the findings that
-  // blocked the merge. A dry run that reports STATUS_VALIDATED also carries
-  // its Warning and Info findings, so a reviewer sees what the merge leaves
-  // behind without a separate validation call.
+  // Post-merge validation findings. Blocking errors (the store-level checks
+  // of the post-merge world) produce STATUS_INVALID and carry the findings
+  // that blocked the merge. Strategic findings about bounded contexts,
+  // domains and subdomains, including those a landed deletion leaves behind,
+  // ride along without blocking, at any severity, exactly as they do on
+  // PutEntityResponse: STATUS_VALIDATED (a dry run) and STATUS_APPLIED carry
+  // them, so a reviewer sees what the merge leaves behind without a separate
+  // validation call.
   repeated ValidationIssue validation = 3;
   // Number of non-CONVERGED entries actually landed on baseline, or that a
   // dry run would land.

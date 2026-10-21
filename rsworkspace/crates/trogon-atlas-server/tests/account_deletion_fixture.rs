@@ -15,9 +15,10 @@ fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     }
 }
 
-fn fixture_dir() -> PathBuf {
+fn manifests_dir(namespace: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../examples/manifests/acme-customer-data-deletion")
+        .join("../../../examples/manifests")
+        .join(namespace)
 }
 
 fn put(entity: pb::Entity) -> pb::BatchMutateOp {
@@ -34,11 +35,14 @@ fn put(entity: pb::Entity) -> pb::BatchMutateOp {
 }
 
 fn load_manifests() -> Vec<pb::Entity> {
-    trogon_atlas_client::manifest::load_paths(&[fixture_dir()])
-        .expect("acme-customer-data-deletion manifests should load")
-        .into_iter()
-        .map(|m| m.entity)
-        .collect()
+    trogon_atlas_client::manifest::load_paths(&[
+        manifests_dir("acme"),
+        manifests_dir("acme-customer-data-deletion"),
+    ])
+    .expect("acme-customer-data-deletion manifests should load")
+    .into_iter()
+    .map(|m| m.entity)
+    .collect()
 }
 
 async fn seed_entities(entities: Vec<pb::Entity>) -> EventModelServiceImpl {

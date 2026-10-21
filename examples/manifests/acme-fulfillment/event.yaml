@@ -1,0 +1,28 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Event
+metadata:
+  name: order.fulfilled
+  namespace: acme-fulfillment
+spec:
+  doc: Acme Shipping Carrier confirmed the order was delivered.
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - name: fulfilled_at
+      type:
+        timestamp: {}
+  swimlane:
+    id:
+      namespace: acme-fulfillment
+      slug: fulfillment
+      version: '1'
+  title: Order fulfilled

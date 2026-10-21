@@ -79,6 +79,10 @@ enum Cmd {
         #[arg(short = 'f', long = "filename", required = true, num_args = 1..)]
         filenames: Vec<PathBuf>,
         /// Run server-side validation for every change without persisting.
+        /// Reports the request-time findings for each write, including the
+        /// strategic ones (BoundedContext, Domain, Subdomain rules), which
+        /// are warnings and never block the apply. Findings that need the
+        /// whole model in view come from `validate` and `validate-project`.
         #[arg(long)]
         dry_run: bool,
         /// Idempotency key for the batch this apply sends; omit to mint a
@@ -169,14 +173,42 @@ enum Cmd {
     },
     /// List the namespaces the caller can see, with their ids and entity counts.
     Namespaces,
-    /// Run model-level validation on a stored event model: the rules that
-    /// need the whole model in view, which `apply --dry-run` does not run.
-    /// Exits 1 when any finding is an error. With --branch, validates the
-    /// branch's view of the model.
+    /// Run full validation on a stored event model: the rules that need the
+    /// whole model in view, which `apply --dry-run` does not run, plus the
+    /// strategic chain of the model's namespace (its BoundedContext, the
+    /// Subdomains it realizes, their Domains, and Domains declared in the
+    /// namespace). Exits 1 when any finding is an error. With --branch,
+    /// validates the branch's view of the model.
     Validate {
         /// `<namespace>/<model>[@version]`, e.g. `shop/checkout`. Omit
         /// `@version` to validate the latest version.
         model: String,
+    },
+    /// Validate every event model in a namespace, domain or project, plus
+    /// the strategic findings (BoundedContext, Domain, Subdomain, Project
+    /// rules), which print once in a store-level section. Use it after
+    /// editing only problem-space entities or a BoundedContext, when there
+    /// may be no event model to run `validate` on. Exits 1 when any
+    /// finding is an error. With --branch, validates the branch's view.
+    #[command(group(
+        clap::ArgGroup::new("scope")
+            .required(true)
+            .multiple(false)
+            .args(["namespace", "domain", "project"])
+    ))]
+    ValidateProject {
+        /// Every event model in this namespace, problem-space namespaces
+        /// (those with no event model) included.
+        #[arg(long)]
+        namespace: Option<String>,
+        /// `<namespace>/<slug>[@version]` of a Domain; omit `@version` for
+        /// the latest.
+        #[arg(long)]
+        domain: Option<String>,
+        /// `<namespace>/<slug>[@version]` of a Project; omit `@version` for
+        /// the latest.
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Manage branch lifecycle (Phase 1: Isolation). Branch scope for
     /// Apply/Diff/Export is set via the top-level --branch flag, not here.
@@ -352,6 +384,86 @@ enum BranchCmd {
         #[arg(long)]
         operation_id: Option<String>,
     },
+}
+
+/// One section of a `validate-project` run: a model's findings, or the
+/// store-level findings (strategic rules) that belong to no event model.
+struct ProjectSection {
+    /// Canonical event model id; `None` for the store-level section.
+    event_model: Option<String>,
+    counts: branch::SeverityCounts,
+    issues: Vec<pb::ValidationIssue>,
+}
+
+struct ProjectValidation {
+    scope: String,
+    total: branch::SeverityCounts,
+    sections: Vec<ProjectSection>,
+}
+
+impl ProjectValidation {
+    fn of(scope: &str, resp: &pb::ValidateProjectResponse) -> Self {
+        let sections: Vec<ProjectSection> = resp
+            .reports
+            .iter()
+            .map(|report| ProjectSection {
+                event_model: report
+                    .event_model_id
+                    .as_ref()
+                    .filter(|id| !id.slug.is_empty())
+                    .map(|id| pb::canonical::id_string(pb::EntityKind::EventModel, id)),
+                counts: branch::SeverityCounts::of(&report.issues),
+                issues: report.issues.clone(),
+            })
+            .collect();
+        let total =
+            sections
+                .iter()
+                .fold(branch::SeverityCounts::default(), |mut total, section| {
+                    total.errors += section.counts.errors;
+                    total.warnings += section.counts.warnings;
+                    total.infos += section.counts.infos;
+                    total
+                });
+        Self {
+            scope: scope.to_string(),
+            total,
+            sections,
+        }
+    }
+
+    fn render(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = format!("{}: {}\n", self.scope, self.total);
+        for section in &self.sections {
+            let name = section.event_model.as_deref().unwrap_or("store-level");
+            let _ = writeln!(out, "{name}: {}", section.counts);
+            for issue in &section.issues {
+                let _ = writeln!(out, "{}", apply::format_issue(issue));
+            }
+        }
+        out
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "scope": self.scope,
+            "validation_summary": summary_json(self.total),
+            "reports": self.sections.iter().map(|section| json!({
+                "event_model": section.event_model,
+                "validation_summary": summary_json(section.counts),
+                "validation": section.issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+fn summary_json(counts: branch::SeverityCounts) -> Value {
+    json!({
+        "errors": counts.errors,
+        "warnings": counts.warnings,
+        "info": counts.infos,
+    })
 }
 
 /// Exit code for a command whose output reports something short of success
@@ -941,6 +1053,40 @@ async fn run(
                 Some(data),
             ))
         }
+        Cmd::ValidateProject {
+            namespace,
+            domain,
+            project,
+        } => {
+            let (label, scope) = match (namespace, domain, project) {
+                (Some(ns), None, None) => (
+                    format!("namespace {ns}"),
+                    validate::ProjectScope::namespace(&ns)?,
+                ),
+                (None, Some(d), None) => {
+                    (format!("domain {d}"), validate::ProjectScope::domain(&d)?)
+                }
+                (None, None, Some(p)) => {
+                    (format!("project {p}"), validate::ProjectScope::project(&p)?)
+                }
+                _ => unreachable!("clap requires exactly one of --namespace, --domain, --project"),
+            };
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let resp = validate::validate_project(&mut client, &scope).await?;
+            let report = ProjectValidation::of(&label, &resp);
+            if text {
+                print!("{}", report.render());
+            }
+            Ok((
+                if report.total.errors > 0 {
+                    ExitCode::from(EXIT_FINDINGS)
+                } else {
+                    ExitCode::SUCCESS
+                },
+                Some(report.to_json()),
+            ))
+        }
         Cmd::Tree { namespace } => {
             if let Some(namespace) = &namespace {
                 trogon_atlas_core::validate_id_component(namespace).map_err(|e| {
@@ -1169,8 +1315,15 @@ async fn run(
                 use pb::merge_branch_response::Status;
                 match Status::try_from(resp.status).unwrap_or(Status::Unspecified) {
                     Status::Applied => {
+                        let severities = branch::SeverityCounts::of(&resp.validation);
                         if text {
                             println!("{name} merged ({} entities applied)", resp.applied_count);
+                            if !resp.validation.is_empty() {
+                                println!("validation after merge: {severities}");
+                                for issue in &resp.validation {
+                                    println!("{}", apply::format_issue(issue));
+                                }
+                            }
                         }
                         let counts = branch::MergeCounts::of(&resp);
                         let data = json!({
@@ -1179,6 +1332,12 @@ async fn run(
                             "added_count": counts.added,
                             "changed_count": counts.changed,
                             "deleted_count": counts.deleted,
+                            "validation_summary": {
+                                "errors": severities.errors,
+                                "warnings": severities.warnings,
+                                "info": severities.infos,
+                            },
+                            "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
@@ -1352,10 +1511,12 @@ async fn run(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use trogon_atlas_client::failure::FailureCategory as Category;
+    use trogon_atlas_proto as pb;
 
-    use super::exit_code_for_category;
+    use super::{exit_code_for_category, ProjectValidation};
 
     // `ExitCode` has no public accessor for the raw code, so compare
     // through `Debug` formatting against `ExitCode::from(expected)` built
@@ -1384,5 +1545,77 @@ mod tests {
                 "{category:?} should exit {expected}"
             );
         }
+    }
+
+    fn issue(severity: pb::validation_issue::Severity, code: &str) -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            severity: severity as i32,
+            code: code.into(),
+            message: "m".into(),
+            ..Default::default()
+        }
+    }
+
+    fn project_response() -> pb::ValidateProjectResponse {
+        use pb::validation_issue::Severity;
+        pb::ValidateProjectResponse {
+            reports: vec![
+                pb::validate_project_response::ModelReport {
+                    event_model_id: Some(pb::Id {
+                        namespace: "shop".into(),
+                        slug: "checkout".into(),
+                        version: 1,
+                    }),
+                    issues: vec![issue(Severity::Info, "OPEN_QUESTION_PRESENT")],
+                },
+                pb::validate_project_response::ModelReport {
+                    event_model_id: None,
+                    issues: vec![
+                        issue(Severity::Warning, "DOMAIN_IN_CONTEXT_NAMESPACE"),
+                        issue(Severity::Error, "DOMAIN_SLUG_MISMATCH"),
+                    ],
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn project_validation_prints_per_model_and_store_level_sections() {
+        let report = ProjectValidation::of("namespace shop", &project_response());
+        assert_eq!(report.total.errors, 1);
+        assert_eq!(report.total.warnings, 1);
+        assert_eq!(report.total.infos, 1);
+        let text = report.render();
+        assert!(
+            text.starts_with("namespace shop: 1 errors, 1 warnings, 1 info\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("event_model:shop/checkout@1: 0 errors, 0 warnings, 1 info"),
+            "{text}"
+        );
+        assert!(
+            text.contains("store-level: 1 errors, 1 warnings, 0 info"),
+            "{text}"
+        );
+        assert!(
+            text.contains("warning DOMAIN_IN_CONTEXT_NAMESPACE"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn project_validation_json_keeps_store_level_report_with_null_model() {
+        let json = ProjectValidation::of("namespace shop", &project_response()).to_json();
+        assert_eq!(json["scope"], "namespace shop");
+        assert_eq!(json["validation_summary"]["errors"], 1);
+        let reports = json["reports"].as_array().unwrap();
+        assert_eq!(reports[0]["event_model"], "event_model:shop/checkout@1");
+        assert!(reports[1]["event_model"].is_null());
+        assert_eq!(
+            reports[1]["validation"][0]["code"],
+            "DOMAIN_IN_CONTEXT_NAMESPACE"
+        );
     }
 }

@@ -1,0 +1,46 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Storyboard
+metadata:
+  name: fulfillment-flow
+  namespace: acme-fulfillment
+spec:
+  doc: A paid order is dispatched to the carrier and confirmed delivered. It starts from the fulfillment queue that the storefront order.paid event populates, so that projection is upstream preparation and not a step here.
+  entry:
+    automation:
+      processor:
+        processor:
+          id:
+            namespace: acme-fulfillment
+            slug: carrier-dispatch-worker
+            version: '1'
+    readModel:
+      readModel:
+        id:
+          namespace: acme-fulfillment
+          slug: fulfillment-queue
+          version: '1'
+  outcome:
+    events:
+    - event:
+        id:
+          namespace: acme-fulfillment
+          slug: order.fulfilled
+          version: '1'
+  slices:
+  - id:
+      namespace: acme-fulfillment
+      slug: mark-fulfilled-auto
+      version: '1'
+  - id:
+      namespace: acme-fulfillment
+      slug: mark-fulfilled-slice
+      version: '1'
+  - id:
+      namespace: acme-fulfillment
+      slug: order-status-fulfilled-rms
+      version: '1'
+  - id:
+      namespace: acme-fulfillment
+      slug: order-tracking-ui-slice
+      version: '1'
+  title: Fulfillment

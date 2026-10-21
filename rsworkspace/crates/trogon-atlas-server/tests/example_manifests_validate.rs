@@ -7,8 +7,11 @@ use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
-const NAMESPACES: [(&str, &str); 4] = [
+const PROBLEM_SPACE: &str = "acme";
+
+const NAMESPACES: [(&str, &str); 5] = [
     ("acme-storefront", "acme-storefront-model"),
+    ("acme-fulfillment", "acme-fulfillment-model"),
     ("acme-reviews", "acme-reviews-model"),
     (
         "acme-customer-data-deletion",
@@ -35,9 +38,9 @@ fn put(entity: pb::Entity) -> pb::BatchMutateOp {
 }
 
 async fn seed_all_examples() -> EventModelServiceImpl {
-    let paths: Vec<PathBuf> = NAMESPACES
-        .iter()
-        .map(|(ns, _)| manifests_dir().join(ns))
+    let paths: Vec<PathBuf> = std::iter::once(PROBLEM_SPACE)
+        .chain(NAMESPACES.iter().map(|(ns, _)| *ns))
+        .map(|ns| manifests_dir().join(ns))
         .collect();
     let ops: Vec<pb::BatchMutateOp> = trogon_atlas_client::manifest::load_paths(&paths)
         .expect("example manifests should load")
@@ -104,33 +107,45 @@ async fn example_models_raise_no_errors_or_warnings() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn example_projects_raise_no_errors_or_warnings() {
+async fn example_project_raises_no_errors_or_warnings() {
     let svc = seed_all_examples().await;
-    let mut findings = Vec::new();
+    let resp = svc
+        .validate_project(Request::new(pb::ValidateProjectRequest {
+            scope: Some(pb::validate_project_request::Scope::ProjectId(pb::Id {
+                namespace: PROBLEM_SPACE.into(),
+                slug: PROBLEM_SPACE.into(),
+                version: 1,
+            })),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let reported: Vec<String> = resp
+        .reports
+        .iter()
+        .filter_map(|r| r.event_model_id.as_ref())
+        .map(|id| id.namespace.clone())
+        .collect();
     for (ns, _) in NAMESPACES {
-        let resp = svc
-            .validate_project(Request::new(pb::ValidateProjectRequest {
-                scope: Some(pb::validate_project_request::Scope::ProjectId(pb::Id {
-                    namespace: ns.into(),
-                    slug: ns.into(),
-                    version: 1,
-                })),
-            }))
-            .await
-            .unwrap()
-            .into_inner();
-        assert!(!resp.reports.is_empty(), "{ns} project reported no models");
-        for report in resp.reports {
-            for i in report.issues {
-                if i.severity >= pb::validation_issue::Severity::Warning as i32 {
-                    findings.push(format!("{ns} {} {:?} :: {}", i.code, i.subject, i.message));
-                }
+        assert!(
+            reported.iter().any(|reported| reported == ns),
+            "the {PROBLEM_SPACE} project reported no model for {ns}"
+        );
+    }
+    let mut findings = Vec::new();
+    for report in resp.reports {
+        for i in report.issues {
+            if i.severity >= pb::validation_issue::Severity::Warning as i32 {
+                findings.push(format!(
+                    "{PROBLEM_SPACE} {} {:?} :: {}",
+                    i.code, i.subject, i.message
+                ));
             }
         }
     }
     assert!(
         findings.is_empty(),
-        "example projects must validate cleanly:\n{}",
+        "the example project must validate cleanly:\n{}",
         findings.join("\n")
     );
 }

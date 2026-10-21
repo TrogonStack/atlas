@@ -198,7 +198,7 @@ from pathlib import Path
 d = Path(sys.argv[1])
 names = lambda p: sorted(n[0] for n in json.loads((d / f"scope.{p}.json").read_text())["namespaces"])
 expect = {
-    "acme-agent": ["acme-customer-data-deletion", "acme-reviews", "acme-storefront"],
+    "acme-agent": ["acme", "acme-customer-data-deletion", "acme-fulfillment", "acme-reviews", "acme-storefront"],
     "globex-agent": ["globex-orders", "ledger"],
     "partner-reader": ["acme-reviews"],
 }
@@ -249,8 +249,8 @@ touched="$src"
 quiet dc "$src" up -d --wait --wait-timeout 300
 use_stack "$src"
 
-log "seeding acme fixtures as acme-agent (claims acme-* namespaces)"
-trogon_atlas_as acme-agent apply -f "$manifests/acme-storefront" "$manifests/acme-reviews" "$manifests/acme-customer-data-deletion" >/dev/null
+log "seeding acme fixtures as acme-agent (claims the acme and acme-* namespaces)"
+trogon_atlas_as acme-agent apply -f "$manifests/acme" "$manifests/acme-storefront" "$manifests/acme-fulfillment" "$manifests/acme-reviews" "$manifests/acme-customer-data-deletion" >/dev/null
 
 log "registering a minted namespace and seeding a second tenant as globex-agent"
 drill call RegisterNamespace globex-agent '{"name":"ledger"}' >/dev/null

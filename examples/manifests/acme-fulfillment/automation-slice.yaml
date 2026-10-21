@@ -1,0 +1,43 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: AutomationSlice
+metadata:
+  name: mark-fulfilled-auto
+  namespace: acme-fulfillment
+spec:
+  doc: Calls Acme Shipping Carrier to dispatch the order and records delivery confirmation.
+  emittedCommand:
+    command:
+      id:
+        namespace: acme-fulfillment
+        slug: mark-fulfilled
+        version: '1'
+  processor:
+    processor:
+      id:
+        namespace: acme-fulfillment
+        slug: carrier-dispatch-worker
+        version: '1'
+  scenarios:
+  - doc: Queue row.
+    given:
+    - readModel:
+        id:
+          namespace: acme-fulfillment
+          slug: fulfillment-queue
+          version: '1'
+    id: ok
+    then:
+      command:
+        id:
+          namespace: acme-fulfillment
+          slug: mark-fulfilled
+          version: '1'
+    title: Delivery confirmed
+    whenDoc: Acme Shipping Carrier confirms delivery.
+  sourceReadModels:
+  - readModel:
+      id:
+        namespace: acme-fulfillment
+        slug: fulfillment-queue
+        version: '1'
+  title: Dispatch to carrier

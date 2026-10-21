@@ -1531,6 +1531,15 @@ pub struct DeleteEntityResponse {
     /// Set only when the request carried an operation_id.
     #[prost(message, optional, tag="2")]
     pub operation_receipt: ::core::option::Option<super::super::super::catalog::v1alpha1::OperationReceipt>,
+    /// Strategic findings the delete causes on the entities left behind, for
+    /// example REALIZES_DANGLING on a bounded context whose subdomain is gone or
+    /// SUBDOMAIN_UNREALIZED on a subdomain whose only realizing context is gone.
+    /// Populated when the delete proceeds (including FORCE) and, for DRY_RUN, as
+    /// a preview of what the delete would leave. Advisory at every severity: they
+    /// never block the delete. Empty on an operation_id replay, which has no
+    /// current view to judge.
+    #[prost(message, repeated, tag="3")]
+    pub validation: ::prost::alloc::vec::Vec<ValidationIssue>,
 }
 // ---------- Batch mutation (atomic multi-entity write) -----------------------
 //
@@ -2477,10 +2486,14 @@ pub struct MergeBranchResponse {
     pub status: i32,
     #[prost(message, repeated, tag="2")]
     pub conflicts: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::BranchDiffEntry>,
-    /// Post-merge validation findings. STATUS_INVALID carries the findings that
-    /// blocked the merge. A dry run that reports STATUS_VALIDATED also carries
-    /// its Warning and Info findings, so a reviewer sees what the merge leaves
-    /// behind without a separate validation call.
+    /// Post-merge validation findings. Blocking errors (the store-level checks
+    /// of the post-merge world) produce STATUS_INVALID and carry the findings
+    /// that blocked the merge. Strategic findings about bounded contexts,
+    /// domains and subdomains, including those a landed deletion leaves behind,
+    /// ride along without blocking, at any severity, exactly as they do on
+    /// PutEntityResponse: STATUS_VALIDATED (a dry run) and STATUS_APPLIED carry
+    /// them, so a reviewer sees what the merge leaves behind without a separate
+    /// validation call.
     #[prost(message, repeated, tag="3")]
     pub validation: ::prost::alloc::vec::Vec<ValidationIssue>,
     /// Number of non-CONVERGED entries actually landed on baseline, or that a
@@ -2515,9 +2528,9 @@ pub mod merge_branch_response {
         /// At least one entry is a conflict class; nothing was persisted.
         /// See `conflicts`.
         Conflicts = 3,
-        /// No conflicts, but the post-merge world fails validation with at
-        /// least one Error-severity issue; nothing was persisted. See
-        /// `validation`.
+        /// No conflicts, but the post-merge world fails a blocking validation
+        /// check with at least one Error-severity issue; nothing was persisted.
+        /// See `validation`. Strategic findings never cause this status.
         Invalid = 4,
     }
     impl Status {

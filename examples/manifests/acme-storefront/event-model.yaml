@@ -4,21 +4,16 @@ metadata:
   name: acme-storefront-model
   namespace: acme-storefront
 spec:
-  doc: 'End-to-end storefront flow: cart, checkout, payment capture, and carrier fulfillment.'
+  doc: 'Storefront ordering flow: cart, checkout, and payment capture.'
   members:
   - id:
-      namespace: acme-storefront
-      slug: retail-commerce
+      namespace: acme
+      slug: acme
       version: '1'
     kind: ENTITY_KIND_DOMAIN
   - id:
-      namespace: acme-storefront
+      namespace: acme
       slug: ordering
-      version: '1'
-    kind: ENTITY_KIND_SUBDOMAIN
-  - id:
-      namespace: acme-storefront
-      slug: fulfillment
       version: '1'
     kind: ENTITY_KIND_SUBDOMAIN
   - id:
@@ -33,17 +28,7 @@ spec:
     kind: ENTITY_KIND_EXTERNAL_SYSTEM
   - id:
       namespace: acme-storefront
-      slug: acme-shipping-carrier
-      version: '1'
-    kind: ENTITY_KIND_EXTERNAL_SYSTEM
-  - id:
-      namespace: acme-storefront
       slug: payment-capture-module
-      version: '1'
-    kind: ENTITY_KIND_COMPONENT
-  - id:
-      namespace: acme-storefront
-      slug: carrier-dispatch-module
       version: '1'
     kind: ENTITY_KIND_COMPONENT
   - id:
@@ -68,11 +53,6 @@ spec:
     kind: ENTITY_KIND_SWIMLANE
   - id:
       namespace: acme-storefront
-      slug: fulfillment
-      version: '1'
-    kind: ENTITY_KIND_SWIMLANE
-  - id:
-      namespace: acme-storefront
       slug: cart.item-added
       version: '1'
     kind: ENTITY_KIND_EVENT
@@ -84,11 +64,6 @@ spec:
   - id:
       namespace: acme-storefront
       slug: order.paid
-      version: '1'
-    kind: ENTITY_KIND_EVENT
-  - id:
-      namespace: acme-storefront
-      slug: order.fulfilled
       version: '1'
     kind: ENTITY_KIND_EVENT
   - id:
@@ -108,11 +83,6 @@ spec:
     kind: ENTITY_KIND_COMMAND
   - id:
       namespace: acme-storefront
-      slug: mark-fulfilled
-      version: '1'
-    kind: ENTITY_KIND_COMMAND
-  - id:
-      namespace: acme-storefront
       slug: cart-summary
       version: '1'
     kind: ENTITY_KIND_READ_MODEL
@@ -123,32 +93,12 @@ spec:
     kind: ENTITY_KIND_READ_MODEL
   - id:
       namespace: acme-storefront
-      slug: fulfillment-queue
-      version: '1'
-    kind: ENTITY_KIND_READ_MODEL
-  - id:
-      namespace: acme-storefront
-      slug: order-status
-      version: '1'
-    kind: ENTITY_KIND_READ_MODEL
-  - id:
-      namespace: acme-storefront
       slug: payment-capture-worker
       version: '1'
     kind: ENTITY_KIND_PROCESSOR
   - id:
       namespace: acme-storefront
-      slug: carrier-dispatch-worker
-      version: '1'
-    kind: ENTITY_KIND_PROCESSOR
-  - id:
-      namespace: acme-storefront
       slug: storefront-checkout
-      version: '1'
-    kind: ENTITY_KIND_UI
-  - id:
-      namespace: acme-storefront
-      slug: order-tracking
       version: '1'
     kind: ENTITY_KIND_UI
   - id:
@@ -168,11 +118,6 @@ spec:
     kind: ENTITY_KIND_COMMAND_SLICE
   - id:
       namespace: acme-storefront
-      slug: mark-fulfilled-slice
-      version: '1'
-    kind: ENTITY_KIND_COMMAND_SLICE
-  - id:
-      namespace: acme-storefront
       slug: cart-summary-rms
       version: '1'
     kind: ENTITY_KIND_READ_MODEL_SLICE
@@ -183,7 +128,7 @@ spec:
     kind: ENTITY_KIND_READ_MODEL_SLICE
   - id:
       namespace: acme-storefront
-      slug: fulfillment-queue-rms
+      slug: pending-payments-delete-rms
       version: '1'
     kind: ENTITY_KIND_READ_MODEL_SLICE
   - id:
@@ -193,37 +138,12 @@ spec:
     kind: ENTITY_KIND_AUTOMATION_SLICE
   - id:
       namespace: acme-storefront
-      slug: mark-fulfilled-auto
-      version: '1'
-    kind: ENTITY_KIND_AUTOMATION_SLICE
-  - id:
-      namespace: acme-storefront
-      slug: order-tracking-ui-slice
-      version: '1'
-    kind: ENTITY_KIND_UI_SLICE
-  - id:
-      namespace: acme-storefront
       slug: checkout-flow
       version: '1'
     kind: ENTITY_KIND_STORYBOARD
   - id:
       namespace: acme-storefront
-      slug: fulfillment-flow
+      slug: payment-flow
       version: '1'
     kind: ENTITY_KIND_STORYBOARD
-  - id:
-      namespace: acme-storefront
-      slug: order-status-placed-rms
-      version: '1'
-    kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-storefront
-      slug: order-status-paid-rms
-      version: '1'
-    kind: ENTITY_KIND_READ_MODEL_SLICE
-  - id:
-      namespace: acme-storefront
-      slug: order-status-fulfilled-rms
-      version: '1'
-    kind: ENTITY_KIND_READ_MODEL_SLICE
   title: Acme Storefront

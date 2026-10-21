@@ -30,7 +30,7 @@ spec:
         string: {}
   sourceEvents:
   - id:
-      namespace: acme-storefront
+      namespace: acme-fulfillment
       slug: order.fulfilled
       version: '1'
   - id:

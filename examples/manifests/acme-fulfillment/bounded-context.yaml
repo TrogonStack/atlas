@@ -1,0 +1,21 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata:
+  name: acme-fulfillment
+  namespace: acme-fulfillment
+spec:
+  doc: Owns dispatch of a paid order to the shipping carrier, delivery confirmation, and the shopper-facing order tracking.
+  realizes:
+  - id:
+      namespace: acme
+      slug: fulfillment
+      version: '1'
+  relationships:
+  - doc: Fulfillment needs the order.placed and order.paid facts shaped for dispatch and tracking, so it has a voice when Acme Storefront plans a change to them.
+    intent: INTENT_CUSTOMER_SUPPLIER
+    upstream:
+      id:
+        namespace: acme-storefront
+        slug: acme-storefront
+        version: '1'
+  title: Acme Fulfillment

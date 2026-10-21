@@ -4,14 +4,10 @@ metadata:
   name: acme-storefront
   namespace: acme-storefront
 spec:
-  doc: Owns the cart-to-delivery lifecycle of a storefront order, the payment capture worker, and the carrier dispatch worker.
+  doc: Owns the cart-to-payment lifecycle of a storefront order and the payment capture worker.
   realizes:
   - id:
-      namespace: acme-storefront
+      namespace: acme
       slug: ordering
-      version: '1'
-  - id:
-      namespace: acme-storefront
-      slug: fulfillment
       version: '1'
   title: Acme Storefront

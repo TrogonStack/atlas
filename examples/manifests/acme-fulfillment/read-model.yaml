@@ -1,0 +1,84 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: fulfillment-queue
+  namespace: acme-fulfillment
+spec:
+  doc: 'Worker feed: paid orders awaiting carrier dispatch.'
+  key:
+  - order_id
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - name: paid_at
+      type:
+        timestamp: {}
+    - name: status
+      type:
+        string: {}
+  sourceEvents:
+  - id:
+      namespace: acme-storefront
+      slug: order.paid
+      version: '1'
+  title: Fulfillment queue
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModel
+metadata:
+  name: order-status
+  namespace: acme-fulfillment
+spec:
+  doc: Current status of an order for the shopper-facing tracking page.
+  key:
+  - order_id
+  schema:
+    '@type': type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Schema
+    fields:
+    - name: order_id
+      type:
+        uuid: {}
+    - name: status
+      type:
+        string: {}
+    - name: cart_id
+      type:
+        uuid: {}
+    - name: buyer_id
+      type:
+        uuid: {}
+    - name: seller_id
+      type:
+        uuid: {}
+    - name: placed_at
+      type:
+        timestamp: {}
+    - name: paid_at
+      type:
+        timestamp: {}
+    - name: fulfilled_at
+      type:
+        timestamp: {}
+  sourceEvents:
+  - id:
+      namespace: acme-storefront
+      slug: order.placed
+      version: '1'
+  - id:
+      namespace: acme-storefront
+      slug: order.paid
+      version: '1'
+  - id:
+      namespace: acme-fulfillment
+      slug: order.fulfilled
+      version: '1'
+  title: Order status

@@ -701,6 +701,28 @@ impl EventModelServiceImpl {
         self.narrow(Arc::new(result.entities), vis).await
     }
 
+    /// Strategic findings deleting `kind`/`id` would leave on the entities
+    /// that remain. Empty for kinds outside the problem space and context map.
+    async fn delete_strategic_findings(
+        &self,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<Vec<pb::ValidationIssue>, Status> {
+        if !is_strategic_kind(kind) {
+            return Ok(Vec::new());
+        }
+        let before = self.snapshot_for(branch, vis).await?;
+        let after = world_after(&before, &[(kind, id, None)]);
+        Ok(
+            validation::strategic_issues_for_deletes(&[(kind, id.clone())], &before, &after, &[])
+                .into_iter()
+                .flatten()
+                .collect(),
+        )
+    }
+
     /// The caller's view of baseline right after `changeset_id` landed.
     ///
     /// Every newer baseline changeset is undone from its revision rows. A
@@ -2332,6 +2354,103 @@ fn sanitize_author_field(s: &str) -> String {
         .collect()
 }
 
+/// Advisory strategic findings a merge leaves behind, at every severity: what
+/// the landed contexts, domains and subdomains (and the entities they affect)
+/// report in the post-merge world, plus what the landed deletions leave
+/// dangling or unrealized. `pre_world` is the baseline before the merge. They
+/// never block the merge; only the store-level checks do.
+fn merge_strategic_findings(
+    op_metas: &[OpMetaLike],
+    pre_world: &[StoredEntity],
+    post_world: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    let changes: Vec<validation::StrategicChange> = op_metas
+        .iter()
+        .filter(|m| m.is_put && is_strategic_kind(m.kind))
+        .map(|m| (m.kind, m.id.clone()))
+        .collect();
+    let mut findings: Vec<pb::ValidationIssue> =
+        validation::strategic_issues_by_change(&changes, post_world)
+            .into_iter()
+            .flatten()
+            .collect();
+    let deletions: Vec<validation::StrategicChange> = op_metas
+        .iter()
+        .filter(|m| !m.is_put && is_strategic_kind(m.kind))
+        .map(|m| (m.kind, m.id.clone()))
+        .collect();
+    if !deletions.is_empty() {
+        let before = world_after(pre_world, &put_changes(op_metas));
+        findings.extend(
+            validation::strategic_issues_for_deletes(&deletions, &before, post_world, &findings)
+                .into_iter()
+                .flatten(),
+        );
+    }
+    findings
+}
+
+/// The puts of `metas` as world changes, in order.
+fn put_changes(metas: &[OpMetaLike]) -> Vec<(pb::EntityKind, &pb::Id, Option<&pb::Entity>)> {
+    metas
+        .iter()
+        .filter(|m| m.is_put)
+        .map(|m| (m.kind, &m.id, m.entity.as_ref()))
+        .collect()
+}
+
+/// The kinds whose write-time findings come from the strategic rules
+/// (problem space and context map) rather than slice scenarios.
+fn is_strategic_kind(kind: pb::EntityKind) -> bool {
+    matches!(
+        kind,
+        pb::EntityKind::BoundedContext | pb::EntityKind::Domain | pb::EntityKind::Subdomain
+    )
+}
+
+/// The store as it will be once `changes` landed: each put replaces the
+/// stored entity with the same key (or joins the world), each `None` removes
+/// it. Applied in order, so the last change to a key wins.
+fn world_after(
+    base: &[StoredEntity],
+    changes: &[(pb::EntityKind, &pb::Id, Option<&pb::Entity>)],
+) -> Vec<StoredEntity> {
+    let mut world: Vec<Option<StoredEntity>> = base.iter().cloned().map(Some).collect();
+    let mut index: std::collections::HashMap<pb::EntityKey, usize> = base
+        .iter()
+        .enumerate()
+        .filter_map(|(i, se)| {
+            let kind = trogon_atlas_store::refs::entity_kind(&se.entity)?;
+            let id = trogon_atlas_store::refs::entity_id(&se.entity)?;
+            Some((pb::EntityKey::new(kind, id), i))
+        })
+        .collect();
+    for (kind, id, entity) in changes {
+        let key = pb::EntityKey::new(*kind, id);
+        match (entity, index.get(&key).copied()) {
+            (Some(entity), Some(at)) => {
+                world[at] = Some(StoredEntity {
+                    entity: (*entity).clone(),
+                    etag: String::new(),
+                });
+            }
+            (Some(entity), None) => {
+                index.insert(key, world.len());
+                world.push(Some(StoredEntity {
+                    entity: (*entity).clone(),
+                    etag: String::new(),
+                }));
+            }
+            (None, Some(at)) => {
+                world[at] = None;
+                index.remove(&key);
+            }
+            (None, None) => {}
+        }
+    }
+    world.into_iter().flatten().collect()
+}
+
 fn is_slice_kind(kind: pb::EntityKind) -> bool {
     matches!(
         kind,
@@ -2388,11 +2507,13 @@ fn build_op_results(
                 }
             } else {
                 let referrers = per_op_referrers.get(i).cloned().unwrap_or_default();
+                let validation = per_op_validation.get(i).cloned().unwrap_or_default();
                 pb::BatchMutateOpResult {
                     result: Some(pb::batch_mutate_op_result::Result::Delete(
                         pb::DeleteEntityResponse {
                             referrers,
                             operation_receipt: None,
+                            validation,
                         },
                     )),
                 }
@@ -4329,7 +4450,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .check_schema(&*self.store, &entity, &[], branch.as_deref())
             .await?;
 
-        let scenario_issues = if matches!(
+        let mut scenario_issues = if matches!(
             kind,
             pb::EntityKind::CommandSlice
                 | pb::EntityKind::ReadModelSlice
@@ -4347,6 +4468,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             return Err(Status::invalid_argument(format_scenario_issues(
                 &scenario_issues,
             )));
+        }
+        // Strategic findings never block: sequential puts of one problem
+        // space are order dependent, so a context put before its subdomains
+        // is transiently dangling and rejecting it would make the model
+        // impossible to build one call at a time. They ride the response.
+        if is_strategic_kind(kind) {
+            let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let world = world_after(&all, &[(kind, &id, Some(&entity))]);
+            scenario_issues.extend(
+                validation::strategic_issues_by_change(&[(kind, id.clone())], &world)
+                    .into_iter()
+                    .flatten(),
+            );
         }
 
         if req.validate_only {
@@ -4660,6 +4794,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                 &req.operation_id,
                                 &record,
                             )),
+                            validation: Vec::new(),
                         }));
                     }
                 }
@@ -4734,9 +4869,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             pb::delete_entity_request::Mode::DryRun => {
                 // operation_id and dry-run never coexist (rejected above),
                 // so claim_key is always None here.
+                let validation = self
+                    .delete_strategic_findings(kind, &id, branch.as_deref(), &vis)
+                    .await?;
                 return Ok(Response::new(pb::DeleteEntityResponse {
                     referrers,
                     operation_receipt: None,
+                    validation,
                 }));
             }
             pb::delete_entity_request::Mode::FailIfReferenced if is_referenced => {
@@ -4764,6 +4903,18 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // From here, mode is FailIfReferenced-with-no-referrers or Force:
         // exactly one real write either way, settled the same way
         // regardless of which mode asked for it.
+        let validation = match self
+            .delete_strategic_findings(kind, &id, branch.as_deref(), &vis)
+            .await
+        {
+            Ok(findings) => findings,
+            Err(status) => {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        };
         let mut changeset = PendingChangeset::mint("DeleteEntity", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
             .with_operation_key(claim_key.as_deref());
@@ -4812,6 +4963,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             operation_receipt: claim_key.as_ref().map(|_| {
                 operation_receipts::fresh_receipt(&req.operation_id, &receipt_changeset_id)
             }),
+            validation,
         }))
     }
 
@@ -4868,6 +5020,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let mut metas: Vec<OpMetaLike> = Vec::with_capacity(req.ops.len());
         let mut dry_run = req.validate_only;
         let mut has_slice_puts = false;
+        let mut has_strategic_puts = false;
+        let mut has_strategic_deletes = false;
 
         for (i, op) in req.ops.iter().enumerate() {
             match &op.op {
@@ -4883,6 +5037,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     check_context_slug(&entity)?;
                     if is_slice_kind(kind) {
                         has_slice_puts = true;
+                    }
+                    if is_strategic_kind(kind) {
+                        has_strategic_puts = true;
                     }
                     if p.validate_only {
                         dry_run = true;
@@ -4920,6 +5077,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         .unwrap_or(pb::delete_entity_request::Mode::FailIfReferenced);
                     if matches!(mode, pb::delete_entity_request::Mode::DryRun) {
                         dry_run = true;
+                    }
+                    if is_strategic_kind(kind) {
+                        has_strategic_deletes = true;
                     }
                     metas.push(OpMetaLike {
                         kind,
@@ -5033,8 +5193,65 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         //
         // Per-op issues (warnings/info) are retained for PutEntityResponse
         // on success; errors fail the batch with the first offending index.
+        //
+        // Strategic findings (contexts, domains, subdomains) are advisory
+        // for every severity and judged against the same overlay with
+        // replacement semantics, so the order of ops inside a batch never
+        // matters. Each finding rides the op whose entity it is about, or
+        // the op that caused it when that entity is not in the batch.
         let mut per_op_validation: Vec<Vec<pb::ValidationIssue>> =
             std::iter::repeat_with(Vec::new).take(metas.len()).collect();
+        if has_strategic_puts || has_strategic_deletes {
+            if branch.is_none() && !has_slice_puts {
+                self.invalidate_snapshot().await;
+            }
+            let base = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let world_changes: Vec<(pb::EntityKind, &pb::Id, Option<&pb::Entity>)> = metas
+                .iter()
+                .map(|m| (m.kind, &m.id, m.entity.as_ref().filter(|_| m.is_put)))
+                .collect();
+            let world = world_after(&base, &world_changes);
+            let strategic_ops: Vec<usize> = metas
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.is_put && is_strategic_kind(m.kind))
+                .map(|(i, _)| i)
+                .collect();
+            let changes: Vec<validation::StrategicChange> = strategic_ops
+                .iter()
+                .map(|i| (metas[*i].kind, metas[*i].id.clone()))
+                .collect();
+            for (op_index, issues) in strategic_ops
+                .iter()
+                .zip(validation::strategic_issues_by_change(&changes, &world))
+            {
+                per_op_validation[*op_index] = issues;
+            }
+            let delete_ops: Vec<usize> = metas
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| !m.is_put && is_strategic_kind(m.kind))
+                .map(|(i, _)| i)
+                .collect();
+            if !delete_ops.is_empty() {
+                let deletions: Vec<validation::StrategicChange> = delete_ops
+                    .iter()
+                    .map(|i| (metas[*i].kind, metas[*i].id.clone()))
+                    .collect();
+                let reported: Vec<pb::ValidationIssue> =
+                    per_op_validation.iter().flatten().cloned().collect();
+                let before = world_after(&base, &put_changes(&metas));
+                for (op_index, issues) in
+                    delete_ops
+                        .iter()
+                        .zip(validation::strategic_issues_for_deletes(
+                            &deletions, &before, &world, &reported,
+                        ))
+                {
+                    per_op_validation[*op_index] = issues;
+                }
+            }
+        }
         if has_slice_puts {
             if branch.is_none() {
                 self.invalidate_snapshot().await;
@@ -6430,6 +6647,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let (_subdomain_domain, bc_domain) = build_domain_maps(all.as_ref());
 
         let mut reports: Vec<ModelReport> = Vec::new();
+        // Problem-space namespaces carry no event model, so the scope
+        // seeds the namespaces itself instead of waiting for a model to
+        // vouch for them: the requested namespace, or the namespaces of the
+        // scoped domains and of the contexts realizing their subdomains.
+        let mut scoped_namespaces: std::collections::BTreeSet<String> = match &scope {
+            Scope::Namespace(ns) => std::iter::once(ns.clone()).collect(),
+            _ => strategic_scope_namespaces(all.as_ref(), &scoped_domains),
+        };
         for se in all.iter() {
             let Some(pb::entity::Kind::EventModel(em)) = se.entity.kind.as_ref() else {
                 continue;
@@ -6444,12 +6669,29 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if !in_scope {
                 continue;
             }
-            let issues = validation::validate_model(em, all.as_ref());
+            let issues = validation::validate_model_content(em, all.as_ref());
+            scoped_namespaces.insert(id.namespace.clone());
             reports.push(ModelReport {
                 event_model_id: Some(id.clone()),
                 issues,
             });
         }
+
+        // The strategic chain belongs to the namespaces, not to any one
+        // model, so it is reported once beside the store-level issues
+        // instead of repeating in every model that shares a domain.
+        let chain_issues = validation::strategic_chain_issues(
+            scoped_namespaces.iter().map(String::as_str),
+            all.as_ref(),
+        );
+        let already_reported: Vec<_> = store_issues.clone();
+        store_issues.extend(chain_issues.into_iter().filter(|chain| {
+            !already_reported.iter().any(|seen| {
+                seen.code == chain.code
+                    && seen.subject == chain.subject
+                    && seen.subject_field == chain.subject_field
+            })
+        }));
 
         // Surface the store-level issues by attaching them to a
         // synthetic "store" report, keeping the response shape uniform
@@ -7245,7 +7487,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
                 Err(error) => return Err(store_err(error)),
             };
-            let validation_issues = validation::validate_store_hygiene(&post_world);
+            let mut validation_issues = validation::validate_store_hygiene(&post_world);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
@@ -7256,6 +7498,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     ..landed.into_response()
                 }));
             }
+            validation_issues.extend(merge_strategic_findings(&op_metas, &pre_all, &post_world));
             return Ok(Response::new(pb::MergeBranchResponse {
                 status: pb::merge_branch_response::Status::Validated as i32,
                 validation: validation_issues,
@@ -7266,7 +7509,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Real merge: land verbatim, then validate the *actual* post-merge
         // world. If invalid, nothing was persisted -- `land_branch_merge`
         // has not been called yet, so there is nothing to roll back.
-        {
+        let strategic_findings = {
             let pre_all = self.snapshot(&vis).await?;
             let mut projected: Vec<StoredEntity> = (*pre_all).clone();
             let mut by_key: std::collections::HashMap<pb::EntityKey, usize> =
@@ -7328,7 +7571,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     ..landed.into_response()
                 }));
             }
-        }
+            merge_strategic_findings(&op_metas, &pre_all, &projected)
+        };
 
         // Claimed here, past every validation failure above (conflicts,
         // dry-run/real invalid post-merge world) and ahead of the
@@ -7464,6 +7708,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         Ok(Response::new(pb::MergeBranchResponse {
             status: pb::merge_branch_response::Status::Applied as i32,
+            validation: strategic_findings,
             operation_receipt: claim_key
                 .as_ref()
                 .map(|_| operation_receipts::fresh_receipt(&req.operation_id, &merge_changeset_id)),
@@ -8360,6 +8605,45 @@ type BcNamespaceDomainMap = std::collections::HashMap<String, (String, String)>;
 /// - `bc_domain`: BC namespace -> (domain ns, slug)
 ///
 /// Used by `validate_project` and `list_entities_by_domain`.
+/// Namespaces a domain scope reaches on the strategic chain: each domain's
+/// own namespace and the namespace of every context realizing one of its
+/// subdomains.
+fn strategic_scope_namespaces(
+    all: &[StoredEntity],
+    domains: &std::collections::HashSet<(String, String)>,
+) -> std::collections::BTreeSet<String> {
+    let mut namespaces: std::collections::BTreeSet<String> =
+        domains.iter().map(|(ns, _)| ns.clone()).collect();
+    let subdomains: std::collections::HashSet<(&str, &str)> = all
+        .iter()
+        .filter_map(|se| match se.entity.kind.as_ref()? {
+            pb::entity::Kind::Subdomain(sd) => {
+                let did = sd.domain.as_ref()?.id.as_ref()?;
+                let id = sd.id.as_ref()?;
+                domains
+                    .contains(&(did.namespace.clone(), did.slug.clone()))
+                    .then_some((id.namespace.as_str(), id.slug.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    for se in all {
+        let Some(pb::entity::Kind::BoundedContext(bc)) = se.entity.kind.as_ref() else {
+            continue;
+        };
+        let Some(id) = bc.id.as_ref() else { continue };
+        if bc
+            .realizes
+            .iter()
+            .filter_map(|r| r.id.as_ref())
+            .any(|rid| subdomains.contains(&(rid.namespace.as_str(), rid.slug.as_str())))
+        {
+            namespaces.insert(id.namespace.clone());
+        }
+    }
+    namespaces
+}
+
 fn build_domain_maps(
     all: &[trogon_atlas_store::StoredEntity],
 ) -> (SubdomainDomainMap, BcNamespaceDomainMap) {
@@ -8430,9 +8714,9 @@ fn check_project_namespace_conflict(entity: &pb::Entity) -> Result<(), Status> {
 
 /// Reject a BoundedContext whose slug differs from its namespace.
 ///
-/// The put path runs `validate_scenarios` only for slice kinds, so the
-/// `CONTEXT_SLUG_MISMATCH` rule has to be enforced here to stop a second
-/// context from landing in a namespace.
+/// The other strategic rules only advise at write time (see `put_entity`),
+/// so `CONTEXT_SLUG_MISMATCH` is the one that has to be enforced here to stop
+/// a second context from landing in a namespace.
 #[allow(clippy::result_large_err)]
 fn check_context_slug(entity: &pb::Entity) -> Result<(), Status> {
     let Some(pb::entity::Kind::BoundedContext(bc)) = entity.kind.as_ref() else {

@@ -171,8 +171,11 @@ impl std::fmt::Display for SeverityCounts {
 }
 
 /// Merge a branch onto baseline. All-or-nothing: any conflict (see
-/// `resp.conflicts`) or post-merge validation Error (see `resp.validation`)
-/// persists nothing. `operation_id` is dropped when `options.dry_run` is
+/// `resp.conflicts`) persists nothing, and so do blocking post-merge
+/// validation errors, which yield `STATUS_INVALID` with the findings in
+/// `resp.validation`. Strategic findings (BoundedContext, Domain, Subdomain
+/// rules) ride along in `resp.validation` at any severity on every status,
+/// an applied merge included, and never block it. `operation_id` is dropped when `options.dry_run` is
 /// set: the server rejects an `operation_id` paired with `dry_run`, since a
 /// dry run never produces a write for a later replay to recover.
 pub async fn merge_branch(

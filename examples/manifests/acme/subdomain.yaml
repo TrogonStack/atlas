@@ -1,0 +1,74 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: ordering
+  namespace: acme
+spec:
+  classification: CLASSIFICATION_CORE
+  doc: Cart, checkout, and payment capture for a single order.
+  domain:
+    id:
+      namespace: acme
+      slug: acme
+      version: '1'
+  title: Ordering
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: fulfillment
+  namespace: acme
+spec:
+  classification: CLASSIFICATION_SUPPORTING
+  doc: Dispatching a paid order to the shipping carrier and confirming delivery.
+  domain:
+    id:
+      namespace: acme
+      slug: acme
+      version: '1'
+  title: Fulfillment
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: seller-reputation
+  namespace: acme
+spec:
+  classification: CLASSIFICATION_SUPPORTING
+  doc: Collecting buyer reviews of a seller once an order is delivered.
+  domain:
+    id:
+      namespace: acme
+      slug: acme
+      version: '1'
+  title: Seller Reputation
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: data-deletion
+  namespace: acme
+spec:
+  classification: CLASSIFICATION_SUPPORTING
+  doc: Coordinating deletion of a customer's personal data across every downstream vendor that holds it.
+  domain:
+    id:
+      namespace: acme
+      slug: acme
+      version: '1'
+  title: Data Deletion
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Subdomain
+metadata:
+  name: wishlists
+  namespace: acme
+spec:
+  classification: CLASSIFICATION_CORE
+  doc: Saving products a shopper wants to buy later.
+  domain:
+    id:
+      namespace: acme
+      slug: acme
+      version: '1'
+  title: Wishlists
