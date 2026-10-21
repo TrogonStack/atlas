@@ -3,6 +3,12 @@
 Start with the [Atlas principles](explanation/principles/README.md) for the
 shared direction behind the product, its modeling language, and its codebase.
 
+## Tutorials
+
+Learn by doing:
+
+- [Run Atlas locally with Docker Compose](tutorials/run-atlas-locally.md)
+
 ## How-to guides
 
 Solve a specific problem:
