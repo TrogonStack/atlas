@@ -429,7 +429,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "The subdomain referenced by BoundedContext.realizes is not in the store.",
           BoundedContext, "realizes", "strategic"),
         r("REALIZES_MIXED_CLASSIFICATIONS", Warning, "Bounded context realizes subdomains of different classifications",
-          "One boundary carries two investment levels, so one of them is mis-budgeted. Split the context along the classification line.",
+          "One boundary carries two investment levels, so one of them is funded at the wrong level. Split the context along the classification line.",
           BoundedContext, "realizes", "strategic"),
         r("REALIZES_MULTIPLE", Info, "Bounded context realizes multiple subdomains",
           "A BoundedContext realizing several subdomains of one classification is allowed but unusual; surfaced for awareness.",
@@ -2173,7 +2173,7 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                     severity: pb::validation_issue::Severity::Warning as i32,
                     code: "REALIZES_MIXED_CLASSIFICATIONS".into(),
                     message: format!(
-                        "context realizes subdomains classified {}; one boundary carries {} investment levels, so one of them is mis-budgeted: split the context along the classification line",
+                        "context realizes subdomains classified {}; one boundary carries {} investment levels, so one of them is funded at the wrong level: split the context along the classification line",
                         names.join(" and "),
                         names.len(),
                     ),
