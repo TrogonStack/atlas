@@ -206,7 +206,8 @@ where applicable. Rejection leaves the stored content and identities unchanged.
 | Hidden referrer lies beyond visible budget or projection cap | Complete guard still refuses deletion. Test both single-target and multi-target guarded batches in the merged branch view. |
 | Complete safe-delete scan times out, errors, or cannot finish | Refuse mutation; incomplete scan cannot prove absence of references. No partial success in a guarded batch. |
 | Visible scanner has backend/authorization/decoding operational error other than budget exhaustion | Return an error; do not silently use the budget fallback or report no referrers. |
-| Lineage/impact traversal hits a budget, cycle or inaccessible segment | Preserve checked scope and explicit incomplete/unknown state, with visited identities and no unbounded expansion. Do not assert negative or verified lineage from a partial path. |
+| Lineage/impact traversal hits a budget, cycle or inaccessible segment | Preserve checked scope and explicit incomplete/unknown state, with visited identities and no unbounded expansion. Suppress paths from the affected incomplete input traversal; preserve complete independent input paths. Request-wide discovery/construction/evidence exhaustion suppresses all producing claims. Do not assert negative or verified lineage from a partial path. |
+| A disconnected slice has a missing or inaccessible target, or a disconnected cycle | Preserve the selected input's complete checked paths and scope; unrelated defects do not make that traversal incomplete. |
 | Add descriptive references around existing cycles | No invented product execution ordering, product-to-product edge or replacement of supersession/TypeLibrary/behavioral cycle rules. |
 
 ## Evidence required before implementation acceptance

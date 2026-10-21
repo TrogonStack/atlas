@@ -301,9 +301,14 @@ attach current inspection evidence to historical declarations.
 
 Producing traversal returns at most one checked path per input/output port
 pair. Repeated ports remain independent pairs. Discovery, edge examinations,
-traversal and combined returned connection references are bounded; incomplete
-behavioral traversal suppresses producing-path claims. Event confirmation
-witnesses remain a separate result. Cycles mark traversal incomplete.
+traversal and combined returned connection references are bounded. A gap or
+cycle reachable from a selected input suppresses that input's producing paths
+and marks coverage incomplete. Disconnected defects do not invalidate its
+checked traversal; complete input traversals retain their paths independently.
+An output's incomplete flag describes aggregate input coverage and can coexist
+with checked paths from complete inputs. Discovery, graph-construction or
+combined returned-evidence exhaustion remains request-wide and suppresses all
+producing-path claims. Event confirmation witnesses remain a separate result.
 
 | Result dimension | Required distinction |
 | --- | --- |

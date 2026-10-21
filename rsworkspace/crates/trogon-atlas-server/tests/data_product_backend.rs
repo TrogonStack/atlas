@@ -1403,3 +1403,418 @@ async fn retained_access_cannot_confirm_an_inaccessible_output() {
     assert_retained_access_unresolved(&report);
     assert!(!format!("{report:?}").contains(&namespaces[1]));
 }
+
+fn scope_id(namespace: &str, slug: &str) -> pb::Id {
+    pb::Id {
+        namespace: namespace.into(),
+        ..id(slug)
+    }
+}
+
+async fn scope_projection(
+    client: &mut Client,
+    namespace: &str,
+    slug: &str,
+    event: &str,
+    target: pb::Id,
+) -> pb::Entity {
+    put(
+        client,
+        pb::entity::Kind::ReadModelSlice(pb::ReadModelSlice {
+            id: Some(scope_id(namespace, slug)),
+            title: slug.into(),
+            source_events: vec![pb::EventEdge {
+                event: Some(pb::EventRef {
+                    id: Some(scope_id(namespace, event)),
+                }),
+                ..Default::default()
+            }],
+            read_model: Some(pb::ReadModelEdge {
+                read_model: Some(pb::ReadModelRef { id: Some(target) }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )
+    .await
+}
+
+async fn scope_emitter(client: &mut Client, namespace: &str, suffix: &str) {
+    put(
+        client,
+        pb::entity::Kind::Event(pb::Event {
+            id: Some(scope_id(namespace, &format!("fact-{suffix}"))),
+            title: suffix.into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    put(
+        client,
+        pb::entity::Kind::Command(pb::Command {
+            id: Some(scope_id(namespace, &format!("command-{suffix}"))),
+            title: suffix.into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    put(
+        client,
+        pb::entity::Kind::CommandSlice(pb::CommandSlice {
+            id: Some(scope_id(namespace, &format!("emit-{suffix}"))),
+            title: suffix.into(),
+            command: Some(pb::CommandEdge {
+                command: Some(pb::CommandRef {
+                    id: Some(scope_id(namespace, &format!("command-{suffix}"))),
+                }),
+                ..Default::default()
+            }),
+            emitted_events: vec![pb::EventEdge {
+                event: Some(pb::EventRef {
+                    id: Some(scope_id(namespace, &format!("fact-{suffix}"))),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await;
+}
+
+async fn scope_automation(client: &mut Client, namespace: &str, suffix: &str, source: &str) {
+    put(
+        client,
+        pb::entity::Kind::Processor(pb::Processor {
+            id: Some(scope_id(namespace, &format!("worker-{suffix}"))),
+            title: suffix.into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    put(
+        client,
+        pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+            id: Some(scope_id(namespace, &format!("react-{suffix}"))),
+            title: suffix.into(),
+            source_read_models: vec![pb::ReadModelEdge {
+                read_model: Some(pb::ReadModelRef {
+                    id: Some(scope_id(namespace, source)),
+                }),
+                ..Default::default()
+            }],
+            processor: Some(pb::ProcessorEdge {
+                processor: Some(pb::ProcessorRef {
+                    id: Some(scope_id(namespace, &format!("worker-{suffix}"))),
+                }),
+                ..Default::default()
+            }),
+            emitted_command: Some(pb::CommandEdge {
+                command: Some(pb::CommandRef {
+                    id: Some(scope_id(namespace, &format!("command-{suffix}"))),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )
+    .await;
+}
+
+async fn scope_product(client: &mut Client, namespace: &str) -> pb::DataProductRef {
+    scope_emitter(client, namespace, "selected").await;
+    put(
+        client,
+        pb::entity::Kind::ReadModel(pb::ReadModel {
+            id: Some(scope_id(namespace, "result")),
+            title: "Result".into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    scope_projection(
+        client,
+        namespace,
+        "selected-projection",
+        "fact-selected",
+        scope_id(namespace, "result"),
+    )
+    .await;
+    let mut value = product("scoped");
+    value.id.as_mut().unwrap().namespace = namespace.into();
+    value.outputs[0]
+        .data
+        .as_mut()
+        .unwrap()
+        .read_model
+        .as_mut()
+        .unwrap()
+        .id
+        .as_mut()
+        .unwrap()
+        .namespace = namespace.into();
+    value.inputs = vec![pb::DataInputPort {
+        name: Some(pb::PortName {
+            value: "Selected fact".into(),
+        }),
+        data: Some(pb::InputDataSelection {
+            target: Some(pb::input_data_selection::Target::Event(pb::EventRef {
+                id: Some(scope_id(namespace, "fact-selected")),
+            })),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }];
+    let reference = pb::DataProductRef {
+        id: value.id.clone(),
+    };
+    put(client, pb::entity::Kind::DataProduct(value)).await;
+    reference
+}
+
+async fn scope_inspect(
+    client: &mut Client,
+    product: &pb::DataProductRef,
+    token: &str,
+) -> pb::InspectDataProductResponse {
+    client
+        .inspect_data_product(request(
+            pb::InspectDataProductRequest {
+                product: Some(product.clone()),
+            },
+            token,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+async fn scope_orphan(client: &mut Client, namespace: &str, target_namespace: &str) {
+    scope_emitter(client, namespace, "orphan").await;
+    let target = scope_id(target_namespace, "orphan-result");
+    put(
+        client,
+        pb::entity::Kind::ReadModel(pb::ReadModel {
+            id: Some(target.clone()),
+            title: "Unrelated output".into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    scope_projection(
+        client,
+        namespace,
+        "orphan-projection",
+        "fact-orphan",
+        target,
+    )
+    .await;
+}
+
+async fn scope_delete_orphan(client: &mut Client, namespace: &str) {
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::ReadModel as i32,
+                id: Some(scope_id(namespace, "orphan-result")),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn producing_scope_unrelated_missing_target_preserves_checked_product_path() {
+    let mut client = client().await;
+    let product = scope_product(&mut client, "offering").await;
+    let before = scope_inspect(&mut client, &product, READER).await;
+    assert_eq!(before.producing.len(), 1);
+    scope_orphan(&mut client, "offering", "offering").await;
+    scope_delete_orphan(&mut client, "offering").await;
+    let after = scope_inspect(&mut client, &product, READER).await;
+    assert_eq!(after.producing, before.producing);
+    assert!(!after.incomplete, "{after:?}");
+    assert!(after.ports.iter().all(|port| !port.incomplete));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn producing_scope_unrelated_hidden_endpoint_preserves_authorized_path_without_leaking() {
+    let mut client = client().await;
+    let mut namespaces = Vec::new();
+    for (name, parent) in [("scope-visible", "visible"), ("scope-private", "hidden")] {
+        namespaces.push(
+            client
+                .register_namespace(request(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        parent: parent.into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let product = scope_product(&mut client, &namespaces[0]).await;
+    let before = scope_inspect(&mut client, &product, LIMITED).await;
+    assert_eq!(before.producing.len(), 1);
+    scope_orphan(&mut client, &namespaces[0], &namespaces[1]).await;
+    let after = scope_inspect(&mut client, &product, LIMITED).await;
+    assert!(!format!("{after:?}").contains(&namespaces[1]));
+    assert_eq!(after.producing, before.producing);
+    assert!(!after.incomplete, "{after:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn producing_scope_one_incomplete_input_does_not_erase_another_inputs_path() {
+    let mut client = client().await;
+    let product = scope_product(&mut client, "offering").await;
+    let before = scope_inspect(&mut client, &product, READER).await;
+    scope_orphan(&mut client, "offering", "offering").await;
+    let stored = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::DataProduct as i32,
+                id: product.id.clone(),
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let Some(pb::entity::Kind::DataProduct(mut value)) = stored.entity.unwrap().kind else {
+        panic!("DataProduct")
+    };
+    value.inputs.push(pb::DataInputPort {
+        name: Some(pb::PortName {
+            value: "Incomplete fact".into(),
+        }),
+        data: Some(pb::InputDataSelection {
+            target: Some(pb::input_data_selection::Target::Event(pb::EventRef {
+                id: Some(id("fact-orphan")),
+            })),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    put(&mut client, pb::entity::Kind::DataProduct(value)).await;
+    scope_delete_orphan(&mut client, "offering").await;
+    let after = scope_inspect(&mut client, &product, READER).await;
+    assert_eq!(after.producing, before.producing);
+    assert!(after.incomplete);
+    assert!(!after.ports[0].incomplete);
+    assert!(after.ports[1].incomplete);
+    assert!(after.ports[2].incomplete);
+    let stored = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::DataProduct as i32,
+                id: product.id.clone(),
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let Some(pb::entity::Kind::DataProduct(mut value)) = stored.entity.unwrap().kind else {
+        panic!("DataProduct")
+    };
+    value.inputs.reverse();
+    put(&mut client, pb::entity::Kind::DataProduct(value)).await;
+    let reordered = scope_inspect(&mut client, &product, READER).await;
+    assert_eq!(reordered.producing, before.producing);
+    assert!(reordered.ports[0].incomplete);
+    assert!(!reordered.ports[1].incomplete);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn producing_scope_disconnected_cycle_preserves_checked_product_path() {
+    let mut client = client().await;
+    let product = scope_product(&mut client, "offering").await;
+    let before = scope_inspect(&mut client, &product, READER).await;
+    scope_orphan(&mut client, "offering", "offering").await;
+    scope_automation(&mut client, "offering", "orphan", "orphan-result").await;
+    let after = scope_inspect(&mut client, &product, READER).await;
+    assert_eq!(after.producing, before.producing);
+    assert!(!after.incomplete, "{after:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn producing_scope_reachable_cycle_cannot_claim_checked_product_paths() {
+    let mut client = client().await;
+    let product = scope_product(&mut client, "offering").await;
+    scope_automation(&mut client, "offering", "selected", "result").await;
+    let after = scope_inspect(&mut client, &product, READER).await;
+    assert_eq!(
+        after.producing,
+        Vec::<pb::DataProductProducingEvidence>::new()
+    );
+    assert!(after.incomplete);
+    assert!(after.ports.iter().all(|port| port.incomplete));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn producing_scope_reachable_hidden_endpoint_is_incomplete_without_leaking() {
+    let mut client = client().await;
+    let mut namespaces = Vec::new();
+    for (name, parent) in [("scope-visible", "visible"), ("scope-private", "hidden")] {
+        namespaces.push(
+            client
+                .register_namespace(request(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        parent: parent.into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let product = scope_product(&mut client, &namespaces[0]).await;
+    let hidden = scope_id(&namespaces[1], "hidden-result");
+    put(
+        &mut client,
+        pb::entity::Kind::ReadModel(pb::ReadModel {
+            id: Some(hidden.clone()),
+            title: "Hidden result".into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    scope_projection(
+        &mut client,
+        &namespaces[0],
+        "reachable-private-projection",
+        "fact-selected",
+        hidden,
+    )
+    .await;
+    let limited = scope_inspect(&mut client, &product, LIMITED).await;
+    assert_eq!(
+        limited.producing,
+        Vec::<pb::DataProductProducingEvidence>::new()
+    );
+    assert!(limited.incomplete);
+    assert!(limited.ports.iter().all(|port| port.incomplete));
+    assert!(!format!("{limited:?}").contains(&namespaces[1]));
+    let authorized = scope_inspect(&mut client, &product, READER).await;
+    assert_eq!(authorized.producing.len(), 1);
+    assert!(!authorized.incomplete, "{authorized:?}");
+}

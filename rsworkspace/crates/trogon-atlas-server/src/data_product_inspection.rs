@@ -12,6 +12,12 @@ use crate::validation::architecture_resources::ArchitectureContext;
 type World = HashMap<pb::EntityKey, StoredEntity>;
 type PathEdges = HashMap<pb::EntityKey, Vec<(pb::EntityKey, Vec<pb::ConnectionRef>)>>;
 
+struct ProducingGraph {
+    edges: PathEdges,
+    unresolved_sources: HashSet<pb::EntityKey>,
+    complete: bool,
+}
+
 impl EventModelServiceImpl {
     pub(super) async fn inspect_product(
         &self,
@@ -101,7 +107,7 @@ impl EventModelServiceImpl {
             Lens::Everything => Vec::new(),
             Lens::Only(values) => values.iter().map(|id| id.as_str().to_owned()).collect(),
         };
-        let mut behavior_complete = true;
+        let mut discovery_complete = true;
         if !matches!(&lens, Lens::Only(values) if values.is_empty()) {
             let rows = self
                 .store
@@ -121,7 +127,7 @@ impl EventModelServiceImpl {
                 .await
                 .map_err(store_err)?;
             if rows.len() > 5_000 {
-                behavior_complete = false;
+                discovery_complete = false;
             }
             for row in rows.into_iter().take(5_000) {
                 let key = pb::EntityKey::new(entity_kind(&row.entity)?, entity_id(&row.entity)?);
@@ -150,20 +156,17 @@ impl EventModelServiceImpl {
                 continue;
             }
             if !lens.admits(&target.namespace) {
-                behavior_complete = false;
                 continue;
             }
             if world.len() >= 10_000 {
-                behavior_complete = false;
+                discovery_complete = false;
                 break;
             }
             match self.store.get(kind, &target, branch).await {
                 Ok(row) => {
                     world.insert(key, row);
                 }
-                Err(trogon_atlas_store::error::StoreError::NotFound) => {
-                    behavior_complete = false;
-                }
+                Err(trogon_atlas_store::error::StoreError::NotFound) => {}
                 Err(error) => return Err(store_err(error)),
             }
         }
@@ -328,13 +331,14 @@ impl EventModelServiceImpl {
                 contract: contract as i32,
                 lineage: lineage as i32,
                 access,
-                incomplete: !behavior_complete,
+                incomplete: !discovery_complete,
             });
         }
-        let (edges, edge_complete) = producing_edges(&world);
-        behavior_complete &= edge_complete;
+        let graph = producing_edges(&world);
+        let graph_complete = discovery_complete && graph.complete;
         let mut producing = Vec::new();
         let mut evidence_work = 0;
+        let mut evidence_complete = true;
         let targets: HashSet<_> = authored
             .outputs
             .iter()
@@ -348,7 +352,7 @@ impl EventModelServiceImpl {
             })
             .collect();
         for (index, input) in authored.inputs.iter().enumerate() {
-            if !behavior_complete {
+            if !graph_complete || !evidence_complete {
                 break;
             }
             if ports[index].data != State::Resolved as i32 {
@@ -366,8 +370,15 @@ impl EventModelServiceImpl {
                 None => None,
             };
             let Some(start) = start else { continue };
-            let (paths, complete) = paths_from(start, &edges, &targets);
-            behavior_complete &= complete;
+            let (paths, complete) = paths_from(start, &graph, &targets);
+            if !complete {
+                incomplete = true;
+                ports[index].incomplete = true;
+                for port in &mut ports[authored.inputs.len()..] {
+                    port.incomplete = true;
+                }
+                continue;
+            }
             for (output_index, output) in authored.outputs.iter().enumerate() {
                 if ports[authored.inputs.len() + output_index].data != State::Resolved as i32 {
                     continue;
@@ -382,7 +393,7 @@ impl EventModelServiceImpl {
                     if !path.is_empty() {
                         evidence_work += path.len();
                         if evidence_work > 5_000 {
-                            behavior_complete = false;
+                            evidence_complete = false;
                             break;
                         }
                         producing.push(pb::DataProductProducingEvidence {
@@ -402,12 +413,12 @@ impl EventModelServiceImpl {
                 }
             }
         }
-        if !behavior_complete {
+        if !graph_complete || !evidence_complete {
             producing.clear();
-        }
-        incomplete |= !behavior_complete;
-        for port in &mut ports {
-            port.incomplete |= !behavior_complete;
+            incomplete = true;
+            for port in &mut ports {
+                port.incomplete = true;
+            }
         }
         let unresolved = !issues.is_empty()
             || ports.iter().any(|port| {
@@ -632,14 +643,14 @@ fn connection(entity: &pb::Entity, id: Option<&pb::ConnectionId>) -> Option<pb::
     reference.id.as_ref()?;
     Some(reference)
 }
-fn producing_edges(world: &World) -> (PathEdges, bool) {
-    let mut edges = PathEdges::new();
-    let mut complete = true;
-    let mut examined = 0;
-    let key = |kind, id: Option<&pb::Id>| {
-        id.map(|id| pb::EntityKey::new(kind, id))
-            .filter(|key| world.contains_key(key))
+fn producing_edges(world: &World) -> ProducingGraph {
+    let mut graph = ProducingGraph {
+        edges: PathEdges::new(),
+        unresolved_sources: HashSet::new(),
+        complete: true,
     };
+    let mut examined = 0;
+    let key = |kind, id: Option<&pb::Id>| id.map(|id| pb::EntityKey::new(kind, id));
     let mut rows: Vec<_> = world.iter().collect();
     rows.sort_by_key(|(key, _)| (key.kind as i32, &key.namespace, &key.slug, key.version));
     for (_, stored) in rows {
@@ -652,23 +663,30 @@ fn producing_edges(world: &World) -> (PathEdges, bool) {
         };
         examined += work;
         if examined > 5_000 {
-            complete = false;
+            graph.complete = false;
             break;
         }
-        if trogon_atlas_core::connections::validate_stored_connection_ids(entity).is_err() {
-            complete = false;
-            continue;
-        }
+        let owner_resolves = entity
+            .system
+            .as_ref()
+            .is_some_and(|system| !system.uid.is_empty())
+            && trogon_atlas_core::connections::validate_stored_connection_ids(entity).is_ok();
         let mut add = |from: Option<pb::EntityKey>,
                        to: Option<pb::EntityKey>,
-                       path: Vec<Option<pb::ConnectionRef>>| {
-            if let (Some(from), Some(to), Some(path)) =
-                (from, to, path.into_iter().collect::<Option<Vec<_>>>())
-            {
-                edges.entry(from).or_default().push((to, path));
-            } else {
-                complete = false;
+                       path: Vec<Option<pb::ConnectionRef>>,
+                       paired_endpoint_resolves: bool| {
+            let Some(source) = from else { return };
+            if owner_resolves && paired_endpoint_resolves && world.contains_key(&source) {
+                if let (Some(target), Some(path)) =
+                    (to, path.into_iter().collect::<Option<Vec<_>>>())
+                {
+                    if world.contains_key(&target) {
+                        graph.edges.entry(source).or_default().push((target, path));
+                        return;
+                    }
+                }
             }
+            graph.unresolved_sources.insert(source);
         };
         match &entity.kind {
             Some(pb::entity::Kind::ReadModelSlice(slice)) => {
@@ -696,6 +714,7 @@ fn producing_edges(world: &World) -> (PathEdges, bool) {
                                     .and_then(|e| e.connection_id.as_ref()),
                             ),
                         ],
+                        true,
                     );
                 }
             }
@@ -724,6 +743,7 @@ fn producing_edges(world: &World) -> (PathEdges, bool) {
                             ),
                             connection(entity, event.connection_id.as_ref()),
                         ],
+                        true,
                     );
                 }
             }
@@ -731,7 +751,7 @@ fn producing_edges(world: &World) -> (PathEdges, bool) {
                 if slice.emitted_command.is_none() {
                     continue;
                 }
-                if key(
+                let processor_resolves = key(
                     pb::EntityKind::Processor,
                     slice
                         .processor
@@ -739,11 +759,7 @@ fn producing_edges(world: &World) -> (PathEdges, bool) {
                         .and_then(|e| e.processor.as_ref())
                         .and_then(|r| r.id.as_ref()),
                 )
-                .is_none()
-                {
-                    complete = false;
-                    continue;
-                }
+                .is_some_and(|key| world.contains_key(&key));
                 for source in &slice.source_read_models {
                     add(
                         key(
@@ -775,23 +791,31 @@ fn producing_edges(world: &World) -> (PathEdges, bool) {
                                     .and_then(|e| e.connection_id.as_ref()),
                             ),
                         ],
+                        processor_resolves,
                     );
                 }
             }
             _ => {}
         }
     }
-    (edges, complete)
+    graph
 }
 fn paths_from(
     start: pb::EntityKey,
-    edges: &PathEdges,
+    graph: &ProducingGraph,
     targets: &HashSet<pb::EntityKey>,
 ) -> (HashMap<pb::EntityKey, Vec<pb::ConnectionRef>>, bool) {
+    if !graph.complete {
+        return (HashMap::new(), false);
+    }
+    let edges = &graph.edges;
     let mut parents = HashMap::from([(start.clone(), None)]);
     let mut pending = VecDeque::from([start]);
     let mut examined = 0;
     while let Some(node) = pending.pop_front() {
+        if graph.unresolved_sources.contains(&node) {
+            return (HashMap::new(), false);
+        }
         if let Some(next) = edges.get(&node) {
             for (target, segment) in next {
                 examined += 1;
@@ -886,12 +910,17 @@ mod tests {
                 )
             })
             .collect();
-        let (paths, complete) = paths_from(key(0), &edges, &HashSet::from([key(5_000)]));
+        let graph = ProducingGraph {
+            edges,
+            unresolved_sources: HashSet::new(),
+            complete: true,
+        };
+        let (paths, complete) = paths_from(key(0), &graph, &HashSet::from([key(5_000)]));
         assert!(complete);
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[&key(5_000)].len(), 5_000);
         let (paths, complete) =
-            paths_from(key(0), &edges, &HashSet::from([key(4_999), key(5_000)]));
+            paths_from(key(0), &graph, &HashSet::from([key(4_999), key(5_000)]));
         assert!(!complete);
         assert_eq!(paths.len(), 0);
     }
@@ -901,7 +930,71 @@ mod tests {
             (key(0), vec![(key(1), vec![pb::ConnectionRef::default()])]),
             (key(1), vec![(key(0), vec![pb::ConnectionRef::default()])]),
         ]);
-        let (paths, complete) = paths_from(key(0), &edges, &HashSet::from([key(1)]));
+        let graph = ProducingGraph {
+            edges,
+            unresolved_sources: HashSet::new(),
+            complete: true,
+        };
+        let (paths, complete) = paths_from(key(0), &graph, &HashSet::from([key(1)]));
+        assert!(!complete);
+        assert_eq!(paths.len(), 0);
+    }
+    #[test]
+    fn producing_scope_unresolved_sources_only_invalidate_reachable_walks() {
+        let mut graph = ProducingGraph {
+            edges: HashMap::from([(key(0), vec![(key(1), vec![pb::ConnectionRef::default()])])]),
+            unresolved_sources: HashSet::from([key(2)]),
+            complete: true,
+        };
+        let (paths, complete) = paths_from(key(0), &graph, &HashSet::from([key(1)]));
+        assert!(complete);
+        assert_eq!(paths[&key(1)].len(), 1);
+        graph.unresolved_sources.insert(key(1));
+        let (paths, complete) = paths_from(key(0), &graph, &HashSet::from([key(1)]));
+        assert!(!complete);
+        assert_eq!(paths.len(), 0);
+    }
+
+    #[test]
+    fn producing_scope_construction_budget_is_not_scoped_away_with_unrelated_rows() {
+        let entity = pb::Entity {
+            kind: Some(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                id: Some(key(0).id()),
+                emitted_events: vec![pb::EventEdge::default(); 5_001],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let world = HashMap::from([(
+            pb::EntityKey::new(pb::EntityKind::CommandSlice, &key(0).id()),
+            StoredEntity {
+                entity,
+                etag: String::new(),
+            },
+        )]);
+        let graph = producing_edges(&world);
+        assert!(!graph.complete);
+        let (paths, complete) = paths_from(key(1), &graph, &HashSet::from([key(2)]));
+        assert!(!complete);
+        assert_eq!(paths.len(), 0);
+    }
+
+    #[test]
+    fn producing_scope_reachable_work_budget_still_suppresses_short_output_evidence() {
+        let edges = (0..5_001)
+            .map(|index| {
+                (
+                    key(index),
+                    vec![(key(index + 1), vec![pb::ConnectionRef::default()])],
+                )
+            })
+            .collect();
+        let graph = ProducingGraph {
+            edges,
+            unresolved_sources: HashSet::new(),
+            complete: true,
+        };
+        let (paths, complete) = paths_from(key(0), &graph, &HashSet::from([key(1)]));
         assert!(!complete);
         assert_eq!(paths.len(), 0);
     }
