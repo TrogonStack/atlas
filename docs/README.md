@@ -36,7 +36,7 @@ Resource contracts and acceptance:
 - [Channel and DataStore acceptance fixture](reference/channel-and-datastore-acceptance.md)
 - [Specification and API contracts](reference/specification-and-api-contracts.md)
 - [Specification and API acceptance criteria](reference/specification-and-api-acceptance.md)
-- [DataProduct contract proposal](reference/data-product-contracts.md)
+- [DataProduct contracts](reference/data-product-contracts.md)
 - [DataProduct acceptance criteria](reference/data-product-acceptance.md)
 
 ## Explanation

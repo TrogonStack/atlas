@@ -4,6 +4,7 @@ pub mod auth;
 pub mod batch_recovery;
 pub mod change_cursor;
 pub mod conv;
+mod data_product_resources;
 pub mod diff;
 pub mod fixtures;
 pub mod git_mirror;

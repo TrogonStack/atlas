@@ -12,6 +12,7 @@ pub mod apply;
 pub mod branch;
 pub mod client;
 pub mod compat;
+pub mod data_product;
 pub mod export;
 pub mod failure;
 pub mod fmt;

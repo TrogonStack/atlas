@@ -1639,6 +1639,68 @@ async fn specification_mcp_roundtrip_preserves_stored_members_associations_and_a
         assert_ne!(id, "");
         assert!(ids.insert(id));
     }
+    let spec_uid = before["json"]["system"]["uid"].as_str().unwrap();
+    let spec_ref = serde_json::json!({"id": {"namespace": ns, "slug": "orders", "version": "1"}});
+    let external = |connection: &serde_json::Value| {
+        serde_json::json!({
+            "owner": {"kind": "ENTITY_KIND_SPECIFICATION", "id": spec_ref["id"]},
+            "ownerUid": spec_uid, "id": connection,
+        })
+    };
+    let operation_ref = serde_json::json!({"specification": spec_ref, "ownerUid": spec_uid,
+        "kind": "CONTRACT_MEMBER_KIND_OPERATION", "memberId": {"value": operation_id}});
+    let response_ref = external(&contract["operations"][0]["messages"][1]["connectionId"]);
+    let provider_ref = external(&contract["exposures"][0]["connectionId"]);
+    let access = |provider: bool| {
+        let mut operation =
+            serde_json::json!({"operation": operation_ref, "response": response_ref});
+        if provider {
+            operation["providerExposure"] = provider_ref.clone();
+        }
+        serde_json::json!({"operation": operation})
+    };
+    let offering = serde_json::json!({"dataProduct": {
+        "id": {"namespace": ns, "slug": "offering", "version": "1"}, "title": "Receipt offering",
+        "outputs": [{"name": {"value": "Receipt"},
+            "data": {"readModel": {"id": {"namespace": ns, "slug": "receipt", "version": "2"}}},
+            "contract": {"contractType": {"schema": {"specification": spec_ref, "ownerUid": spec_uid,
+                "kind": "CONTRACT_MEMBER_KIND_SCHEMA", "memberId": {"value": schema_id}},
+                "expectedArtifactId": {"value": artifact_id}, "expectedDigest": {"sha256": digest},
+                "expectedSelector": {"syntax": "json-pointer", "value": "/$defs/Order"}}},
+            "access": [access(true), access(false), access(true)]}]
+    }});
+    call_ok(
+        &client,
+        "put_entity_json",
+        put_entity_json_args(&offering.to_string()),
+    )
+    .await;
+    let product_args = args_obj(&[
+        ("kind", serde_json::json!("DataProduct")),
+        ("namespace", serde_json::json!(ns)),
+        ("slug", serde_json::json!("offering")),
+        ("version", serde_json::json!(1)),
+    ]);
+    let product_before =
+        call_tool_result_text(&call_ok(&client, "get_entity_json", product_args.clone()).await);
+    let checked = call_tool_result_text(
+        &call_ok(&client, "inspect_data_product", product_args.clone()).await,
+    );
+    assert_eq!(checked["offering"], "DATA_PRODUCT_OFFERING_STATE_MAPPED");
+    let access_states = checked["ports"][0]["access"].as_array().unwrap();
+    assert_eq!(access_states.len(), 3);
+    assert_eq!(
+        access_states[0]["state"],
+        "DATA_PRODUCT_SELECTION_STATE_RESOLVED"
+    );
+    assert_eq!(
+        access_states[1]["provider"],
+        "DATA_PRODUCT_SELECTION_STATE_UNDECLARED"
+    );
+    assert_ne!(
+        access_states[0]["declaration"]["connectionId"],
+        access_states[2]["declaration"]["connectionId"]
+    );
     let exported = call_ok(
         &client,
         "export_namespace",
@@ -1662,6 +1724,11 @@ async fn specification_mcp_roundtrip_preserves_stored_members_associations_and_a
     .await;
     let after = call_ok(&client, "get_entity_json", get_args).await;
     assert_eq!(before, call_tool_result_text(&after));
+    assert_eq!(
+        product_before,
+        call_tool_result_text(&call_ok(&client, "get_entity_json", product_args).await)
+    );
+
     let mut grpc = grpc_client(&endpoint).await;
     let stored = grpc
         .get_entity(pb::GetEntityRequest {
@@ -1681,5 +1748,90 @@ async fn specification_mcp_roundtrip_preserves_stored_members_associations_and_a
         contract.artifacts[0].member_id.as_ref().unwrap().value,
         artifact_id
     );
+    service.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn data_product_mcp_authoring_export_reapply_and_checked_inspection() {
+    let (client, service, _) = start_mcp_client().await;
+    let ns = "mcp-data-product";
+    call_ok(
+        &client,
+        "put_entity_json",
+        put_entity_json_args(
+            &serde_json::json!({"readModel": {
+                "id": {"namespace": ns, "slug": "receipt", "version": "2"}, "title": "Receipt"
+            }})
+            .to_string(),
+        ),
+    )
+    .await;
+    let input_id = "11111111-1111-4111-8111-111111111111";
+    let product = serde_json::json!({"dataProduct": {
+        "id": {"namespace": ns, "slug": "offering", "version": "1"}, "title": "Offering",
+        "inputs": [
+            {"portId": {"value": input_id}, "name": {"value": "Receipt input"}, "data": {"readModel": {"id": {"namespace": ns, "slug": "receipt", "version": "2"}}}},
+            {"name": {"value": "Repeated input"}, "data": {"readModel": {"id": {"namespace": ns, "slug": "receipt", "version": "2"}}}},
+            {"name": {"value": "Unknown input"}}
+        ],
+        "outputs": [
+            {"name": {"value": "Receipt"}, "data": {"readModel": {"id": {"namespace": ns, "slug": "receipt", "version": "2"}}}, "derivedFrom": {"inputs": [{"inputPortId": {"value": input_id}}]}},
+            {"name": {"value": "Explicit empty"}, "derivedFrom": {}},
+            {"name": {"value": "Unknown lineage"}}
+        ]
+    }});
+    call_ok(
+        &client,
+        "put_entity_json",
+        put_entity_json_args(&product.to_string()),
+    )
+    .await;
+    let args = args_obj(&[
+        ("kind", serde_json::json!("data_product")),
+        ("namespace", serde_json::json!(ns)),
+        ("slug", serde_json::json!("offering")),
+        ("version", serde_json::json!(1)),
+    ]);
+    let before = call_tool_result_text(&call_ok(&client, "get_entity_json", args.clone()).await);
+    let product = &before["json"]["dataProduct"];
+    assert_eq!(product["inputs"][0]["portId"]["value"], input_id);
+    assert_ne!(
+        product["inputs"][0]["data"]["connectionId"],
+        product["inputs"][1]["data"]["connectionId"]
+    );
+    assert_eq!(
+        product["outputs"][0]["data"]["readModel"]["id"]["version"],
+        "2"
+    );
+    assert_eq!(product["outputs"][1]["derivedFrom"], serde_json::json!({}));
+    assert!(product["outputs"][2].get("derivedFrom").is_none());
+    let inspection =
+        call_tool_result_text(&call_ok(&client, "inspect_data_product", args.clone()).await);
+    assert_eq!(inspection["product"], *product);
+    assert!(inspection["scope"].is_object());
+    assert_eq!(inspection["ports"].as_array().unwrap().len(), 6);
+    let exported = call_tool_result_text(
+        &call_ok(
+            &client,
+            "export_namespace",
+            args_obj(&[("namespace", serde_json::json!(ns))]),
+        )
+        .await,
+    );
+    let yaml = exported["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    call_ok(
+        &client,
+        "apply_manifests",
+        args_obj(&[("manifests_yaml", serde_json::json!(yaml))]),
+    )
+    .await;
+    let after = call_tool_result_text(&call_ok(&client, "get_entity_json", args).await);
+    assert_eq!(before, after);
     service.cancel().await.unwrap();
 }

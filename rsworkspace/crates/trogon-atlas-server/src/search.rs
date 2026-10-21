@@ -423,6 +423,7 @@ fn kind_label(entity: &pb::Entity) -> String {
         Some(K::Channel(_)) => "channel",
         Some(K::DataStore(_)) => "data_store",
         Some(K::Specification(_)) => "specification",
+        Some(K::DataProduct(_)) => "data_product",
         None => "",
     }
     .to_string()
@@ -463,6 +464,7 @@ pub fn kind_label_for(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::Channel => "channel",
         pb::EntityKind::DataStore => "data_store",
         pb::EntityKind::Specification => "specification",
+        pb::EntityKind::DataProduct => "data_product",
         pb::EntityKind::Unspecified => "",
     }
 }
@@ -508,6 +510,7 @@ fn title_of(entity: &pb::Entity) -> String {
         Some(K::Channel(x)) => x.title.clone(),
         Some(K::DataStore(x)) => x.title.clone(),
         Some(K::Specification(x)) => x.title.clone(),
+        Some(K::DataProduct(x)) => x.title.clone(),
         None => String::new(),
     }
 }
@@ -584,6 +587,28 @@ fn body_of(entity: &pb::Entity) -> String {
             push(&mut s, &x.target);
         }
         Some(K::Channel(x)) => push(&mut s, &x.doc),
+        Some(K::DataProduct(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            if let Some(purpose) = &x.purpose {
+                push(&mut s, purpose);
+            }
+            for port in &x.inputs {
+                if let Some(name) = &port.name {
+                    push(&mut s, &name.value);
+                }
+                if let Some(doc) = &port.doc {
+                    push(&mut s, doc);
+                }
+            }
+            for port in &x.outputs {
+                if let Some(name) = &port.name {
+                    push(&mut s, &name.value);
+                }
+                if let Some(doc) = &port.doc {
+                    push(&mut s, doc);
+                }
+            }
+        }
         Some(K::Specification(x)) => {
             push(&mut s, x.doc.as_deref().unwrap_or_default());
             for (name, doc) in x

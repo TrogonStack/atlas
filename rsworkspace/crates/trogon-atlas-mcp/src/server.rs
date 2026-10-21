@@ -240,6 +240,15 @@ pub struct ToolPolicy {
 
 pub const TOOL_POLICIES: &[ToolPolicy] = &[
     ToolPolicy {
+        tool: "inspect_data_product",
+        rpcs: &[
+            "InspectDataProduct",
+            "GetServerInfo",
+            "GetTypeLibraryDescriptorSet",
+        ],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
         tool: "get_server_info",
         rpcs: &["GetServerInfo"],
         min_role: ToolRole::Reader,
@@ -1261,6 +1270,35 @@ impl McpServer {
             .map_err(tool_err("list_entities"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "Inspect an exact DataProduct using backend checked selection states, Event emission witnesses and producing model paths. Incomplete evidence is not runtime proof.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn inspect_data_product(
+        &self,
+        Parameters(p): Parameters<EntitySpec>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let kind = parse_kind(&p.kind).map_err(rmcp::ErrorData::from)?;
+        if kind != pb::EntityKind::DataProduct {
+            return Err(rmcp::ErrorData::invalid_params(
+                "expected data_product kind",
+                None,
+            ));
+        }
+        let id = validated_id_from(&p.namespace, &p.slug, p.version)?;
+        let result = trogon_atlas_client::data_product::inspect(&mut self.client(), id)
+            .await
+            .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
     }
 
     #[tool(

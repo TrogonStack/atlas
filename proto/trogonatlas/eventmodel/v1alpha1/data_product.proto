@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/connections.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+
+message DataPortId { string value = 1; }
+message PortName { string value = 1; }
+
+enum DataPortDirection {
+  DATA_PORT_DIRECTION_UNSPECIFIED = 0;
+  DATA_PORT_DIRECTION_INPUT = 1;
+  DATA_PORT_DIRECTION_OUTPUT = 2;
+}
+
+message DataPortRef {
+  DataProductRef product = 1;
+  string owner_uid = 2;
+  DataPortDirection direction = 3;
+  DataPortId port_id = 4;
+}
+
+message InputDataSelection {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  oneof target {
+    ReadModelRef read_model = 2;
+    EventRef event = 3;
+  }
+}
+
+message OutputDataSelection {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ReadModelRef read_model = 2;
+}
+
+message OutputContract {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  oneof type {
+    SchemaRef schema = 2;
+    ContractTypeRef contract_type = 3;
+    TypeLibraryTypeRef library_type = 4;
+  }
+}
+
+message StoreAccess {
+  DataStoreRef store = 1;
+  ConnectionRef attachment = 2;
+}
+message ChannelAccess {
+  ChannelRef channel = 1;
+  ConnectionRef binding = 2;
+  ConnectionRef observation = 3;
+}
+message OperationAccess {
+  ContractMemberRef operation = 1;
+  ConnectionRef response = 2;
+  ConnectionRef provider_exposure = 3;
+}
+message OutputAccess {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  oneof selection {
+    StoreAccess store = 2;
+    ChannelAccess channel = 3;
+    OperationAccess operation = 4;
+  }
+  optional string doc = 5;
+}
+
+message LineageInput {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DataPortId input_port_id = 2;
+  optional string doc = 3;
+}
+message DeclaredLineage {
+  repeated LineageInput inputs = 1;
+  optional string doc = 2;
+}
+message DataInputPort {
+  DataPortId port_id = 1;
+  PortName name = 2;
+  optional string doc = 3;
+  InputDataSelection data = 4;
+}
+message DataOutputPort {
+  DataPortId port_id = 1;
+  PortName name = 2;
+  optional string doc = 3;
+  OutputDataSelection data = 4;
+  OutputContract contract = 5;
+  repeated OutputAccess access = 6;
+  DeclaredLineage derived_from = 7;
+}
+message DataProduct {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  optional string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  optional string purpose = 6;
+  repeated DataInputPort inputs = 7;
+  repeated DataOutputPort outputs = 8;
+}

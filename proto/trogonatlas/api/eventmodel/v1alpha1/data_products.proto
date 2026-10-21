@@ -1,0 +1,72 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/connections.proto";
+import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
+
+// Branch selection uses the service's x-trogon-atlas-branch metadata.
+message InspectDataProductRequest {
+  trogonatlas.eventmodel.v1alpha1.DataProductRef product = 1;
+}
+
+enum DataProductSelectionState {
+  DATA_PRODUCT_SELECTION_STATE_UNSPECIFIED = 0;
+  DATA_PRODUCT_SELECTION_STATE_UNDECLARED = 1;
+  DATA_PRODUCT_SELECTION_STATE_RESOLVED = 2;
+  DATA_PRODUCT_SELECTION_STATE_OPAQUE = 3;
+  DATA_PRODUCT_SELECTION_STATE_UNRESOLVED = 4;
+  DATA_PRODUCT_SELECTION_STATE_INACCESSIBLE = 5;
+  DATA_PRODUCT_SELECTION_STATE_UNKNOWN = 6;
+  DATA_PRODUCT_SELECTION_STATE_EXPLICIT_EMPTY = 7;
+  DATA_PRODUCT_SELECTION_STATE_DECLARED = 8;
+}
+message DataProductAccessState {
+  trogonatlas.eventmodel.v1alpha1.OutputAccess declaration = 1;
+  DataProductSelectionState state = 2;
+  DataProductSelectionState provider = 3;
+  repeated trogonatlas.eventmodel.v1alpha1.ConnectionRef checked_connections = 4;
+}
+message DataProductEmissionEvidence {
+  trogonatlas.eventmodel.v1alpha1.DataPortRef input = 1;
+  trogonatlas.eventmodel.v1alpha1.EventRef event = 2;
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef emission = 3;
+}
+message DataProductProducingEvidence {
+  trogonatlas.eventmodel.v1alpha1.DataPortRef input = 1;
+  trogonatlas.eventmodel.v1alpha1.DataPortRef output = 2;
+  repeated trogonatlas.eventmodel.v1alpha1.ConnectionRef path = 3;
+}
+message DataProductPortState {
+  trogonatlas.eventmodel.v1alpha1.DataPortRef port = 1;
+  DataProductSelectionState data = 2;
+  DataProductSelectionState contract = 3;
+  DataProductSelectionState lineage = 4;
+  repeated DataProductAccessState access = 5;
+  bool incomplete = 6;
+}
+message DataProductCheckedScope {
+  optional string branch = 1;
+  repeated string authorized_namespaces = 2;
+  // Identifies the content and branch context actually checked for this evidence.
+  string revision = 3;
+  repeated trogonatlas.eventmodel.v1alpha1.EntityRef visited = 4;
+}
+enum DataProductOfferingState {
+  DATA_PRODUCT_OFFERING_STATE_UNSPECIFIED = 0;
+  DATA_PRODUCT_OFFERING_STATE_DRAFT = 1;
+  DATA_PRODUCT_OFFERING_STATE_MAPPED = 2;
+  DATA_PRODUCT_OFFERING_STATE_UNRESOLVED = 3;
+  DATA_PRODUCT_OFFERING_STATE_UNKNOWN = 4;
+}
+message InspectDataProductResponse {
+  trogonatlas.eventmodel.v1alpha1.DataProduct product = 1;
+  string etag = 2;
+  DataProductCheckedScope scope = 3;
+  repeated DataProductPortState ports = 4;
+  repeated DataProductEmissionEvidence emissions = 5;
+  repeated DataProductProducingEvidence producing = 6;
+  bool incomplete = 7;
+  DataProductOfferingState offering = 8;
+}

@@ -126,6 +126,7 @@ pub(super) fn is_resource(entity: &pb::Entity) -> bool {
             pb::entity::Kind::Channel(_)
                 | pb::entity::Kind::DataStore(_)
                 | pb::entity::Kind::Specification(_)
+                | pb::entity::Kind::DataProduct(_)
         )
     )
 }
@@ -307,6 +308,9 @@ pub(super) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
 ) -> Vec<pb::ValidationIssue> {
+    if matches!(entity.kind, Some(pb::entity::Kind::DataProduct(_))) {
+        return crate::data_product_resources::validate_in_context(entity, context);
+    }
     if matches!(entity.kind, Some(pb::entity::Kind::Specification(_))) {
         return crate::specification_resources::validate_in_context(entity, context);
     }

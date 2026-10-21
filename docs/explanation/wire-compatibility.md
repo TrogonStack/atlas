@@ -122,12 +122,18 @@ their association IDs and pinned observation references. Upgrade the server
 and clients together before authoring these resources. Existing revision-9
 entities retain their stored identities.
 
-The current contract revision is 11, with both mutation compatibility floors
-also at 11. It adds Specification members, exact member/content pins and
+Contract revision 11 raised both mutation compatibility floors to 11.
+It adds Specification members, exact member/content pins and
 identified API associations. Writers must preserve member IDs as well as
 connection IDs, request/response roles and provider selections. Upgrade clients
 and server before authoring these resources; an exact entity version alone
 does not pin a mutable contract's content or member incarnation.
+
+The current contract revision is 12, with both mutation compatibility floors
+also at 12. DataProduct writers preserve independent port IDs, nested
+association IDs and exact selected access and contract pins. Upgrade clients
+and server together before authoring DataProducts; older writers cannot
+preserve the complete resource contract.
 
 ## Supported combinations
 

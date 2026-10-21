@@ -2145,6 +2145,7 @@ fn kind_of(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::TypeLibrary(_) => EntityKind::TypeLibrary,
         EntityOneof::Channel(_) => EntityKind::Channel,
         EntityOneof::DataStore(_) => EntityKind::DataStore,
+        EntityOneof::DataProduct(_) => EntityKind::DataProduct,
         EntityOneof::Specification(_) => EntityKind::Specification,
     })
 }
@@ -2182,6 +2183,7 @@ fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::TypeLibrary(x) => x.id.as_ref(),
         EntityOneof::Channel(x) => x.id.as_ref(),
         EntityOneof::DataStore(x) => x.id.as_ref(),
+        EntityOneof::DataProduct(x) => x.id.as_ref(),
         EntityOneof::Specification(x) => x.id.as_ref(),
     }
 }

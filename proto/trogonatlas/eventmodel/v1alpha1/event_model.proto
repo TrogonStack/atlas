@@ -80,6 +80,7 @@ import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
 import "trogonatlas/eventmodel/v1alpha1/type_library.proto";
 import "trogonatlas/eventmodel/v1alpha1/architecture.proto";
 import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
 
 // =============================================================================
 // Event Modeling schema.
@@ -603,6 +604,7 @@ message Entity {
     Channel channel = 31;
     DataStore data_store = 32;
     Specification specification = 33;
+    DataProduct data_product = 34;
   }
   trogonatlas.type.v1alpha1.SystemMeta system = 29;
 }

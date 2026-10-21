@@ -721,6 +721,7 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
         K::Channel(x) => x.supersedes.as_ref(),
         K::DataStore(x) => x.supersedes.as_ref(),
         K::Specification(x) => x.supersedes.as_ref(),
+        K::DataProduct(x) => x.supersedes.as_ref(),
     }
 }
 

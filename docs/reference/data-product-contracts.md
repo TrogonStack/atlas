@@ -1,9 +1,8 @@
 # DataProduct contracts
 
-Status: proposed native contract; schema, backend, CLI/MCP and Studio support
-are pending. Names and wire values below are candidate definitions, not an
-existing protobuf or API. The [acceptance reference](data-product-acceptance.md)
-defines required outcomes, not executed test evidence.
+Status: native schema, backend admission and inspection, CLI/MCP and Studio
+review support are implemented. The [acceptance reference](data-product-acceptance.md)
+separates executable coverage from deployment and remaining acceptance limits.
 
 ## Scope and behavioral authority
 
@@ -30,7 +29,7 @@ list or inferred owner from provider, namespace or producing slice.
 ## Entity and port values
 
 Existing identity, concurrency, registered metadata and server-owned system
-metadata rules apply to the proposed entity kind.
+metadata rules apply to this entity kind.
 
 | DataProduct field | Type and requiredness |
 | --- | --- |
@@ -71,8 +70,7 @@ must include authorized emissions outside capped display projections. An
 incomplete or failed search cannot confirm an input or prove no emission exists;
 new admission fails explicitly when confirmation cannot finish within its budget.
 Projection participation is separately reported and does
-not prove an arbitrary output derives from this input. This confirmation rule
-is a proposed native admission rule, not a claim about current validators.
+not prove an arbitrary output derives from this input.
 
 | DataOutputPort field | Type and requiredness |
 | --- | --- |
@@ -185,7 +183,7 @@ failed traversal cannot establish either verified lineage or no relationship.
 
 ## Port and association identity
 
-Port IDs use the existing native member lifecycle as the proposed policy:
+Port IDs use the existing native member lifecycle:
 omitted IDs on creation/addition receive server-assigned UUIDv7 values; valid
 caller IDs may be supplied on new-owner creation. On an existing owner,
 supplied port IDs must already be active in the same direction. New ports omit
@@ -288,8 +286,24 @@ these need explicit guarded selector repair and fresh changed association IDs.
 
 ## Query classification and bounds
 
-Query terms below are semantic requirements, not new RPC or command names.
-Expose per-port and per-access states before any product-level summary.
+`InspectDataProduct` accepts an exact `DataProductRef` and the existing branch
+request metadata. The CLI exposes `inspect-data-product` and MCP exposes
+`inspect_data_product`; Studio displays the same backend result. Per-port and
+per-access states precede the product-level summary.
+
+The response retains authored declarations, exact Event emission witnesses,
+checked producing paths and checked scope. Scope includes the branch,
+authorized namespaces, visited exact identities and a revision digest of the
+retained checked content and etags. Reads form an assembled view under the
+existing single-writer assumption; the digest is neither a distributed
+transaction snapshot nor a retained historical replay token. Studio does not
+attach current inspection evidence to historical declarations.
+
+Producing traversal returns at most one checked path per input/output port
+pair. Repeated ports remain independent pairs. Discovery, edge examinations,
+traversal and combined returned connection references are bounded; incomplete
+behavioral traversal suppresses producing-path claims. Event confirmation
+witnesses remain a separate result. Cycles mark traversal incomplete.
 
 | Result dimension | Required distinction |
 | --- | --- |
@@ -311,17 +325,16 @@ TypeLibrary import and behavioral cycle rules remain unchanged. Traversal uses
 visited exact identities and preserves repeated occurrences without unbounded
 expansion. A cycle is not evidence of producing behavior by itself.
 
-Proposed admission ceilings are 1,024 total ports, 4,096 total associations
+Admission ceilings are 1,024 total ports, 4,096 total associations
 across all nested collections, and 1 MiB for the complete protobuf-encoded
 DataProduct. Each LineageInput counts as an association. Existing lower entity,
 RPC and store limits still apply. Exceeding a ceiling rejects atomically, without
-truncating ports or references. Allocation of protobuf fields, enum numbers and
-entity-kind integration remains implementation work.
+truncating ports or references. DataProduct uses entity kind `33`, entity union
+field `34`, and wire contract revision `12` with matching mutation revision floors.
 
 The required visible resource scan budget is 5,000 rows combined across
 DataProducts, Channels, DataStores and Specifications in visible namespaces.
-Adding DataProducts to the existing resource budget is proposed work, not
-current scanner coverage. Exceeding it returns `RESOURCE_EXHAUSTED`; an empty
+The scanner includes DataProducts. Exceeding it returns `RESOURCE_EXHAUSTED`; an empty
 result is not a substitute. Bounded impact/lineage queries retain checked scope
 and explicitly mark incomplete traversal. Operational failures remain errors,
 not undeclared data or negative lineage findings.

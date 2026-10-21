@@ -422,3 +422,30 @@ export const api = {
       opts,
     ),
 };
+
+export interface DataProductPortState {
+  port?: { portId?: { value?: string }; direction?: string };
+  data?: string;
+  contract?: string;
+  lineage?: string;
+  access?: { declaration?: Record<string, unknown>; state?: string; provider?: string }[];
+  incomplete?: boolean;
+}
+
+export interface DataProductInspection {
+  product?: Record<string, unknown>;
+  etag?: string;
+  scope?: { branch?: string; revision?: string; authorizedNamespaces?: string[]; visited?: unknown[] };
+  ports?: DataProductPortState[];
+  emissions?: unknown[];
+  producing?: unknown[];
+  incomplete?: boolean;
+  offering?: string;
+}
+
+export function inspectDataProduct(id: EntityId, opts: FetchOptions = {}): Promise<DataProductInspection> {
+  return getJson(
+    `/api/data-product/${encodeURIComponent(id.namespace)}/${encodeURIComponent(id.slug)}/inspect?version=${encodeURIComponent(id.version)}`,
+    opts,
+  );
+}

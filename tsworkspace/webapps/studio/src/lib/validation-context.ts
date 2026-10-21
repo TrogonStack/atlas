@@ -27,6 +27,8 @@ const referenceFields: Record<string, ContextRef['kind']> = {
   specification: 'specification',
   schema: 'schema',
   channel: 'channel',
+  store: 'dataStore',
+  product: 'dataProduct',
   library: 'typeLibrary',
   typeLibrary: 'typeLibrary',
   component: 'component',
@@ -57,8 +59,9 @@ function references(entity: Entity): ContextRef[] {
     const kind = wireKind(body.kind) ?? impliedKind;
     if (kind && body.id) add(kind, body.id);
     for (const [field, child] of Object.entries(body)) {
-      if (['id', 'data', 'metadata', 'fields', 'supersedes'].includes(field)) continue;
-      if (field === 'schema' && entity.kind !== 'specification') continue;
+      if (['id', 'metadata', 'fields', 'supersedes', 'artifacts', 'expectedSelector'].includes(field)) continue;
+      if (field === 'data' && entity.kind !== 'dataProduct') continue;
+      if (field === 'schema' && entity.kind !== 'specification' && entity.kind !== 'dataProduct') continue;
       visit(child, referenceFields[field]);
     }
   };

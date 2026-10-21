@@ -57,17 +57,19 @@ Retained opaque formats and selectors do not imply semantic format validation,
 a source connector or another format compiler. Deployment and production-scale
 evidence remain distinct from the linked local tests.
 
-## Next resource slice: DataProduct
+## DataProduct resource slice
 
-The [DataProduct contract proposal](../reference/data-product-contracts.md)
+The [DataProduct contract](../reference/data-product-contracts.md)
 defines input and output ports, exact output contracts, selected access paths
 and declared lineage. Its [acceptance criteria](../reference/data-product-acceptance.md)
 connect those declarations to existing ReadModels, Channel observations,
 DataStore attachments and Specification response messages.
 
-The contract and fixture are design references. DataProduct schema, runtime
-admission, native authoring and Studio review support remain pending. Port
-membership and access declarations do not introduce producing behavior.
+Native schema, runtime admission, CLI/MCP authoring and inspection, and Studio
+review are implemented. The linked acceptance reference identifies executable
+fixtures and their limits. Port membership and access declarations do not
+introduce producing behavior. Backend inspection reports checked model paths
+separately from declared lineage and runtime execution evidence.
 
 ## Follow-on contracts
 
