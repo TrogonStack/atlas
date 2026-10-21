@@ -10,4 +10,6 @@
 
 **Atlas is for product teams that design with Event Modeling and want AI agents to carry out the work.** Product engineers, architects and designers share one model through views suited to their roles and preferences. Connected clients support people and multiple agents working together, while the backend validates and exposes the model's evolving state.
 
+To try Atlas, [run it locally with Docker Compose](docs/tutorials/run-atlas-locally.md) and load the example model.
+
 Read the [Atlas principles](docs/explanation/principles/README.md) for the ideas behind the product, its modeling language, and its codebase. The [documentation](docs/README.md) connects those ideas to design explanations, task guides, and technical contracts.
