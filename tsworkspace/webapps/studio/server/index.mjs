@@ -320,6 +320,7 @@ const READ_RPCS = new Set([
   "diffBranch",
   "exportEventModelManifests",
   "getEntity",
+  "inspectDataProduct",
   "getChangeset",
   "getEntityHistory",
   "getEventModelProjection",
@@ -1801,6 +1802,20 @@ app.get(
       namespaces,
       limit: 25,
     });
+  }),
+);
+
+app.get(
+  "/api/data-product/:namespace/:slug/inspect",
+  branchHandler((req) => {
+    const { ns, slug } = namespaceSlugParams(req);
+    const version = String(req.query.version ?? "");
+    if (!/^[1-9][0-9]*$/.test(version)) {
+      const error = /** @type {HttpError} */ (new Error("inspection requires an exact positive version"));
+      error.status = 400;
+      throw error;
+    }
+    return call("inspectDataProduct", { product: { id: { namespace: ns, slug, version } } });
   }),
 );
 

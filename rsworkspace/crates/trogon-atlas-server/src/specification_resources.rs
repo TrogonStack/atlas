@@ -80,6 +80,9 @@ pub(crate) fn library_types(entity: &pb::Entity) -> Vec<&pb::TypeLibraryTypeRef>
                 _ => None,
             })
             .collect(),
+        Some(pb::entity::Kind::DataProduct(product)) => {
+            crate::data_product_resources::library_types(product).collect()
+        }
         _ => Vec::new(),
     }
 }

@@ -327,6 +327,7 @@ pub fn entity_kind(entity: &pb::Entity) -> Result<pb::EntityKind, Status> {
         Some(K::Channel(_)) => Ok(pb::EntityKind::Channel),
         Some(K::DataStore(_)) => Ok(pb::EntityKind::DataStore),
         Some(K::Specification(_)) => Ok(pb::EntityKind::Specification),
+        Some(K::DataProduct(_)) => Ok(pb::EntityKind::DataProduct),
         None => Err(Status::invalid_argument("entity.kind oneof is required")),
     }
 }
@@ -366,6 +367,7 @@ pub fn entity_id(entity: &pb::Entity) -> Result<&pb::Id, Status> {
         Some(K::Channel(x)) => x.id.as_ref(),
         Some(K::DataStore(x)) => x.id.as_ref(),
         Some(K::Specification(x)) => x.id.as_ref(),
+        Some(K::DataProduct(x)) => x.id.as_ref(),
         None => return Err(Status::invalid_argument("entity.kind oneof is required")),
     };
     let id = id.ok_or_else(|| Status::invalid_argument("entity.id is required"))?;
@@ -448,6 +450,12 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
         Some(K::Channel(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
         Some(K::DataStore(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
         Some(K::Specification(x)) => (
+            x.title.as_str(),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::DataProduct(x)) => (
             x.title.as_str(),
             x.doc.as_deref().unwrap_or_default(),
             0,

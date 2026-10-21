@@ -17,6 +17,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/graph.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/batch.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/entity_kinds.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
 
 
 // =============================================================================
@@ -1140,6 +1141,7 @@ message ResolveBranchEntryResponse {
 //     DeleteBranch                       : branch lifecycle (Phase 1: Isolation)
 
 service EventModelService {
+  rpc InspectDataProduct(InspectDataProductRequest) returns (InspectDataProductResponse);
   // Bootstrap. Clients SHOULD call GetServerInfo on connect to learn
   // which optional features and limits apply (Decision #22).
   rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);

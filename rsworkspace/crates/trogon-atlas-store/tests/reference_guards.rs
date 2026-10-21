@@ -447,3 +447,224 @@ async fn specification_nested_references_guard_the_complete_target_set_and_branc
         HashSet::from(targets)
     );
 }
+
+#[tokio::test]
+async fn data_product_nested_target_set_guard_uses_merged_view_without_visible_namespace_filter() {
+    use std::collections::HashSet;
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let selector = |kind: pb::EntityKind, slug: &str| pb::ConnectionRef {
+        owner: Some(pb::EntityRef {
+            kind: kind as i32,
+            id: Some(id(slug)),
+        }),
+        owner_uid: "selected-owner".into(),
+        id: Some(pb::ConnectionId {
+            value: "11111111-1111-4111-8111-111111111111".into(),
+        }),
+    };
+    let output = |name: &str, contract, access| pb::DataOutputPort {
+        name: Some(pb::PortName { value: name.into() }),
+        data: Some(pb::OutputDataSelection {
+            read_model: Some(pb::ReadModelRef {
+                id: Some(id("receipt")),
+            }),
+            ..Default::default()
+        }),
+        contract,
+        access,
+        ..Default::default()
+    };
+    let product = pb::Entity {
+        kind: Some(pb::entity::Kind::DataProduct(pb::DataProduct {
+            id: Some(pb::Id {
+                namespace: "hidden-products".into(),
+                slug: "offering".into(),
+                version: 1,
+            }),
+            title: "Hidden offering".into(),
+            inputs: vec![pb::DataInputPort {
+                name: Some(pb::PortName {
+                    value: "Fact".into(),
+                }),
+                data: Some(pb::InputDataSelection {
+                    target: Some(pb::input_data_selection::Target::Event(pb::EventRef {
+                        id: Some(id("fact")),
+                    })),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            outputs: vec![
+                output(
+                    "Native",
+                    Some(pb::OutputContract {
+                        r#type: Some(pb::output_contract::Type::Schema(pb::SchemaRef {
+                            id: Some(id("shape")),
+                        })),
+                        ..Default::default()
+                    }),
+                    vec![
+                        pb::OutputAccess {
+                            selection: Some(pb::output_access::Selection::Store(pb::StoreAccess {
+                                store: Some(pb::DataStoreRef {
+                                    id: Some(id("store")),
+                                }),
+                                attachment: Some(selector(
+                                    pb::EntityKind::DataStore,
+                                    "attachment-owner",
+                                )),
+                            })),
+                            ..Default::default()
+                        },
+                        pb::OutputAccess {
+                            selection: Some(pb::output_access::Selection::Channel(
+                                pb::ChannelAccess {
+                                    channel: Some(pb::ChannelRef {
+                                        id: Some(id("channel")),
+                                    }),
+                                    binding: Some(selector(
+                                        pb::EntityKind::Channel,
+                                        "binding-owner",
+                                    )),
+                                    observation: Some(selector(
+                                        pb::EntityKind::AutomationSlice,
+                                        "observer",
+                                    )),
+                                },
+                            )),
+                            ..Default::default()
+                        },
+                        pb::OutputAccess {
+                            selection: Some(pb::output_access::Selection::Operation(
+                                pb::OperationAccess {
+                                    operation: Some(pb::ContractMemberRef {
+                                        specification: Some(pb::SpecificationRef {
+                                            id: Some(id("operation-owner")),
+                                        }),
+                                        owner_uid: "selected-owner".into(),
+                                        kind: pb::ContractMemberKind::Operation as i32,
+                                        member_id: Some(pb::ContractMemberId {
+                                            value: "22222222-2222-4222-8222-222222222222".into(),
+                                        }),
+                                        ..Default::default()
+                                    }),
+                                    response: Some(selector(
+                                        pb::EntityKind::Specification,
+                                        "response-owner",
+                                    )),
+                                    provider_exposure: Some(selector(
+                                        pb::EntityKind::Specification,
+                                        "exposure-owner",
+                                    )),
+                                },
+                            )),
+                            ..Default::default()
+                        },
+                    ],
+                ),
+                output(
+                    "Library",
+                    Some(pb::OutputContract {
+                        r#type: Some(pb::output_contract::Type::LibraryType(
+                            pb::TypeLibraryTypeRef {
+                                library: Some(pb::TypeLibraryRef {
+                                    id: Some(id("types")),
+                                }),
+                                message: Some(pb::QualifiedProtoName {
+                                    value: "fixture.Receipt".into(),
+                                }),
+                            },
+                        )),
+                        ..Default::default()
+                    }),
+                    vec![],
+                ),
+                output(
+                    "Pinned",
+                    Some(pb::OutputContract {
+                        r#type: Some(pb::output_contract::Type::ContractType(
+                            pb::ContractTypeRef {
+                                schema: Some(pb::ContractMemberRef {
+                                    specification: Some(pb::SpecificationRef {
+                                        id: Some(id("type-owner")),
+                                    }),
+                                    owner_uid: "selected-owner".into(),
+                                    kind: pb::ContractMemberKind::Schema as i32,
+                                    member_id: Some(pb::ContractMemberId {
+                                        value: "33333333-3333-4333-8333-333333333333".into(),
+                                    }),
+                                    ..Default::default()
+                                }),
+                                expected_artifact_id: Some(pb::ContractMemberId {
+                                    value: "44444444-4444-4444-8444-444444444444".into(),
+                                }),
+                                expected_digest: Some(pb::ContentDigest {
+                                    sha256: "a".repeat(64),
+                                }),
+                                expected_selector: None,
+                            },
+                        )),
+                        ..Default::default()
+                    }),
+                    vec![],
+                ),
+            ],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let stored = store
+        .create(
+            pb::EntityKind::DataProduct,
+            &product,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let targets = [
+        (pb::EntityKind::Event, "fact"),
+        (pb::EntityKind::ReadModel, "receipt"),
+        (pb::EntityKind::Schema, "shape"),
+        (pb::EntityKind::DataStore, "store"),
+        (pb::EntityKind::DataStore, "attachment-owner"),
+        (pb::EntityKind::Channel, "channel"),
+        (pb::EntityKind::Channel, "binding-owner"),
+        (pb::EntityKind::AutomationSlice, "observer"),
+        (pb::EntityKind::Specification, "operation-owner"),
+        (pb::EntityKind::Specification, "response-owner"),
+        (pb::EntityKind::Specification, "exposure-owner"),
+        (pb::EntityKind::Specification, "type-owner"),
+        (pb::EntityKind::TypeLibrary, "types"),
+    ]
+    .map(|(kind, slug)| pb::EntityKey::new(kind, &id(slug)));
+    let all = HashSet::from(targets.clone());
+    assert_eq!(store.referenced_targets(&targets, None).await.unwrap(), all);
+    store.create_branch("product-guard", "").await.unwrap();
+    assert_eq!(
+        store
+            .referenced_targets(&targets, Some("product-guard"))
+            .await
+            .unwrap(),
+        all
+    );
+    store
+        .delete(
+            pb::EntityKind::DataProduct,
+            &pb::Id {
+                namespace: "hidden-products".into(),
+                slug: "offering".into(),
+                version: 1,
+            },
+            None,
+            WriteContext::branch("product-guard"),
+        )
+        .await
+        .unwrap();
+    assert!(store
+        .referenced_targets(&targets, Some("product-guard"))
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(store.referenced_targets(&targets, None).await.unwrap(), all);
+    assert!(stored.entity.system.is_some());
+}

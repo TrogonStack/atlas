@@ -33,6 +33,7 @@ const ALL_KINDS: EntityKind[] = [
   'alertNotificationTarget',
   'channel',
   'dataStore',
+  'dataProduct',
   'specification',
   'typeLibrary',
 ];

@@ -346,6 +346,7 @@ fn kind_from_short(s: &str) -> Option<EntityKind> {
         "type_library" => EntityKind::TypeLibrary,
         "channel" => EntityKind::Channel,
         "data_store" => EntityKind::DataStore,
+        "data_product" => EntityKind::DataProduct,
         "specification" => EntityKind::Specification,
         _ => return None,
     })
@@ -370,6 +371,7 @@ mod tests {
         for kind in [
             EntityKind::Channel,
             EntityKind::DataStore,
+            EntityKind::DataProduct,
             EntityKind::Specification,
         ] {
             let id = id("shop", "order-feed", 2);

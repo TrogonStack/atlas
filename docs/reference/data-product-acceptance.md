@@ -1,10 +1,10 @@
 # DataProduct acceptance fixture
 
-Status: proposed acceptance criteria for the
-[DataProduct contract](data-product-contracts.md). DataProduct schema, runtime
-and executable acceptance coverage are pending. Tables use logical fixture
-notation, not literal manifest syntax. Existing connected fixtures anchor the
-model vocabulary; they do not test DataProducts or prove these criteria passed.
+Status: acceptance criteria and executable coverage for the
+[DataProduct contract](data-product-contracts.md). Tables use logical fixture
+notation, not literal manifest syntax. The executable coverage section records
+which native checks exist; illustrative tables are not evidence that every
+permutation has run.
 
 ## Checked context and existing anchors
 
@@ -65,12 +65,12 @@ uses namespace `commerce`. Retain its independent
 
 The namespace-qualified distinction matters: `contracts/order-intake@1` is a
 slice, while `commerce/order-intake@1` is a Processor. Do not merge fixtures by
-slug. Their sources currently set up separate test contexts. The proposed
-combined acceptance run must explicitly materialize the chosen anchors into
-one authorized model scope and retain the resulting snapshot; their coexistence
-is a criterion, not current executable proof.
+slug. Their sources set up separate test contexts. A combined acceptance run
+must explicitly materialize the chosen anchors into one authorized model scope
+and retain the resulting checked context. The native DataProduct fixture below
+uses its own explicit anchors.
 
-## Proposed product declarations
+## Product declaration criteria
 
 Add DataProduct `contracts/order-data@1`. Port names below are display labels;
 retain their independent DataPortIds. For setup, use valid client-supplied IDs
@@ -201,12 +201,13 @@ where applicable. Rejection leaves the stored content and identities unchanged.
 | Anchor omitted only from capped model projection | Resolve exact authorized anchor in the selected branch; do not report missing or invalidate data merely because the projection is capped. |
 | Safe-delete a data/type/access owner with only a hidden product referrer | Refuse in standalone and guarded batch preview/apply, without hidden-referrer details. Include every nested selected owner in protection. |
 | Force-delete product or selected external owner | Preserve other entities; diagnose incoming selectors as unresolved. No cascade/pruning or target replacement. |
-| Visible scan reaches combined resource budget with products included | Up to 5,000 rows remains within the proposed budget; exceeding returns RESOURCE_EXHAUSTED for reference/impact reporting. Existing scanner coverage alone is not DataProduct coverage. |
+| Visible scan reaches combined resource budget with products included | Up to 5,000 rows remains within the budget; exceeding returns RESOURCE_EXHAUSTED for reference/impact reporting. Existing scanner coverage alone is not DataProduct coverage. |
 | Delete reporting exceeds only visible scan budget | Permit explicit incomplete capped reporting under existing policy, while independently executing the complete deletion guard across namespaces. |
 | Hidden referrer lies beyond visible budget or projection cap | Complete guard still refuses deletion. Test both single-target and multi-target guarded batches in the merged branch view. |
 | Complete safe-delete scan times out, errors, or cannot finish | Refuse mutation; incomplete scan cannot prove absence of references. No partial success in a guarded batch. |
 | Visible scanner has backend/authorization/decoding operational error other than budget exhaustion | Return an error; do not silently use the budget fallback or report no referrers. |
-| Lineage/impact traversal hits a budget, cycle or inaccessible segment | Preserve checked scope and explicit incomplete/unknown state, with visited identities and no unbounded expansion. Do not assert negative or verified lineage from a partial path. |
+| Lineage/impact traversal hits a budget, cycle or inaccessible segment | Preserve checked scope and explicit incomplete/unknown state, with visited identities and no unbounded expansion. Suppress paths from the affected incomplete input traversal; preserve complete independent input paths. Request-wide discovery/construction/evidence exhaustion suppresses all producing claims. Do not assert negative or verified lineage from a partial path. |
+| A disconnected slice has a missing or inaccessible target, or a disconnected cycle | Preserve the selected input's complete checked paths and scope; unrelated defects do not make that traversal incomplete. |
 | Add descriptive references around existing cycles | No invented product execution ordering, product-to-product edge or replacement of supersession/TypeLibrary/behavioral cycle rules. |
 
 ## Evidence required before implementation acceptance
@@ -219,9 +220,35 @@ prove deployed browser behavior. Verification must identify which cases ran,
 their exact requests/results and rejection diagnostics, retained fixture keys,
 UIDs and IDs, snapshot/revision, branch and authorization context.
 
-The existing fixture sources linked above establish available model anchors
-and their own narrower executable coverage. They are not DataProduct tests.
-No DataProduct implementation, deployment, transformation runtime, ownership
-directory, external import/sync or format-parser success follows from this
-document. Runtime and release acceptance remain pending until separate evidence
-is recorded against these criteria.
+## Executable native coverage
+
+The [connected DataProduct fixture](../../rsworkspace/crates/trogon-atlas-server/tests/data_product_fixture.rs)
+materializes namespace `product-fixture`, exact version `1`, with ReadModels
+`submitted` and `receipt`, Event `placed`, Command `place`, Processor `adapter`,
+and slices `intake`, `handle`, `project` and `observe`. Returned identities pin
+repeated Channel observations, a DataStore attachment, API RESPONSE access and
+selected or undeclared providers. `orders` keeps declared lineage narrower
+than its checked producing paths. Inspection resolves exact anchors with a
+zero general snapshot cap; native export and unchanged reapply preserve port,
+association and owner identities under the normal export budget.
+
+The [authenticated backend checks](../../rsworkspace/crates/trogon-atlas-server/tests/data_product_backend.rs)
+exercise branch tombstones, Reader authorization, hidden targets and referrers,
+exact Store/Channel/RESPONSE selections, artifact and compiled type pins,
+undeclared providers, Event confirmation, final batch overlays and shared
+confirmation work budgets. Core identity and budget helper tests cover local
+lifecycle rules and boundary accounting independently.
+
+The [CLI roundtrip](../../rsworkspace/crates/trogon-atlas-cli/tests/data_product_cli_integration.rs)
+and [MCP transport checks](../../rsworkspace/crates/trogon-atlas-mcp/tests/mcp_integration.rs)
+exercise native authoring, exact inspection and export/reapply. The
+[Studio inspector checks](../../tsworkspace/webapps/studio/src/components/DataProductInspector.test.tsx)
+exercise backend result rendering, repeated selections and historical-context
+handling. These tests use controlled local stores and service transports.
+
+This coverage does not establish deployed browser behavior, distributed
+transactional reads, exhaustive branch recovery or operational failure
+permutations, transformation execution, ownership directories, external
+import/sync, format parsing or schema compatibility. Those require their own
+acceptance evidence; illustrative cases remain requirements where no linked
+test exercises them.

@@ -8,9 +8,9 @@ use super::{
     Status, StoredEntity, Visibility,
 };
 
-struct ArchitectureProposal<'a> {
-    overlay: HashMap<pb::EntityKey, Option<&'a pb::Entity>>,
-    landing: Option<&'a [BranchLandOp]>,
+pub(super) struct ArchitectureProposal<'a> {
+    pub(super) overlay: HashMap<pb::EntityKey, Option<&'a pb::Entity>>,
+    pub(super) landing: Option<&'a [BranchLandOp]>,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +85,7 @@ impl EventModelServiceImpl {
                         pb::EntityKind::Channel
                             | pb::EntityKind::DataStore
                             | pb::EntityKind::Specification
+                            | pb::EntityKind::DataProduct
                     )
             })
             .filter_map(|meta| meta.entity.as_ref())
@@ -121,7 +122,10 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let endpoints = observation_endpoints(&resources, &world);
+        let mut endpoints = observation_endpoints(&resources, &world);
+        endpoints.extend(crate::data_product_resources::selected_endpoints(
+            &resources, &world,
+        ));
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -132,6 +136,33 @@ impl EventModelServiceImpl {
         )
         .await?;
         let context: Vec<_> = world.into_values().collect();
+        let event_products: Vec<_> = resources
+            .iter()
+            .filter_map(|entity| match &entity.kind {
+                Some(pb::entity::Kind::DataProduct(product))
+                    if super::data_product_events::inputs(product).next().is_some() =>
+                {
+                    Some(product)
+                }
+                _ => None,
+            })
+            .collect();
+        let mut confirmations = super::data_product_events::EventConfirmation::default();
+        if !event_products.is_empty() {
+            let (rows, complete) = self
+                .data_product_emission_rows(branch, vis, &proposal)
+                .await?;
+            for product in event_products {
+                for (_, id) in super::data_product_events::inputs(product) {
+                    if confirmations.confirm(id, &rows, complete)?.is_empty() {
+                        return Err(Status::invalid_argument(
+                            "Data product Event input has no authorized local emission",
+                        ));
+                    }
+                }
+            }
+        }
+        let mut compiled = HashSet::new();
         for resource in resources {
             let kind = entity_kind(resource)?;
             let id = entity_id(resource)?;
@@ -153,9 +184,20 @@ impl EventModelServiceImpl {
                     selection.library.as_ref().and_then(|v| v.id.as_ref()),
                     selection.message.as_ref(),
                 ) {
-                    self.type_libraries
-                        .check_contract_type(id, &message.value, &context)
-                        .await?;
+                    if compiled.insert((
+                        pb::EntityKey::new(pb::EntityKind::TypeLibrary, id),
+                        message.value.clone(),
+                    )) {
+                        self.type_libraries
+                            .check_contract_type(id, &message.value, &context)
+                            .await.map_err(|status| {
+                                if matches!(prepared.kind, Some(pb::entity::Kind::DataProduct(_)))
+                                    && matches!(status.code(), Code::InvalidArgument | Code::FailedPrecondition)
+                                {
+                                    Status::invalid_argument("Selected data product protobuf type is unresolved or invalid")
+                                } else { status }
+                            })?;
+                    }
                 }
             }
         }
@@ -178,6 +220,7 @@ impl EventModelServiceImpl {
                         pb::entity::Kind::Channel(_)
                             | pb::entity::Kind::DataStore(_)
                             | pb::entity::Kind::Specification(_)
+                            | pb::entity::Kind::DataProduct(_)
                     )
                 )
             })
@@ -210,7 +253,10 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let endpoints = observation_endpoints(&resources, &world);
+        let mut endpoints = observation_endpoints(&resources, &world);
+        endpoints.extend(crate::data_product_resources::selected_endpoints(
+            &resources, &world,
+        ));
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -258,10 +304,10 @@ impl EventModelServiceImpl {
                         return Err(status.clone());
                     }
                     issues.push(validation::issue_error(
-                        "SPECIFICATION_REFERENCE_UNRESOLVED",
+                        if matches!(stored.entity.kind, Some(pb::entity::Kind::DataProduct(_))) { "DATA_PRODUCT_REFERENCE_UNRESOLVED" } else { "SPECIFICATION_REFERENCE_UNRESOLVED" },
                         "Selected protobuf message is absent, unreadable or does not compile in its exact library".into(),
                         crate::conv::entity_to_ref(&stored.entity).ok(),
-                        "messages.schemas.library_type",
+                        if matches!(stored.entity.kind, Some(pb::entity::Kind::DataProduct(_))) { "outputs.contract.library_type" } else { "messages.schemas.library_type" },
                     ));
                 }
             }
@@ -291,6 +337,7 @@ impl EventModelServiceImpl {
                         pb::EntityKind::Channel,
                         pb::EntityKind::DataStore,
                         pb::EntityKind::Specification,
+                        pb::EntityKind::DataProduct,
                     ],
                     namespaces: &namespaces,
                     ..Default::default()
@@ -390,6 +437,108 @@ impl EventModelServiceImpl {
         Ok(())
     }
 
+    pub(super) async fn data_product_emission_rows(
+        &self,
+        branch: Option<&str>,
+        vis: &Visibility,
+        proposal: &ArchitectureProposal<'_>,
+    ) -> Result<(Vec<StoredEntity>, bool), Status> {
+        let lens = self.lens(vis).await?;
+        let namespaces: Vec<_> = match &lens {
+            Lens::Everything => Vec::new(),
+            Lens::Only(namespaces) if namespaces.is_empty() => return Ok((Vec::new(), true)),
+            Lens::Only(namespaces) => namespaces.iter().map(|id| id.as_str().to_owned()).collect(),
+        };
+        let limit = 5_001 + proposal.overlay.len();
+        let rows = self
+            .store
+            .list(
+                super::ListFilter {
+                    kinds: &[pb::EntityKind::CommandSlice],
+                    namespaces: &namespaces,
+                    ..Default::default()
+                },
+                Some(limit),
+                branch,
+            )
+            .await
+            .map_err(store_err)?;
+        let complete = rows.len() < limit;
+        let mut overlay = Vec::new();
+        for (key, entity) in &proposal.overlay {
+            if key.kind != pb::EntityKind::CommandSlice {
+                continue;
+            }
+            let next = if let Some(entity) = entity {
+                let previous = match self.store.get(key.kind, &key.id(), branch).await {
+                    Ok(stored) => Some(stored.entity),
+                    Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                    Err(error) => return Err(store_err(error)),
+                };
+                Some(StoredEntity {
+                    entity: prepare_proposal_entity(
+                        proposal,
+                        key.kind,
+                        &key.id(),
+                        previous.as_ref(),
+                        entity,
+                    )?,
+                    etag: String::new(),
+                })
+            } else {
+                None
+            };
+            overlay.push((key.clone(), next));
+        }
+        let rows = super::data_product_events::merge_rows(rows, overlay)
+            .into_iter()
+            .filter(|stored| {
+                super::entity_id(&stored.entity).is_ok_and(|id| lens.admits(&id.namespace))
+            })
+            .collect();
+        Ok((rows, complete))
+    }
+
+    pub(super) async fn data_product_event_diagnostics(
+        &self,
+        snapshot: &[StoredEntity],
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<Vec<pb::ValidationIssue>, Status> {
+        if !snapshot.iter().any(|stored| matches!(&stored.entity.kind, Some(pb::entity::Kind::DataProduct(product)) if super::data_product_events::inputs(product).next().is_some())) { return Ok(Vec::new()) }
+        let proposal = ArchitectureProposal {
+            overlay: HashMap::new(),
+            landing: None,
+        };
+        let (rows, complete) = self
+            .data_product_emission_rows(branch, vis, &proposal)
+            .await?;
+        let mut budget = super::data_product_events::EventConfirmation::default();
+        let mut issues = Vec::new();
+        for stored in snapshot {
+            let Some(pb::entity::Kind::DataProduct(product)) = &stored.entity.kind else {
+                continue;
+            };
+            for (index, id) in super::data_product_events::inputs(product) {
+                let code = match budget.confirm(id, &rows, complete) {
+                    Ok(witnesses) if !witnesses.is_empty() => continue,
+                    Ok(_) => "DATA_PRODUCT_REFERENCE_UNRESOLVED",
+                    Err(status) if status.code() == Code::ResourceExhausted => {
+                        "DATA_PRODUCT_CONFIRMATION_INCOMPLETE"
+                    }
+                    Err(status) => return Err(status),
+                };
+                issues.push(validation::issue_error(
+                    code,
+                    "Authorized local Event confirmation is absent or incomplete".into(),
+                    crate::conv::entity_to_ref(&stored.entity).ok(),
+                    &format!("inputs[{index}].data"),
+                ));
+            }
+        }
+        Ok(issues)
+    }
+
     pub(super) async fn validate_architecture_write(
         &self,
         entity: &pb::Entity,
@@ -402,6 +551,7 @@ impl EventModelServiceImpl {
                 pb::entity::Kind::Channel(_)
                     | pb::entity::Kind::DataStore(_)
                     | pb::entity::Kind::Specification(_)
+                    | pb::entity::Kind::DataProduct(_)
             )
         ) {
             return Ok(());
@@ -757,6 +907,141 @@ mod specification_validation_tests {
                     assert!(!format!("{issue:?}").contains(private), "{issue:?}");
                 }
             }
+        }
+    }
+    #[tokio::test]
+    async fn data_product_compilation_memo_and_operational_errors_are_request_scoped() {
+        let mut service = fixture().await;
+        library(&service, library_id("types", 1), VALID, vec![]).await;
+        let selection = pb::TypeLibraryTypeRef {
+            library: Some(pb::TypeLibraryRef {
+                id: Some(library_id("types", 1)),
+            }),
+            message: Some(pb::QualifiedProtoName {
+                value: "orders.v1.Order".into(),
+            }),
+        };
+        let product = pb::Entity {
+            kind: Some(pb::entity::Kind::DataProduct(pb::DataProduct {
+                id: Some(pb::Id {
+                    namespace: "contracts".into(),
+                    slug: "product".into(),
+                    version: 1,
+                }),
+                title: "Product".into(),
+                outputs: ["First", "Second"]
+                    .into_iter()
+                    .map(|name| pb::DataOutputPort {
+                        name: Some(pb::PortName { value: name.into() }),
+                        contract: Some(pb::OutputContract {
+                            r#type: Some(pb::output_contract::Type::LibraryType(selection.clone())),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let specification = pb::Entity {
+            kind: Some(pb::entity::Kind::Specification(pb::Specification {
+                id: Some(pb::Id {
+                    namespace: "contracts".into(),
+                    slug: "specification".into(),
+                    version: 1,
+                }),
+                title: "Specification".into(),
+                messages: vec![pb::ContractMessage {
+                    name: Some(pb::MemberName {
+                        value: "Payload".into(),
+                    }),
+                    schemas: vec![pb::SchemaBinding {
+                        role: pb::schema_binding::Role::Payload as i32,
+                        r#type: Some(pb::schema_binding::Type::LibraryType(selection)),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let before = service.type_libraries.contract_compile_calls();
+        service
+            .batch_mutate(Request::new(pb::BatchMutateRequest {
+                ops: [product, specification]
+                    .into_iter()
+                    .map(|entity| pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(entity),
+                            ..Default::default()
+                        })),
+                    })
+                    .collect(),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 1);
+        let request = || {
+            Request::new(pb::InspectDataProductRequest {
+                product: Some(pb::DataProductRef {
+                    id: Some(pb::Id {
+                        namespace: "contracts".into(),
+                        slug: "product".into(),
+                        version: 1,
+                    }),
+                }),
+            })
+        };
+        service.inspect_data_product(request()).await.unwrap();
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 2);
+        service.inspect_data_product(request()).await.unwrap();
+        assert_eq!(service.type_libraries.contract_compile_calls() - before, 3);
+        service.type_libraries =
+            TypeLibraryGate::with_compile_runner(CompileRunner::new(0, Duration::from_millis(1)));
+        let error = service.inspect_data_product(request()).await.unwrap_err();
+        assert_eq!(error.code(), Code::DeadlineExceeded);
+        for private in ["orders.proto", "orders.v1", "Order"] {
+            assert!(!format!("{error:?}").contains(private));
+        }
+        service.type_libraries = TypeLibraryGate::default();
+        library(
+            &service,
+            library_id("types", 1),
+            "private compiler source",
+            vec![],
+        )
+        .await;
+        let mut edited = service
+            .store
+            .get(
+                pb::EntityKind::DataProduct,
+                &pb::Id {
+                    namespace: "contracts".into(),
+                    slug: "product".into(),
+                    version: 1,
+                },
+                None,
+            )
+            .await
+            .unwrap()
+            .entity;
+        let Some(pb::entity::Kind::DataProduct(product)) = &mut edited.kind else {
+            panic!("DataProduct")
+        };
+        product.title = "Changed".into();
+        let error = service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(edited),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        for private in ["orders.proto", "private compiler source", "orders.v1"] {
+            assert!(!format!("{error:?}").contains(private));
         }
     }
 }

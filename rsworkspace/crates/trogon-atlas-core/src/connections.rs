@@ -97,6 +97,8 @@ pub enum ConnectionError {
     RemovedFromBranchBase(ConnectionId),
     #[error("specification identity error: {0}")]
     Member(String),
+    #[error("data port identity error: {0}")]
+    Port(String),
     #[error("connection encoding error: {0}")]
     Encoding(String),
 }
@@ -273,11 +275,13 @@ fn visit(
         predecessor.to_vec()
     };
     let mut after = after;
-    if let Some(value) = message.get_field_by_name("member_id") {
-        if let Some(id) = value.as_message() {
-            let encoded = id.encode_to_vec();
-            after.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
-            after.extend(encoded);
+    for identity_field in ["member_id", "port_id"] {
+        if let Some(value) = message.get_field_by_name(identity_field) {
+            if let Some(id) = value.as_message() {
+                let encoded = id.encode_to_vec();
+                after.extend_from_slice(&(encoded.len() as u64).to_le_bytes());
+                after.extend(encoded);
+            }
         }
     }
     let fields: Vec<_> = descriptor

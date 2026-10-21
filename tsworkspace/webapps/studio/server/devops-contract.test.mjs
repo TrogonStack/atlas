@@ -73,6 +73,24 @@ describe('proto entrypoint contract', () => {
     expect(entityCodec.deserialize(entityCodec.serialize(entity))).toEqual(entity);
   });
 
+  it('loads DataProduct kind, repeated port/access identities and inspection DTO from the production package', () => {
+    const definitions = protoLoader.loadSync(path.join(protoRoot, SERVICE_PKG_DIR, 'service.proto'), {
+      keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot],
+    });
+    expect(definitions['trogonatlas.eventmodel.v1alpha1.EntityKind'].type.value)
+      .toContainEqual(expect.objectContaining({ name: 'ENTITY_KIND_DATA_PRODUCT', number: 33 }));
+    const id = { namespace: 'shop', slug: 'offering', version: '2' };
+    const product = { id, title: 'Offering', inputs: [{ portId: { value: 'input-port' }, name: { value: 'Input' } }], outputs: [
+      { portId: { value: 'output-port' }, name: { value: 'Output' }, derivedFrom: {}, contract: { connectionId: { value: 'contract-id' }, contractType: { schema: { ownerUid: 'spec-uid', memberId: { value: 'schema-member' }, kind: 'CONTRACT_MEMBER_KIND_SCHEMA', specification: { id } }, expectedDigest: { sha256: 'a'.repeat(64) }, expectedArtifactId: { value: 'artifact-member' } } }, access: ['access-a', 'access-b'].map((value) => ({ connectionId: { value }, operation: { operation: { specification: { id }, ownerUid: 'spec-uid', memberId: { value: 'operation-member' }, kind: 'CONTRACT_MEMBER_KIND_OPERATION' }, response: { owner: { kind: 'ENTITY_KIND_SPECIFICATION', id }, ownerUid: 'spec-uid', id: { value: 'response-id' } } } })) },
+    ] };
+    const codec = definitions['trogonatlas.eventmodel.v1alpha1.Entity'];
+    expect(codec.deserialize(codec.serialize({ dataProduct: product }))).toEqual({ dataProduct: product });
+    const response = { product, etag: 'etag', scope: { branch: 'review', revision: 'checked-revision' }, ports: [{ port: { product: { id }, ownerUid: 'product-uid', portId: { value: 'output-port' }, direction: 'DATA_PORT_DIRECTION_OUTPUT' }, data: 'DATA_PRODUCT_SELECTION_STATE_UNDECLARED', incomplete: true }], incomplete: true };
+    const inspectCodec = definitions['trogonatlas.api.eventmodel.v1alpha1.InspectDataProductResponse'];
+    expect(inspectCodec.deserialize(inspectCodec.serialize(response))).toEqual(response);
+    expect(Object.values(loadServiceCtor(path.join(protoRoot, SERVICE_PKG_DIR, 'service.proto'), protoRoot).service).some((method) => method.path.endsWith('/InspectDataProduct'))).toBe(true);
+  });
+
   it('event_model.proto does not expose EventModelService (must not be PROTO_PATH)', () => {
     // service definitions live in service.proto; using event_model.proto as
     // PROTO_PATH leaves EventModelService undefined at studio boot.

@@ -122,6 +122,11 @@ enum Cmd {
         /// or an id that `describe` prints.
         entity: String,
     },
+    /// Inspect authoritative DataProduct selections and checked model evidence.
+    InspectDataProduct {
+        /// Exact `data_product/<namespace>/<slug>@<version>` address.
+        entity: String,
+    },
     /// Print one entity as readable text: title, doc, schema fields, and
     /// the references it holds and receives.
     Describe {
@@ -716,6 +721,30 @@ async fn run(
                 },
                 Some(data),
             ))
+        }
+        Cmd::InspectDataProduct { entity } => {
+            let address = view::parse_address(&entity)?;
+            if address.kind != pb::EntityKind::DataProduct {
+                trogon_atlas_client::invalid_input!("expected a data_product address");
+            }
+            let version = address.version.ok_or_else(|| {
+                trogon_atlas_client::failure::invalid_input("inspection requires an exact version")
+            })?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::data_product::inspect(
+                &mut client,
+                pb::Id {
+                    namespace: address.namespace,
+                    slug: address.slug,
+                    version,
+                },
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
         }
         Cmd::Get { entity } => {
             let address = view::parse_address(&entity)?;

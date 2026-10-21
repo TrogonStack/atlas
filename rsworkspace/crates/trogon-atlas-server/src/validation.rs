@@ -166,6 +166,8 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "Declared storage attached to exact ReadModels."),
         k(pb::EntityKind::Specification, "ENTITY_KIND_SPECIFICATION", "specification", "Specification", "Specifications",
           "Retained interface and schema declarations with exact message, operation, provider and usage selections."),
+        k(pb::EntityKind::DataProduct, "ENTITY_KIND_DATA_PRODUCT", "dataProduct", "Data Product", "Data Products",
+          "A discoverable offering of exact data through explicit input and output ports."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -218,6 +220,15 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         category: category.into(),
     };
     vec![
+        r("DATA_PRODUCT_VALUE_INVALID", Error, "Invalid data product declaration",
+          "Port values and local identities must satisfy the native data product contract.",
+          pb::EntityKind::DataProduct, "", "architecture"),
+        r("DATA_PRODUCT_REFERENCE_UNRESOLVED", Error, "Data product selection does not resolve",
+          "A selected data, type or access occurrence is absent, stale or inaccessible.",
+          pb::EntityKind::DataProduct, "", "architecture"),
+        r("DATA_PRODUCT_CONFIRMATION_INCOMPLETE", Error, "Event confirmation is incomplete",
+          "The bounded authorized emission search could not finish.",
+          pb::EntityKind::DataProduct, "inputs.data", "architecture"),
         r("SPECIFICATION_VALUE_INVALID", Error, "Invalid Specification declaration",
           "Contract values and local selections must satisfy the native Specification contract.",
           pb::EntityKind::Specification, "", "architecture"),
@@ -587,6 +598,9 @@ mod catalog_drift_tests {
     // OR remove one, update both the catalog AND this list so the diff
     // test below can guard against drift.
     const EMITTED_CODES: &[&str] = &[
+        "DATA_PRODUCT_VALUE_INVALID",
+        "DATA_PRODUCT_REFERENCE_UNRESOLVED",
+        "DATA_PRODUCT_CONFIRMATION_INCOMPLETE",
         "SPECIFICATION_VALUE_INVALID",
         "SPECIFICATION_REFERENCE_UNRESOLVED",
         "ARCHITECTURE_VALUE_INVALID",
@@ -740,6 +754,7 @@ mod catalog_drift_tests {
             pb::EntityKind::Channel,
             pb::EntityKind::DataStore,
             pb::EntityKind::Specification,
+            pb::EntityKind::DataProduct,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -1109,6 +1124,7 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::Channel(x)) => &x.metadata,
         Some(pb::entity::Kind::DataStore(x)) => &x.metadata,
         Some(pb::entity::Kind::Specification(x)) => &x.metadata,
+        Some(pb::entity::Kind::DataProduct(x)) => &x.metadata,
         None => &[],
     }
 }

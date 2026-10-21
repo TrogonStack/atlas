@@ -1,5 +1,9 @@
 #[path = "architecture_admission.rs"]
 mod architecture_admission;
+#[path = "data_product_events.rs"]
+mod data_product_events;
+#[path = "data_product_inspection.rs"]
+mod data_product_inspection;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -2787,6 +2791,28 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             truncated,
             entries,
         }))
+    }
+
+    async fn inspect_data_product(
+        &self,
+        req: Request<pb::InspectDataProductRequest>,
+    ) -> Result<Response<pb::InspectDataProductResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        let product = req
+            .into_inner()
+            .product
+            .ok_or_else(|| Status::invalid_argument("product is required"))?;
+        self.inspect_product(&product, branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn get_entity(
@@ -6147,6 +6173,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .await?,
         );
 
+        store_issues.extend(
+            self.data_product_event_diagnostics(&all, branch.as_deref(), &vis)
+                .await?,
+        );
+
         // Resolve which Domain(s) belong to the scope, then iterate
         // every stored EventModel whose namespace traces back to one of
         // those Domains. Today scoping by project requires walking the
@@ -7346,7 +7377,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
         if matches!(
             kind,
-            pb::EntityKind::Channel | pb::EntityKind::DataStore | pb::EntityKind::Specification
+            pb::EntityKind::Channel
+                | pb::EntityKind::DataStore
+                | pb::EntityKind::Specification
+                | pb::EntityKind::DataProduct
         ) {
             self.authorize_write(
                 principal.as_ref(),

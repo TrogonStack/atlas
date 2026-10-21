@@ -54,6 +54,7 @@ export type EntityKind =
   | 'typeLibrary'
   | 'channel'
   | 'dataStore'
+  | 'dataProduct'
   | 'specification';
 
 export interface FieldTypeConfig {
@@ -431,6 +432,7 @@ const KIND_SET: ReadonlySet<string> = new Set([
   'typeLibrary',
   'channel',
   'dataStore',
+  'dataProduct',
   'specification',
 ]);
 
@@ -466,6 +468,7 @@ const WIRE_KIND: Record<string, EntityKind> = {
   ENTITY_KIND_TYPE_LIBRARY: 'typeLibrary',
   ENTITY_KIND_CHANNEL: 'channel',
   ENTITY_KIND_DATA_STORE: 'dataStore',
+  ENTITY_KIND_DATA_PRODUCT: 'dataProduct',
   ENTITY_KIND_SPECIFICATION: 'specification',
 };
 

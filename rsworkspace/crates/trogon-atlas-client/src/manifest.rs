@@ -436,6 +436,13 @@ pub(crate) fn is_ref_like(md: &MessageDescriptor) -> bool {
 pub(crate) fn shorthand_ref_field(
     md: &MessageDescriptor,
 ) -> Option<prost_reflect::FieldDescriptor> {
+    if matches!(
+        md.full_name(),
+        "trogonatlas.eventmodel.v1alpha1.ChannelAccess"
+            | "trogonatlas.eventmodel.v1alpha1.StoreAccess"
+    ) {
+        return None;
+    }
     md.fields().find(|f| match f.kind() {
         FieldKind::Message(inner) => is_ref_like(&inner),
         _ => false,

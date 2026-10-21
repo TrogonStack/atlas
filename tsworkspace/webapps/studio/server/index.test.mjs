@@ -2211,3 +2211,36 @@ describe('/-/readiness and /-/liveness', () => {
     }
   });
 });
+
+describe('GET DataProduct backend inspection', () => {
+  it('forwards exact product, caller authorization and branch and retains checked evidence', async () => {
+    let received;
+    fakeClient.inspectDataProduct = (req, meta, _opts, cb) => {
+      received = { req, branch: meta.get('x-trogon-atlas-branch'), authorization: meta.get('authorization') };
+      cb(null, { etag: 'checked-etag', scope: { branch: 'review', revision: 'checked-context' }, incomplete: true, producing: [{ path: [{ id: { value: 'model-edge' } }] }] });
+    };
+    process.env.TROGON_ATLAS_AUTH_PASSTHROUGH = 'true';
+    const module = await import('./index.mjs?t=data-product-passthrough');
+    delete process.env.TROGON_ATLAS_AUTH_PASSTHROUGH;
+    const res = await request(module.app).get('/api/data-product/acme/offering/inspect?version=3&branch=review').set('Authorization', 'Bearer caller-token');
+    expect(res.status).toBe(200);
+    expect(received).toEqual({ req: { product: { id: { namespace: 'acme', slug: 'offering', version: '3' } } }, branch: ['review'], authorization: ['Bearer caller-token'] });
+    expect(res.body).toMatchObject({ etag: 'checked-etag', incomplete: true, scope: { revision: 'checked-context' }, producing: [{ path: [{ id: { value: 'model-edge' } }] }] });
+    delete fakeClient.inspectDataProduct;
+  });
+  it.each(['', '0', '-1', 'latest', '1.5'])('refuses a nonexact version %s before upstream inspection', async (version) => {
+    const inspect = vi.fn();
+    fakeClient.inspectDataProduct = inspect;
+    const res = await request(app).get(`/api/data-product/acme/offering/inspect?version=${version}`);
+    expect(res.status).toBe(400);
+    expect(inspect).not.toHaveBeenCalled();
+    delete fakeClient.inspectDataProduct;
+  });
+  it('preserves backend operational errors instead of converting them to undeclared data', async () => {
+    fakeClient.inspectDataProduct = (_req, _meta, _opts, cb) => cb(Object.assign(new Error('backend unavailable'), { code: 14 }));
+    const res = await request(app).get('/api/data-product/acme/offering/inspect?version=1');
+    expect(res.status).toBe(503);
+    expect(res.body.error).toContain('backend unavailable');
+    delete fakeClient.inspectDataProduct;
+  });
+});

@@ -383,3 +383,51 @@ describe('Specification validation repair context', () => {
     expect(prompt).toContain('selected-artifact');
   });
 });
+
+it('collects exact DataProduct nested data/type/access owners without following opaque metadata', () => {
+  const model = buildModel([
+    {
+      dataProduct: {
+        id: id('offering'),
+        title: 'Offering',
+        inputs: [{ data: { event: { id: id('fact', '3') } } }],
+        outputs: [
+          {
+            data: { readModel: { id: id('receipt', '2') } },
+            contract: { schema: { id: id('shape', '4') } },
+            access: [
+              {
+                store: {
+                  store: { id: id('cache', '5') },
+                  attachment: { owner: { kind: 'ENTITY_KIND_DATA_STORE', id: id('cache', '5') } },
+                },
+              },
+              {
+                channel: {
+                  channel: { id: id('transport', '6') },
+                  observation: { owner: { kind: 'ENTITY_KIND_AUTOMATION_SLICE', id: id('observer', '7') } },
+                },
+              },
+              { operation: { operation: { specification: { id: id('api', '8') } } } },
+            ],
+          },
+        ],
+        metadata: [{ data: { readModel: { id: id('secret') } } }],
+      },
+    },
+  ]);
+  const prompt = validationFixPrompt(model, finding({ subject: { kind: 'dataProduct', id: id('offering') } }));
+  const refs = snapshot(prompt, 'References to fetch') as { notLoaded: string[] };
+  expect(refs.notLoaded).toEqual(
+    expect.arrayContaining([
+      'event:shop/fact@3',
+      'readModel:shop/receipt@2',
+      'schema:shop/shape@4',
+      'dataStore:shop/cache@5',
+      'channel:shop/transport@6',
+      'automationSlice:shop/observer@7',
+      'specification:shop/api@8',
+    ]),
+  );
+  expect(refs.notLoaded.join()).not.toContain('secret');
+});
