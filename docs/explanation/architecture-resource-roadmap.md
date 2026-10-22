@@ -30,7 +30,8 @@ Ordinary writes use bounded active state without a deleted-ID ledger.
 
 That foundation does not identify every reference in the model. Raw reference
 lists, repeated storyboard moments, additional architecture associations and
-the fitness host's reference adapter still need their own supported representations.
+the future linter host's reference adapter still need their own supported
+representations.
 Implementing a new association requires extending reference discovery,
 validation and lifecycle handling together.
 
@@ -89,20 +90,42 @@ schema, backend admission and typed queries, CLI/MCP authoring and Studio review
 preserve these exact selections. The acceptance reference links executable
 coverage and records its deployment and acceptance limits.
 
-## Follow-on contracts
+## Decision and Document contracts
 
-Decision and Document resources still need their own subjects, artifact and
-navigation rules, cross-namespace permissions and deletion/copy/merge semantics.
-They should extend the connected fixture as they become implementable rather
-than silently inheriting undefined behavior.
+The proposed [Decision and Document contract](../reference/decision-and-document-contracts.md)
+defines how rationale and supporting material select exact model subjects.
+Its [acceptance requirements](../reference/decision-and-document-acceptance.md)
+extend the connected fixture with artifact, navigation, permission and lifecycle
+cases. These resources are not implemented; the contract precedes schema and
+runtime work.
 
-Fitness functions use the WebAssembly Component Model and WIT. Their remaining
-contracts include the authorized snapshot projection, lossless entity and exact
-connection subjects, component/configuration storage, registration,
-run/cancel/report operations, retention, budget profiles and CI failure policy.
-The connection-ID foundation alone does not provide that host or its adapter.
+## Source integration and format support
 
 Source import, synchronization, export and additional schema-format validation
 are later milestones with explicit acceptance criteria. Native Channel and
 DataStore support does not require a source connector, a source overlay,
 Specification resources or format-specific compatibility checking.
+
+Native manifest export already exists. Source integration still needs its own
+mapping, provenance, reconciliation and export-fidelity contracts; it must
+preserve the existing behavioral anchors and exact selections.
+
+## Atlas Linter comes after the architecture resources
+
+Atlas Linter is deferred until the remaining architecture resources and source
+integration concerns are defined. Its rules can inspect model consistency,
+ownership, documentation, naming, contract compatibility and architectural
+constraints. It is not limited to architecture-specific checks.
+
+The terminology is Lint Module for a WebAssembly component, Lint Rule for an
+individual check, Finding for a reported issue and Lint Run for an execution.
+Module remains the broader extension concept; future importers, exporters or
+transformations would need their own contracts. No generic module registry or
+module type is implemented by this naming decision.
+
+Lint modules must use the WebAssembly Component Model and WIT. The detailed
+host interface and runtime remain deferred, including authorized consistent
+snapshot access, lossless entity and exact connection subjects, component and
+configuration storage, registration, run/cancel/report operations, retention,
+budget profiles and CI failure policy. The connection-ID foundation alone does
+not provide that host or its adapter.
