@@ -4,7 +4,7 @@ metadata:
   name: fulfillment-flow
   namespace: acme-fulfillment
 spec:
-  doc: A paid order is dispatched to the carrier and confirmed delivered. It starts from the fulfillment queue that the storefront order.paid event populates, so that projection is upstream preparation and not a step here.
+  doc: A paid order is dispatched to the carrier and confirmed delivered. It starts from the fulfillment queue that the storefront order.paid event populates, so that projection is upstream preparation and not a step here. The order-status rows for placement and payment arrive the same way, through its subscription to the storefront order.placed and order.paid events.
   entry:
     automation:
       processor:
