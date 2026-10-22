@@ -186,7 +186,28 @@ pub(crate) fn validate_in_context(
             );
         }
     }
-    for selection in documents(entity) {
+    let (field, selections): (_, Vec<_>) = match &entity.kind {
+        Some(pb::entity::Kind::Decision(value)) => (
+            "documents",
+            value
+                .documents
+                .iter()
+                .map(|association| &association.document)
+                .collect(),
+        ),
+        Some(pb::entity::Kind::Document(value)) => (
+            "navigation",
+            value
+                .navigation
+                .iter()
+                .map(|association| &association.document)
+                .collect(),
+        ),
+        _ => ("", Vec::new()),
+    };
+    for (index, selection) in selections.into_iter().enumerate() {
+        let Some(selection) = selection else { continue };
+
         let resolves = trogon_atlas_core::decision_document::document_owner(selection)
             .ok()
             .and_then(|reference| context.find(pb::EntityKind::Document, reference.id.as_ref()?))
@@ -196,7 +217,7 @@ pub(crate) fn validate_in_context(
             });
         if !resolves {
             issue(
-                "documents",
+                &format!("{field}[{index}].document"),
                 "Document selection is absent, stale or unavailable",
             );
         }
