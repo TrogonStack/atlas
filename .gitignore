@@ -29,6 +29,9 @@ rsworkspace/lcov.info
 # buf dependency pins
 !proto/buf.lock
 
+# Generated protobuf descriptors
+*.binpb
+
 # Studio
 tsworkspace/node_modules/
 tsworkspace/webapps/studio/coverage/

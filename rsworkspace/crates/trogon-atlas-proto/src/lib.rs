@@ -25,7 +25,8 @@ pub const MIN_CLIENT_CONTRACT_REVISION: u32 = 13;
 
 /// Serialized `FileDescriptorSet` for the schema, for reflection-based
 /// tooling (textproto/JSON transcoding).
-pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!("gen/descriptor.binpb");
+pub const FILE_DESCRIPTOR_SET: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/descriptor.binpb"));
 
 /// Hashable identity newtype carrying the (kind, namespace, slug, version)
 /// quadruple. Replaces the ad-hoc `(EntityKind, String, String, u64)` tuple
