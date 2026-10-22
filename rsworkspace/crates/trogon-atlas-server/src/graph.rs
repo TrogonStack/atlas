@@ -65,6 +65,8 @@ impl ReverseIndex {
                     let key = pb::EntityKey::new(to_kind, &o.to_id);
                     let (responsibility, membership) =
                         responsibility_provenance(&se.entity, &o.from_field);
+                    let (catalog_subject, document_selection, connection_id) =
+                        catalog_provenance(&se.entity, &o.from_field);
                     by_target.entry(key).or_default().push(pb::Reference {
                         from: Some(from_ref.clone()),
                         from_field: o.from_field.clone(),
@@ -75,6 +77,9 @@ impl ReverseIndex {
                         responsibility,
                         membership,
                         from_uid: entity_uid(&se.entity),
+                        catalog_subject,
+                        document_selection,
+                        connection_id,
                     });
                 }
             }
@@ -110,13 +115,18 @@ fn responsibility_occurrence_count(all: &[StoredEntity]) -> usize {
             let entity = &stored.entity;
             if !matches!(
                 entity.kind,
-                Some(pb::entity::Kind::Team(_) | pb::entity::Kind::Person(_))
+                Some(
+                    pb::entity::Kind::Team(_)
+                        | pb::entity::Kind::Person(_)
+                        | pb::entity::Kind::Decision(_)
+                        | pb::entity::Kind::Document(_)
+                )
             ) {
                 return None;
             }
             let key = pb::EntityKey::new(ref_entity_kind(entity)?, ref_entity_id(entity)?);
             seen.insert(key)
-                .then(|| crate::responsibility_resources::occurrence_count(entity))
+                .then(|| crate::decision_document_resources::occurrence_count(entity))
         })
         .fold(0, usize::saturating_add)
 }
@@ -336,6 +346,8 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
     for o in outbound_refs(entity) {
         for to_kind in resolve_to_kinds(o.to_kind, &o.to_id, known) {
             let (responsibility, membership) = responsibility_provenance(entity, &o.from_field);
+            let (catalog_subject, document_selection, connection_id) =
+                catalog_provenance(entity, &o.from_field);
             out.push(pb::Reference {
                 from: Some(from_ref.clone()),
                 from_field: o.from_field.clone(),
@@ -346,6 +358,9 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
                 responsibility,
                 membership,
                 from_uid: entity_uid(entity),
+                catalog_subject,
+                document_selection,
+                connection_id,
             });
         }
     }
@@ -541,7 +556,7 @@ pub fn closure(
             continue;
         };
         responsibility_occurrences = responsibility_occurrences
-            .saturating_add(crate::responsibility_resources::occurrence_count(entity));
+            .saturating_add(crate::decision_document_resources::occurrence_count(entity));
         if check_responsibility_occurrence_count(responsibility_occurrences).is_err() {
             truncated = true;
             break;
@@ -791,6 +806,8 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
         K::DataProduct(x) => x.supersedes.as_ref(),
         K::Team(x) => x.supersedes.as_ref(),
         K::Person(x) => x.supersedes.as_ref(),
+        K::Decision(x) => x.supersedes.as_ref(),
+        K::Document(x) => x.supersedes.as_ref(),
     }
 }
 
@@ -929,6 +946,26 @@ fn responsibility_provenance(
         _ => None,
     };
     (assignment, membership)
+}
+
+fn catalog_provenance(
+    entity: &pb::Entity,
+    field: &str,
+) -> (
+    Option<pb::CatalogSubject>,
+    Option<pb::DocumentSelection>,
+    Option<pb::ConnectionId>,
+) {
+    let mut reference = pb::Reference {
+        from_field: field.to_owned(),
+        ..Default::default()
+    };
+    trogon_atlas_core::decision_document::decorate_reference(entity, &mut reference);
+    (
+        reference.catalog_subject,
+        reference.document_selection,
+        reference.connection_id,
+    )
 }
 
 #[cfg(test)]

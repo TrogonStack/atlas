@@ -1,3 +1,4 @@
+import type { CatalogInspection, CatalogSubject, DocumentSelection } from '@/lib/decision-document';
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
 import type {
@@ -475,4 +476,26 @@ export function listPersonTeams(person: DirectoryRef, opts: FetchOptions = {}) {
 }
 export function getTeamContacts(team: DirectoryRef, includeMembers = false, opts: FetchOptions = {}) {
   return responsibilityQuery<ResponsibilityContacts>('team-contacts', { team, includeMembers }, opts);
+}
+
+function catalogQuery(query: string, request: unknown, opts: FetchOptions): Promise<CatalogInspection> {
+  return getJson(`/api/catalog/${query}?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}
+export function listSubjectDecisions(subject: CatalogSubject, status?: string, opts: FetchOptions = {}) {
+  return catalogQuery('subject-decisions', { subject, ...(status === undefined ? {} : { status }) }, opts);
+}
+export function listSubjectDocuments(subject: CatalogSubject, opts: FetchOptions = {}) {
+  return catalogQuery('subject-documents', { subject }, opts);
+}
+export function getDecisionDetail(decision: { id: EntityId }, followReplacement = false, opts: FetchOptions = {}) {
+  return catalogQuery('decision-detail', { decision, followReplacement }, opts);
+}
+export function getDocumentDetail(document: DocumentSelection, opts: FetchOptions = {}) {
+  return catalogQuery('document-detail', { document }, opts);
+}
+export function listIncomingDecisionDeclarations(decision: { id: EntityId }, opts: FetchOptions = {}) {
+  return catalogQuery('incoming-decisions', { decision }, opts);
+}
+export function listIncomingDocumentDeclarations(document: DocumentSelection, opts: FetchOptions = {}) {
+  return catalogQuery('incoming-documents', { document }, opts);
 }

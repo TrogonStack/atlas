@@ -188,7 +188,7 @@ vi.mock('protobufjs', async (importOriginal) => {
     resolvePath: () => '',
     load: () => Promise.resolve(fakeRoot),
     lookupType: (name) => {
-      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts)Request$/.test(name)) return responsibilityRoot.lookupType(name);
+      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations)Request$/.test(name)) return responsibilityRoot.lookupType(name);
       return { decode: () => ({}), toObject: () => ({}) };
     },
     lookupEnum: (name) => {
@@ -2369,4 +2369,60 @@ describe('responsibility strict production serializer boundary', () => {
     } finally { delete fakeClient[name]; }
   });
 
+});
+
+
+describe('catalog strict gateway serializer boundary', () => {
+  const id = { namespace: 'catalog', slug: 'note', version: '9007199254740993' };
+  const document = { anchor: { document: { id }, ownerUid: 'incarnation', anchorId: { value: 'anchor-b' }, expectedDigest: { sha256: 'a'.repeat(64) } } };
+  const subject = { entity: { kind: 'ENTITY_KIND_EVENT', id } };
+  it.each([
+    ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'TYPO' }],
+    ['subject-decisions', 'ListSubjectDecisions', { subject, status: 991 }],
+    ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: 'false' }],
+    ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: null }],
+    ['document-detail', 'GetDocumentDetail', { document: {} }],
+    ['document-detail', 'GetDocumentDetail', { document: { ...document, document: { id } } }],
+    ['document-detail', 'GetDocumentDetail', { document: { anchor: { ...document.anchor, owner_uid: 'lost' } } }],
+    ['incoming-documents', 'ListIncomingDocumentDeclarations', { document, unknown: true }],
+  ])('rejects malformed %s before calling serializer', async (route, rpc, input) => {
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    const invoke = vi.fn();
+    fakeClient[name] = invoke;
+    try {
+      const response = await request(app).get(`/api/catalog/${route}`).query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(400);
+      expect(invoke).not.toHaveBeenCalled();
+    } finally { delete fakeClient[name]; }
+  });
+  it.each([
+    ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'DECISION_STATUS_ACCEPTED' }],
+    ['subject-documents', 'ListSubjectDocuments', { subject }],
+    ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: false }],
+    ['document-detail', 'GetDocumentDetail', { document }],
+    ['incoming-decisions', 'ListIncomingDecisionDeclarations', { decision: { id } }],
+    ['incoming-documents', 'ListIncomingDocumentDeclarations', { document }],
+  ])('preserves valid %s through HTTP and real serializer', async (route, rpc, input) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const protoRoot = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find(value => value.path.endsWith(`/${rpc}`));
+    const codec = definitions[`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`];
+    const invoke = vi.fn((req, meta, _opts, cb) => cb(null, { received: codec.deserialize(method.requestSerialize(req)), branch: meta.get('x-trogon-atlas-branch')[0], incomplete: true, failures: [{ code: 14, message: 'Unavailable' }] }));
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = invoke;
+    try {
+      const response = await request(app).get(`/api/catalog/${route}`).query({ request: JSON.stringify(input), branch: 'review' });
+      expect(response.status).toBe(200);
+      expect(response.body.received).toEqual(input);
+      expect(response.body.branch).toBe('review');
+      expect(response.body.incomplete).toBe(true);
+      expect(response.body.failures[0].code).toBe(14);
+    } finally { delete fakeClient[name]; }
+  });
+  it('refuses unknown routes, mutations and historical hydration', async () => {
+    expect((await request(app).get('/api/catalog/putEntity').query({ request: '{}' })).status).toBe(400);
+    expect((await request(app).get('/api/catalog/document-detail').query({ request: '{}', asOf: 'historical' })).status).toBe(400);
+    expect((await request(app).post('/api/catalog/document-detail').send({ document })).status).toBe(403);
+  });
 });

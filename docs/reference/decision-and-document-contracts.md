@@ -1,10 +1,15 @@
 # Decision and Document contracts
 
-Status: proposed native resource contracts. Decision and Document have no
-implemented schema, admission, storage, queries or client surfaces. Names below
-are conceptual fields and operations, not allocated protobuf tags, entity-kind
-numbers or RPCs. The [acceptance reference](decision-and-document-acceptance.md)
-specifies required evidence; existing fixtures do not prove this proposal works.
+Status: native schema, backend admission, typed queries, manifest/CLI/MCP
+authoring and Studio review surfaces are implemented. The
+[protobuf contract](../../proto/trogonatlas/eventmodel/v1alpha1/decision_document.proto)
+defines the wire representation. The [acceptance reference](decision-and-document-acceptance.md)
+links executable coverage and distinguishes it from exhaustive or deployed
+acceptance evidence.
+
+Decision and Document use entity kinds 36 and 37 and union fields 37 and 38.
+Contract revision and minimum client/server mutation revisions are 14; upgrade
+connected clients and servers together.
 
 ## Scope
 
@@ -22,7 +27,7 @@ format compiler, executable content or filesystem access in this proposal.
 
 ## Shared fields and values
 
-| Field | Proposed contract |
+| Field | Contract |
 | --- | --- |
 | `id` | Required existing Id: namespace, slug and exact positive breaking-change version. |
 | `title` | Required `CatalogTitle`. |
@@ -49,7 +54,7 @@ still apply. Exceeding any limit rejects the whole write, without truncation.
 
 ## Decision values and state
 
-| Field | Proposed contract |
+| Field | Contract |
 | --- | --- |
 | `status` | Required PROPOSED, ACCEPTED, REJECTED, WITHDRAWN or SUPERSEDED. |
 | `context` | Required CatalogText describing the question and constraints. |
@@ -106,7 +111,7 @@ and value, reject within a Decision. Queries do not recursively expand it by def
 
 ## Document body, identity and navigation
 
-| Field | Proposed contract |
+| Field | Contract |
 | --- | --- |
 | `body` | Required oneof `retained: RetainedDocumentText` or `link: ExternalDocumentLink`. |
 | `anchors` | At most 256 declared `DocumentAnchor` values; allowed only with retained body. |
@@ -187,8 +192,8 @@ identity or mismatched kind/direction. No selection freezes mappings or behavior
 A historical conclusion requires checked bytes, branch, revision/etag and
 authorization context; current hydration is not historical evidence.
 
-Team/Person responsibility entity subjects must explicitly admit the proposed
-Decision and Document kinds at implementation. Existing assignment kinds,
+Team/Person responsibility entity subjects admit the Decision and Document
+kinds. Existing assignment kinds,
 assignee authority, direct/reverse queries and no-inheritance rules remain.
 No new assignments live on Decision or Document, and no Person becomes an
 authenticated approver. Responsibility subjects exclude these new associations,
@@ -203,7 +208,7 @@ including pins; documentation, display labels and list order are excluded.
 Changing role, target or pin requires fresh association identity. All
 association and anchor inventories are validated before local selection.
 
-| Operation | Proposed requirement |
+| Operation | Requirement |
 | --- | --- |
 | Create/add | Omitted local/association IDs request server UUIDv7. Valid supplied IDs only on new-owner creation; existing-owner additions omit IDs. Persisted returned UID/IDs are authoritative. Preview reserves none. |
 | Edit/reorder | Preserve unchanged IDs; reject unknown IDs, changed fingerprints retaining IDs and stripping retained identities. |
@@ -256,19 +261,30 @@ timeouts, decoding, backend and authorization-service errors retain operational
 failure semantics. Neither hidden, failed nor incomplete lookup is a verified
 empty result. Validation must not convert operational failures into model errors.
 
-## Proposed operations, queries and bounds
+## Native operations, queries and bounds
 
-Implementation must integrate ordinary native entity authoring, manifests,
+Ordinary native entity authoring, manifests,
 validation, branch operations, diff, preview, safe/force deletion, snapshot/export
-and exact reads. No executable command/RPC spelling is allocated here.
+and exact reads include Decision and Document. The
+[query protobuf contract](../../proto/trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto)
+defines typed request and response fields.
 
-| Conceptual query | Input and required result |
+| RPC | Input and result |
 | --- | --- |
-| Decisions/documents for subject | Exact CatalogSubject and optional typed Decision status filter. Return authorized owners, owner UID, association ID and unchanged full selector; no owner/endpoint/family expansion. |
-| Decision detail | Exact DecisionRef. Return authored state, selected option and resolved/unresolved supporting/replacement/subject records; following replacement is explicit, bounded and cycle-aware. |
-| Document detail | Exact DocumentRef or DocumentAnchorRef. Return authorized retained bytes/media/digest or unverified inert link and declared anchor metadata. |
-| Incoming related/navigation/supporting declarations | Exact DecisionRef or DocumentSelection. Match full selector, including pin presence/value, without promoting anchor lookup to whole-document lookup. |
-| Generic references/impact | Preserve containing from EntityRef/from_uid, field, ConnectionId, full typed declaration and selected owner as to. Owner-level impact finds nested selectors without replacing their provenance. |
+| `ListSubjectDecisions`, `ListSubjectDocuments` | Exact CatalogSubject and optional typed Decision status filter. Return authorized owners, owner UID, association ID and unchanged full selector; no owner/endpoint/family expansion. |
+| `GetDecisionDetail` | Exact DecisionRef. Return authored state, selected option and resolved/unresolved supporting/replacement/subject records; following replacement is explicit, bounded and cycle-aware. |
+| `GetDocumentDetail` | Exact DocumentSelection. Return authorized retained bytes/media/digest or unverified inert link and declared anchor metadata. |
+| `ListIncomingDecisionDeclarations`, `ListIncomingDocumentDeclarations` | Exact DecisionRef or DocumentSelection. Match full selector, including pin presence/value, without promoting anchor lookup to whole-document lookup. |
+
+Generic reference results preserve containing `from` EntityRef, `from_uid`,
+field, ConnectionId, full typed CatalogSubject or DocumentSelection and selected
+owner as `to`. Owner-level impact preserves the full selector on its returned
+path; it retains the existing one-path-per-owner traversal rather than enumerating
+every parallel association path. Reference lists retain distinct occurrences.
+
+Resolution is `RESOLVED` for a checked selection, `UNRESOLVED` for an invalid
+selection against a readable owner, and `UNAVAILABLE` when the selected owner
+cannot be hydrated. Missing and hidden owners share the unavailable state.
 
 Queries default to direct declarations, not recursive relationship expansion.
 Explicit traversal uses visited typed identities and preserves every distinct
@@ -281,12 +297,20 @@ unverified even when lookup itself completes successfully.
 Visible resource discovery extends the existing shared 5,000-row ceiling across
 Channels, DataStores, Specifications, DataProducts, Teams, Persons, Decisions and
 Documents. Count each exact kind/key/version once per selected view/request.
-Examine at most 10,000 identified occurrences, anchors or replacement hops
-combined and emit at most 4,096 records per request. Repeated equal endpoints
-consume occurrence work; pagination, batch members and traversal loops never
-reset budgets. Exact owner hydration bypasses display projection caps while
-retaining entity/RPC limits. Replacement admission shares these work ceilings;
-it fails atomically if chain termination cannot be established within them.
+Typed catalog queries examine at most 10,000 identified occurrences, anchors or
+replacement hops combined and emit at most 4,096 records per request. Repeated
+equal endpoints consume occurrence work; pagination, batch members and traversal
+loops never reset budgets. Exact owner hydration bypasses display projection
+caps while retaining entity/RPC limits. Replacement admission shares these work
+ceilings; it fails atomically if chain termination cannot be established within
+them.
+
+Generic retargeting enumerates complete referrers independently of the discovery
+occurrence ceiling, so unrelated assignments do not block a migration. It retains
+the complete visible resource-row ceiling, staged-write admission budgets and a
+4,096-result output ceiling. Exceeding the output ceiling refuses preview/apply
+before writes; existing lower Store batch limits still apply. It never uses a
+partial reporting fallback to choose mutation targets.
 
 Typed discovery exceeding a ceiling returns RESOURCE_EXHAUSTED. Existing bounded
 impact/closure/export surfaces may explicitly report incomplete/truncated
@@ -301,3 +325,10 @@ a total timeout. Its safety decision does not use visible reporting caps. Any
 incomplete guard or operational failure refuses deletion. Only visible resource
 budget exhaustion permits the existing explicitly incomplete delete-report
 fallback; it never authorizes deletion. No persistent reverse index is promised.
+
+`DeleteEntityResponse.referrers_incomplete` marks incomplete visible reporting,
+including a clipped reporting snapshot or a replay whose current report was not
+reconstructed. It does not weaken the independent guard or assert anything about
+hidden referrers. Reports share a 4,096-record request ceiling. Overflow refuses
+the request before entity writes; only the visible resource-budget fallback may
+clip its report at that ceiling while retaining the incomplete flag.

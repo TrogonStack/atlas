@@ -426,6 +426,8 @@ fn kind_label(entity: &pb::Entity) -> String {
         Some(K::DataProduct(_)) => "data_product",
         Some(K::Team(_)) => "team",
         Some(K::Person(_)) => "person",
+        Some(K::Decision(_)) => "decision",
+        Some(K::Document(_)) => "document",
         None => "",
     }
     .to_string()
@@ -469,6 +471,8 @@ pub fn kind_label_for(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::DataProduct => "data_product",
         pb::EntityKind::Team => "team",
         pb::EntityKind::Person => "person",
+        pb::EntityKind::Decision => "decision",
+        pb::EntityKind::Document => "document",
         pb::EntityKind::Unspecified => "",
     }
 }
@@ -523,6 +527,14 @@ fn title_of(entity: &pb::Entity) -> String {
             .title
             .as_ref()
             .map_or_else(String::new, |value| value.value.clone()),
+        Some(K::Decision(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |v| v.value.clone()),
+        Some(K::Document(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |v| v.value.clone()),
         None => String::new(),
     }
 }
@@ -599,6 +611,41 @@ fn body_of(entity: &pb::Entity) -> String {
             push(&mut s, &x.target);
         }
         Some(K::Channel(x)) => push(&mut s, &x.doc),
+        Some(K::Decision(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            if let Some(value) = &x.context {
+                push(&mut s, &value.value);
+            }
+            if let Some(value) = &x.rationale {
+                push(&mut s, &value.value);
+            }
+            for option in &x.options {
+                if let Some(title) = &option.title {
+                    push(&mut s, &title.value);
+                }
+                if let Some(description) = &option.description {
+                    push(&mut s, &description.value);
+                }
+            }
+            for consequence in &x.consequences {
+                if let Some(text) = &consequence.text {
+                    push(&mut s, &text.value);
+                }
+            }
+        }
+        Some(K::Document(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            match &x.body {
+                Some(pb::document::Body::Retained(body)) => push(&mut s, &body.content),
+                Some(pb::document::Body::Link(link)) => push(&mut s, &link.value),
+                None => {}
+            }
+            for anchor in &x.anchors {
+                if let Some(label) = &anchor.label {
+                    push(&mut s, &label.value);
+                }
+            }
+        }
         Some(K::Team(x)) => {
             push(&mut s, x.doc.as_deref().unwrap_or_default());
             push(&mut s, x.purpose.as_deref().unwrap_or_default());

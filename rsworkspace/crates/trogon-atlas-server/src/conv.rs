@@ -330,6 +330,8 @@ pub fn entity_kind(entity: &pb::Entity) -> Result<pb::EntityKind, Status> {
         Some(K::DataProduct(_)) => Ok(pb::EntityKind::DataProduct),
         Some(K::Team(_)) => Ok(pb::EntityKind::Team),
         Some(K::Person(_)) => Ok(pb::EntityKind::Person),
+        Some(K::Decision(_)) => Ok(pb::EntityKind::Decision),
+        Some(K::Document(_)) => Ok(pb::EntityKind::Document),
         None => Err(Status::invalid_argument("entity.kind oneof is required")),
     }
 }
@@ -372,6 +374,8 @@ pub fn entity_id(entity: &pb::Entity) -> Result<&pb::Id, Status> {
         Some(K::DataProduct(x)) => x.id.as_ref(),
         Some(K::Team(x)) => x.id.as_ref(),
         Some(K::Person(x)) => x.id.as_ref(),
+        Some(K::Decision(x)) => x.id.as_ref(),
+        Some(K::Document(x)) => x.id.as_ref(),
         None => return Err(Status::invalid_argument("entity.kind oneof is required")),
     };
     let id = id.ok_or_else(|| Status::invalid_argument("entity.id is required"))?;
@@ -472,6 +476,18 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
             x.metadata.len(),
         ),
         Some(K::Person(x)) => (
+            x.title.as_ref().map_or("", |v| v.value.as_str()),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::Decision(x)) => (
+            x.title.as_ref().map_or("", |v| v.value.as_str()),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::Document(x)) => (
             x.title.as_ref().map_or("", |v| v.value.as_str()),
             x.doc.as_deref().unwrap_or_default(),
             0,

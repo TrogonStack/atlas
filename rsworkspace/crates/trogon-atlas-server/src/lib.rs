@@ -5,6 +5,7 @@ pub mod batch_recovery;
 pub mod change_cursor;
 pub mod conv;
 mod data_product_resources;
+mod decision_document_resources;
 pub mod diff;
 pub mod fixtures;
 pub mod git_mirror;

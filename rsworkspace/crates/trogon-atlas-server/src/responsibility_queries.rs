@@ -8,9 +8,11 @@ use tonic::Status;
 use super::{
     entity_id, entity_kind, pb, store_err, EventModelServiceImpl, Lens, StoredEntity, Visibility,
 };
-use crate::responsibility_resources::{
-    assignments, occurrence_count as occurrences, selected_endpoints, subject_owner,
-    MAX_RESPONSIBILITY_OCCURRENCES,
+use crate::{
+    decision_document_resources::occurrence_count as occurrences,
+    responsibility_resources::{
+        assignments, selected_endpoints, subject_owner, MAX_RESPONSIBILITY_OCCURRENCES,
+    },
 };
 
 type World = HashMap<pb::EntityKey, Option<StoredEntity>>;
@@ -195,7 +197,7 @@ impl EventModelServiceImpl {
             if !seen.insert(pb::EntityKey::new(kind, id)) {
                 continue;
             }
-            if seen.len() > super::MAX_PROJECTION_ENTITIES {
+            if seen.len() > 4_096 {
                 incomplete = true;
                 break;
             }

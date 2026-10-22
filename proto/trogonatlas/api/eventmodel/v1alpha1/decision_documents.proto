@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+
+enum CatalogResolutionState {
+  CATALOG_RESOLUTION_STATE_UNSPECIFIED = 0;
+  CATALOG_RESOLUTION_STATE_RESOLVED = 1;
+  CATALOG_RESOLUTION_STATE_UNAVAILABLE = 2;
+  CATALOG_RESOLUTION_STATE_UNRESOLVED = 3;
+}
+message CatalogQueryFailure {
+  string field = 1;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 2;
+  int32 code = 3;
+  string message = 4;
+}
+message CatalogCheckedOwner {
+  trogonatlas.eventmodel.v1alpha1.EntityRef owner = 1;
+  string uid = 2;
+  string etag = 3;
+}
+message CatalogCheckedScope {
+  optional string branch = 1;
+  repeated string authorized_namespaces = 2;
+  string revision = 3;
+  repeated CatalogCheckedOwner visited = 4;
+  repeated trogonatlas.eventmodel.v1alpha1.CatalogSubject visited_subjects = 5;
+  repeated trogonatlas.eventmodel.v1alpha1.DocumentSelection visited_documents = 6;
+}
+message CatalogDeclaration {
+  CatalogCheckedOwner owner = 1;
+  string field = 2;
+  CatalogResolutionState state = 3;
+  oneof declaration {
+    trogonatlas.eventmodel.v1alpha1.SubjectAssociation subject = 4;
+    trogonatlas.eventmodel.v1alpha1.DecisionReplacement replacement = 5;
+    trogonatlas.eventmodel.v1alpha1.RelatedDecision related = 6;
+    trogonatlas.eventmodel.v1alpha1.SupportingDocument supporting = 7;
+    trogonatlas.eventmodel.v1alpha1.DocumentNavigation navigation = 8;
+  }
+}
+message ListSubjectDecisionsRequest {
+  trogonatlas.eventmodel.v1alpha1.CatalogSubject subject = 1;
+  optional trogonatlas.eventmodel.v1alpha1.DecisionStatus status = 2;
+}
+message ListSubjectDecisionsResponse {
+  repeated CatalogDeclaration declarations = 1;
+  CatalogCheckedScope scope = 2;
+  bool incomplete = 3;
+  repeated CatalogQueryFailure failures = 4;
+  CatalogResolutionState subject_state = 5;
+}
+message ListSubjectDocumentsRequest {
+  trogonatlas.eventmodel.v1alpha1.CatalogSubject subject = 1;
+}
+message ListSubjectDocumentsResponse {
+  repeated CatalogDeclaration declarations = 1;
+  CatalogCheckedScope scope = 2;
+  bool incomplete = 3;
+  repeated CatalogQueryFailure failures = 4;
+  CatalogResolutionState subject_state = 5;
+}
+message GetDecisionDetailRequest {
+  trogonatlas.eventmodel.v1alpha1.DecisionRef decision = 1;
+  bool follow_replacement = 2;
+}
+message GetDecisionDetailResponse {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  string etag = 2;
+  repeated CatalogDeclaration declarations = 3;
+  CatalogCheckedScope scope = 4;
+  bool incomplete = 5;
+  repeated CatalogQueryFailure failures = 6;
+  repeated CatalogCheckedOwner replacement_chain = 7;
+}
+message GetDocumentDetailRequest {
+  trogonatlas.eventmodel.v1alpha1.DocumentSelection document = 1;
+}
+message GetDocumentDetailResponse {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  string etag = 2;
+  trogonatlas.eventmodel.v1alpha1.DocumentAnchor anchor = 3;
+  repeated CatalogDeclaration declarations = 4;
+  CatalogCheckedScope scope = 5;
+  bool incomplete = 6;
+  repeated CatalogQueryFailure failures = 7;
+  CatalogResolutionState selection_state = 8;
+}
+message ListIncomingDecisionDeclarationsRequest {
+  trogonatlas.eventmodel.v1alpha1.DecisionRef decision = 1;
+}
+message ListIncomingDecisionDeclarationsResponse {
+  repeated CatalogDeclaration declarations = 1;
+  CatalogCheckedScope scope = 2;
+  bool incomplete = 3;
+  repeated CatalogQueryFailure failures = 4;
+}
+message ListIncomingDocumentDeclarationsRequest {
+  trogonatlas.eventmodel.v1alpha1.DocumentSelection document = 1;
+}
+message ListIncomingDocumentDeclarationsResponse {
+  repeated CatalogDeclaration declarations = 1;
+  CatalogCheckedScope scope = 2;
+  bool incomplete = 3;
+  repeated CatalogQueryFailure failures = 4;
+}

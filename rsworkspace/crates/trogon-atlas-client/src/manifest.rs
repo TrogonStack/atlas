@@ -441,6 +441,8 @@ pub(crate) fn shorthand_ref_field(
         "trogonatlas.eventmodel.v1alpha1.ChannelAccess"
             | "trogonatlas.eventmodel.v1alpha1.StoreAccess"
             | "trogonatlas.eventmodel.v1alpha1.ResponsibilitySubject"
+            | "trogonatlas.eventmodel.v1alpha1.CatalogSubject"
+            | "trogonatlas.eventmodel.v1alpha1.DocumentSelection"
     ) {
         return None;
     }

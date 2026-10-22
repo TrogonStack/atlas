@@ -92,12 +92,14 @@ coverage and records its deployment and acceptance limits.
 
 ## Decision and Document contracts
 
-The proposed [Decision and Document contract](../reference/decision-and-document-contracts.md)
+The [Decision and Document contract](../reference/decision-and-document-contracts.md)
 defines how rationale and supporting material select exact model subjects.
 Its [acceptance requirements](../reference/decision-and-document-acceptance.md)
 extend the connected fixture with artifact, navigation, permission and lifecycle
-cases. These resources are not implemented; the contract precedes schema and
-runtime work.
+cases. Native schema, exact subject admission, retained content and anchor
+selection, typed queries, CLI/MCP authoring and Studio review are implemented.
+The acceptance reference distinguishes executable coverage from remaining
+exhaustive and deployed-browser evidence.
 
 ## Source integration and format support
 

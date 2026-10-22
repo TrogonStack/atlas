@@ -19,6 +19,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/entity_kinds.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
 
 
 // =============================================================================
@@ -302,6 +303,7 @@ message DeleteEntityResponse {
   repeated Reference referrers = 1;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 2;
+  bool referrers_incomplete = 3;
 }
 
 // ---------- Batch mutation (atomic multi-entity write) -----------------------
@@ -1142,6 +1144,13 @@ message ResolveBranchEntryResponse {
 //     DeleteBranch                       : branch lifecycle (Phase 1: Isolation)
 
 service EventModelService {
+  rpc ListSubjectDecisions(ListSubjectDecisionsRequest) returns (ListSubjectDecisionsResponse);
+  rpc ListSubjectDocuments(ListSubjectDocumentsRequest) returns (ListSubjectDocumentsResponse);
+  rpc GetDecisionDetail(GetDecisionDetailRequest) returns (GetDecisionDetailResponse);
+  rpc GetDocumentDetail(GetDocumentDetailRequest) returns (GetDocumentDetailResponse);
+  rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);
+  rpc ListIncomingDocumentDeclarations(ListIncomingDocumentDeclarationsRequest) returns (ListIncomingDocumentDeclarationsResponse);
+
   rpc ListSubjectAssignments(ListSubjectAssignmentsRequest) returns (ListSubjectAssignmentsResponse);
   rpc ListAssigneeResponsibilities(ListAssigneeResponsibilitiesRequest) returns (ListAssigneeResponsibilitiesResponse);
   rpc ListTeamMembers(ListTeamMembersRequest) returns (ListTeamMembersResponse);

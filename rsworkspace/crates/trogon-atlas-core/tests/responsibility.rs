@@ -130,7 +130,7 @@ fn wire_allocations_revision_and_presence_are_native() {
             MIN_CLIENT_CONTRACT_REVISION,
             MIN_SERVER_CONTRACT_REVISION
         ),
-        (13, 13, 13)
+        (14, 14, 14)
     );
     assert_eq!(canonical::parse_kind("team"), Some(EntityKind::Team));
     assert_eq!(canonical::parse_kind("person"), Some(EntityKind::Person));
@@ -1021,6 +1021,9 @@ fn generic_references_preserve_full_typed_assignment_and_membership_provenance()
             doc: Some("Catalog stewardship".into()),
         };
         let reference = Reference {
+            catalog_subject: None,
+            document_selection: None,
+            connection_id: None,
             from: from.clone(),
             from_field: "responsibilities[0].subject".into(),
             to: Some(selected_owner),
@@ -1043,6 +1046,9 @@ fn generic_references_preserve_full_typed_assignment_and_membership_provenance()
         );
     }
     let reference = Reference {
+        catalog_subject: None,
+        document_selection: None,
+        connection_id: None,
         from,
         from_field: "members[0].person".into(),
         to: Some(entity_ref(EntityKind::Person, "pat")),

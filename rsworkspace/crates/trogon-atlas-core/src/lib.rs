@@ -18,6 +18,8 @@ pub mod connections;
 pub mod content_hash;
 pub mod data_product;
 mod data_product_refs;
+pub mod decision_document;
+mod decision_document_refs;
 pub mod id_component;
 pub mod namespace;
 pub mod operation_id;

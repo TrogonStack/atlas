@@ -243,6 +243,8 @@ pub(crate) fn entity_label(entity: &pb::Entity) -> String {
         K::Specification(x) => x.id.as_ref(),
         K::Team(x) => x.id.as_ref(),
         K::Person(x) => x.id.as_ref(),
+        K::Decision(x) => x.id.as_ref(),
+        K::Document(x) => x.id.as_ref(),
     };
     match id {
         Some(id) => pb::canonical::id_string(entity_kind_of(kind), id),
@@ -291,6 +293,8 @@ fn entity_kind_of(kind: &pb::entity::Kind) -> pb::EntityKind {
         K::Specification(_) => pb::EntityKind::Specification,
         K::Team(_) => pb::EntityKind::Team,
         K::Person(_) => pb::EntityKind::Person,
+        K::Decision(_) => pb::EntityKind::Decision,
+        K::Document(_) => pb::EntityKind::Document,
     }
 }
 

@@ -4,6 +4,8 @@ mod architecture_admission;
 mod data_product_events;
 #[path = "data_product_inspection.rs"]
 mod data_product_inspection;
+#[path = "decision_document_queries.rs"]
+mod decision_document_queries;
 #[path = "responsibility_queries.rs"]
 mod responsibility_queries;
 
@@ -54,6 +56,44 @@ use crate::{
 enum ReferenceIndexPurpose {
     Discovery,
     CompleteReferrers,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DeleteReportCoverage {
+    Complete,
+    SnapshotTruncated,
+    VisibleResourceBudget,
+}
+
+struct DeleteReportingIndex {
+    index: Arc<graph::ReverseIndex>,
+    coverage: DeleteReportCoverage,
+    emitted: usize,
+}
+
+impl DeleteReportingIndex {
+    fn incomplete(&self) -> bool {
+        self.coverage != DeleteReportCoverage::Complete
+    }
+
+    fn take_referrers(
+        &mut self,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+    ) -> Result<Vec<pb::Reference>, Status> {
+        let references = self.index.incoming(kind, id);
+        let remaining = 4_096 - self.emitted;
+        if references.len() > remaining
+            && self.coverage != DeleteReportCoverage::VisibleResourceBudget
+        {
+            return Err(Status::resource_exhausted(
+                "delete report output budget exceeded",
+            ));
+        }
+        let result: Vec<_> = references.iter().take(remaining).cloned().collect();
+        self.emitted += result.len();
+        Ok(result)
+    }
 }
 
 impl ReferenceIndexPurpose {
@@ -1036,19 +1076,34 @@ impl EventModelServiceImpl {
         &self,
         branch: Option<&str>,
         vis: &Visibility,
-    ) -> Result<Arc<graph::ReverseIndex>, Status> {
+    ) -> Result<DeleteReportingIndex, Status> {
         match self
             .reference_index_for(branch, vis, ReferenceIndexPurpose::CompleteReferrers)
             .await
         {
-            Ok(index) => Ok(index),
+            Ok(index) => {
+                let (_, incomplete) = self.snapshot_with_truncation(branch, vis).await?;
+                Ok(DeleteReportingIndex {
+                    index,
+                    coverage: if incomplete {
+                        DeleteReportCoverage::SnapshotTruncated
+                    } else {
+                        DeleteReportCoverage::Complete
+                    },
+                    emitted: 0,
+                })
+            }
             Err(status)
                 if status.code() == tonic::Code::ResourceExhausted
                     && status.message()
                         == "architecture reference scan exceeds its entity budget" =>
             {
                 let snapshot = self.snapshot_for(branch, vis).await?;
-                Ok(Arc::new(graph::ReverseIndex::build(&snapshot)))
+                Ok(DeleteReportingIndex {
+                    index: Arc::new(graph::ReverseIndex::build(&snapshot)),
+                    coverage: DeleteReportCoverage::VisibleResourceBudget,
+                    emitted: 0,
+                })
             }
             Err(status) => Err(status),
         }
@@ -2348,6 +2403,7 @@ fn build_op_results(
     validated: bool,
     per_op_validation: &[Vec<pb::ValidationIssue>],
     per_op_referrers: &[Vec<pb::Reference>],
+    referrers_incomplete: bool,
 ) -> Vec<pb::BatchMutateOpResult> {
     metas
         .iter()
@@ -2391,6 +2447,7 @@ fn build_op_results(
                 pb::BatchMutateOpResult {
                     result: Some(pb::batch_mutate_op_result::Result::Delete(
                         pb::DeleteEntityResponse {
+                            referrers_incomplete,
                             referrers,
                             operation_receipt: None,
                         },
@@ -2837,6 +2894,114 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             truncated,
             entries,
         }))
+    }
+
+    async fn list_subject_decisions(
+        &self,
+        req: Request<pb::ListSubjectDecisionsRequest>,
+    ) -> Result<Response<pb::ListSubjectDecisionsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.subject_decisions(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn list_subject_documents(
+        &self,
+        req: Request<pb::ListSubjectDocumentsRequest>,
+    ) -> Result<Response<pb::ListSubjectDocumentsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.subject_documents(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn get_decision_detail(
+        &self,
+        req: Request<pb::GetDecisionDetailRequest>,
+    ) -> Result<Response<pb::GetDecisionDetailResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.decision_detail(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn get_document_detail(
+        &self,
+        req: Request<pb::GetDocumentDetailRequest>,
+    ) -> Result<Response<pb::GetDocumentDetailResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.document_detail(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn list_incoming_decision_declarations(
+        &self,
+        req: Request<pb::ListIncomingDecisionDeclarationsRequest>,
+    ) -> Result<Response<pb::ListIncomingDecisionDeclarationsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.incoming_decisions(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn list_incoming_document_declarations(
+        &self,
+        req: Request<pb::ListIncomingDocumentDeclarationsRequest>,
+    ) -> Result<Response<pb::ListIncomingDocumentDeclarationsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.incoming_documents(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn list_subject_assignments(
@@ -3532,6 +3697,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // lives in `from`.
         let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::From);
         let total = all_references.len();
+        if total > 4_096 {
+            return Err(Status::resource_exhausted(
+                "reference output budget exceeded",
+            ));
+        }
         let references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
@@ -3592,6 +3762,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // lives in `to`.
         let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::To);
         let total = all_references.len();
+        if total > 4_096 {
+            return Err(Status::resource_exhausted(
+                "reference output budget exceeded",
+            ));
+        }
         let references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
@@ -3650,6 +3825,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let total = all_nodes.len();
+        if total > 4_096 {
+            return Err(Status::resource_exhausted("impact output budget exceeded"));
+        }
         let nodes: Vec<pb::ImpactNode> =
             all_nodes.into_iter().skip(offset).take(page_size).collect();
         let next_offset = offset + nodes.len();
@@ -3761,6 +3939,21 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .collect()
         };
 
+        let mut result_owners = std::collections::HashSet::new();
+        for reference in &referrers {
+            let owner = reference
+                .from
+                .as_ref()
+                .ok_or_else(|| Status::internal("reverse index entry missing from"))?;
+            let kind = kind_from_i32(owner.kind, "referrer.kind")?;
+            let id = require_id(owner.id.as_ref(), "referrer")?;
+            if result_owners.insert(pb::EntityKey::new(kind, id)) && result_owners.len() > 4_096 {
+                return Err(Status::resource_exhausted(
+                    "retarget output budget exceeded",
+                ));
+            }
+        }
+
         // Load every referrer, apply the in-memory rewrite, and stage the
         // rewritten entity for a batch write. Per-referrer load errors are
         // captured in results and do not abort the rest of the referrers.
@@ -3813,6 +4006,36 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 return Err(Status::failed_precondition(
                     "Responsibility local selectors require an explicit guarded replacement using returned owner and local identities",
                 ));
+            }
+            if crate::decision_document_resources::subjects(&stored.entity)
+                .iter()
+                .any(|association| {
+                    association.subject.as_ref().is_some_and(|subject| {
+                        !matches!(
+                            subject.selection,
+                            Some(pb::catalog_subject::Selection::Entity(_))
+                        ) && trogon_atlas_core::decision_document::subject_owner(subject).is_ok_and(
+                            |owner| {
+                                owner.kind == from_kind as i32
+                                    && owner.id.as_ref() == Some(&from_id)
+                            },
+                        )
+                    })
+                })
+                || crate::decision_document_resources::documents(&stored.entity)
+                    .iter()
+                    .any(|selection| {
+                        matches!(
+                            selection.selection,
+                            Some(pb::document_selection::Selection::Anchor(_))
+                        ) && trogon_atlas_core::decision_document::document_owner(selection)
+                            .is_ok_and(|owner| {
+                                owner.kind == from_kind as i32
+                                    && owner.id.as_ref() == Some(&from_id)
+                            })
+                    })
+            {
+                return Err(Status::failed_precondition("Catalog local selectors require an explicit guarded replacement using returned owner and local identities"));
             }
             let mut entity = stored.entity.clone();
             let fields =
@@ -4123,7 +4346,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let (all, responsibility_incomplete) = if matches!(
             pb::EntityKind::try_from(root_ref.kind),
-            Ok(pb::EntityKind::Team | pb::EntityKind::Person)
+            Ok(pb::EntityKind::Team
+                | pb::EntityKind::Person
+                | pb::EntityKind::Decision
+                | pb::EntityKind::Document)
         ) {
             let id = require_id(root_ref.id.as_ref(), "scope")?;
             self.require_visible(&vis, &id.namespace).await?;
@@ -4655,6 +4881,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         // current to report; an empty list is the honest
                         // answer, not a stale one.
                         return Ok(Response::new(pb::DeleteEntityResponse {
+                            referrers_incomplete: true,
                             referrers: Vec::new(),
                             operation_receipt: Some(operation_receipts::replay_receipt(
                                 &req.operation_id,
@@ -4727,14 +4954,28 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .has_incoming_reference(kind, &id, branch.as_deref())
                 .await
                 .map_err(store_err)?;
-        let index = self.delete_reporting_index(branch.as_deref(), &vis).await?;
-        let referrers = index.incoming(kind, &id).to_vec();
+        let report = async {
+            let mut report = self.delete_reporting_index(branch.as_deref(), &vis).await?;
+            let references = report.take_referrers(kind, &id)?;
+            Ok::<_, Status>((references, report.incomplete()))
+        }
+        .await;
+        let (referrers, referrers_incomplete) = match report {
+            Ok(report) => report,
+            Err(status) => {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        };
 
         match mode {
             pb::delete_entity_request::Mode::DryRun => {
                 // operation_id and dry-run never coexist (rejected above),
                 // so claim_key is always None here.
                 return Ok(Response::new(pb::DeleteEntityResponse {
+                    referrers_incomplete,
                     referrers,
                     operation_receipt: None,
                 }));
@@ -4808,6 +5049,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await;
         }
         Ok(Response::new(pb::DeleteEntityResponse {
+            referrers_incomplete,
             referrers,
             operation_receipt: claim_key.as_ref().map(|_| {
                 operation_receipts::fresh_receipt(&req.operation_id, &receipt_changeset_id)
@@ -5095,6 +5337,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .collect();
         let mut per_op_referrers: Vec<Vec<pb::Reference>> =
             std::iter::repeat_with(Vec::new).take(metas.len()).collect();
+        let mut referrers_incomplete = false;
         if delete_modes.iter().any(Option::is_some) {
             let guarded_targets: Vec<pb::EntityKey> = delete_modes
                 .iter()
@@ -5139,11 +5382,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     return Ok(Response::new(Self::batch_referenced_response(&metas, i)));
                 }
             }
-            let index = self.delete_reporting_index(branch.as_deref(), &vis).await?;
+            let mut report = self.delete_reporting_index(branch.as_deref(), &vis).await?;
+            referrers_incomplete = report.incomplete();
             for (i, mode) in delete_modes.iter().enumerate() {
                 if mode.is_some() {
                     let meta = &metas[i];
-                    per_op_referrers[i] = index.incoming(meta.kind, &meta.id).to_vec();
+                    per_op_referrers[i] = report.take_referrers(meta.kind, &meta.id)?;
                 }
             }
         }
@@ -5290,6 +5534,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         /*validated=*/ true,
                         &per_op_validation,
                         &per_op_referrers,
+                        referrers_incomplete,
                     );
                     Ok(Response::new(pb::BatchMutateResponse {
                         status: pb::batch_mutate_response::Status::Validated as i32,
@@ -5390,6 +5635,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         /*validated=*/ false,
                         &per_op_validation,
                         &per_op_referrers,
+                        referrers_incomplete,
                     );
                     let receipt_changeset_id = changeset.id.clone();
                     if let Some(key) = &claim_key {
@@ -7607,6 +7853,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 | pb::EntityKind::DataProduct
                 | pb::EntityKind::Team
                 | pb::EntityKind::Person
+                | pb::EntityKind::Decision
+                | pb::EntityKind::Document
         ) {
             self.authorize_write(
                 principal.as_ref(),

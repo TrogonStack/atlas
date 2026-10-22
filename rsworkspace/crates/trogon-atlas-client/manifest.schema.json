@@ -259,6 +259,15 @@
       ],
       "type": "string"
     },
+    "trogonatlas.eventmodel.v1alpha1.AnchorFragment": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.ApiUsage": {
       "additionalProperties": false,
       "properties": {
@@ -513,6 +522,92 @@
         "CALENDAR_PERIOD_YEAR"
       ],
       "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.CatalogSubject": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "entity",
+              "connection"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "entity",
+              "member"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "entity",
+              "port"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "connection",
+              "member"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "connection",
+              "port"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "member",
+              "port"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "connection": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
+        },
+        "entity": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+        },
+        "member": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
+        },
+        "port": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataPortRef"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.CatalogText": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.CatalogTitle": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.Channel": {
       "additionalProperties": false,
@@ -1908,6 +2003,162 @@
         }
       ]
     },
+    "trogonatlas.eventmodel.v1alpha1.Decision": {
+      "additionalProperties": false,
+      "properties": {
+        "consequences": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionConsequence"
+          },
+          "type": "array"
+        },
+        "context": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "documents": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SupportingDocument"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "items": {
+            "properties": {
+              "@type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "@type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionOption"
+          },
+          "type": "array"
+        },
+        "rationale": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "relatedDecisions": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.RelatedDecision"
+          },
+          "type": "array"
+        },
+        "replacedBy": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionReplacement"
+        },
+        "selectedOption": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LocalValueId"
+        },
+        "status": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionStatus"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SubjectAssociation"
+          },
+          "type": "array"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+        },
+        "title": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DecisionConsequence": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionConsequence.Kind"
+        },
+        "text": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DecisionConsequence.Kind": {
+      "enum": [
+        "KIND_BENEFIT",
+        "KIND_COST",
+        "KIND_RISK",
+        "KIND_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DecisionOption": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "optionId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LocalValueId"
+        },
+        "title": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DecisionRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.DecisionReplacement": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "decision": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.DecisionStatus": {
+      "enum": [
+        "DECISION_STATUS_ACCEPTED",
+        "DECISION_STATUS_PROPOSED",
+        "DECISION_STATUS_REJECTED",
+        "DECISION_STATUS_SUPERSEDED",
+        "DECISION_STATUS_UNSPECIFIED",
+        "DECISION_STATUS_WITHDRAWN"
+      ],
+      "type": "string"
+    },
     "trogonatlas.eventmodel.v1alpha1.DeclaredLineage": {
       "additionalProperties": false,
       "properties": {
@@ -1946,6 +2197,162 @@
       "properties": {
         "value": {
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.Document": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "retained",
+              "link"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "anchors": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentAnchor"
+          },
+          "type": "array"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "link": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalDocumentLink"
+        },
+        "metadata": {
+          "items": {
+            "properties": {
+              "@type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "@type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "navigation": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentNavigation"
+          },
+          "type": "array"
+        },
+        "retained": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.RetainedDocumentText"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SubjectAssociation"
+          },
+          "type": "array"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+        },
+        "title": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DocumentAnchor": {
+      "additionalProperties": false,
+      "properties": {
+        "anchorId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LocalValueId"
+        },
+        "fragment": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.AnchorFragment"
+        },
+        "label": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DocumentAnchorRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "anchorId": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LocalValueId"
+            },
+            "document": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentRef"
+            },
+            "expectedDigest": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+            },
+            "ownerUid": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.DocumentNavigation": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "document": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentSelection"
+        },
+        "label": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DocumentRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.DocumentSelection": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "document",
+              "anchor"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "anchor": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentAnchorRef"
+        },
+        "document": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentRef"
         }
       },
       "type": "object"
@@ -2032,6 +2439,8 @@
         "Component",
         "DataProduct",
         "DataStore",
+        "Decision",
+        "Document",
         "Domain",
         "ENTITY_KIND_ALERT_NOTIFICATION_TARGET",
         "ENTITY_KIND_ALERT_POLICY",
@@ -2044,6 +2453,8 @@
         "ENTITY_KIND_COMPONENT",
         "ENTITY_KIND_DATA_PRODUCT",
         "ENTITY_KIND_DATA_STORE",
+        "ENTITY_KIND_DECISION",
+        "ENTITY_KIND_DOCUMENT",
         "ENTITY_KIND_DOMAIN",
         "ENTITY_KIND_EVENT",
         "ENTITY_KIND_EVENT_MODEL",
@@ -2109,6 +2520,8 @@
         "data-store",
         "data_product",
         "data_store",
+        "decision",
+        "document",
         "domain",
         "event",
         "event-model",
@@ -2344,6 +2757,15 @@
         },
         "provider": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DirectoryProvider"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ExternalDocumentLink": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -3019,6 +3441,15 @@
         },
         "expectedDigest": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.LocalValueId": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -4072,6 +4503,28 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.RelatedDecision": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "decision": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionRef"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "trogonatlas.eventmodel.v1alpha1.ResidencyPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -4176,6 +4629,21 @@
         },
         "port": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataPortRef"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.RetainedDocumentText": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "digest": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+        },
+        "mediaType": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MediaType"
         }
       },
       "type": "object"
@@ -5101,6 +5569,36 @@
           "type": "object"
         }
       ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.SubjectAssociation": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "subject": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogSubject"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SupportingDocument": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "document": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentSelection"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.Swimlane": {
       "additionalProperties": false,
@@ -6952,6 +7450,52 @@
         "properties": {
           "spec": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.Person"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "Decision",
+              "ENTITY_KIND_DECISION",
+              "decision"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "spec": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.Decision"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "Document",
+              "ENTITY_KIND_DOCUMENT",
+              "document"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "spec": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.Document"
           }
         }
       }

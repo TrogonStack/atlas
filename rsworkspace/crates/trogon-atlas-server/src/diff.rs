@@ -58,6 +58,8 @@ fn kind_name(e: &pb::Entity) -> &'static str {
         Some(K::DataProduct(_)) => "DataProduct",
         Some(K::Team(_)) => "Team",
         Some(K::Person(_)) => "Person",
+        Some(K::Decision(_)) => "Decision",
+        Some(K::Document(_)) => "Document",
         None => "<empty>",
     }
 }
@@ -634,6 +636,49 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
                     ("responsibilities", "responsibilities"),
                     ("role", "role"),
                     ("directory_pointer", "directoryPointer"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
+        (Some(K::Decision(x)), Some(K::Decision(y))) => {
+            resource_fields(
+                ops,
+                "Decision",
+                x,
+                y,
+                &[
+                    ("title", "title"),
+                    ("doc", "doc"),
+                    ("supersedes", "supersedes"),
+                    ("subjects", "subjects"),
+                    ("status", "status"),
+                    ("context", "context"),
+                    ("rationale", "rationale"),
+                    ("options", "options"),
+                    ("selected_option", "selectedOption"),
+                    ("consequences", "consequences"),
+                    ("replaced_by", "replacedBy"),
+                    ("related_decisions", "relatedDecisions"),
+                    ("documents", "documents"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
+        (Some(K::Document(x)), Some(K::Document(y))) => {
+            resource_fields(
+                ops,
+                "Document",
+                x,
+                y,
+                &[
+                    ("title", "title"),
+                    ("doc", "doc"),
+                    ("supersedes", "supersedes"),
+                    ("subjects", "subjects"),
+                    ("retained", "retained"),
+                    ("link", "link"),
+                    ("anchors", "anchors"),
+                    ("navigation", "navigation"),
                 ],
             );
             resource_metadata(ops, &x.metadata, &y.metadata);

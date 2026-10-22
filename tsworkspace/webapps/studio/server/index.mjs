@@ -17,6 +17,7 @@ import protoLoader from "@grpc/proto-loader";
 import express from "express";
 import { rateLimit as expressRateLimit } from "express-rate-limit";
 import protobuf from "protobufjs";
+import { validateCatalogRequest } from "./decision-document-request.mjs";
 import { validateResponsibilityRequest } from "./responsibility-request.mjs";
 import { isChangesetId, isSafeBranchName, isSafeNamespace } from "../shared/safe-namespace.mjs";
 
@@ -327,6 +328,13 @@ const READ_RPCS = new Set([
   "listTeamMembers",
   "listPersonTeams",
   "getTeamContacts",
+  "listSubjectDecisions",
+  "listSubjectDocuments",
+  "getDecisionDetail",
+  "getDocumentDetail",
+  "listIncomingDecisionDeclarations",
+  "listIncomingDocumentDeclarations",
+
   "getChangeset",
   "getEntityHistory",
   "getEventModelProjection",
@@ -1808,6 +1816,36 @@ app.get(
       namespaces,
       limit: 25,
     });
+  }),
+);
+
+const CATALOG_QUERIES = new Map([
+  ["subject-decisions", "listSubjectDecisions"],
+  ["subject-documents", "listSubjectDocuments"],
+  ["decision-detail", "getDecisionDetail"],
+  ["document-detail", "getDocumentDetail"],
+  ["incoming-decisions", "listIncomingDecisionDeclarations"],
+  ["incoming-documents", "listIncomingDocumentDeclarations"],
+]);
+
+app.get(
+  "/api/catalog/:query",
+  branchHandler((req) => {
+    const method = CATALOG_QUERIES.get(String(req.params.query));
+    /** @param {string} message */
+    const reject = (message) => {
+      const error = /** @type {HttpError} */ (new Error(message));
+      error.status = 400;
+      throw error;
+    };
+    if (!method) return reject("unknown catalog query");
+    if (req.query.asOf !== undefined) return reject("historical catalog inspection unavailable");
+    let input;
+    try { input = JSON.parse(String(req.query.request ?? "")); }
+    catch { return reject("request must be a JSON object"); }
+    const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
+    validateCatalogRequest(requestType, input);
+    return call(method, input);
   }),
 );
 

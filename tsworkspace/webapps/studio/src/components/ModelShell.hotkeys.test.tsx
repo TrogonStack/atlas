@@ -3,6 +3,8 @@ import { withNuqsTestingAdapter } from 'nuqs/adapters/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/lib/api', () => ({
+  listSubjectDecisions: vi.fn().mockResolvedValue({ scope: { revision: 'hotkey-fixture' }, declarations: [] }),
+  listSubjectDocuments: vi.fn().mockResolvedValue({ scope: { revision: 'hotkey-fixture' }, declarations: [] }),
   listSubjectAssignments: vi.fn().mockResolvedValue({ scope: { revision: 'hotkey-fixture' }, assignments: [] }),
   api: {
     info: vi.fn(),

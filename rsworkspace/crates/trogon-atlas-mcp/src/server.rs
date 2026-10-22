@@ -22,18 +22,18 @@ use crate::{
     error::{attach_operation_id, tool_err, McpError},
     tools::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
-        BatchMutateParams, CompileTypeLibraryParams, CreateBranchParams, DeleteBranchParams,
-        DeleteByQueryParams, DeleteEntityParams, DiffBranchParams, DiffEntitiesParams,
-        DiffManifestsParams, EmptyParams, EntitySpec, EventModelProjectionParams,
-        ExportNamespaceParams, ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams,
-        GetEntityHistoryParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
-        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
-        ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams, MergeBranchParams,
-        MoveNamespaceParams, ProjectionParams, PutEntityJsonParams, PutEntityParams,
-        ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
-        ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
-        SliceProjectionParams, SupersessionChainParams, UpdateBranchParams,
-        ValidateEventModelParams, ValidateProjectParams,
+        BatchMutateParams, CatalogQueryParams, CompileTypeLibraryParams, CreateBranchParams,
+        DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams, DiffBranchParams,
+        DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySpec,
+        EventModelProjectionParams, ExportNamespaceParams, ExportOpensloParams,
+        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
+        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
+        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams,
+        MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
+        PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
+        ResolveTypeParams, ResponsibilityQueryParams, RetargetReferencesParams,
+        RevertChangesetParams, SearchParams, SliceProjectionParams, SupersessionChainParams,
+        UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
     },
 };
 
@@ -239,6 +239,36 @@ pub struct ToolPolicy {
 }
 
 pub const TOOL_POLICIES: &[ToolPolicy] = &[
+    ToolPolicy {
+        tool: "list_subject_decisions",
+        rpcs: &["ListSubjectDecisions"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_subject_documents",
+        rpcs: &["ListSubjectDocuments"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "get_decision_detail",
+        rpcs: &["GetDecisionDetail"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "get_document_detail",
+        rpcs: &["GetDocumentDetail"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_incoming_decision_declarations",
+        rpcs: &["ListIncomingDecisionDeclarations"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_incoming_document_declarations",
+        rpcs: &["ListIncomingDocumentDeclarations"],
+        min_role: ToolRole::Reader,
+    },
     ToolPolicy {
         tool: "list_subject_assignments",
         rpcs: &["ListSubjectAssignments"],
@@ -1298,6 +1328,240 @@ impl McpServer {
     }
 
     #[tool(
+        description = "ListSubjectDecisions: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_subject_decisions(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "ListSubjectDecisionsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::decision_document::list_subject_decisions(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSubjectDocuments: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_subject_documents(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "ListSubjectDocumentsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::decision_document::list_subject_documents(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetDecisionDetail: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_decision_detail(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "GetDecisionDetailRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::decision_document::get_decision_detail(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetDocumentDetail: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_document_detail(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "GetDocumentDetailRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::decision_document::get_document_detail(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListIncomingDecisionDeclarations: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_incoming_decision_declarations(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "ListIncomingDecisionDeclarationsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::decision_document::list_incoming_decision_declarations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListIncomingDocumentDeclarations: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_incoming_document_declarations(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "ListIncomingDocumentDeclarationsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::decision_document::list_incoming_document_declarations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
         description = "ListSubjectAssignments: return backend checked exact responsibility declarations and provenance. Incomplete or inaccessible results never prove absence. Team contact member expansion requires explicit includeMembers; no inheritance or authorization grants.",
         annotations(
             read_only_hint = true,
@@ -2214,7 +2478,13 @@ impl McpServer {
             .map_err(tool_err("delete_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope(&resp))
+        let mut result = self.scoped_envelope(&resp);
+        if resp.referrers_incomplete {
+            result.content.push(ContentBlock::text(
+                "Incoming-reference report is incomplete; missing records do not prove absence or deletion safety.",
+            ));
+        }
+        Ok(result)
     }
 
     #[tool(

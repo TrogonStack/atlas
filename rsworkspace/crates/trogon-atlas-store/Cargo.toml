@@ -25,6 +25,7 @@ uuid = { workspace = true, features = ["v7"] }
 trogon-atlas-semconv = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 trogon-atlas-testsupport = { path = "../trogon-atlas-testsupport" }
 async-nats = { workspace = true }
 proptest = "1"
