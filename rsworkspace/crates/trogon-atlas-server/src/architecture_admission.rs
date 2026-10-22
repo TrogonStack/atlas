@@ -354,6 +354,50 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
+        let mut budget = crate::decision_document_resources::CatalogBudget::default();
+        for entity in &resources {
+            let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
+                continue;
+            };
+            let mut next = decision
+                .replaced_by
+                .as_ref()
+                .and_then(|replacement| replacement.decision.as_ref())
+                .and_then(|reference| reference.id.clone());
+            let mut visited = HashSet::new();
+            visited.insert(entity_id(entity)?.clone());
+            while let Some(id) = next.take() {
+                budget.examine(1)?;
+                if !visited.insert(id.clone()) {
+                    break;
+                }
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    ArchitectureTargetAccess::ExactDiagnostic(&lens),
+                    vec![(pb::EntityKind::Decision, id.clone())],
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+                let Some(row) = world.get(&pb::EntityKey::new(pb::EntityKind::Decision, &id))
+                else {
+                    break;
+                };
+                budget.owner(&row.entity)?;
+                let Some(pb::entity::Kind::Decision(target)) = &row.entity.kind else {
+                    break;
+                };
+                if target.status != pb::DecisionStatus::Superseded as i32 {
+                    break;
+                }
+                next = target
+                    .replaced_by
+                    .as_ref()
+                    .and_then(|replacement| replacement.decision.as_ref())
+                    .and_then(|reference| reference.id.clone());
+            }
+        }
         Ok(world.into_values().collect())
     }
 

@@ -136,6 +136,45 @@ impl CatalogBudget {
     }
 }
 
+fn replacement_resolves(decision: &pb::Decision, context: &ArchitectureContext<'_>) -> bool {
+    let Some(replacement) = &decision.replaced_by else {
+        return true;
+    };
+    let mut next = replacement
+        .decision
+        .as_ref()
+        .and_then(|reference| reference.id.as_ref());
+    let mut visited = HashSet::new();
+    if let Some(id) = &decision.id {
+        visited.insert(id);
+    }
+    for _ in 0..10_000 {
+        let Some(id) = next else { return false };
+        if id.version == 0 || !visited.insert(id) {
+            return false;
+        }
+        let Some(pb::Entity {
+            kind: Some(pb::entity::Kind::Decision(target)),
+            ..
+        }) = context.find(pb::EntityKind::Decision, id)
+        else {
+            return false;
+        };
+        match pb::DecisionStatus::try_from(target.status) {
+            Ok(pb::DecisionStatus::Accepted) => return true,
+            Ok(pb::DecisionStatus::Superseded) => {
+                next = target
+                    .replaced_by
+                    .as_ref()
+                    .and_then(|replacement| replacement.decision.as_ref())
+                    .and_then(|reference| reference.id.as_ref());
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 pub(crate) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
@@ -152,7 +191,18 @@ pub(crate) fn validate_in_context(
     if let Err(error) = trogon_atlas_core::decision_document::validate_values(entity) {
         issue("catalog", &error.to_string());
     }
+    if let Some(pb::entity::Kind::Decision(decision)) = &entity.kind {
+        if !replacement_resolves(decision, context) {
+            issue(
+                "replaced_by.decision",
+                "Replacement chain is absent, stale or unavailable",
+            );
+        }
+    }
     for reference in trogon_atlas_core::refs::outbound_refs(entity) {
+        if reference.from_field == "replaced_by.decision" {
+            continue;
+        }
         if !reference.to_kind.is_some_and(|kind| {
             reference.to_id.version > 0 && context.find(kind, &reference.to_id).is_some()
         }) {
