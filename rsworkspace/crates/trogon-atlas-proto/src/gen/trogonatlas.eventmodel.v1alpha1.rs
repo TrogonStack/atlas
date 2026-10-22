@@ -424,7 +424,7 @@ pub struct PersonaEdge {
 /// field references another type and the kind is unknown ahead of time.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TypeRef {
-    #[prost(oneof="type_ref::Ref", tags="1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof="type_ref::Ref", tags="1, 2, 3, 4, 5, 6, 7, 8")]
     pub r#ref: ::core::option::Option<type_ref::Ref>,
 }
 /// Nested message and enum types in `TypeRef`.
@@ -445,6 +445,12 @@ pub mod type_ref {
         Persona(super::PersonaRef),
         #[prost(message, tag="7")]
         Swimlane(super::SwimlaneRef),
+        /// A field whose type is a named top-level Schema entity (one with
+        /// `id` set), distinct from the Decision #33 Any-bytes nominal-typing
+        /// route: this is a structural ref the impact/reference graph can
+        /// walk, not just a type_url+bytes equality check.
+        #[prost(message, tag="8")]
+        Schema(super::SchemaRef),
     }
 }
 /// A field's type: a CLOSED vocabulary (the oneof is the finite, checkable
