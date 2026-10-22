@@ -122,33 +122,39 @@ enum Cmd {
         /// or an id that `describe` prints.
         entity: String,
     },
-    /// Inspect exact catalog declarations with backend checked scope.
+    /// List Decisions for an exact subject using proto3 JSON `ListSubjectDecisionsRequest`.
     ListSubjectDecisions {
+        /// Proto3 JSON `ListSubjectDecisionsRequest`.
         #[arg(long)]
         request: String,
     },
-    /// Inspect exact catalog declarations with backend checked scope.
+    /// List Documents for an exact subject using proto3 JSON `ListSubjectDocumentsRequest`.
     ListSubjectDocuments {
+        /// Proto3 JSON `ListSubjectDocumentsRequest`.
         #[arg(long)]
         request: String,
     },
-    /// Inspect exact catalog declarations with backend checked scope.
+    /// Inspect a Decision using proto3 JSON `GetDecisionDetailRequest`.
     GetDecisionDetail {
+        /// Proto3 JSON `GetDecisionDetailRequest`.
         #[arg(long)]
         request: String,
     },
-    /// Inspect exact catalog declarations with backend checked scope.
+    /// Inspect a whole Document or anchor using proto3 JSON `GetDocumentDetailRequest`.
     GetDocumentDetail {
+        /// Proto3 JSON `GetDocumentDetailRequest`.
         #[arg(long)]
         request: String,
     },
-    /// Inspect exact catalog declarations with backend checked scope.
+    /// Find declarations selecting a Decision using proto3 JSON `ListIncomingDecisionDeclarationsRequest`.
     ListIncomingDecisionDeclarations {
+        /// Proto3 JSON `ListIncomingDecisionDeclarationsRequest`.
         #[arg(long)]
         request: String,
     },
-    /// Inspect exact catalog declarations with backend checked scope.
+    /// Find declarations selecting a Document using proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
     ListIncomingDocumentDeclarations {
+        /// Proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
         #[arg(long)]
         request: String,
     },

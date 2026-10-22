@@ -3697,11 +3697,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // lives in `from`.
         let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::From);
         let total = all_references.len();
-        if total > 4_096 {
-            return Err(Status::resource_exhausted(
-                "reference output budget exceeded",
-            ));
-        }
         let references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
@@ -3762,11 +3757,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // lives in `to`.
         let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::To);
         let total = all_references.len();
-        if total > 4_096 {
-            return Err(Status::resource_exhausted(
-                "reference output budget exceeded",
-            ));
-        }
         let references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
@@ -3824,10 +3814,21 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             });
         }
 
+        all_nodes.sort_by_cached_key(|node| {
+            (
+                node.depth,
+                node.entity.as_ref().map(|entity| {
+                    (
+                        entity.kind,
+                        entity
+                            .id
+                            .as_ref()
+                            .map(|id| (id.namespace.clone(), id.slug.clone(), id.version)),
+                    )
+                }),
+            )
+        });
         let total = all_nodes.len();
-        if total > 4_096 {
-            return Err(Status::resource_exhausted("impact output budget exceeded"));
-        }
         let nodes: Vec<pb::ImpactNode> =
             all_nodes.into_iter().skip(offset).take(page_size).collect();
         let next_offset = offset + nodes.len();

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '@/lib/api';
+import type { CatalogInspection } from '@/lib/decision-document';
 import { buildModel } from '@/lib/model';
 import { DecisionDocumentInspector } from './DecisionDocumentInspector';
 
@@ -51,6 +52,63 @@ afterEach(() => {
   window.history.replaceState({}, '', '/');
 });
 describe('native catalog inspector', () => {
+  it('preserves pending and completed queries across same-context parent renders', async () => {
+    let resolveDetail: ((value: CatalogInspection) => void) | undefined;
+    vi.mocked(api.getDocumentDetail).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDetail = resolve;
+        }),
+    );
+    const note = entity();
+    const { rerender } = render(<DecisionDocumentInspector entity={note} />);
+    const signal = vi.mocked(api.getDocumentDetail).mock.calls[0][1]?.signal;
+    rerender(<DecisionDocumentInspector entity={structuredClone(note)} />);
+    expect(api.getDocumentDetail).toHaveBeenCalledTimes(1);
+    expect(signal?.aborted).toBe(false);
+    resolveDetail?.({ scope: { revision: 'retained-result' } });
+    await screen.findAllByText(/retained-result/);
+    rerender(<DecisionDocumentInspector entity={structuredClone(note)} />);
+    for (const method of [
+      api.getDocumentDetail,
+      api.listIncomingDocumentDeclarations,
+      api.listSubjectDecisions,
+      api.listSubjectDocuments,
+    ])
+      expect(method).toHaveBeenCalledTimes(1);
+    expect(signal?.aborted).toBe(false);
+    expect(screen.getAllByText(/retained-result/).length).toBeGreaterThan(0);
+  });
+  it('aborts old queries and reloads on changed context, and suspends hydration for history', async () => {
+    const note = entity();
+    const { rerender } = render(<DecisionDocumentInspector entity={note} />);
+    let count = 1;
+    for (const changed of [
+      { ...note, uid: 'new-incarnation' },
+      { ...note, raw: { ...note.raw, title: { value: 'Edited' } } },
+      { ...note, id: { ...id, version: '8' } },
+    ]) {
+      const signal = vi.mocked(api.getDocumentDetail).mock.calls.at(-1)?.[1]?.signal;
+      rerender(<DecisionDocumentInspector entity={changed} />);
+      expect(signal?.aborted).toBe(true);
+      expect(api.getDocumentDetail).toHaveBeenCalledTimes(++count);
+    }
+    const signal = vi.mocked(api.getDocumentDetail).mock.calls.at(-1)?.[1]?.signal;
+    window.history.replaceState({}, '', '/?branch=other');
+    rerender(<DecisionDocumentInspector entity={note} />);
+    expect(signal?.aborted).toBe(true);
+    expect(api.getDocumentDetail).toHaveBeenLastCalledWith(
+      { document: { id } },
+      expect.objectContaining({ branch: 'other' }),
+    );
+    expect(api.getDocumentDetail).toHaveBeenCalledTimes(++count);
+    const currentSignal = vi.mocked(api.getDocumentDetail).mock.calls.at(-1)?.[1]?.signal;
+    rerender(<DecisionDocumentInspector entity={note} asOf="retained-revision" />);
+    expect(currentSignal?.aborted).toBe(true);
+    expect(api.getDocumentDetail).toHaveBeenCalledTimes(count);
+    rerender(<DecisionDocumentInspector entity={note} />);
+    await waitFor(() => expect(api.getDocumentDetail).toHaveBeenCalledTimes(count + 1));
+  });
   it('recognizes kind and title, escapes retained Markdown and preserves exact branch/subject selectors', async () => {
     const note = entity();
     expect(note.kind).toBe('document');

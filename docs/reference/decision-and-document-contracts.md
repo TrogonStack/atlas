@@ -271,7 +271,8 @@ defines typed request and response fields.
 
 | RPC | Input and result |
 | --- | --- |
-| `ListSubjectDecisions`, `ListSubjectDocuments` | Exact CatalogSubject and optional typed Decision status filter. Return authorized owners, owner UID, association ID and unchanged full selector; no owner/endpoint/family expansion. |
+| `ListSubjectDecisions` | Exact CatalogSubject and optional typed Decision status filter. Return authorized owners, owner UID, association ID and unchanged full selector; no owner/endpoint/family expansion. |
+| `ListSubjectDocuments` | Exact CatalogSubject. Return authorized owners, owner UID, association ID and unchanged full selector; no owner/endpoint/family expansion. |
 | `GetDecisionDetail` | Exact DecisionRef. Return authored state, selected option and resolved/unresolved supporting/replacement/subject records; following replacement is explicit, bounded and cycle-aware. |
 | `GetDocumentDetail` | Exact DocumentSelection. Return authorized retained bytes/media/digest or unverified inert link and declared anchor metadata. |
 | `ListIncomingDecisionDeclarations`, `ListIncomingDocumentDeclarations` | Exact DecisionRef or DocumentSelection. Match full selector, including pin presence/value, without promoting anchor lookup to whole-document lookup. |

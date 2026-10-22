@@ -21,10 +21,12 @@ function Exact({ value }: { value: unknown }) {
   );
 }
 function Query({ title, load }: { title: string; load: (signal: AbortSignal) => Promise<CatalogInspection> }) {
+  // The keyed context owns this query's lifetime, including its initial loader.
+  const [loadContext] = useState(() => load);
   const [result, setResult] = useState<{ data?: CatalogInspection; error?: string }>();
   useEffect(() => {
     const controller = new AbortController();
-    load(controller.signal).then(
+    loadContext(controller.signal).then(
       (data) => {
         if (!controller.signal.aborted) setResult({ data });
       },
@@ -33,7 +35,7 @@ function Query({ title, load }: { title: string; load: (signal: AbortSignal) => 
       },
     );
     return () => controller.abort();
-  }, [load]);
+  }, [loadContext]);
   return (
     <section className="flex flex-col gap-2">
       <h4 className="font-semibold">{title}</h4>
