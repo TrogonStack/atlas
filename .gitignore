@@ -29,6 +29,9 @@ rsworkspace/lcov.info
 # buf dependency pins
 !proto/buf.lock
 
+# Legacy descriptor output; Cargo generates reflection metadata in OUT_DIR.
+/rsworkspace/crates/trogon-atlas-proto/src/gen/descriptor.binpb
+
 # Studio
 tsworkspace/node_modules/
 tsworkspace/webapps/studio/coverage/
