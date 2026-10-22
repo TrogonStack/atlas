@@ -1020,6 +1020,23 @@ pub struct FailureModeAnnotation {
     #[prost(string, tag="3")]
     pub recovery: ::prost::alloc::string::String,
 }
+/// Declares that a field's value domain is the same concept as every other
+/// field carrying an identical tag, without requiring either field to adopt
+/// a shared top-level Schema or Enumeration entity. A cheap way to record
+/// intentional reuse the moment an author notices it -- e.g. two different
+/// RPCs' request filters that both constrain the same conceptual enum --
+/// without first doing the heavier refactor of extracting a named type.
+/// Purely descriptive: like FailureModeAnnotation, no validator rule keys
+/// off this message today.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DomainTagAnnotation {
+    /// Free-form, author-chosen. Two fields carrying the same tag (compared
+    /// as exact string equality) are declared the same domain concept.
+    /// Namespace by convention to avoid collisions, e.g. "invoice-source" or
+    /// "acme.billing.currency-code".
+    #[prost(string, tag="1")]
+    pub tag: ::prost::alloc::string::String,
+}
 /// Command slice: Command -> Event(s)
 ///
 /// When persona and UI are present, the command is human-issued from that
