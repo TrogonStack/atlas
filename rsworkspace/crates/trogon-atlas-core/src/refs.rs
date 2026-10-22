@@ -3782,12 +3782,12 @@ mod tests {
             ..Default::default()
         }));
         let rewritten = retarget_refs(&mut entity, EntityKind::Schema, &old, &new);
-        assert!(
-            rewritten
-                .iter()
-                .any(|p| p == "schema.fields[0].ref" || p.ends_with(".ref")),
-            "retarget_refs must rewrite the TypeRef::Schema; got {rewritten:?}"
-        );
+        assert_eq!(rewritten, vec!["schema.fields[0].ref".to_string()]);
+        let refs = outbound_refs(&entity);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].to_kind, Some(EntityKind::Schema));
+        assert_eq!(refs[0].to_id, new);
+        assert_eq!(refs[0].from_field, "schema.fields[0].ref");
     }
 
     /// BUG: `Swimlane.state` is a load-bearing FieldSpec list (aggregate
