@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-#MISE description="Regenerate the Rust proto code and the Atlas FileDescriptorSet with buf"
+#MISE description="Regenerate the checked-in Rust proto code with buf"
 set -euo pipefail
 
 cd "$MISE_PROJECT_ROOT"
 buf generate --template .config/buf/buf.gen.yaml
 buf generate --template .config/buf/buf.gen.authzed.yaml
-buf build proto -o rsworkspace/crates/trogon-atlas-proto/src/gen/descriptor.binpb --as-file-descriptor-set
