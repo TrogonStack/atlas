@@ -1,0 +1,9 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Persona
+metadata:
+  name: shopper
+  namespace: acme-fulfillment
+spec:
+  doc: The customer following their paid order from dispatch to delivery.
+  role: customer
+  title: Shopper

@@ -52,6 +52,48 @@ the write landed in, because a branch write keeps no durable receipt:
 
 `scope` is `baseline` and `branch` is `null` when no branch applies.
 
+`put_entity`, `put_entity_json`, `delete_entity`, `batch_mutate` and
+`batch_mutate_json` also return the server's validation findings as a JSON
+`issues` array next to `binpb_base64`, so an agent reads them without decoding
+the protobuf. Findings
+are non-blocking, strategic ones included (BoundedContext, Domain and Subdomain
+rules), and `validate_only` dry runs return them too:
+
+```json
+{
+  "scope": "baseline",
+  "branch": null,
+  "issues": [
+    {
+      "severity": "warning",
+      "code": "DOMAIN_IN_CONTEXT_NAMESPACE",
+      "message": "...",
+      "subject": "domain:shop/shop@1",
+      "field": null
+    }
+  ],
+  "binpb_base64": "..."
+}
+```
+
+`severity` is `error`, `warning` or `info`; `subject` and `field` are `null`
+when the finding names no entity or path. Batch findings also carry
+`op_index` (zero-based position of the put or delete op) and `op_entity` (the
+entity that op wrote or deleted). `delete_entity` returns what the delete leaves
+behind, such as `REALIZES_DANGLING` after force-deleting a realized Subdomain,
+and `mode: dry_run` previews it. `merge_branch` adds the same `issues` array from the response's
+post-merge validation. Fix every warning and error that comes back.
+
+`apply_manifests` returns the same objects in `issues`, so one shape covers
+every mutating tool. `op_index` is the position among the changed manifests
+sent in the batch (unchanged manifests are skipped) and `op_entity` is the
+manifest's entity id.
+
+Strategic findings also appear once on the store-level report of
+`validate_project` (an empty `event_model_id`). After editing only Project,
+Domain, Subdomain or BoundedContext entities, run `validate_project` with the
+namespace or project scope, since there may be no EventModel to validate.
+
 ## Error contract
 
 Internal helpers (`descriptor_for`, `message_from_json`,

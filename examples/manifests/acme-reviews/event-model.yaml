@@ -7,12 +7,12 @@ spec:
   doc: Review eligibility and review submission for delivered storefront orders.
   members:
   - id:
-      namespace: acme-reviews
-      slug: customer-trust
+      namespace: acme
+      slug: acme
       version: '1'
     kind: ENTITY_KIND_DOMAIN
   - id:
-      namespace: acme-reviews
+      namespace: acme
       slug: seller-reputation
       version: '1'
     kind: ENTITY_KIND_SUBDOMAIN

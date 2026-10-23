@@ -437,3 +437,115 @@ fn tempfile_dir() -> tempfile::TempDir {
         .tempdir()
         .unwrap()
 }
+
+// A BoundedContext realizing a Subdomain that is not stored yet lands with
+// an Error-severity REALIZES_DANGLING finding; the write succeeded, so apply
+// exits 0 and still reports the finding.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trogon_atlas_apply_exits_zero_when_only_strategic_errors_ride_a_landed_write() {
+    let endpoint = start_server().await;
+    let ns = "cli-apply-strategic-error";
+    let dir = tempfile_dir();
+    let manifest_path = dir.path().join("context.yaml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata: {{ namespace: {ns}, name: {ns} }}
+spec:
+  title: Checkout
+  realizes:
+  - id: {{ namespace: {ns}, slug: checkout, version: '1' }}
+"
+        ),
+    )
+    .unwrap();
+
+    let applied = trogon_atlas(
+        &endpoint,
+        &[
+            "--format",
+            "json",
+            "apply",
+            "-f",
+            manifest_path.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(applied.status.code(), Some(0), "{applied:?}");
+    let doc: serde_json::Value = serde_json::from_str(&applied.stdout).unwrap();
+    let dangling = doc["data"]["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "REALIZES_DANGLING")
+        .unwrap_or_else(|| panic!("no REALIZES_DANGLING in {doc}"));
+    assert_eq!(dangling["severity"], "error", "{doc}");
+}
+
+// An applied merge carries strategic findings (non-blocking at any severity).
+// Depends on the server returning them on STATUS_APPLIED.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trogon_atlas_branch_merge_applied_prints_and_returns_strategic_findings() {
+    let endpoint = start_server().await;
+    let ns = "cli-merge-strategic";
+
+    let created = trogon_atlas(&endpoint, &["branch", "create", "cli-merge-strategic"]);
+    assert!(created.status.success(), "{:?}", created.stderr);
+
+    let dir = tempfile_dir();
+    let manifest_path = dir.path().join("strategic.yaml");
+    std::fs::write(
+        &manifest_path,
+        format!(
+            r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: BoundedContext
+metadata: {{ namespace: {ns}, name: {ns} }}
+spec: {{ title: Shop }}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata: {{ namespace: {ns}, name: {ns} }}
+spec: {{ title: Shop }}
+"
+        ),
+    )
+    .unwrap();
+    let applied = trogon_atlas_branched(
+        &endpoint,
+        "cli-merge-strategic",
+        &["apply", "-f", manifest_path.to_str().unwrap()],
+    );
+    assert!(applied.status.success(), "{:?}", applied.stderr);
+
+    let merged = trogon_atlas(
+        &endpoint,
+        &[
+            "--format",
+            "json",
+            "branch",
+            "merge",
+            "cli-merge-strategic",
+            "--keep-branch",
+        ],
+    );
+    assert_eq!(merged.status.code(), Some(0), "{merged:?}");
+    let doc: serde_json::Value = serde_json::from_str(&merged.stdout).unwrap();
+    assert_eq!(doc["data"]["status"], "applied", "{doc}");
+    assert!(
+        doc["data"]["validation_summary"]["warnings"]
+            .as_u64()
+            .unwrap()
+            >= 1,
+        "{doc}"
+    );
+    let codes: Vec<_> = doc["data"]["validation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|issue| issue["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"DOMAIN_IN_CONTEXT_NAMESPACE"), "{doc}");
+}

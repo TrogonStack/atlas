@@ -7,12 +7,12 @@ spec:
   doc: A shopper saves products to a wishlist.
   members:
   - id:
-      namespace: acme-wishlist
-      slug: shopping
+      namespace: acme
+      slug: acme
       version: '1'
     kind: ENTITY_KIND_DOMAIN
   - id:
-      namespace: acme-wishlist
+      namespace: acme
       slug: wishlists
       version: '1'
     kind: ENTITY_KIND_SUBDOMAIN

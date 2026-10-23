@@ -1,0 +1,21 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: ReadModelSlice
+metadata:
+  name: order-status-fulfilled-rms
+  namespace: acme-fulfillment
+spec:
+  doc: Status row on delivery.
+  projectionRole: PROJECTION_ROLE_UPSERT
+  readModel:
+    readModel:
+      id:
+        namespace: acme-fulfillment
+        slug: order-status
+        version: '1'
+  sourceEvents:
+  - event:
+      id:
+        namespace: acme-fulfillment
+        slug: order.fulfilled
+        version: '1'
+  title: 'Projection: order fulfilled'

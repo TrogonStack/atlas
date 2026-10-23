@@ -127,6 +127,138 @@ async fn validate_project_namespace_scope_covers_only_that_namespace() {
     assert_eq!(validated, ["vp-ns-a/checkout", "vp-ns-a/refunds"]);
 }
 
+async fn put_entity(svc: &EventModelServiceImpl, entity: pb::Entity) {
+    svc.put_entity(Request::new(pb::PutEntityRequest {
+        operation_id: String::new(),
+        entity: Some(entity),
+        create_only: true,
+        if_match: String::new(),
+        validate_only: false,
+        force: false,
+    }))
+    .await
+    .unwrap();
+}
+
+async fn seed_confused_context(svc: &EventModelServiceImpl, ns: &str) {
+    let domain_id = id(ns, "retail", 1);
+    put_entity(
+        svc,
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Domain(pb::Domain {
+                id: Some(domain_id.clone()),
+                title: "Retail".into(),
+                ..Default::default()
+            })),
+        },
+    )
+    .await;
+    let mut realizes = Vec::new();
+    for (slug, classification) in [
+        ("ordering", pb::subdomain::Classification::Core),
+        ("fulfillment", pb::subdomain::Classification::Supporting),
+    ] {
+        put_entity(
+            svc,
+            pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Subdomain(pb::Subdomain {
+                    id: Some(id(ns, slug, 1)),
+                    title: slug.into(),
+                    domain: Some(pb::DomainRef {
+                        id: Some(domain_id.clone()),
+                    }),
+                    classification: classification as i32,
+                    ..Default::default()
+                })),
+            },
+        )
+        .await;
+        realizes.push(pb::SubdomainRef {
+            id: Some(id(ns, slug, 1)),
+        });
+    }
+    put_entity(
+        svc,
+        pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::BoundedContext(pb::BoundedContext {
+                id: Some(id(ns, ns, 1)),
+                title: ns.into(),
+                realizes,
+                ..Default::default()
+            })),
+        },
+    )
+    .await;
+}
+
+fn codes_of(issues: &[pb::ValidationIssue], code: &str) -> usize {
+    issues.iter().filter(|i| i.code == code).count()
+}
+
+const STRATEGIC_FINDINGS: [&str; 3] = [
+    "DOMAIN_SLUG_MISMATCH",
+    "DOMAIN_IN_CONTEXT_NAMESPACE",
+    "REALIZES_MIXED_CLASSIFICATIONS",
+];
+
+#[tokio::test(flavor = "multi_thread")]
+async fn validate_event_model_reports_the_strategic_chain() {
+    let svc = svc().await;
+    seed_confused_context(&svc, "vem-chain").await;
+    put_entity(&svc, make_event_model("vem-chain", "checkout")).await;
+
+    let issues = svc
+        .validate_event_model(Request::new(pb::ValidateEventModelRequest {
+            event_model: None,
+            event_model_id: Some(id("vem-chain", "checkout", 1)),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .issues;
+    for code in STRATEGIC_FINDINGS {
+        assert_eq!(codes_of(&issues, code), 1, "{code}: {issues:?}");
+    }
+    assert_eq!(codes_of(&issues, "REALIZES_MULTIPLE"), 0, "{issues:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn validate_project_reports_the_strategic_chain_once() {
+    let svc = svc().await;
+    seed_confused_context(&svc, "vp-chain").await;
+    put_entity(&svc, make_event_model("vp-chain", "checkout")).await;
+    put_entity(&svc, make_event_model("vp-chain", "refunds")).await;
+
+    let resp = svc
+        .validate_project(Request::new(pb::ValidateProjectRequest {
+            scope: Some(pb::validate_project_request::Scope::Namespace(
+                "vp-chain".into(),
+            )),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let all_issues: Vec<pb::ValidationIssue> = resp
+        .reports
+        .iter()
+        .flat_map(|r| r.issues.iter().cloned())
+        .collect();
+    for code in STRATEGIC_FINDINGS {
+        assert_eq!(codes_of(&all_issues, code), 1, "{code}: {all_issues:?}");
+    }
+    let store_report = resp
+        .reports
+        .iter()
+        .find(|r| r.event_model_id.is_none())
+        .expect("strategic findings ride the store report");
+    for code in STRATEGIC_FINDINGS {
+        assert_eq!(codes_of(&store_report.issues, code), 1, "{code}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn validate_project_rejects_an_empty_namespace_scope() {
     let svc = svc().await;

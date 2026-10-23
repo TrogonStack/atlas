@@ -7,7 +7,7 @@ spec:
   doc: Owns each shopper's wishlist.
   realizes:
   - id:
-      namespace: acme-wishlist
+      namespace: acme
       slug: wishlists
       version: '1'
   title: Acme Wishlist

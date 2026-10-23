@@ -7,7 +7,7 @@ spec:
   doc: Owns the request-to-completion lifecycle of a customer data deletion, and dispatch to every downstream vendor.
   realizes:
   - id:
-      namespace: acme-customer-data-deletion
+      namespace: acme
       slug: data-deletion
       version: '1'
   title: Acme Customer Data Deletion

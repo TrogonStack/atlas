@@ -1,0 +1,37 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: CommandSlice
+metadata:
+  name: mark-fulfilled-slice
+  namespace: acme-fulfillment
+spec:
+  command:
+    command:
+      id:
+        namespace: acme-fulfillment
+        slug: mark-fulfilled
+        version: '1'
+  doc: Acme Shipping Carrier confirmed delivery.
+  emittedEvents:
+  - event:
+      id:
+        namespace: acme-fulfillment
+        slug: order.fulfilled
+        version: '1'
+  scenarios:
+  - doc: Delivery confirmed for a paid order from the fulfillment queue.
+    emit:
+      events:
+      - event:
+          id:
+            namespace: acme-fulfillment
+            slug: order.fulfilled
+            version: '1'
+    id: delivered
+    title: Delivery confirmed
+    when:
+      command:
+        id:
+          namespace: acme-fulfillment
+          slug: mark-fulfilled
+          version: '1'
+  title: Mark fulfilled

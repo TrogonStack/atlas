@@ -130,6 +130,7 @@ async fn mcp_read_write_tool_lifecycle() {
     assert!(!put_result.is_error.unwrap_or(false), "{put_result:?}");
     let put_body = call_tool_result_text(&put_result);
     assert!(put_body["binpb_base64"].is_string(), "{put_body:?}");
+    assert!(put_body["issues"].is_array(), "{put_body:?}");
 
     // get_entity_json: read back as proto3 JSON, with an etag.
     let get_json_result = client
@@ -216,6 +217,7 @@ async fn mcp_read_write_tool_lifecycle() {
     let raw = base64_decode(batch_body["binpb_base64"].as_str().unwrap());
     let decoded = pb::BatchMutateResponse::decode(raw.as_slice()).unwrap();
     assert_eq!(decoded.results.len(), 2, "{decoded:?}");
+    assert!(batch_body["issues"].is_array(), "{batch_body:?}");
 
     // delete_entity: the second entity is now deletable directly.
     let delete_result = client
@@ -337,6 +339,7 @@ spec: { title: Order placed }
     let dry_body = call_tool_result_text(&dry_result);
     let lines = dry_body["lines"].as_array().unwrap();
     assert_eq!(lines.len(), 1, "{dry_body:?}");
+    assert!(dry_body["issues"].is_array(), "{dry_body:?}");
     assert!(
         lines[0].as_str().unwrap().contains("dry run"),
         "{:?}",
@@ -536,6 +539,205 @@ async fn mcp_batch_mutate_json_status_failed_reports_as_error() {
         }
         other => panic!("expected McpError, got {other:?}"),
     }
+
+    mcp_service.cancel().await.unwrap();
+}
+
+// Strategic findings are non-blocking: put_entity_json lands the write and
+// returns them in `issues`, readable without decoding binpb_base64. Depends on
+// the server returning strategic findings from PutEntity.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_put_entity_json_returns_strategic_findings_in_issues() {
+    let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
+    let ns = "mcp-strategic-issues";
+
+    let put = |entity: serde_json::Value| {
+        let client = &client;
+        async move {
+            client
+                .call_tool(
+                    rmcp::model::CallToolRequestParams::new("put_entity_json").with_arguments(
+                        args_obj(&[("entity_json", serde_json::json!(entity.to_string()))]),
+                    ),
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let context = put(serde_json::json!({
+        "boundedContext": {"id": {"namespace": ns, "slug": ns, "version": 1}, "title": "Shop"}
+    }))
+    .await;
+    assert!(!context.is_error.unwrap_or(false), "{context:?}");
+
+    let domain = put(serde_json::json!({
+        "domain": {"id": {"namespace": ns, "slug": ns, "version": 1}, "title": "Shop"}
+    }))
+    .await;
+    assert!(!domain.is_error.unwrap_or(false), "{domain:?}");
+    let body = call_tool_result_text(&domain);
+    let issue = body["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "DOMAIN_IN_CONTEXT_NAMESPACE")
+        .unwrap_or_else(|| panic!("no DOMAIN_IN_CONTEXT_NAMESPACE in {body:?}"));
+    assert_eq!(issue["severity"], "warning", "{issue:?}");
+    assert!(issue["subject"].as_str().unwrap().contains(ns), "{issue:?}");
+    assert!(body["binpb_base64"].is_string(), "{body:?}");
+
+    mcp_service.cancel().await.unwrap();
+}
+
+// delete_entity returns the findings a delete leaves behind in `issues`: a
+// force delete of a realized Subdomain strands the BoundedContext that
+// realizes it. A dry_run previews the same finding without deleting. Depends
+// on the server returning strategic findings from DeleteEntity.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_delete_entity_returns_strategic_findings_in_issues() {
+    let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
+    let ps = "mcp-del-ps";
+    let ctx = "mcp-del";
+
+    let put = |entity: serde_json::Value| {
+        let client = &client;
+        async move {
+            let result = client
+                .call_tool(
+                    rmcp::model::CallToolRequestParams::new("put_entity_json").with_arguments(
+                        args_obj(&[("entity_json", serde_json::json!(entity.to_string()))]),
+                    ),
+                )
+                .await
+                .unwrap();
+            assert!(!result.is_error.unwrap_or(false), "{result:?}");
+        }
+    };
+    put(serde_json::json!({
+        "domain": {"id": {"namespace": ps, "slug": ps, "version": 1}, "title": "Shop"}
+    }))
+    .await;
+    put(serde_json::json!({
+        "subdomain": {
+            "id": {"namespace": ps, "slug": "ordering", "version": 1},
+            "title": "Ordering",
+            "domain": {"id": {"namespace": ps, "slug": ps, "version": 1}},
+            "classification": "CLASSIFICATION_CORE"
+        }
+    }))
+    .await;
+    put(serde_json::json!({
+        "boundedContext": {
+            "id": {"namespace": ctx, "slug": ctx, "version": 1},
+            "title": "Ordering",
+            "realizes": [{"id": {"namespace": ps, "slug": "ordering", "version": 1}}]
+        }
+    }))
+    .await;
+
+    let delete = |mode: &'static str| {
+        let client = &client;
+        async move {
+            let result = client
+                .call_tool(
+                    rmcp::model::CallToolRequestParams::new("delete_entity").with_arguments(
+                        args_obj(&[
+                            ("kind", serde_json::json!("subdomain")),
+                            ("namespace", serde_json::json!(ps)),
+                            ("slug", serde_json::json!("ordering")),
+                            ("version", serde_json::json!(1)),
+                            ("mode", serde_json::json!(mode)),
+                        ]),
+                    ),
+                )
+                .await
+                .unwrap();
+            assert!(!result.is_error.unwrap_or(false), "{result:?}");
+            call_tool_result_text(&result)
+        }
+    };
+
+    let preview = delete("dry_run").await;
+    assert!(
+        preview["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|issue| issue["code"] == "REALIZES_DANGLING"),
+        "dry_run lost the preview findings: {preview:?}"
+    );
+
+    let body = delete("force").await;
+    let issue = body["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "REALIZES_DANGLING")
+        .unwrap_or_else(|| panic!("no REALIZES_DANGLING in {body:?}"));
+    assert!(issue["severity"].is_string(), "{issue:?}");
+    assert!(
+        issue["subject"].as_str().unwrap().contains(ctx),
+        "{issue:?}"
+    );
+    assert!(body["binpb_base64"].is_string(), "{body:?}");
+
+    mcp_service.cancel().await.unwrap();
+}
+
+// apply_manifests returns its findings as the same objects put/batch return,
+// tagged with the op that produced them. Depends on the server returning
+// strategic findings from BatchMutate.
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_apply_manifests_dry_run_returns_strategic_findings_as_objects() {
+    let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
+    let ns = "mcp-apply-strategic";
+
+    let context = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("put_entity_json").with_arguments(args_obj(&[(
+                "entity_json",
+                serde_json::json!(serde_json::json!({
+                    "boundedContext": {"id": {"namespace": ns, "slug": ns, "version": 1}, "title": "Shop"}
+                })
+                .to_string()),
+            )])),
+        )
+        .await
+        .unwrap();
+    assert!(!context.is_error.unwrap_or(false), "{context:?}");
+
+    let manifest_yaml = format!(
+        r"
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Domain
+metadata: {{ namespace: {ns}, name: {ns} }}
+spec: {{ title: Shop }}
+"
+    );
+    let result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("apply_manifests").with_arguments(args_obj(&[
+                ("manifests_yaml", serde_json::json!(manifest_yaml)),
+                ("dry_run", serde_json::json!(true)),
+            ])),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error.unwrap_or(false), "{result:?}");
+    let body = call_tool_result_text(&result);
+    let issue = body["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "DOMAIN_IN_CONTEXT_NAMESPACE")
+        .unwrap_or_else(|| panic!("no DOMAIN_IN_CONTEXT_NAMESPACE in {body:?}"));
+    assert!(issue.is_object(), "{issue:?}");
+    assert_eq!(issue["severity"], "warning", "{issue:?}");
+    assert_eq!(issue["op_index"], 0, "{issue:?}");
+    assert!(
+        issue["op_entity"].as_str().unwrap().contains(ns),
+        "{issue:?}"
+    );
 
     mcp_service.cancel().await.unwrap();
 }

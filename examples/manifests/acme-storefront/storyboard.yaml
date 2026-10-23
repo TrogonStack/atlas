@@ -49,19 +49,15 @@ spec:
       namespace: acme-storefront
       slug: pending-payments-rms
       version: '1'
-  - id:
-      namespace: acme-storefront
-      slug: order-status-placed-rms
-      version: '1'
   title: Checkout
 ---
 apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
 kind: Storyboard
 metadata:
-  name: fulfillment-flow
+  name: payment-flow
   namespace: acme-storefront
 spec:
-  doc: A placed order is captured, dispatched, and confirmed delivered. It starts from the pending-payments queue that checkout-flow populated.
+  doc: A placed order has its payment captured. It starts from the pending-payments queue that checkout-flow populated.
   entry:
     automation:
       processor:
@@ -81,7 +77,7 @@ spec:
     - event:
         id:
           namespace: acme-storefront
-          slug: order.fulfilled
+          slug: order.paid
           version: '1'
   slices:
   - id:
@@ -94,26 +90,6 @@ spec:
       version: '1'
   - id:
       namespace: acme-storefront
-      slug: order-status-paid-rms
+      slug: pending-payments-delete-rms
       version: '1'
-  - id:
-      namespace: acme-storefront
-      slug: fulfillment-queue-rms
-      version: '1'
-  - id:
-      namespace: acme-storefront
-      slug: mark-fulfilled-auto
-      version: '1'
-  - id:
-      namespace: acme-storefront
-      slug: mark-fulfilled-slice
-      version: '1'
-  - id:
-      namespace: acme-storefront
-      slug: order-status-fulfilled-rms
-      version: '1'
-  - id:
-      namespace: acme-storefront
-      slug: order-tracking-ui-slice
-      version: '1'
-  title: Fulfillment
+  title: Payment
