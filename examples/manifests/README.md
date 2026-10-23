@@ -16,15 +16,6 @@ per entity kind.
 `acme` holds no bounded context. Every other namespace is one bounded
 context that realizes one `acme` subdomain across namespaces.
 
-Apply a namespace in one atomic batch, check it without writing, or detect
-drift between the files and a running server:
-
-```sh
-trogon-atlas apply -f examples/manifests/acme-storefront/            # idempotent
-trogon-atlas apply -f examples/manifests/acme-storefront/ --dry-run  # validate only
-trogon-atlas diff  -f examples/manifests/acme-storefront/            # exit 1 on drift
-```
-
 Apply `acme` first, because every context realizes one of its subdomains.
 `acme-fulfillment` references entities in `acme-storefront`, and
 `acme-reviews` references entities in `acme-fulfillment`, so apply them
@@ -35,6 +26,16 @@ them together:
 ```sh
 trogon-atlas apply -f examples/manifests/acme/ examples/manifests/acme-storefront/ \
   examples/manifests/acme-fulfillment/ examples/manifests/acme-reviews/
+```
+
+Once its dependencies are in the store, apply a namespace in one atomic
+batch, check it without writing, or detect drift between the files and a
+running server:
+
+```sh
+trogon-atlas apply -f examples/manifests/acme-storefront/            # idempotent
+trogon-atlas apply -f examples/manifests/acme-storefront/ --dry-run  # validate only
+trogon-atlas diff  -f examples/manifests/acme-storefront/            # exit 1 on drift
 ```
 
 `acme-customer-data-deletion` and `acme-wishlist` only need `acme`. To
