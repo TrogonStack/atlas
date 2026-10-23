@@ -2,7 +2,7 @@
 // ValidateEventModelResponse.issues (service.proto: ValidationIssue).
 
 import { describe, expect, it } from 'vitest';
-import { buildIssueIndex, EMPTY_ISSUE_INDEX } from './issues';
+import { buildIssueIndex, buildProjectIssueIndex, EMPTY_ISSUE_INDEX } from './issues';
 
 // Shaped like GET /api/validate?namespace=registry&slug=changeset-review-flow.
 const RM_EVENT_NOT_PROJECTED = {
@@ -86,5 +86,35 @@ describe('buildIssueIndex', () => {
     expect(failed.error).toBe('validate: 503');
     expect(failed.all).toEqual([]);
     expect(EMPTY_ISSUE_INDEX.error).toBeUndefined();
+  });
+});
+
+describe('buildProjectIssueIndex', () => {
+  const strategic = {
+    severity: 'SEVERITY_WARNING',
+    code: 'DOMAIN_IN_CONTEXT_NAMESPACE',
+    message: 'misplaced',
+    subject: { kind: 'ENTITY_KIND_DOMAIN', id: { namespace: 'accounts', slug: 'accounts', version: '1' } },
+  };
+  const own = { severity: 'SEVERITY_ERROR', code: 'DANGLING_REF', message: 'missing' };
+
+  it('collapses the strategic chain repeated by the store-level and per-model reports', () => {
+    const index = buildProjectIssueIndex([
+      {
+        reports: [
+          { issues: [strategic] },
+          { eventModelId: { namespace: 'accounts', slug: 'checkout' }, issues: [strategic, own] },
+        ],
+      },
+      { reports: [{ issues: [strategic] }] },
+    ]);
+    expect(index.all.map((i) => i.code)).toEqual(['DANGLING_REF', 'DOMAIN_IN_CONTEXT_NAMESPACE']);
+    expect(index.for({ kind: 'domain', id: { namespace: 'accounts', slug: 'accounts', version: '1' } })).toHaveLength(
+      1,
+    );
+  });
+
+  it('is empty for missing responses and reports', () => {
+    expect(buildProjectIssueIndex([undefined, {}, { reports: [{}] }]).all).toEqual([]);
   });
 });
