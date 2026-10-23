@@ -5093,6 +5093,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .has_incoming_reference(kind, &id, branch.as_deref())
                 .await
                 .map_err(store_err)?;
+        if is_referenced {
+            let status = Status::failed_precondition(
+                "entity is referenced; pass mode=FORCE or repair referrers first",
+            );
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
         let report = async {
             let mut report = self.delete_reporting_index(branch.as_deref(), &vis).await?;
             let references = report.take_referrers(kind, &id)?;
@@ -5122,15 +5131,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     operation_receipt: None,
                     validation,
                 }));
-            }
-            pb::delete_entity_request::Mode::FailIfReferenced if is_referenced => {
-                let status = Status::failed_precondition(
-                    "entity is referenced; pass mode=FORCE or repair referrers first",
-                );
-                if let Some(key) = &claim_key {
-                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
-                }
-                return Err(status);
             }
             pb::delete_entity_request::Mode::Unspecified => {
                 let status = Status::invalid_argument(
