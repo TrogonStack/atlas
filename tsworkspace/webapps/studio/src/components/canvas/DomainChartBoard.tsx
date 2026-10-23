@@ -53,11 +53,13 @@ function FindingMarker({ marker }: { marker?: ChartMarker }) {
   return (
     <span
       title={markerTooltip(marker)}
-      aria-label={`${count} validation ${count === 1 ? 'finding' : 'findings'}: ${marker.findings.map((f) => f.code).join(', ')}`}
       className={cn('ml-auto flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-bold', tone)}
     >
       <Icon aria-hidden="true" className="h-2.5 w-2.5" />
-      {count}
+      <span aria-hidden="true">{count}</span>
+      <span className="sr-only">
+        {`${count} validation ${count === 1 ? 'finding' : 'findings'}: ${marker.findings.map((f) => f.code).join(', ')}`}
+      </span>
     </span>
   );
 }
