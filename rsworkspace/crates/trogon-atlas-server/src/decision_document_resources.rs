@@ -200,7 +200,10 @@ pub(crate) fn validate_in_context(
         }
     }
     for reference in trogon_atlas_core::refs::outbound_refs(entity) {
-        if reference.from_field == "replaced_by.decision" {
+        if matches!(
+            reference.from_field.as_str(),
+            "replaced_by.decision" | "supersedes"
+        ) {
             continue;
         }
         if !reference.to_kind.is_some_and(|kind| {
@@ -301,4 +304,34 @@ pub(crate) fn validate_in_context(
     }
     crate::validation::enrich_issues_with_catalog(&mut issues);
     issues
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_supersedes_target_is_reported_once() {
+        let id = |version| pb::Id {
+            namespace: "catalog".into(),
+            slug: "choice".into(),
+            version,
+        };
+        for supersedes in [id(1), id(0)] {
+            let entity = pb::Entity {
+                kind: Some(pb::entity::Kind::Decision(pb::Decision {
+                    id: Some(id(2)),
+                    supersedes: Some(supersedes),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            let issues = validate_in_context(&entity, &ArchitectureContext::new([]));
+            let ancestry: Vec<_> = issues
+                .iter()
+                .filter(|issue| issue.subject_field == "supersedes")
+                .collect();
+            assert_eq!(ancestry.len(), 1, "{issues:?}");
+        }
+    }
 }
