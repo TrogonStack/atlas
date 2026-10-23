@@ -2907,9 +2907,9 @@ pub fn strategic_issues_by_change(
 /// so what a delete reports is what it caused. A deletion covers the
 /// surviving entities whose verdict it can move:
 ///
-/// - a domain: the latest version of each subdomain that named it;
-/// - a subdomain: the latest version of each context realizing it and its
-///   domain;
+/// - a domain: the latest surviving version of each subdomain that named it;
+/// - a subdomain: the latest surviving version of each context realizing it
+///   and its domain;
 /// - a bounded context: the subdomains it realized and the domains declared
 ///   in its namespace.
 ///
@@ -2923,7 +2923,7 @@ pub fn strategic_issues_for_deletes(
     after: &[StoredEntity],
     reported: &[pb::ValidationIssue],
 ) -> Vec<Vec<pb::ValidationIssue>> {
-    let latest_before = latest_strategic_versions(before);
+    let latest_after = latest_strategic_versions(after);
     let mut seen: HashSet<IssueKey> = reported.iter().map(issue_key).collect();
     let mut by_delete: Vec<Vec<pb::ValidationIssue>> = vec![Vec::new(); deleted.len()];
     for (index, (kind, id)) in deleted.iter().enumerate() {
@@ -2933,30 +2933,26 @@ pub fn strategic_issues_for_deletes(
         let mut targets: Vec<&StoredEntity> = Vec::new();
         match gone.entity.kind.as_ref() {
             Some(pb::entity::Kind::Domain(_)) => {
-                targets.extend(latest_subdomains_of(before, &latest_before, id));
+                targets.extend(latest_subdomains_of(after, &latest_after, id));
             }
             Some(pb::entity::Kind::Subdomain(sd)) => {
-                targets.extend(latest_realizers(before, &latest_before, id));
-                if let Some(domain) = strategic_subdomain_domain(sd, before) {
+                targets.extend(latest_realizers(after, &latest_after, id));
+                if let Some(domain) = strategic_subdomain_domain(sd, after) {
                     targets.push(domain);
                 }
             }
             Some(pb::entity::Kind::BoundedContext(bc)) => {
                 for sid in bc.realizes.iter().filter_map(|r| r.id.as_ref()) {
-                    if let Some(sub) = find_stored(before, pb::EntityKind::Subdomain, sid) {
+                    if let Some(sub) = find_stored(after, pb::EntityKind::Subdomain, sid) {
                         targets.push(sub);
                     }
                 }
-                for se in before {
+                for se in after {
                     if let Some(pb::entity::Kind::Domain(d)) = se.entity.kind.as_ref() {
                         if d.id
                             .as_ref()
                             .is_some_and(|did| did.namespace == id.namespace)
-                            && declared_latest(
-                                &latest_before,
-                                pb::EntityKind::Domain,
-                                d.id.as_ref(),
-                            )
+                            && declared_latest(&latest_after, pb::EntityKind::Domain, d.id.as_ref())
                         {
                             targets.push(se);
                         }
@@ -2966,19 +2962,11 @@ pub fn strategic_issues_for_deletes(
             _ => {}
         }
         for target in targets {
-            let (Some(target_kind), Some(target_id)) =
-                (entity_kind(&target.entity), entity_id(&target.entity))
-            else {
-                continue;
-            };
-            let Some(survivor) = find_stored(after, target_kind, target_id) else {
-                continue;
-            };
             let existing: HashSet<IssueKey> = validate_scenarios(&target.entity, before)
                 .iter()
                 .map(issue_key)
                 .collect();
-            for issue in validate_scenarios(&survivor.entity, after) {
+            for issue in validate_scenarios(&target.entity, after) {
                 let key = issue_key(&issue);
                 if !existing.contains(&key) && seen.insert(key) {
                     by_delete[index].push(issue);
@@ -11632,6 +11620,77 @@ mod knowledge_graph_tests {
         assert_eq!(
             subjects_at_version(&issues, pb::EntityKind::Subdomain, 2),
             ["SUBDOMAIN_DANGLING_DOMAIN"],
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn domain_delete_checks_the_version_left_as_head_when_the_batch_deletes_the_latest() {
+        let before = vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(at_version(
+                subdomain("shop", "ordering", Some("shop"), true),
+                2,
+            )),
+            stored(context("shop", &[("shop", "ordering")])),
+        ];
+        let after = vec![before[1].clone(), before[3].clone()];
+        let issues = flat(strategic_issues_for_deletes(
+            &[
+                (pb::EntityKind::Domain, id("shop", "shop")),
+                (
+                    pb::EntityKind::Subdomain,
+                    pb::Id {
+                        version: 2,
+                        ..id("shop", "ordering")
+                    },
+                ),
+            ],
+            &before,
+            &after,
+            &[],
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::Subdomain, 1),
+            ["SUBDOMAIN_DANGLING_DOMAIN"],
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn subdomain_delete_checks_the_context_left_as_head_when_the_batch_deletes_the_latest() {
+        let before = supersede_world();
+        let gone = id("shop", "ordering");
+        let after = before
+            .iter()
+            .filter(|se| match se.entity.kind.as_ref() {
+                Some(pb::entity::Kind::Subdomain(sd)) => sd.id.as_ref() != Some(&gone),
+                Some(pb::entity::Kind::BoundedContext(bc)) => {
+                    bc.id.as_ref().is_some_and(|bid| bid.version != 2)
+                }
+                _ => true,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let issues = flat(strategic_issues_for_deletes(
+            &[
+                change_subdomain("ordering"),
+                (
+                    pb::EntityKind::BoundedContext,
+                    pb::Id {
+                        version: 2,
+                        ..id("shop", "shop")
+                    },
+                ),
+            ],
+            &before,
+            &after,
+            &[],
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::BoundedContext, 1),
+            ["REALIZES_DANGLING", "REALIZES_MULTIPLE"],
             "{issues:?}"
         );
     }
