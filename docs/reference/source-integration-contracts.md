@@ -1,6 +1,7 @@
 # Source integration contracts
 
-Status: proposed, native-first design. Source registration, retained snapshots,
+Status: source control design proposed; the [supplied bundle profile](source-bundle-profile.md)
+and its Rust core validator are implemented. Source registration, retained snapshots,
 overlays, reconciliation runs and their persistence are not implemented by this
 reference. Channel/DataStore, Specification/API, DataProduct, Team/Person and
 Decision/Document are implemented native foundations. Their contracts remain
@@ -81,13 +82,14 @@ encoding below, independently of native content normalization.
 
 ### Supplied-byte digest encoding
 
-The proposed `supplied-native-v1` profile accepts an inventory document and a
-finite set of named files; it does not accept archives. The inventory is exact
+The implemented `supplied-native-v1` intake profile accepts an inventory document
+and a finite set of named files; it does not unpack archive containers. The inventory is exact
 UTF-8 JSON bytes describing the registration, opaque source version, input
 profile revision, partition/coverage, resource keys, ordered relation occurrences
 and pointers. Repeated object keys, invalid JSON and invalid UTF-8 reject before
-acceptance. Its eventual typed wire schema must represent those fields without
-an arbitrary-property escape hatch. Whitespace and object-key order are retained
+intake. Its typed JSON shape is defined in the
+[profile reference](source-bundle-profile.md#inventory-json), without an
+arbitrary-property escape hatch. Whitespace and object-key order are retained
 input bytes, so changing either changes source identity even if native content
 would compare equal.
 
@@ -114,10 +116,11 @@ against the profile's limits.
 
 Logical names are unique, case-sensitive, relative slash-separated names, at
 most 1,024 UTF-8 bytes. Empty segments, `.`/`..`, leading/trailing slash,
-backslash, control characters, URI schemes and drive prefixes reject; no path
+backslash, colon anywhere, control characters, URI schemes and drive prefixes
+reject; no path
 or Unicode normalization is performed. Neither logical names nor media types
 are trimmed or inferred. A media type is required nonblank ASCII without control
-characters. Duplicate logical names reject rather than overwrite. File-list
+characters, at most 1,024 bytes. Duplicate logical names reject rather than overwrite. File-list
 transport order does not affect the digest; authored inventory relation/list
 order does. Changing version, scope or coverage must change the inventory bytes
 and therefore its digest. Transport timestamps, current native resolutions and

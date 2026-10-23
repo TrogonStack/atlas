@@ -48,6 +48,7 @@ Resource contracts and acceptance:
 - [Responsibility acceptance criteria](reference/responsibility-acceptance.md)
 - [Decision and Document contracts](reference/decision-and-document-contracts.md)
 - [Decision and Document acceptance requirements](reference/decision-and-document-acceptance.md)
+- [Supplied source bundle profile](reference/source-bundle-profile.md)
 - [Source integration contracts](reference/source-integration-contracts.md)
 - [Source integration acceptance requirements](reference/source-integration-acceptance.md)
 

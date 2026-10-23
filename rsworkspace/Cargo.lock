@@ -4353,6 +4353,7 @@ dependencies = [
  "prost",
  "prost-reflect",
  "prost-types",
+ "serde",
  "serde_json",
  "sha2 0.11.1",
  "thiserror",

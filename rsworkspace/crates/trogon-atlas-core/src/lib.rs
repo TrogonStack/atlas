@@ -28,6 +28,7 @@ pub mod responsibility;
 mod responsibility_refs;
 pub mod schema;
 pub mod semantic_eq;
+pub mod source_bundle;
 pub mod specification;
 mod specification_refs;
 pub mod system_meta;
