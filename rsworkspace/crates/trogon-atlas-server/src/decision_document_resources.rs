@@ -175,6 +175,13 @@ fn replacement_resolves(decision: &pb::Decision, context: &ArchitectureContext<'
     false
 }
 
+fn has_dedicated_check(field: &str) -> bool {
+    matches!(field, "replaced_by.decision" | "supersedes")
+        || ["subjects[", "documents[", "navigation["]
+            .iter()
+            .any(|prefix| field.starts_with(prefix))
+}
+
 pub(crate) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
@@ -200,10 +207,7 @@ pub(crate) fn validate_in_context(
         }
     }
     for reference in trogon_atlas_core::refs::outbound_refs(entity) {
-        if matches!(
-            reference.from_field.as_str(),
-            "replaced_by.decision" | "supersedes"
-        ) {
+        if has_dedicated_check(&reference.from_field) {
             continue;
         }
         if !reference.to_kind.is_some_and(|kind| {
@@ -332,6 +336,83 @@ mod tests {
                 .filter(|issue| issue.subject_field == "supersedes")
                 .collect();
             assert_eq!(ancestry.len(), 1, "{issues:?}");
+        }
+    }
+
+    #[test]
+    fn broken_associations_are_reported_once_each() {
+        let missing = |slug: &str| pb::Id {
+            namespace: "catalog".into(),
+            slug: slug.into(),
+            version: 1,
+        };
+        let selection = || pb::DocumentSelection {
+            selection: Some(pb::document_selection::Selection::Document(
+                pb::DocumentRef {
+                    id: Some(missing("note")),
+                },
+            )),
+        };
+        let subjects = vec![pb::SubjectAssociation {
+            subject: Some(pb::CatalogSubject {
+                selection: Some(pb::catalog_subject::Selection::Entity(pb::EntityRef {
+                    kind: pb::EntityKind::ReadModel as i32,
+                    id: Some(missing("receipt")),
+                })),
+            }),
+            ..Default::default()
+        }];
+        let decision = pb::Entity {
+            kind: Some(pb::entity::Kind::Decision(pb::Decision {
+                id: Some(missing("choice")),
+                subjects: subjects.clone(),
+                related_decisions: vec![pb::RelatedDecision {
+                    decision: Some(pb::DecisionRef {
+                        id: Some(missing("other")),
+                    }),
+                    ..Default::default()
+                }],
+                documents: vec![pb::SupportingDocument {
+                    document: Some(selection()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        let document = pb::Entity {
+            kind: Some(pb::entity::Kind::Document(pb::Document {
+                id: Some(missing("guide")),
+                subjects,
+                navigation: vec![pb::DocumentNavigation {
+                    document: Some(selection()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        for (entity, expected) in [
+            (
+                decision,
+                vec![
+                    "related_decisions[0].decision",
+                    "subjects[0].subject",
+                    "documents[0].document",
+                ],
+            ),
+            (
+                document,
+                vec!["subjects[0].subject", "navigation[0].document"],
+            ),
+        ] {
+            let issues = validate_in_context(&entity, &ArchitectureContext::new([]));
+            let fields: Vec<_> = issues
+                .iter()
+                .map(|issue| issue.subject_field.as_str())
+                .filter(|field| *field != "catalog")
+                .collect();
+            assert_eq!(fields, expected, "{issues:?}");
         }
     }
 }

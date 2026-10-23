@@ -1479,6 +1479,37 @@ async fn catalog_discovery_output_and_shared_row_boundaries_are_exact() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn referenced_delete_refuses_as_referenced_beyond_the_report_budget() {
+    use trogon_atlas_store::{store::MutationOp, Store, WriteContext};
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let mut client = client_with_store(store.clone(), 10_000).await;
+    let target = put(&mut client, read_model("hub"), None)
+        .await
+        .entity
+        .unwrap();
+    for start in (0..4_097).step_by(128) {
+        let ops: Vec<_> = (start..(start + 128).min(4_097))
+            .map(|index| {
+                let mut value = document(&format!("note-{index}"), subject(reference(&target)));
+                if let Some(pb::entity::Kind::Document(value)) = &mut value.kind {
+                    value.anchors.clear();
+                }
+                MutationOp::Create {
+                    kind: pb::EntityKind::Document,
+                    entity: value,
+                }
+            })
+            .collect();
+        store
+            .batch_apply(&ops, WriteContext::baseline())
+            .await
+            .unwrap();
+    }
+    let failure = delete(&mut client, &target, false, None).await.unwrap_err();
+    assert_eq!(failure.code(), Code::FailedPrecondition, "{failure:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn catalog_batch_delete_reporting_shares_output_budget_before_mutation() {
     use trogon_atlas_store::{store::MutationOp, Store, WriteContext};
     let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
