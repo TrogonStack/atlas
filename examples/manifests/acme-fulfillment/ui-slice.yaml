@@ -2,24 +2,24 @@ apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
 kind: UiSlice
 metadata:
   name: order-tracking-ui-slice
-  namespace: acme-storefront
+  namespace: acme-fulfillment
 spec:
   persona:
     persona:
       id:
-        namespace: acme-storefront
+        namespace: acme-fulfillment
         slug: shopper
         version: '1'
   sourceReadModels:
   - readModel:
       id:
-        namespace: acme-storefront
+        namespace: acme-fulfillment
         slug: order-status
         version: '1'
   title: Order tracking display
   ui:
     ui:
       id:
-        namespace: acme-storefront
+        namespace: acme-fulfillment
         slug: order-tracking
         version: '1'

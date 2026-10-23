@@ -288,6 +288,8 @@ export interface ValidateProjectScope {
   domainNamespace?: string;
   domainSlug?: string;
   domainVersion?: string;
+  /** Every EventModel in this namespace, whether or not a Domain claims it. */
+  namespace?: string;
 }
 
 function buildQuery(params: Record<string, string | number | undefined>): string {
@@ -427,6 +429,7 @@ export const api = {
         domainNamespace: scope.domainNamespace,
         domainSlug: scope.domainSlug,
         domainVersion: scope.domainVersion,
+        namespace: scope.namespace,
       })}`,
       opts,
     ),

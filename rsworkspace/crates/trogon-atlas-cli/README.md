@@ -17,7 +17,7 @@ clap CLI on top of it, so the MCP adapter can build on the same semantics.
 
 ```sh
 trogon-atlas apply  -f manifests/                 # create + configure + skip unchanged
-trogon-atlas apply  -f manifests/ --dry-run       # server-side validation, nothing persisted
+trogon-atlas apply  -f manifests/ --dry-run       # request-time findings (strategic warnings included), nothing persisted
 trogon-atlas diff   -f manifests/                 # unified diff vs live state, exit 1 on drift
 trogon-atlas export --namespace shop -o manifests # live store -> manifest YAML (one file per kind)
 trogon-atlas export --namespace shop -o manifests --layout slices # one self-contained file per slice
@@ -30,7 +30,10 @@ trogon-atlas describe command_slice/shop/place-order-slice # title, doc, fields,
 trogon-atlas tree shop                            # domains, storyboards, slices and what each slice connects
 trogon-atlas tree                                 # the same for every namespace that holds entities
 trogon-atlas namespaces                           # namespaces you can see, with ids and entity counts
-trogon-atlas validate shop/checkout                # model-level findings, exit 1 on any error
+trogon-atlas validate shop/checkout                # full model validation incl. the strategic chain, exit 1 on any error
+trogon-atlas validate-project --namespace shop     # every model in a namespace plus store-level strategic findings
+trogon-atlas validate-project --domain shop/shop   # the models a Domain claims
+trogon-atlas validate-project --project shop/main@2 # the models a Project claims
 ```
 
 `get`, `describe`, `tree` and `namespaces` are read-only. They take the same kind names
@@ -38,12 +41,28 @@ as manifests (`read-model`, `read_model`, `ReadModel`). A missing entity
 exits `6` (`not_found`). They also take the ids that `describe`
 prints, such as `event:shop/order.placed@1`.
 
-`validate <namespace>/<model>[@version]` runs the model-level rules on a
-stored event model: storyboard entries, projection order, field provenance.
-`apply --dry-run` runs only the per-entity checks, so run `validate` after an
-apply to see these findings. With `--branch`, it validates the branch's view
-of the model. It exits `1` when any finding is an error and `6` when the
-model does not exist.
+`validate <namespace>/<model>[@version]` runs full validation on a stored
+event model: the model-level rules (storyboard entries, projection order,
+field provenance) and the strategic chain of the model's namespace, meaning
+its BoundedContext, the Subdomains it realizes, their Domains, and any Domain
+declared in the namespace. `apply --dry-run` returns only the request-time
+findings for each write, strategic ones included. They never block the
+apply at any severity, so an apply that succeeds exits `0`; run `validate`
+after an apply to see the whole-model findings.
+With `--branch`, it validates the branch's view of the model. It exits `1`
+when any finding is an error and `6` when the model does not exist.
+
+`validate-project` validates every event model in a scope in one call. Pass
+exactly one of `--namespace <ns>`, `--domain <ns/slug[@version]>` or
+`--project <ns/slug[@version]>`; omit `@version` for the latest. Findings
+print per model, then once more in a `store-level` section: the strategic
+findings (BoundedContext, Domain, Subdomain and Project rules) belong to no
+model, so they appear there. A namespace scope also covers problem-space
+namespaces that hold no event model, which is why to run it after editing
+only Project, Domain, Subdomain or BoundedContext entities. It exits `1` when
+any finding is an error. With `--format json`, `data` carries `scope`,
+`validation_summary` and `reports`, one entry per section with `event_model`
+(`null` for the store-level section), `validation_summary` and `validation`.
 
 Connection flags (or environment):
 

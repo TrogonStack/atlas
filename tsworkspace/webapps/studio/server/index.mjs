@@ -1101,9 +1101,11 @@ app.get(
   handler(() => call("listEntityKinds", {})),
 );
 
-// Validate every EventModel in a project or domain in one call. Query:
+// Validate every EventModel in a project, domain or namespace in one call.
+// Query, exactly one scope:
 //   ?projectNamespace=foo&projectSlug=foo  -- scope by Project
 //   ?domainNamespace=foo&domainSlug=foo    -- scope by Domain
+//   ?namespace=foo                         -- scope by namespace
 app.get(
   "/api/validate-project",
   branchHandler(async (req) => {
@@ -1116,6 +1118,7 @@ app.get(
       "domainNamespace",
       "domainSlug",
       "domainVersion",
+      "namespace",
     ]) {
       if (q[key] != null) {
         const val = String(q[key]);
@@ -1137,12 +1140,16 @@ app.get(
     const domainId = q.domainNamespace && q.domainSlug
       ? { namespace: String(q.domainNamespace), slug: String(q.domainSlug), version: String(q.domainVersion ?? "1") }
       : null;
-    if (!projectId && !domainId) {
-      const err = /** @type {HttpError} */ (new Error("set projectNamespace+projectSlug OR domainNamespace+domainSlug"));
+    const namespaceScope = q.namespace ? String(q.namespace) : null;
+    const scopes = [projectId, domainId, namespaceScope].filter(Boolean).length;
+    if (scopes !== 1) {
+      const err = /** @type {HttpError} */ (new Error(
+        "set exactly one of projectNamespace+projectSlug, domainNamespace+domainSlug, or namespace",
+      ));
       err.status = 400;
       throw err;
     }
-    const args = projectId ? { projectId } : { domainId };
+    const args = projectId ? { projectId } : domainId ? { domainId } : { namespace: namespaceScope };
     return await call("validateProject", args);
   }),
 );
@@ -1718,6 +1725,52 @@ app.get(
       logEvent("warn", "knowledge_graph_fetch_failed", {
         error: maskError(err),
       });
+    }
+    // Domains and Subdomains declared in this namespace, even when they are
+    // not on the realizes chain: a Domain declared in a context's namespace
+    // is the subject of a finding, and a finding on an entity that is not
+    // loaded cannot link anywhere. Then the Project each loaded Domain names.
+    try {
+      /** @param {unknown} e */
+      const slugKey = (e) => envelopeKey(e)?.replace(/@[^@]*$/, "");
+      const loaded = new Set(knowledge.map(slugKey));
+      const declared = await paginateList((pageToken) => ({
+        namespaces: [ns],
+        kinds: [17, 18], // DOMAIN, SUBDOMAIN
+        latestVersionsOnly: true,
+        pageSize: 500,
+        pageToken,
+      }));
+      for (const ent of declared) {
+        const key = slugKey(ent);
+        if (key && loaded.has(key)) continue;
+        if (key) loaded.add(key);
+        knowledge.push(ent);
+      }
+      /** @type {Map<string, unknown>} */
+      const projectRefs = new Map();
+      for (const ent of knowledge) {
+        const pid = /** @type {any} */ (ent)?.domain?.project?.id;
+        if (pid?.namespace && pid?.slug) {
+          projectRefs.set(`${pid.namespace}/${pid.slug}`, { ...pid, version: pid.version || "1" });
+        }
+      }
+      const projects = await limitedMap(
+        [...projectRefs.values()],
+        GRPC_FANOUT_CONCURRENCY,
+        async (/** @type {unknown} */ id) => {
+          try {
+            const r = /** @type {any} */ (await call("getEntity", { kind: 20, id })); // PROJECT
+            return r.entity;
+          } catch (err) {
+            logEvent("warn", "fanout_project_fetch_failed", { kind: 20, id: /** @type {any} */ (id), error: maskError(err) });
+            return null;
+          }
+        },
+      );
+      for (const p of projects) if (p?.project) knowledge.push(p);
+    } catch (err) {
+      logEvent("warn", "namespace_strategic_fetch_failed", { error: maskError(err) });
     }
     return {
       entities: decodeAnnotations([

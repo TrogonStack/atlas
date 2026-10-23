@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -532,6 +532,55 @@ describe('GET /api/validate-project', () => {
     const res = await request(app).get('/api/validate-project?projectNamespace=../bad&projectSlug=my-project');
     expect(res.status).toBe(400);
   });
+
+  describe('namespace scope', () => {
+    let seen;
+    let original;
+
+    beforeEach(() => {
+      original = fakeClient.validateProject;
+      seen = undefined;
+      fakeClient.validateProject = (req, _meta, _opts, cb) => {
+        seen = req;
+        cb(null, { reports: [], totalErrors: 0, totalWarnings: 0, totalInfo: 0 });
+      };
+    });
+
+    afterEach(() => {
+      fakeClient.validateProject = original;
+    });
+
+    it('maps ?namespace= to the namespace scope', async () => {
+      const res = await request(app).get('/api/validate-project?namespace=accounts');
+      expect(res.status).toBe(200);
+      expect(seen).toEqual({ namespace: 'accounts' });
+    });
+
+    it('still maps project and domain scopes to their ids', async () => {
+      await request(app).get('/api/validate-project?projectNamespace=acme&projectSlug=acme');
+      expect(seen).toEqual({ projectId: { namespace: 'acme', slug: 'acme', version: '1' } });
+      await request(app).get('/api/validate-project?domainNamespace=shop&domainSlug=shop&domainVersion=2');
+      expect(seen).toEqual({ domainId: { namespace: 'shop', slug: 'shop', version: '2' } });
+    });
+
+    it('returns 400 when the namespace is unsafe or too long', async () => {
+      expect((await request(app).get('/api/validate-project?namespace=../bad')).status).toBe(400);
+      expect((await request(app).get(`/api/validate-project?namespace=${'a'.repeat(5000)}`)).status).toBe(400);
+      expect(seen).toBeUndefined();
+    });
+
+    it('returns 400 unless exactly one scope is set', async () => {
+      const both = await request(app).get(
+        '/api/validate-project?namespace=accounts&projectNamespace=acme&projectSlug=acme',
+      );
+      expect(both.status).toBe(400);
+      expect(both.body.error).toMatch(/exactly one/);
+      expect(seen).toBeUndefined();
+      const none = await request(app).get('/api/validate-project');
+      expect(none.status).toBe(400);
+      expect(none.body.error).toMatch(/exactly one/);
+    });
+  });
 });
 
 describe('GET /api/event-model/:namespace/:slug/manifests', () => {
@@ -650,6 +699,103 @@ describe('GET /api/event-model/:namespace/:slug success path (members, halo, kno
     expect(res.body.entities.some((e) => e.boundedContext)).toBe(true);
     expect(res.body.entities.some((e) => e.subdomain)).toBe(true);
     expect(res.body.entities.some((e) => e.domain)).toBe(true);
+  });
+
+  it('loads the domains and subdomains declared in the namespace, and the project a domain names', async () => {
+    const originalGetEntity = fakeClient.getEntity;
+    const originalListEntities = fakeClient.listEntities;
+    const listed = [];
+    fakeClient.getEntity = (req, _meta, _opts, cb) => {
+      const { kind, id } = req;
+      if (kind === 12) {
+        cb(null, { entity: { eventModel: { id, title: 'Stray model', members: [] } } });
+        return;
+      }
+      if (kind === 16) {
+        cb(null, {
+          entity: {
+            boundedContext: {
+              id: { namespace: 'my-ns', slug: 'my-ns', version: '1' },
+              title: 'My context',
+              realizes: [{ id: { namespace: 'problem', slug: 'billing', version: '1' } }],
+            },
+          },
+        });
+        return;
+      }
+      if (kind === 18 && id.slug === 'billing') {
+        cb(null, {
+          entity: {
+            subdomain: {
+              id,
+              title: 'Billing',
+              domain: { id: { namespace: 'problem', slug: 'problem', version: '1' } },
+            },
+          },
+        });
+        return;
+      }
+      if (kind === 17 && id.namespace === 'problem') {
+        cb(null, { entity: { domain: { id, title: 'Problem' } } });
+        return;
+      }
+      if (kind === 20) {
+        cb(null, { entity: { project: { id, title: 'Acme' } } });
+        return;
+      }
+      cb(null, { entity: null });
+    };
+    fakeClient.listEntities = (req, _meta, _opts, cb) => {
+      listed.push(req);
+      const strayDomain = {
+        domain: {
+          id: { namespace: 'my-ns', slug: 'my-ns', version: '1' },
+          title: 'Stray domain',
+          project: { id: { namespace: 'acme', slug: 'acme', version: '1' } },
+        },
+      };
+      const parent = {
+        domain: { id: { namespace: 'problem', slug: 'problem', version: '2' }, title: 'Problem again' },
+      };
+      cb(null, { entities: req.namespaces?.[0] === 'my-ns' ? [strayDomain, parent] : [], nextPageToken: '' });
+    };
+
+    const res = await request(app).get('/api/event-model/my-ns/stray-model');
+
+    fakeClient.getEntity = originalGetEntity;
+    fakeClient.listEntities = originalListEntities;
+
+    expect(res.status).toBe(200);
+    expect(listed.some((r) => r.namespaces?.[0] === 'my-ns' && r.kinds?.join() === '17,18')).toBe(true);
+    const domains = res.body.entities.filter((e) => e.domain).map((e) => e.domain.title);
+    expect(domains.sort()).toEqual(['Problem', 'Stray domain']);
+    expect(res.body.entities.some((e) => e.project?.id?.slug === 'acme')).toBe(true);
+  });
+
+  it('keeps the rest of the knowledge graph when listing the namespace fails', async () => {
+    const originalGetEntity = fakeClient.getEntity;
+    const originalListEntities = fakeClient.listEntities;
+    fakeClient.getEntity = (req, _meta, _opts, cb) => {
+      const { kind, id } = req;
+      if (kind === 12) {
+        cb(null, { entity: { eventModel: { id, title: 'Model', members: [] } } });
+        return;
+      }
+      if (kind === 16) {
+        cb(null, { entity: { boundedContext: { id, title: 'Context' } } });
+        return;
+      }
+      cb(null, { entity: null });
+    };
+    fakeClient.listEntities = (_req, _meta, _opts, cb) => cb(new Error('listing exploded'));
+
+    const res = await request(app).get('/api/event-model/my-ns/list-fails');
+
+    fakeClient.getEntity = originalGetEntity;
+    fakeClient.listEntities = originalListEntities;
+
+    expect(res.status).toBe(200);
+    expect(res.body.entities.map((e) => Object.keys(e)[0]).sort()).toEqual(['boundedContext', 'eventModel']);
   });
 
   it('tolerates a member fetch failure by dropping that member rather than failing the request', async () => {

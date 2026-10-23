@@ -16,6 +16,11 @@ message TypeRef {
     UIRef ui = 5;
     PersonaRef persona = 6;
     SwimlaneRef swimlane = 7;
+    // A field whose type is a named top-level Schema entity (one with
+    // `id` set), distinct from the Decision #33 Any-bytes nominal-typing
+    // route: this is a structural ref the impact/reference graph can
+    // walk, not just a type_url+bytes equality check.
+    SchemaRef schema = 8;
   }
 }
 

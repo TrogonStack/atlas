@@ -14,11 +14,14 @@ import type { Selection } from '@/components/canvas/Board';
 import { ContextMapBoard } from '@/components/canvas/ContextMapBoard';
 import { DomainChartBoard } from '@/components/canvas/DomainChartBoard';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { IssuesProvider } from '@/components/IssuesProvider';
 import { buttonVariants } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Tabs, TabsList, TabsTab } from '@/components/ui/tabs';
 import { api, type NamespaceRegistryRow } from '@/lib/api';
 import { readBranchFromUrl, withBranchQuery } from '@/lib/branch';
+import { validationScopes } from '@/lib/domainchart';
+import { buildProjectIssueIndex, EMPTY_ISSUE_INDEX, type IssueIndex } from '@/lib/issues';
 import {
   asId,
   buildModel,
@@ -141,6 +144,7 @@ export function OverviewPage() {
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<Entity[]>([]);
   const [chartFocusKey, setChartFocusKey] = useState<string>();
+  const [chartIssues, setChartIssues] = useState<IssueIndex>(EMPTY_ISSUE_INDEX);
   const [selectedDomains, setSelectedDomains] = useState<string[]>(() => {
     const fromUrl = readUrlDomains();
     if (fromUrl.length > 0) return fromUrl;
@@ -191,6 +195,26 @@ export function OverviewPage() {
     return () => ctrl.abort();
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- intentionally mount-only, see above
   }, []);
+
+  // The chart renders without findings until validation answers, and stays
+  // without them when it fails: a marker is only ever the server's word.
+  const chartOpen = mode === 'chart';
+  useEffect(() => {
+    if (!chart || !chartOpen) return;
+    const scopes = validationScopes(chart);
+    if (scopes.length === 0) return;
+    const ctrl = new AbortController();
+    Promise.allSettled(scopes.map((scope) => api.validateProject(scope, { signal: ctrl.signal, branch }))).then(
+      (results) => {
+        if (ctrl.signal.aborted) return;
+        setChartIssues(
+          buildProjectIssueIndex(results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []))),
+        );
+      },
+    );
+    return () => ctrl.abort();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- branch is mount-only, see above
+  }, [chart, chartOpen]);
 
   // Owners only shape the grouping, so a failed registry read keeps the
   // page usable with plain namespace groups.
@@ -552,11 +576,13 @@ export function OverviewPage() {
             {visibleChart ? (
               <ReactFlowProvider>
                 <ErrorBoundary>
-                  <DomainChartBoard
-                    model={visibleChart}
-                    selections={(chartFocusKey ? [{ type: 'entity', key: chartFocusKey }] : []) as Selection[]}
-                    onSelect={(key) => setChartFocusKey(key)}
-                  />
+                  <IssuesProvider issues={chartIssues}>
+                    <DomainChartBoard
+                      model={visibleChart}
+                      selections={(chartFocusKey ? [{ type: 'entity', key: chartFocusKey }] : []) as Selection[]}
+                      onSelect={(key) => setChartFocusKey(key)}
+                    />
+                  </IssuesProvider>
                 </ErrorBoundary>
               </ReactFlowProvider>
             ) : (

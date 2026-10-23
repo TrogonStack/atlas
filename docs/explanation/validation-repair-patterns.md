@@ -43,6 +43,14 @@ The fetched `commandSlice:acme-storefront/mark-fulfilled-slice@1` emitted
 The review storyboard's entry and automation scenario already described
 the granter observing that populated queue.
 
+Those names are historical. The fulfillment half of the storefront has
+since moved into the `acme-fulfillment` namespace, so the command slice is
+now `commandSlice:acme-fulfillment/mark-fulfilled-slice@1`, the event is
+`event:acme-fulfillment/order.fulfilled@1`, and the storyboard is
+`storyboard:acme-fulfillment/fulfillment-flow@1`. The storefront's former
+`fulfillment-flow` storyboard is now `payment-flow`. See
+[one problem space, contexts realize across namespaces](#one-problem-space-contexts-realize-across-namespaces).
+
 The repair changed the local narrative boundary:
 
 - `storyboard:acme-reviews/review-eligibility-grant@1` starts with
@@ -149,6 +157,92 @@ one without a system still reports each field.
 - A read model that has both source events and an external source skips
   the check for every field, including fields its events should carry.
 
+## One problem space, contexts realize across namespaces
+
+### Strategic findings and evidence
+
+The strategic entities of an example model reported findings that nothing
+surfaced:
+
+- `DOMAIN_IN_CONTEXT_NAMESPACE` and `DOMAIN_SLUG_MISMATCH`: each context
+  namespace declared its own Project, Domain and Subdomain. A Domain whose
+  slug names a business area (`retail-commerce`, `customer-trust`,
+  `customer-privacy`, `shopping`) differs from its namespace, and a Domain
+  in a context namespace makes the business look like one context's
+  property.
+- `REALIZES_MIXED_CLASSIFICATIONS`: `acme-storefront` realized both a CORE
+  subdomain (ordering) and a SUPPORTING one (fulfillment). Studio's domain
+  chart drew that one context under both Core and Supporting.
+- `SEAM_WITHOUT_RELATIONSHIP`: contexts subscribed to each other's events
+  without declaring a relationship intent.
+
+This pattern applies when current definitions establish that:
+
+- A Domain shares a namespace with a BoundedContext, or its slug differs
+  from its namespace.
+- A BoundedContext realizes Subdomains with different classifications.
+- A read model in one context sources events from another context that
+  declares no `relationships` entry toward it.
+
+### Root cause
+
+Model and project validation never validated Domain, Subdomain or
+BoundedContext entities, so these findings were never reported on the
+examples. The how-to guide then taught a Project, Domain and Subdomain per
+context namespace, which silenced `DOMAIN_MISSING_PROJECT` while hiding the
+shape of the business. Both reports now include the strategic chain of the
+model's namespace: its BoundedContext, the Subdomains it realizes, their
+Domains, and any Domain declared in that namespace.
+
+### Decision
+
+- One problem-space namespace, `acme`, holds the Project, the Domain and
+  every Subdomain. Project and Domain slugs equal the namespace.
+- Each BoundedContext lives in its own namespace and realizes one `acme`
+  Subdomain across namespaces. The context namespaces declare no Project,
+  Domain or Subdomain.
+- A context that mixes classifications is split along the classification
+  line. The storefront became `acme-storefront` (ordering, CORE) and
+  `acme-fulfillment` (fulfillment, SUPPORTING). The fulfillment entities
+  moved with their behavior: events, commands, slices, read models, UI,
+  processor, external system, swimlane, storyboard and tracker.
+- Every cross-context seam declares a relationship intent on the
+  downstream context: `acme-fulfillment` is a customer of `acme-storefront`
+  (`INTENT_CUSTOMER_SUPPLIER`) and `acme-reviews` conforms to
+  `acme-fulfillment` (`INTENT_CONFORMIST`).
+
+Never silence `DOMAIN_MISSING_PROJECT` by creating a Project and a Domain
+per context namespace. Point the single Domain at the single Project.
+
+These alternatives would have changed behavior or hidden the finding:
+
+- Reclassifying fulfillment as CORE, or ordering as SUPPORTING, only to
+  agree with the other half misstates where Acme invests.
+- Suppressing `REALIZES_MIXED_CLASSIFICATIONS` while one context keeps both
+  halves keeps one boundary under two investment levels.
+- Dropping the cross-context subscriptions would remove the seams the
+  fulfillment and review flows depend on.
+
+### Verification
+
+`example_manifests_validate` and `account_deletion_fixture` pass. The first
+validates every model and the single `acme` project with no warning or
+error. The second loads `acme` and `acme-customer-data-deletion`.
+`mise run manifests:verify -- bootstrap` reports zero drift. Apply order for
+the examples is `acme`, `acme-storefront`, `acme-fulfillment`, then
+`acme-reviews`; the other contexts only need `acme`.
+
+### Limits of the split
+
+- The split moved entities between namespaces. Applying the new manifests
+  creates and overwrites entities but removes none, so a store seeded from
+  the old manifests keeps the old fulfillment entities in `acme-storefront`
+  and the per-context Projects, Domains and Subdomains until they are
+  deleted.
+- `REALIZES_MULTIPLE` stays informational when the Subdomains share a
+  classification, so a context that realizes several of them is not
+  flagged as a mistake.
+
 ## Add a pattern after a repair
 
 Give each new pattern a descriptive heading. Record its symptom,
@@ -168,7 +262,11 @@ rejects. `example_manifests_validate` in `trogon-atlas-server` now applies all
 three namespaces to an ephemeral store and requires every model to validate
 with no warning or error.
 
-On unmodified main the three models reported these findings.
+On unmodified main the three models reported these findings. The test has
+since grown to the problem-space namespace and a fourth model, and the
+`fulfillment-queue`, `order-status` and `fulfillment-flow` entities named
+below now live in `acme-fulfillment`. The decisions are kept as they were
+recorded.
 
 | Model | Errors | Warnings |
 | --- | --- | --- |
@@ -207,8 +305,12 @@ On unmodified main the three models reported these findings.
   the storyboard doc says why. The projection slice itself is deleted from
   the seed because no storyboard, model, scenario, or test references it.
 - **Each example declares its Project.** `DOMAIN_MISSING_PROJECT` only shows
-  in project-scoped validation. Each namespace now has a Project of the same
-  name that its Domain points to, and the test validates every Project.
+  in project-scoped validation. Each namespace was given a Project of the
+  same name that its Domain pointed to, and the test validated every
+  Project. This decision is superseded: a Project and a Domain per context
+  namespace was the wrong fix, and it was replaced by one problem-space
+  namespace. See
+  [one problem space, contexts realize across namespaces](#one-problem-space-contexts-realize-across-namespaces).
 - **Contexts touch through subscriptions only.**
   `CROSS_MODEL_BOUNDARY_VIOLATION` on the grant command slice scenario was
   repaired by dropping the `given` that named an `acme-storefront` event. The

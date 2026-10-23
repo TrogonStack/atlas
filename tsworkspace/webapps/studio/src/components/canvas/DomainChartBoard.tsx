@@ -8,18 +8,22 @@ import {
   Position,
   ReactFlow,
 } from '@xyflow/react';
-import { Globe, Waypoints } from 'lucide-react';
+import { CircleAlert, Globe, Info, TriangleAlert, Waypoints } from 'lucide-react';
 import { useMemo } from 'react';
 import type { Selection } from '@/components/canvas/Board';
+import { useIssues } from '@/components/IssuesProvider';
 import { BoardEmptyState } from '@/components/ui/empty-state';
 import {
   type BandData,
   buildDomainChart,
   CARD_H,
   CARD_W,
+  type ChartMarker,
   type ContextCardData,
   CTX_H,
   CTX_W,
+  chartMarkers,
+  markerTooltip,
   type SubdomainCardData,
 } from '@/lib/domainchart';
 import type { Entity, Model } from '@/lib/model';
@@ -36,6 +40,30 @@ const TONE = {
   unclassified: { band: 'border-dashed border-zinc-300 bg-zinc-50/40', label: 'text-zinc-500' },
 } as const;
 
+const MARKER_STYLE = {
+  error: { icon: CircleAlert, tone: 'bg-red-100 text-red-700' },
+  warning: { icon: TriangleAlert, tone: 'bg-amber-100 text-amber-800' },
+  info: { icon: Info, tone: 'bg-sky-100 text-sky-700' },
+} as const;
+
+function FindingMarker({ marker }: { marker?: ChartMarker }) {
+  if (!marker) return null;
+  const { icon: Icon, tone } = MARKER_STYLE[marker.severity];
+  const count = marker.findings.length;
+  return (
+    <span
+      title={markerTooltip(marker)}
+      className={cn('ml-auto flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[9px] font-bold', tone)}
+    >
+      <Icon aria-hidden="true" className="h-2.5 w-2.5" />
+      <span aria-hidden="true">{count}</span>
+      <span className="sr-only">
+        {`${count} validation ${count === 1 ? 'finding' : 'findings'}: ${marker.findings.map((f) => f.code).join(', ')}`}
+      </span>
+    </span>
+  );
+}
+
 function ClassificationBandNode({ data }: NodeProps & { data: BandData }) {
   const tone = TONE[data.tone];
   return (
@@ -46,7 +74,9 @@ function ClassificationBandNode({ data }: NodeProps & { data: BandData }) {
   );
 }
 
-function DomainHeaderNode({ data }: NodeProps & { data: { entity: Entity; selected?: boolean } }) {
+function DomainHeaderNode({
+  data,
+}: NodeProps & { data: { entity: Entity; marker?: ChartMarker; selected?: boolean } }) {
   return (
     <div
       className={cn(
@@ -57,6 +87,7 @@ function DomainHeaderNode({ data }: NodeProps & { data: { entity: Entity; select
       <Globe className="h-4 w-4 shrink-0 text-indigo-600" />
       <span className="whitespace-nowrap text-sm font-bold text-indigo-900">{data.entity.title}</span>
       <span className="min-w-0 truncate text-[11px] text-indigo-700/70">{data.entity.doc}</span>
+      <FindingMarker marker={data.marker} />
     </div>
   );
 }
@@ -73,10 +104,12 @@ function SubdomainCardNode({ data }: NodeProps & { data: SubdomainCardData }) {
       <Handle id="b" type="target" position={Position.Bottom} className={handleClass} />
       <div className="flex items-center gap-2">
         <span className="truncate text-xs font-semibold">{data.entity.title}</span>
+        <FindingMarker marker={data.marker} />
         {data.classification ? (
           <span
             className={cn(
-              'ml-auto shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase',
+              'shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase',
+              !data.marker && 'ml-auto',
               data.classification === 'core'
                 ? 'bg-amber-100 text-amber-800'
                 : data.classification === 'generic'
@@ -94,17 +127,33 @@ function SubdomainCardNode({ data }: NodeProps & { data: SubdomainCardData }) {
 }
 
 function ContextCardNode({ data }: NodeProps & { data: ContextCardData }) {
+  const others = data.alsoRealizes.map((o) => o.title).join(', ');
   return (
     <div
       style={{ width: CTX_W, height: CTX_H }}
       className={cn(
-        'cursor-pointer overflow-hidden rounded-lg border-2 border-fuchsia-300 bg-fuchsia-50 px-3 py-1.5',
+        'flex cursor-pointer flex-col gap-0.5 overflow-hidden rounded-lg border-2 border-fuchsia-300 bg-fuchsia-50 px-3 py-1.5',
         data.selected && 'ring-2 ring-ring',
       )}
     >
       <Handle id="t" type="source" position={Position.Top} className={handleClass} />
-      <div className="text-xs font-semibold text-fuchsia-900">{data.entity.title}</div>
-      <div className="font-mono text-[10px] text-fuchsia-700/70">{data.entity.id.namespace}</div>
+      <div className="flex items-center gap-1.5">
+        <span className="truncate text-xs font-semibold text-fuchsia-900">{data.entity.title}</span>
+        <FindingMarker marker={data.marker} />
+      </div>
+      <div className="truncate font-mono text-[10px] text-fuchsia-700/70">{data.entity.id.namespace}</div>
+      {data.splitCandidate ? (
+        <div
+          title={`${data.splitCandidate}: one boundary carries several investment levels, also realizes ${others}`}
+          className="max-w-full self-start truncate rounded bg-orange-100 px-1.5 py-0.5 text-[9px] font-bold text-orange-800"
+        >
+          {data.splitCandidate}
+        </div>
+      ) : others ? (
+        <div title={`Also realizes ${others}`} className="truncate text-[10px] text-fuchsia-800">
+          also realizes {others}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -127,7 +176,9 @@ export function DomainChartBoard({
   onSelect: (key: string | undefined, occId?: string, additive?: boolean) => void;
   focus?: FocusRequest;
 }) {
-  const { nodes, edges } = useMemo(() => buildDomainChart(model), [model]);
+  const issues = useIssues();
+  const markers = useMemo(() => chartMarkers(issues.all), [issues]);
+  const { nodes, edges } = useMemo(() => buildDomainChart(model, markers), [model, markers]);
   useFocusNode(focus, nodes, 'subdomainCard');
 
   const displayNodes = useMemo(() => {
@@ -181,10 +232,14 @@ export function DomainChartBoard({
           take care of each one.
         </BoardEmptyState>
       ) : null}
-      <div className="absolute bottom-3 right-3 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
+      <div className="absolute bottom-3 right-3 flex flex-col gap-1 rounded-md border border-border bg-card/95 px-2.5 py-2 text-[10px]">
         <div className="flex items-center gap-1.5">
           <span className="inline-block h-0.5 w-4 bg-indigo-400" />
           where investment goes: subdomains by classification, contexts realizing them
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="inline-block h-2.5 w-4 rounded-sm border border-fuchsia-300 bg-fuchsia-50" />a context
+          realizing several subdomains appears under each one
         </div>
       </div>
     </div>

@@ -443,6 +443,15 @@ describe('BUG: validate / validate-project client surface', () => {
     expect(url).toContain('branch=alex%2Frework');
   });
 
+  it('api.validateProject encodes a namespace scope', async () => {
+    fetchSpy.mockResolvedValueOnce(makeOkResponse({ reports: [] }));
+    await api.validateProject({ namespace: 'accounts' });
+    const [url] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/api/validate-project?');
+    expect(url).toContain('namespace=accounts');
+    expect(url).not.toContain('projectNamespace');
+  });
+
   it('offers no bulk deletion, since agents own every edit', () => {
     expect(api).not.toHaveProperty('deleteByQuery');
   });

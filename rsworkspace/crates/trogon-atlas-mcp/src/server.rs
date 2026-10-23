@@ -143,8 +143,18 @@ pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatl
              in a namespace named after the domain, which is NOT a bounded context. A \
              Subdomain never contains contexts: BoundedContext.realizes maps solution to \
              problem (cross-namespace, legal: knowledge, not coupling). One context \
-             realizing several subdomains is a monolith confessing. Classification goes \
-             on the SUBDOMAIN, never the context.\n\
+             realizing several subdomains is a monolith confessing; realizing subdomains \
+             of different classifications also warns (REALIZES_MIXED_CLASSIFICATIONS), \
+             because one boundary then carries two investment levels. A Domain declared in \
+             a context's namespace warns (DOMAIN_IN_CONTEXT_NAMESPACE): give it its own \
+             problem-space namespace. Classification goes on the SUBDOMAIN, never the \
+             context. Layout: the Project, the Domain and ALL Subdomains live in ONE \
+             problem-space namespace (Domain and Project slug == that namespace); each \
+             context namespace holds only its BoundedContext, which realizes ONE \
+             subdomain across namespaces. Never create a Project or Domain per context \
+             namespace to silence DOMAIN_MISSING_PROJECT; point the contexts at the one \
+             problem space instead. Declare a relationship intent (rule 16) for every \
+             cross-context seam.\n\
              16. Seams carry data; relationships carry intent. The DOWNSTREAM \
              BoundedContext declares relationships: upstream context + intent \
              (CUSTOMER_SUPPLIER / CONFORMIST / PARTNERSHIP / SEPARATE_WAYS) + doc. Intent \
@@ -196,7 +206,12 @@ pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatl
              entity.system (uid, created_at) is SERVER-OWNED incarnation identity, Kubernetes \
              metadata.uid style: assigned on create, preserved across updates, regenerated on \
              delete+recreate. Anything you send there is ignored; never try to set it.\n\
-             Run validate_event_model after every mutation batch and fix all Errors. Mutations \
+             Mutation responses (put_entity, put_entity_json, batch_mutate, batch_mutate_json, merge_branch) \
+             return non-blocking validation findings, strategic ones included, in an `issues` array \
+             beside binpb_base64: read it and fix them. Run validate_event_model after every mutation \
+             batch and fix all Errors and Warnings. After editing only problem-space entities \
+             (Project, Domain, Subdomain) or a BoundedContext there may be no EventModel to validate: \
+             run validate_project with the namespace or project scope instead. Mutations \
              execute concurrently when pipelined: issue ordered workflows (write -> delete -> \
              validate) as separate sequential requests.";
 
@@ -728,6 +743,25 @@ impl McpServer {
         CallToolResult::success(vec![ContentBlock::text(body)])
     }
 
+    /// `scoped_envelope` plus the response's validation findings as a JSON
+    /// `issues` array, so an agent can read non-blocking findings without
+    /// decoding the binpb.
+    fn scoped_envelope_with_issues<M: Message>(
+        &self,
+        msg: &M,
+        issues: &[serde_json::Value],
+    ) -> CallToolResult {
+        let (scope, branch) = self.scope_fields();
+        let body = serde_json::json!({
+            "scope": scope,
+            "branch": branch,
+            "issues": issues,
+            "binpb_base64": encode_b64(msg),
+        })
+        .to_string();
+        CallToolResult::success(vec![ContentBlock::text(body)])
+    }
+
     fn scoped_response<M: Message>(
         &self,
         message_name: &str,
@@ -1014,6 +1048,114 @@ fn encode_b64<M: Message>(msg: &M) -> String {
 fn ok_envelope<M: Message>(msg: &M) -> CallToolResult {
     let body = serde_json::json!({ "binpb_base64": encode_b64(msg) }).to_string();
     CallToolResult::success(vec![ContentBlock::text(body)])
+}
+
+/// JSON shape of one `ValidationIssue` in a mutation response:
+/// `{severity, code, subject, field, message}`. `severity` is
+/// `error`/`warning`/`info`; `subject` is the canonical entity id string or
+/// `null`; `field` is the structural path inside the subject or `null`.
+fn issue_json(issue: &pb::ValidationIssue) -> serde_json::Value {
+    let mut value = trogon_atlas_client::apply::issue_to_json(issue);
+    if let serde_json::Value::Object(fields) = &mut value {
+        fields.insert(
+            "field".into(),
+            (!issue.subject_field.is_empty())
+                .then_some(issue.subject_field.as_str())
+                .into(),
+        );
+    }
+    value
+}
+
+fn issues_json(issues: &[pb::ValidationIssue]) -> Vec<serde_json::Value> {
+    issues.iter().map(issue_json).collect()
+}
+
+/// Canonical id of the entity each batch op writes or deletes, in op order.
+/// Read from the request because a delete result names no entity.
+fn batch_op_entities(ops: &[pb::BatchMutateOp]) -> Vec<Option<String>> {
+    ops.iter()
+        .map(|op| match op.op.as_ref()? {
+            pb::batch_mutate_op::Op::Put(put) => {
+                let entity = put.entity.as_ref()?;
+                let kind = trogon_atlas_core::entity_kind(entity)?;
+                let id = trogon_atlas_core::entity_id(entity)?;
+                Some(pb::canonical::id_string(kind, id))
+            }
+            pb::batch_mutate_op::Op::Delete(delete) => {
+                let kind = pb::EntityKind::try_from(delete.kind).ok()?;
+                Some(pb::canonical::id_string(kind, delete.id.as_ref()?))
+            }
+        })
+        .collect()
+}
+
+/// Findings of every put and delete op in a batch, in op order. Each carries
+/// the zero based `op_index` and the canonical `op_entity` id of the entity
+/// the op wrote or deleted, because a finding's own `subject` can be a
+/// different entity (a strategic rule attached to the BoundedContext, Domain
+/// or Subdomain left behind).
+fn batch_issues_json(
+    op_entities: &[Option<String>],
+    resp: &pb::BatchMutateResponse,
+) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for (index, result) in resp.results.iter().enumerate() {
+        let findings = match result.result.as_ref() {
+            Some(pb::batch_mutate_op_result::Result::Put(put)) => &put.validation,
+            Some(pb::batch_mutate_op_result::Result::Delete(delete)) => &delete.validation,
+            None => continue,
+        };
+        let op_entity = op_entities.get(index).and_then(Option::as_deref);
+        out.extend(op_tagged_issues_json(index, op_entity, findings));
+    }
+    out
+}
+
+/// `issues_json` with each finding tagged by the op that produced it.
+fn op_tagged_issues_json(
+    op_index: usize,
+    op_entity: Option<&str>,
+    issues: &[pb::ValidationIssue],
+) -> Vec<serde_json::Value> {
+    issues
+        .iter()
+        .map(|issue| {
+            let mut value = issue_json(issue);
+            if let serde_json::Value::Object(fields) = &mut value {
+                fields.insert("op_index".into(), op_index.into());
+                fields.insert("op_entity".into(), op_entity.into());
+            }
+            value
+        })
+        .collect()
+}
+
+/// Findings of an `apply_manifests` run, in the same shape as batch findings.
+/// `op_index` counts the changed manifests actually sent, and `op_entity` is
+/// the manifest's canonical id.
+fn apply_issues_json(op_issues: &[trogon_atlas_client::apply::OpIssues]) -> Vec<serde_json::Value> {
+    op_issues
+        .iter()
+        .flat_map(|op| op_tagged_issues_json(op.op_index, Some(op.op_entity.as_str()), &op.issues))
+        .collect()
+}
+
+/// Add `issues` to an already-built JSON tool result body so a response that
+/// carries findings alongside other data exposes them without a decode step.
+fn with_issues(mut result: CallToolResult, issues: Vec<serde_json::Value>) -> CallToolResult {
+    let body = result
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok());
+    if let Some(serde_json::Value::Object(mut fields)) = body {
+        fields.insert("issues".into(), issues.into());
+        result.content = vec![ContentBlock::text(
+            serde_json::Value::Object(fields).to_string(),
+        )];
+    }
+    result
 }
 
 /// `BatchMutateResponse.status == STATUS_FAILED` is an RPC that returned
@@ -2270,7 +2412,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create or replace an entity. The entity payload is a base64-encoded prost binpb of an Entity message (obtain via get_entity, edit binpb_base64, and pass back). A failed write is an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never a success envelope.",
+        description = "Create or replace an entity. The entity payload is a base64-encoded prost binpb of an Entity message (obtain via get_entity, edit binpb_base64, and pass back). A failed write is an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never a success envelope. Non-blocking validation findings, including strategic ones (BoundedContext, Domain, Subdomain rules), come back in the `issues` array next to binpb_base64: fix every warning and error; an empty array means none.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2311,7 +2453,7 @@ impl McpServer {
             .map_err(tool_err("put_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope(&resp))
+        Ok(self.scoped_envelope_with_issues(&resp, &issues_json(&resp.validation)))
     }
 
     #[tool(
@@ -2354,7 +2496,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Create or replace an entity from proto3 JSON (no protobuf tooling required). entity_json is an Entity message, e.g. {\"event\": {\"id\": {\"namespace\": \"shop\", \"slug\": \"order-placed\", \"version\": 1}, \"title\": \"Order placed\"}}.",
+        description = "Create or replace an entity from proto3 JSON (no protobuf tooling required). entity_json is an Entity message, e.g. {\"event\": {\"id\": {\"namespace\": \"shop\", \"slug\": \"order-placed\", \"version\": 1}, \"title\": \"Order placed\"}}. Non-blocking validation findings, including strategic ones (BoundedContext, Domain, Subdomain rules), come back in the `issues` array next to binpb_base64: fix every warning and error; an empty array means none.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -2398,11 +2540,11 @@ impl McpServer {
             .map_err(tool_err("put_entity_json"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope(&resp))
+        Ok(self.scoped_envelope_with_issues(&resp, &issues_json(&resp.validation)))
     }
 
     #[tool(
-        description = "Atomic batch of put/delete operations expressed as a proto3 JSON BatchMutateRequest (no protobuf tooling required). Failure rolls back the whole batch and is reported as an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never as a success envelope with status=STATUS_FAILED inside it.",
+        description = "Atomic batch of put/delete operations expressed as a proto3 JSON BatchMutateRequest (no protobuf tooling required). Failure rolls back the whole batch and is reported as an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never as a success envelope with status=STATUS_FAILED inside it. Non-blocking validation findings, including strategic ones (BoundedContext, Domain, Subdomain rules), come back in the `issues` array next to binpb_base64, each tagged with op_index and op_entity of the put or delete op that produced it (validate_only dry runs included): fix every warning and error; an empty array means none.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -2435,6 +2577,7 @@ impl McpServer {
                 .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
         self.ensure_can_mutate(&mut client, req.validate_only)
             .await?;
+        let op_entities = batch_op_entities(&req.ops);
         let resp = client
             .batch_mutate(req)
             .await
@@ -2443,11 +2586,11 @@ impl McpServer {
         if resp.status == pb::batch_mutate_response::Status::Failed as i32 {
             return Err(McpError::from(batch_mutate_failure(&resp)).into());
         }
-        Ok(self.scoped_envelope(&resp))
+        Ok(self.scoped_envelope_with_issues(&resp, &batch_issues_json(&op_entities, &resp)))
     }
 
     #[tool(
-        description = "Delete an entity. mode = 'fail_if_referenced' (default), 'force', or 'dry_run'. A refused delete is an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never a success envelope.",
+        description = "Delete an entity. mode = 'fail_if_referenced' (default), 'force', or 'dry_run'. A refused delete is an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never a success envelope. Non-blocking strategic findings the delete leaves behind (for example REALIZES_DANGLING on a BoundedContext whose Subdomain is gone, SUBDOMAIN_UNREALIZED) come back in the `issues` array next to binpb_base64; a dry_run previews them. Fix every warning and error.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -2478,7 +2621,7 @@ impl McpServer {
             .map_err(tool_err("delete_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        let mut result = self.scoped_envelope(&resp);
+        let mut result = self.scoped_envelope_with_issues(&resp, &issues_json(&resp.validation));
         if resp.referrers_incomplete {
             result.content.push(ContentBlock::text(
                 "Incoming-reference report is incomplete; missing records do not prove absence or deletion safety.",
@@ -2488,7 +2631,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Atomic batch of put/delete operations. Each op specifies op='put' (with entity_b64) or op='delete' (with kind/namespace/slug/version). Failure rolls back the whole batch and is reported as an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never as a success envelope with status=STATUS_FAILED inside it.",
+        description = "Atomic batch of put/delete operations. Each op specifies op='put' (with entity_b64) or op='delete' (with kind/namespace/slug/version). Failure rolls back the whole batch and is reported as an MCP tool error whose data carries category/next_action (and code/next_action_detail when applicable), never as a success envelope with status=STATUS_FAILED inside it. Non-blocking validation findings, including strategic ones (BoundedContext, Domain, Subdomain rules), come back in the `issues` array next to binpb_base64, each tagged with op_index and op_entity of the put or delete op that produced it (validate_only dry runs included): fix every warning and error; an empty array means none.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -2602,6 +2745,7 @@ impl McpServer {
         let mut client = self.client();
         self.ensure_can_mutate(&mut client, req.validate_only)
             .await?;
+        let op_entities = batch_op_entities(&req.ops);
         let resp = client
             .batch_mutate(req)
             .await
@@ -2612,7 +2756,7 @@ impl McpServer {
             let err: rmcp::ErrorData = McpError::from(batch_mutate_failure(&resp)).into();
             return Err(attach_operation_id(err, &operation_id));
         }
-        Ok(self.scoped_envelope(&resp))
+        Ok(self.scoped_envelope_with_issues(&resp, &batch_issues_json(&op_entities, &resp)))
     }
 
     #[tool(
@@ -2759,7 +2903,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Run structural validation over a stored EventModel and its members.",
+        description = "Run full validation over a stored EventModel: structural findings over the model and its members, plus the strategic chain of the model's namespace (its BoundedContext, the Subdomains it realizes, their Domains, and any Domain declared in the namespace). Fix Errors and Warnings.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -2815,7 +2959,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Validate every EventModel in a project, domain or namespace in one call instead of N. Returns per-model issue lists plus aggregate Error/Warning/Info counts. Scope by project_namespace+project_slug, by domain_namespace+domain_slug, OR by namespace -- set exactly one.",
+        description = "Validate every EventModel in a project, domain or namespace in one call instead of N. Returns per-model issue lists plus aggregate Error/Warning/Info counts. Strategic findings (BoundedContext, Domain, Subdomain, Project rules) appear once, on the store-level report whose event_model_id is empty, not on any model report. A namespace, project or domain scope also covers problem-space namespaces that hold no EventModel, so use it after editing only Project/Domain/Subdomain or BoundedContext entities. Scope by project_namespace+project_slug, by domain_namespace+domain_slug, OR by namespace -- set exactly one.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3079,7 +3223,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state.",
+        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Non-blocking validation findings, strategic ones included, come back in the `issues` array as {severity, code, subject, field, message, op_index, op_entity} (op_index is the position among the changed manifests sent, op_entity the manifest's entity id): fix every warning and error. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -3119,7 +3263,7 @@ impl McpServer {
             "scope": scope,
             "branch": branch,
             "lines": outcome.lines,
-            "issues": outcome.issues.iter().map(trogon_atlas_client::apply::format_issue).collect::<Vec<_>>(),
+            "issues": apply_issues_json(&outcome.op_issues),
             "operation_id": (!operation_id.is_empty()).then_some(operation_id.as_str()),
         })
         .to_string();
@@ -3312,7 +3456,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Merge a branch onto baseline (Phase 2: Review and merge). All-or-nothing: any conflict (see conflicts) or post-merge validation Error (see validation) persists nothing. Set dry_run to run full detection and validation without persisting even on success; the result splits the landable entries into added_count, changed_count and deleted_count and lists the post-merge findings in validation. keep_branch controls whether a successful, non-dry-run merge deletes the branch afterward (default: deletes it). Set auto_merge to land the combined result for edit/edit conflicts whose two sides changed different fields.",
+        description = "Merge a branch onto baseline (Phase 2: Review and merge). All-or-nothing: any conflict (see conflicts) or post-merge validation Error (see validation) persists nothing. Set dry_run to run full detection and validation without persisting even on success; the result splits the landable entries into added_count, changed_count and deleted_count and lists the post-merge findings, strategic ones included, in validation and, as JSON, in `issues` (Warning and Info findings are non-blocking; fix them). keep_branch controls whether a successful, non-dry-run merge deletes the branch afterward (default: deletes it). Set auto_merge to land the combined result for edit/edit conflicts whose two sides changed different fields.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -3339,10 +3483,13 @@ impl McpServer {
             .map_err(tool_err("merge_branch"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(ok_response(
-            "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
-            &resp,
-            p.json.unwrap_or(false),
+        Ok(with_issues(
+            ok_response(
+                "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
+                &resp,
+                p.json.unwrap_or(false),
+            ),
+            issues_json(&resp.validation),
         ))
     }
 
@@ -3729,6 +3876,139 @@ mod tests {
     }
 
     #[test]
+    fn server_instructions_cover_strategic_layout_and_validation_followup() {
+        for needle in [
+            "ONE problem-space namespace",
+            "DOMAIN_MISSING_PROJECT",
+            "validate_project with the namespace or project scope",
+            "`issues` array",
+            "Errors and Warnings",
+        ] {
+            assert!(
+                SERVER_INSTRUCTIONS.contains(needle),
+                "doctrine lost: {needle}"
+            );
+        }
+    }
+
+    fn strategic_issue() -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: "DOMAIN_IN_CONTEXT_NAMESPACE".into(),
+            message: "domain lives in a context namespace".into(),
+            subject: Some(pb::EntityRef {
+                kind: pb::EntityKind::Domain as i32,
+                id: Some(id_from("shop", "shop", 1)),
+            }),
+            subject_field: "id.namespace".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issue_json_carries_severity_code_subject_field_and_message() {
+        let value = issue_json(&strategic_issue());
+        assert_eq!(value["severity"], "warning");
+        assert_eq!(value["code"], "DOMAIN_IN_CONTEXT_NAMESPACE");
+        assert_eq!(value["message"], "domain lives in a context namespace");
+        assert_eq!(value["field"], "id.namespace");
+        assert!(
+            value["subject"].as_str().unwrap().contains("shop"),
+            "{value}"
+        );
+        let bare = issue_json(&pb::ValidationIssue::default());
+        assert!(bare["field"].is_null(), "{bare}");
+        assert!(bare["subject"].is_null(), "{bare}");
+    }
+
+    #[test]
+    fn batch_issues_json_tags_each_finding_with_its_op_index_and_entity() {
+        let put = |issues: Vec<pb::ValidationIssue>| pb::BatchMutateOpResult {
+            result: Some(pb::batch_mutate_op_result::Result::Put(
+                pb::PutEntityResponse {
+                    validation: issues,
+                    ..Default::default()
+                },
+            )),
+        };
+        let domain_put = |slug: &str| pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                entity: Some(pb::Entity {
+                    system: None,
+                    kind: Some(pb::entity::Kind::Domain(pb::Domain {
+                        id: Some(id_from("shop", slug, 1)),
+                        ..Default::default()
+                    })),
+                }),
+                ..Default::default()
+            })),
+        };
+        let delete_op = pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Subdomain as i32,
+                id: Some(id_from("shop", "gone", 1)),
+                ..Default::default()
+            })),
+        };
+        let entities = batch_op_entities(&[
+            domain_put("clean"),
+            delete_op.clone(),
+            domain_put("noisy"),
+            delete_op,
+        ]);
+        let resp = pb::BatchMutateResponse {
+            results: vec![
+                put(vec![]),
+                pb::BatchMutateOpResult {
+                    result: Some(pb::batch_mutate_op_result::Result::Delete(
+                        pb::DeleteEntityResponse {
+                            validation: vec![strategic_issue()],
+                            ..Default::default()
+                        },
+                    )),
+                },
+                put(vec![strategic_issue()]),
+                pb::BatchMutateOpResult {
+                    result: Some(pb::batch_mutate_op_result::Result::Delete(
+                        pb::DeleteEntityResponse::default(),
+                    )),
+                },
+            ],
+            ..Default::default()
+        };
+        let issues = batch_issues_json(&entities, &resp);
+        assert_eq!(issues.len(), 2, "{issues:?}");
+        assert_eq!(issues[0]["op_index"], 1);
+        assert!(
+            issues[0]["op_entity"].as_str().unwrap().contains("gone"),
+            "{:?}",
+            issues[0]
+        );
+        assert_eq!(issues[1]["op_index"], 2);
+        assert!(
+            issues[1]["op_entity"].as_str().unwrap().contains("noisy"),
+            "{:?}",
+            issues[1]
+        );
+        assert_eq!(issues[1]["code"], "DOMAIN_IN_CONTEXT_NAMESPACE");
+    }
+
+    #[test]
+    fn with_issues_adds_the_array_and_keeps_the_rest_of_the_body() {
+        let base = ok_response(
+            "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
+            &pb::MergeBranchResponse::default(),
+            false,
+        );
+        let result = with_issues(base, issues_json(&[strategic_issue()]));
+        let text = result.content[0].as_text().unwrap().text.clone();
+        let body: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(body["format"], "binpb_base64");
+        assert!(body["binpb_base64"].is_string(), "{body}");
+        assert_eq!(body["issues"][0]["code"], "DOMAIN_IN_CONTEXT_NAMESPACE");
+    }
+
+    #[test]
     fn kinds_to_i32_translates_and_short_circuits_on_first_unknown() {
         let ok = kinds_to_i32(Some(&vec!["event".into(), "command".into()])).unwrap();
         assert_eq!(
@@ -3974,5 +4254,22 @@ mod tests {
                 row.rpcs
             );
         }
+    }
+
+    #[test]
+    fn apply_issues_json_uses_the_batch_issue_shape_with_op_tags() {
+        let op_issues = vec![trogon_atlas_client::apply::OpIssues {
+            op_index: 1,
+            op_entity: "domain:shop/shop@1".into(),
+            issues: vec![strategic_issue()],
+        }];
+        let issues = apply_issues_json(&op_issues);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0]["code"], "DOMAIN_IN_CONTEXT_NAMESPACE");
+        assert_eq!(issues[0]["severity"], "warning");
+        assert_eq!(issues[0]["field"], "id.namespace");
+        assert_eq!(issues[0]["op_index"], 1);
+        assert_eq!(issues[0]["op_entity"], "domain:shop/shop@1");
+        assert_eq!(apply_issues_json(&[]), Vec::<serde_json::Value>::new());
     }
 }

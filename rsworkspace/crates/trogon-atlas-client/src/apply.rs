@@ -285,14 +285,48 @@ pub fn issue_to_json(issue: &pb::ValidationIssue) -> Value {
     })
 }
 
+/// The validation findings one batch op produced, with the op's position in
+/// the batch and the canonical id of the entity it wrote.
+pub struct OpIssues {
+    /// Zero-based position among the batch's ops (unchanged manifests are
+    /// not sent, so this is not the manifest index).
+    pub op_index: usize,
+    pub op_entity: String,
+    pub issues: Vec<pb::ValidationIssue>,
+}
+
 pub struct ApplyOutcome {
     /// One human-readable line per manifest, in manifest order.
     pub lines: Vec<String>,
     /// Validation issues the server reported for applied/validated ops.
     pub issues: Vec<pb::ValidationIssue>,
+    /// The same findings grouped by the op that produced them; ops with no
+    /// findings are omitted.
+    pub op_issues: Vec<OpIssues>,
     /// The batch's idempotency receipt, present only when the caller passed
     /// an `operation_id` to `apply` and at least one op ran.
     pub operation_receipt: Option<pb::OperationReceipt>,
+}
+
+/// Groups the findings of put and delete results by op, tagging each group
+/// with the op's position and the entity label at that position.
+fn issues_by_op(results: &[pb::BatchMutateOpResult], labels: &[String]) -> Vec<OpIssues> {
+    results
+        .iter()
+        .enumerate()
+        .filter_map(|(op_index, result)| {
+            let findings = match &result.result {
+                Some(pb::batch_mutate_op_result::Result::Put(put)) => &put.validation,
+                Some(pb::batch_mutate_op_result::Result::Delete(delete)) => &delete.validation,
+                None => return None,
+            };
+            (!findings.is_empty()).then(|| OpIssues {
+                op_index,
+                op_entity: labels.get(op_index).cloned().unwrap_or_default(),
+                issues: findings.clone(),
+            })
+        })
+        .collect()
 }
 
 fn id_label(m: &LoadedManifest) -> String {
@@ -320,6 +354,7 @@ pub async fn apply(
         .collect();
 
     let mut issues = Vec::new();
+    let mut op_issues = Vec::new();
     let mut operation_receipt = None;
     if !changed.is_empty() {
         let ops = changed
@@ -384,11 +419,12 @@ pub async fn apply(
                 "apply returned unexpected status {status:?}, expected {expected:?} (dry_run={dry_run})"
             );
         }
-        for result in &resp.results {
-            if let Some(pb::batch_mutate_op_result::Result::Put(put)) = &result.result {
-                issues.extend(put.validation.iter().cloned());
-            }
-        }
+        let labels: Vec<String> = changed.iter().map(|c| id_label(&c.manifest)).collect();
+        op_issues = issues_by_op(&resp.results, &labels);
+        issues = op_issues
+            .iter()
+            .flat_map(|o| o.issues.iter().cloned())
+            .collect();
     }
 
     let lines = plan
@@ -398,6 +434,7 @@ pub async fn apply(
     Ok(ApplyOutcome {
         lines,
         issues,
+        op_issues,
         operation_receipt,
     })
 }
@@ -605,5 +642,63 @@ mod tests {
         assert_eq!(json["failed"], "event:shop/order.placed@1");
         assert_eq!(json["issues"][0]["code"], "ENTITY_REFERENCED");
         assert_eq!(json["issues"][0]["severity"], "error");
+    }
+
+    fn finding(code: &str) -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: code.into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issues_by_op_tags_put_and_delete_findings_and_skips_clean_ops() {
+        use pb::batch_mutate_op_result::Result as OpResult;
+        let results = vec![
+            pb::BatchMutateOpResult {
+                result: Some(OpResult::Put(pb::PutEntityResponse {
+                    validation: vec![finding("REALIZES_MIXED_CLASSIFICATIONS")],
+                    ..Default::default()
+                })),
+            },
+            pb::BatchMutateOpResult {
+                result: Some(OpResult::Put(pb::PutEntityResponse::default())),
+            },
+            pb::BatchMutateOpResult {
+                result: Some(OpResult::Delete(pb::DeleteEntityResponse {
+                    validation: vec![finding("REALIZES_DANGLING")],
+                    ..Default::default()
+                })),
+            },
+            pb::BatchMutateOpResult { result: None },
+        ];
+        let labels = vec![
+            "bounded_context:shop/shop@1".to_string(),
+            "event:shop/order.placed@1".to_string(),
+            "subdomain:acme/ordering@1".to_string(),
+        ];
+
+        let grouped = issues_by_op(&results, &labels);
+
+        let tagged: Vec<(usize, &str, &str)> = grouped
+            .iter()
+            .flat_map(|o| {
+                o.issues
+                    .iter()
+                    .map(move |i| (o.op_index, o.op_entity.as_str(), i.code.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            tagged,
+            vec![
+                (
+                    0,
+                    "bounded_context:shop/shop@1",
+                    "REALIZES_MIXED_CLASSIFICATIONS"
+                ),
+                (2, "subdomain:acme/ordering@1", "REALIZES_DANGLING"),
+            ]
+        );
     }
 }

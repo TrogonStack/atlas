@@ -1,8 +1,0 @@
-apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
-kind: Project
-metadata:
-  name: acme-customer-data-deletion
-  namespace: acme-customer-data-deletion
-spec:
-  doc: Customer data deletion across every downstream vendor.
-  title: Acme Customer Data Deletion

@@ -91,11 +91,14 @@ stack you started is listening.
 ## Load the demo model
 
 The [example manifests](../../examples/manifests/README.md) describe a
-fictional retailer, Acme. Apply the storefront first, then the reviews model
-that builds on it:
+fictional retailer, Acme. Apply the problem space first, then the
+storefront, the fulfillment model that builds on it, and the reviews model
+that builds on that:
 
 ```sh
+trogon-atlas apply -f examples/manifests/acme/
 trogon-atlas apply -f examples/manifests/acme-storefront/
+trogon-atlas apply -f examples/manifests/acme-fulfillment/
 trogon-atlas apply -f examples/manifests/acme-reviews/
 ```
 
@@ -111,11 +114,13 @@ List the namespaces the server now holds:
 trogon-atlas namespaces
 ```
 
-Print the storefront's structure: its domains, storyboards, and slices, and
-what each slice connects:
+Print the storefront's structure: its storyboards and slices, and what each
+slice connects. The business itself, with its subdomains, lives in the `acme`
+namespace:
 
 ```sh
 trogon-atlas tree acme-storefront
+trogon-atlas tree acme
 ```
 
 Look at one slice in detail, with the entities it refers to and the ones
@@ -135,9 +140,10 @@ It reports no errors or warnings, because the examples are kept valid. The
 informational findings point at places the model could say more.
 
 Now go back to <http://127.0.0.1:8788> and reload. The overview lists Acme
-Reviews and Acme Storefront. Open Acme Storefront: its board shows the
-Checkout and Fulfillment storyboards, from adding an item to the cart to
-marking the order fulfilled.
+Fulfillment, Acme Reviews and Acme Storefront. Open Acme Storefront: its
+board shows the Checkout and Payment storyboards, from adding an item to the
+cart to capturing the payment. Acme Fulfillment picks up from the paid
+order.
 
 ## Connect an AI agent
 

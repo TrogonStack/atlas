@@ -6271,6 +6271,14 @@
             {
               "not": {
                 "required": [
+                  "event",
+                  "schema"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
                   "command",
                   "readModel"
                 ]
@@ -6311,6 +6319,14 @@
             {
               "not": {
                 "required": [
+                  "command",
+                  "schema"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
                   "readModel",
                   "processor"
                 ]
@@ -6343,6 +6359,14 @@
             {
               "not": {
                 "required": [
+                  "readModel",
+                  "schema"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
                   "processor",
                   "ui"
                 ]
@@ -6367,6 +6391,14 @@
             {
               "not": {
                 "required": [
+                  "processor",
+                  "schema"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
                   "ui",
                   "persona"
                 ]
@@ -6383,8 +6415,32 @@
             {
               "not": {
                 "required": [
+                  "ui",
+                  "schema"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
                   "persona",
                   "swimlane"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "persona",
+                  "schema"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "swimlane",
+                  "schema"
                 ]
               }
             }
@@ -6404,6 +6460,9 @@
             },
             "readModel": {
               "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ReadModelRef"
+            },
+            "schema": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaRef"
             },
             "swimlane": {
               "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SwimlaneRef"

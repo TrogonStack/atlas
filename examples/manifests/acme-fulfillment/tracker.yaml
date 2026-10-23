@@ -1,0 +1,24 @@
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Tracker
+metadata:
+  name: fulfillment-buildout
+  namespace: acme-fulfillment
+spec:
+  doc: Delivery tracking for the fulfillment model. The tracker points at the model; the model never points back.
+  items:
+  - doc: waiting on carrier sandbox credentials
+    status: TRACK_STATUS_BLOCKED
+    subject:
+      id:
+        namespace: acme-fulfillment
+        slug: mark-fulfilled-auto
+        version: '1'
+      kind: ENTITY_KIND_AUTOMATION_SLICE
+  - status: TRACK_STATUS_TODO
+    subject:
+      id:
+        namespace: acme-fulfillment
+        slug: order-tracking-ui-slice
+        version: '1'
+      kind: ENTITY_KIND_UI_SLICE
+  title: Fulfillment buildout

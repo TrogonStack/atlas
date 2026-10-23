@@ -6,16 +6,27 @@ vi.mock('@/lib/api', () => ({
     overview: vi.fn(),
     search: vi.fn(),
     namespaceRegistry: vi.fn(),
+    validateProject: vi.fn(),
   },
 }));
 
-vi.mock('@/components/canvas/DomainChartBoard', () => ({
-  DomainChartBoard: ({ onSelect }: { onSelect: (key: string) => void }) => (
-    <button type="button" data-testid="domain-chart-board" onClick={() => onSelect('domain:market/trading@1')}>
-      chart
-    </button>
-  ),
-}));
+vi.mock('@/components/canvas/DomainChartBoard', async () => {
+  const { useIssues } = await import('@/components/IssuesProvider');
+  return {
+    DomainChartBoard: ({ onSelect }: { onSelect: (key: string) => void }) => (
+      <button
+        type="button"
+        data-testid="domain-chart-board"
+        data-findings={useIssues()
+          .all.map((i) => i.code)
+          .join(',')}
+        onClick={() => onSelect('domain:market/trading@1')}
+      >
+        chart
+      </button>
+    ),
+  };
+});
 vi.mock('@/components/canvas/ContextMapBoard', () => ({
   ContextMapBoard: () => <div data-testid="context-map-board" />,
 }));
@@ -73,6 +84,7 @@ describe('OverviewPage', () => {
     (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(EMPTY_OVERVIEW);
     (api.search as ReturnType<typeof vi.fn>).mockResolvedValue({ results: [] });
     (api.namespaceRegistry as ReturnType<typeof vi.fn>).mockResolvedValue({ namespaces: [] });
+    (api.validateProject as ReturnType<typeof vi.fn>).mockResolvedValue({ reports: [] });
   });
 
   afterEach(() => {
@@ -416,5 +428,75 @@ describe('OverviewPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
     fireEvent.click(screen.getByTestId('domain-chart-board'));
     expect(screen.getByText('The trading charter.')).toBeDefined();
+  });
+
+  describe('domain chart findings', () => {
+    const PROJECT_OVERVIEW = {
+      entities: [
+        {
+          domain: {
+            id: { namespace: 'market', slug: 'trading', version: 1 },
+            title: 'Trading',
+            project: { id: { namespace: 'acme', slug: 'acme', version: 1 } },
+          },
+        },
+        { domain: { id: { namespace: 'market', slug: 'risk', version: 1 }, title: 'Risk' } },
+      ],
+    };
+    const STRATEGIC_REPORT = {
+      reports: [
+        {
+          issues: [
+            {
+              severity: 'SEVERITY_WARNING',
+              code: 'DOMAIN_IN_CONTEXT_NAMESPACE',
+              message: 'misplaced',
+              subject: { kind: 'ENTITY_KIND_DOMAIN', id: { namespace: 'market', slug: 'trading', version: '1' } },
+            },
+          ],
+        },
+      ],
+    };
+
+    async function openChart() {
+      render(<OverviewPage />);
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      fireEvent.click(screen.getByRole('tab', { name: 'Domain chart' }));
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+    }
+
+    it('validates each project once, each domain without a project by itself and by namespace, on the current branch', async () => {
+      window.history.replaceState(null, '', '/?branch=feature-x');
+      (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(PROJECT_OVERVIEW);
+      await openChart();
+
+      const calls = (api.validateProject as ReturnType<typeof vi.fn>).mock.calls;
+      expect(calls.map(([scope]) => scope)).toEqual([
+        { projectNamespace: 'acme', projectSlug: 'acme', projectVersion: '1' },
+        { domainNamespace: 'market', domainSlug: 'risk', domainVersion: '1' },
+        { namespace: 'market' },
+      ]);
+      for (const [, opts] of calls) expect(opts).toEqual(expect.objectContaining({ branch: 'feature-x' }));
+    });
+
+    it('hands the server findings to the chart', async () => {
+      (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(PROJECT_OVERVIEW);
+      (api.validateProject as ReturnType<typeof vi.fn>).mockResolvedValue(STRATEGIC_REPORT);
+      await openChart();
+      expect(screen.getByTestId('domain-chart-board').getAttribute('data-findings')).toBe(
+        'DOMAIN_IN_CONTEXT_NAMESPACE',
+      );
+    });
+
+    it('renders the chart without findings when validation fails', async () => {
+      (api.overview as ReturnType<typeof vi.fn>).mockResolvedValue(PROJECT_OVERVIEW);
+      (api.validateProject as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('unavailable'));
+      await openChart();
+      expect(screen.getByTestId('domain-chart-board').getAttribute('data-findings')).toBe('');
+    });
   });
 });

@@ -1785,10 +1785,28 @@ async fn merge_branch_dry_run_splits_counts_by_class_and_reports_findings() {
         !resp.validation.is_empty(),
         "a dry run must report the findings the merge leaves behind"
     );
-    assert!(resp
+    let errors: Vec<&pb::ValidationIssue> = resp
         .validation
         .iter()
-        .all(|i| i.severity != pb::validation_issue::Severity::Error as i32));
+        .filter(|i| i.severity == pb::validation_issue::Severity::Error as i32)
+        .collect();
+    assert!(
+        errors.iter().any(|i| i.code == "DOMAIN_SLUG_MISMATCH"),
+        "a strategic Error rides a VALIDATED merge: {errors:?}"
+    );
+    assert!(
+        errors.iter().all(|i| {
+            i.subject.as_ref().is_some_and(|s| {
+                [
+                    pb::EntityKind::Domain,
+                    pb::EntityKind::Subdomain,
+                    pb::EntityKind::BoundedContext,
+                ]
+                .contains(&pb::EntityKind::try_from(s.kind).unwrap())
+            })
+        }),
+        "only strategic findings may be Errors on a non-INVALID merge: {errors:?}"
+    );
 
     let applied = c
         .merge_branch(pb::MergeBranchRequest {

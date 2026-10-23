@@ -166,6 +166,7 @@ fn typed_delete_report_distinguishes_incomplete_empty_reporting_from_complete_ab
         operation_receipt: None,
         referrers: vec![],
         referrers_incomplete: true,
+        validation: vec![],
     };
     let decoded = pb::DeleteEntityResponse::decode(response.encode_to_vec().as_slice()).unwrap();
     assert!(decoded.referrers_incomplete);

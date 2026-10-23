@@ -43,6 +43,7 @@ async fn incomplete_delete_report_retains_typed_flag_and_warns_without_claiming_
                     operation_receipt: None,
                     referrers: vec![],
                     referrers_incomplete: true,
+                    validation: vec![],
                 })
             };
             Ok::<_, Infallible>(response)
