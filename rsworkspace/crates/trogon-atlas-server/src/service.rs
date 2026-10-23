@@ -2370,7 +2370,7 @@ fn merge_strategic_findings(
         .map(|m| (m.kind, m.id.clone()))
         .collect();
     let mut findings: Vec<pb::ValidationIssue> =
-        validation::strategic_issues_by_change(&changes, post_world)
+        validation::strategic_issues_by_change(&changes, pre_world, post_world)
             .into_iter()
             .flatten()
             .collect();
@@ -4480,7 +4480,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let all = self.snapshot_for(branch.as_deref(), &vis).await?;
             let world = world_after(&all, &[(kind, &id, Some(&entity))]);
             scenario_issues.extend(
-                validation::strategic_issues_by_change(&[(kind, id.clone())], &world)
+                validation::strategic_issues_by_change(&[(kind, id.clone())], &all, &world)
                     .into_iter()
                     .flatten(),
             );
@@ -5225,9 +5225,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .iter()
                 .map(|i| (metas[*i].kind, metas[*i].id.clone()))
                 .collect();
-            for (op_index, issues) in strategic_ops
-                .iter()
-                .zip(validation::strategic_issues_by_change(&changes, &world))
+            for (op_index, issues) in
+                strategic_ops
+                    .iter()
+                    .zip(validation::strategic_issues_by_change(
+                        &changes, &base, &world,
+                    ))
             {
                 per_op_validation[*op_index] = issues;
             }

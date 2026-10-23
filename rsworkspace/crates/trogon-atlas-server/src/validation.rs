@@ -2673,6 +2673,48 @@ fn declared_latest(
     })
 }
 
+fn latest_realizers<'a>(
+    world: &'a [StoredEntity],
+    latest: &HashMap<(pb::EntityKind, &str, &str), u64>,
+    subdomain: &pb::Id,
+) -> Vec<&'a StoredEntity> {
+    world
+        .iter()
+        .filter(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::BoundedContext(bc)) => {
+                declared_latest(latest, pb::EntityKind::BoundedContext, bc.id.as_ref())
+                    && bc.realizes.iter().filter_map(|r| r.id.as_ref()).any(|rid| {
+                        rid.namespace == subdomain.namespace && rid.slug == subdomain.slug
+                    })
+            }
+            _ => false,
+        })
+        .collect()
+}
+
+fn latest_subdomains_of<'a>(
+    world: &'a [StoredEntity],
+    latest: &HashMap<(pb::EntityKind, &str, &str), u64>,
+    domain: &pb::Id,
+) -> Vec<&'a StoredEntity> {
+    world
+        .iter()
+        .filter(|se| match se.entity.kind.as_ref() {
+            Some(pb::entity::Kind::Subdomain(sd)) => {
+                declared_latest(latest, pb::EntityKind::Subdomain, sd.id.as_ref())
+                    && sd
+                        .domain
+                        .as_ref()
+                        .and_then(|r| r.id.as_ref())
+                        .is_some_and(|did| {
+                            did.namespace == domain.namespace && did.slug == domain.slug
+                        })
+            }
+            _ => false,
+        })
+        .collect()
+}
+
 /// A change to one strategic entity: the key of the entity a write put or
 /// merged.
 pub type StrategicChange = (pb::EntityKind, pb::Id);
@@ -2698,15 +2740,47 @@ fn issue_key(issue: &pb::ValidationIssue) -> IssueKey {
     )
 }
 
+/// The entities in `world` that the version of `kind`/`id` stored in `before`
+/// referenced: the subdomains a context realized, the domain a subdomain
+/// named.
+fn replaced_targets<'a>(
+    kind: pb::EntityKind,
+    id: &pb::Id,
+    before: &[StoredEntity],
+    world: &'a [StoredEntity],
+) -> Vec<&'a StoredEntity> {
+    let Some(previous) = find_stored(before, kind, id) else {
+        return Vec::new();
+    };
+    match previous.entity.kind.as_ref() {
+        Some(pb::entity::Kind::BoundedContext(bc)) => bc
+            .realizes
+            .iter()
+            .filter_map(|r| r.id.as_ref())
+            .filter_map(|sid| find_stored(world, pb::EntityKind::Subdomain, sid))
+            .collect(),
+        Some(pb::entity::Kind::Subdomain(sd)) => {
+            strategic_subdomain_domain(sd, world).into_iter().collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// The strategic findings each change causes, judged against `world` (the
 /// store as it will be once every change landed, so the order of changes
-/// does not matter). A change covers its own entity and the entities whose
-/// verdict it can move:
+/// does not matter). `before` is the store without any of the changes. A
+/// change covers its own entity and the entities whose verdict it can move:
 ///
 /// - a domain: itself;
-/// - a subdomain: itself, every context realizing it, and its domain;
+/// - a subdomain: itself, the latest version of every context realizing it,
+///   and its domain;
 /// - a bounded context: itself, the subdomains it realizes, and the domains
 ///   declared in its namespace.
+///
+/// A change also covers what the version it replaced referenced (the
+/// subdomains a context realized, the domain a subdomain named), reporting
+/// only the findings on those entities that `before` did not already have, so
+/// a write is never blamed for a problem it did not cause.
 ///
 /// A finding is reported once, under the change whose entity it is about
 /// (the subject), or else under the first change that reaches it. Findings
@@ -2714,6 +2788,7 @@ fn issue_key(issue: &pb::ValidationIssue) -> IssueKey {
 #[must_use]
 pub fn strategic_issues_by_change(
     changes: &[StrategicChange],
+    before: &[StoredEntity],
     world: &[StoredEntity],
 ) -> Vec<Vec<pb::ValidationIssue>> {
     let latest = latest_strategic_versions(world);
@@ -2725,19 +2800,7 @@ pub fn strategic_issues_by_change(
         let mut targets: Vec<&StoredEntity> = vec![own];
         match own.entity.kind.as_ref() {
             Some(pb::entity::Kind::Subdomain(sd)) => {
-                for se in world {
-                    let Some(pb::entity::Kind::BoundedContext(bc)) = se.entity.kind.as_ref() else {
-                        continue;
-                    };
-                    if bc
-                        .realizes
-                        .iter()
-                        .filter_map(|r| r.id.as_ref())
-                        .any(|rid| rid.namespace == id.namespace && rid.slug == id.slug)
-                    {
-                        targets.push(se);
-                    }
-                }
+                targets.extend(latest_realizers(world, &latest, id));
                 if let Some(domain) = strategic_subdomain_domain(sd, world) {
                     targets.push(domain);
                 }
@@ -2762,10 +2825,41 @@ pub fn strategic_issues_by_change(
             }
             _ => {}
         }
+        let current: HashSet<pb::EntityKey> = targets
+            .iter()
+            .filter_map(|t| {
+                Some(pb::EntityKey::new(
+                    entity_kind(&t.entity)?,
+                    entity_id(&t.entity)?,
+                ))
+            })
+            .collect();
         for target in targets {
             reached.extend(
                 validate_scenarios(&target.entity, world)
                     .into_iter()
+                    .map(|issue| (index, issue)),
+            );
+        }
+        for target in replaced_targets(*kind, id, before, world) {
+            let (Some(target_kind), Some(target_id)) =
+                (entity_kind(&target.entity), entity_id(&target.entity))
+            else {
+                continue;
+            };
+            if current.contains(&pb::EntityKey::new(target_kind, target_id)) {
+                continue;
+            }
+            let existing: HashSet<IssueKey> = find_stored(before, target_kind, target_id)
+                .map(|prior| validate_scenarios(&prior.entity, before))
+                .unwrap_or_default()
+                .iter()
+                .map(issue_key)
+                .collect();
+            reached.extend(
+                validate_scenarios(&target.entity, world)
+                    .into_iter()
+                    .filter(|issue| !existing.contains(&issue_key(issue)))
                     .map(|issue| (index, issue)),
             );
         }
@@ -2813,8 +2907,9 @@ pub fn strategic_issues_by_change(
 /// so what a delete reports is what it caused. A deletion covers the
 /// surviving entities whose verdict it can move:
 ///
-/// - a domain: the subdomains that named it;
-/// - a subdomain: the contexts realizing it and its domain;
+/// - a domain: the latest version of each subdomain that named it;
+/// - a subdomain: the latest version of each context realizing it and its
+///   domain;
 /// - a bounded context: the subdomains it realized and the domains declared
 ///   in its namespace.
 ///
@@ -2838,34 +2933,10 @@ pub fn strategic_issues_for_deletes(
         let mut targets: Vec<&StoredEntity> = Vec::new();
         match gone.entity.kind.as_ref() {
             Some(pb::entity::Kind::Domain(_)) => {
-                for se in before {
-                    let Some(pb::entity::Kind::Subdomain(sd)) = se.entity.kind.as_ref() else {
-                        continue;
-                    };
-                    if sd
-                        .domain
-                        .as_ref()
-                        .and_then(|r| r.id.as_ref())
-                        .is_some_and(|did| did.namespace == id.namespace && did.slug == id.slug)
-                    {
-                        targets.push(se);
-                    }
-                }
+                targets.extend(latest_subdomains_of(before, &latest_before, id));
             }
             Some(pb::entity::Kind::Subdomain(sd)) => {
-                for se in before {
-                    let Some(pb::entity::Kind::BoundedContext(bc)) = se.entity.kind.as_ref() else {
-                        continue;
-                    };
-                    if bc
-                        .realizes
-                        .iter()
-                        .filter_map(|r| r.id.as_ref())
-                        .any(|rid| rid.namespace == id.namespace && rid.slug == id.slug)
-                    {
-                        targets.push(se);
-                    }
-                }
+                targets.extend(latest_realizers(before, &latest_before, id));
                 if let Some(domain) = strategic_subdomain_domain(sd, before) {
                     targets.push(domain);
                 }
@@ -11432,6 +11503,260 @@ mod knowledge_graph_tests {
         ];
         let issues = strategic_chain_issues(["orders"], &all);
         assert_eq!(count_code(&issues, "SUBDOMAIN_UNREALIZED"), 1, "{issues:?}");
+    }
+
+    fn at_version(mut entity: pb::Entity, version: u64) -> pb::Entity {
+        let id = match entity.kind.as_mut() {
+            Some(pb::entity::Kind::BoundedContext(x)) => x.id.as_mut(),
+            Some(pb::entity::Kind::Subdomain(x)) => x.id.as_mut(),
+            Some(pb::entity::Kind::Domain(x)) => x.id.as_mut(),
+            _ => None,
+        };
+        if let Some(id) = id {
+            id.version = version;
+        }
+        entity
+    }
+
+    fn supersede_world() -> Vec<StoredEntity> {
+        vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(subdomain("shop", "pricing", Some("shop"), true)),
+            stored(subdomain_supporting("shop", "fulfillment", Some("shop"))),
+            stored(context(
+                "shop",
+                &[("shop", "ordering"), ("shop", "fulfillment")],
+            )),
+            stored(at_version(
+                context("shop", &[("shop", "ordering"), ("shop", "pricing")]),
+                2,
+            )),
+        ]
+    }
+
+    fn subjects_at_version(
+        issues: &[pb::ValidationIssue],
+        kind: pb::EntityKind,
+        version: u64,
+    ) -> Vec<&str> {
+        issues
+            .iter()
+            .filter(|i| {
+                i.subject.as_ref().is_some_and(|s| {
+                    s.kind == kind as i32 && s.id.as_ref().is_some_and(|id| id.version == version)
+                })
+            })
+            .map(|i| i.code.as_str())
+            .collect()
+    }
+
+    fn change_subdomain(slug: &str) -> StrategicChange {
+        (pb::EntityKind::Subdomain, id("shop", slug))
+    }
+
+    fn flat(issues: Vec<Vec<pb::ValidationIssue>>) -> Vec<pb::ValidationIssue> {
+        issues.into_iter().flatten().collect()
+    }
+
+    #[test]
+    fn subdomain_change_skips_superseded_context_versions() {
+        let world = supersede_world();
+        let issues = flat(strategic_issues_by_change(
+            &[change_subdomain("ordering")],
+            &world,
+            &world,
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::BoundedContext, 1),
+            Vec::<&str>::new(),
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn subdomain_delete_skips_superseded_context_versions() {
+        let before = supersede_world();
+        let gone = id("shop", "ordering");
+        let after = before
+            .iter()
+            .filter(|se| {
+                !matches!(
+                    se.entity.kind.as_ref(),
+                    Some(pb::entity::Kind::Subdomain(sd)) if sd.id.as_ref() == Some(&gone)
+                )
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let issues = flat(strategic_issues_for_deletes(
+            &[change_subdomain("ordering")],
+            &before,
+            &after,
+            &[],
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::BoundedContext, 1),
+            Vec::<&str>::new(),
+            "{issues:?}"
+        );
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::BoundedContext, 2),
+            ["REALIZES_DANGLING"],
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn domain_delete_skips_superseded_subdomain_versions() {
+        let before = vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(at_version(
+                subdomain("shop", "ordering", Some("shop"), true),
+                2,
+            )),
+            stored(context("shop", &[("shop", "ordering")])),
+        ];
+        let after = before[1..].to_vec();
+        let issues = flat(strategic_issues_for_deletes(
+            &[(pb::EntityKind::Domain, id("shop", "shop"))],
+            &before,
+            &after,
+            &[],
+        ));
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::Subdomain, 1),
+            Vec::<&str>::new(),
+            "{issues:?}"
+        );
+        assert_eq!(
+            subjects_at_version(&issues, pb::EntityKind::Subdomain, 2),
+            ["SUBDOMAIN_DANGLING_DOMAIN"],
+            "{issues:?}"
+        );
+    }
+
+    fn put_in(
+        before: &[StoredEntity],
+        entity: pb::Entity,
+    ) -> (Vec<StoredEntity>, Vec<StoredEntity>) {
+        let mut world: Vec<StoredEntity> = before
+            .iter()
+            .filter(|se| {
+                entity_kind(&se.entity) != entity_kind(&entity)
+                    || entity_id(&se.entity) != entity_id(&entity)
+            })
+            .cloned()
+            .collect();
+        world.push(stored(entity));
+        (before.to_vec(), world)
+    }
+
+    fn pricing_world() -> Vec<StoredEntity> {
+        vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(subdomain("shop", "pricing", Some("shop"), true)),
+            stored(context(
+                "shop",
+                &[("shop", "ordering"), ("shop", "pricing")],
+            )),
+        ]
+    }
+
+    #[test]
+    fn context_put_reports_the_subdomain_it_stops_realizing() {
+        let (before, world) = put_in(&pricing_world(), context("shop", &[("shop", "ordering")]));
+        let issues = flat(strategic_issues_by_change(
+            &[(pb::EntityKind::BoundedContext, id("shop", "shop"))],
+            &before,
+            &world,
+        ));
+        let pricing: Vec<&str> = issues
+            .iter()
+            .filter(|i| {
+                i.subject
+                    .as_ref()
+                    .and_then(|s| s.id.as_ref())
+                    .is_some_and(|id| id.slug == "pricing")
+            })
+            .map(|i| i.code.as_str())
+            .collect();
+        assert_eq!(pricing, ["SUBDOMAIN_UNREALIZED"], "{issues:?}");
+    }
+
+    #[test]
+    fn context_put_does_not_repeat_findings_on_what_it_stops_realizing() {
+        let mut before = pricing_world();
+        before[2] = stored(subdomain("shop", "pricing", Some("shop"), false));
+        let (before, world) = put_in(&before, context("shop", &[("shop", "ordering")]));
+        let issues = flat(strategic_issues_by_change(
+            &[(pb::EntityKind::BoundedContext, id("shop", "shop"))],
+            &before,
+            &world,
+        ));
+        let pricing: Vec<&str> = issues
+            .iter()
+            .filter(|i| {
+                i.subject
+                    .as_ref()
+                    .and_then(|s| s.id.as_ref())
+                    .is_some_and(|id| id.slug == "pricing")
+            })
+            .map(|i| i.code.as_str())
+            .collect();
+        assert_eq!(pricing, ["SUBDOMAIN_UNREALIZED"], "{issues:?}");
+    }
+
+    #[test]
+    fn subdomain_put_reports_the_domain_it_moves_away_from() {
+        let before = vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain("shop", "ordering", Some("shop"), true)),
+            stored(subdomain_supporting("shop", "pricing", Some("shop"))),
+            stored(context(
+                "shop",
+                &[("shop", "ordering"), ("shop", "pricing")],
+            )),
+        ];
+        let (before, world) = put_in(
+            &before,
+            subdomain_supporting("shop", "ordering", Some("elsewhere")),
+        );
+        let issues = flat(strategic_issues_by_change(
+            &[change_subdomain("ordering")],
+            &before,
+            &world,
+        ));
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|i| i.code == "DOMAIN_HAS_NO_CORE")
+                .filter_map(|i| i.subject.as_ref()?.id.as_ref())
+                .map(|id| id.slug.as_str())
+                .collect::<Vec<_>>(),
+            ["shop"],
+            "{issues:?}"
+        );
+    }
+
+    #[test]
+    fn subdomain_put_does_not_repeat_findings_on_the_domain_it_leaves() {
+        let before = vec![
+            stored(domain("shop", "shop")),
+            stored(subdomain_supporting("shop", "ordering", Some("shop"))),
+            stored(context("shop", &[("shop", "ordering")])),
+        ];
+        let (before, world) = put_in(
+            &before,
+            subdomain_supporting("shop", "ordering", Some("elsewhere")),
+        );
+        let issues = flat(strategic_issues_by_change(
+            &[change_subdomain("ordering")],
+            &before,
+            &world,
+        ));
+        assert_eq!(count_code(&issues, "DOMAIN_HAS_NO_CORE"), 0, "{issues:?}");
     }
 }
 
