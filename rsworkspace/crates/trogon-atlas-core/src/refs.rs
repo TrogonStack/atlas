@@ -978,6 +978,7 @@ fn collect_field_refs(
                 type_ref::Ref::Ui(x) => (EntityKind::Ui, x.id.clone()),
                 type_ref::Ref::Persona(x) => (EntityKind::Persona, x.id.clone()),
                 type_ref::Ref::Swimlane(x) => (EntityKind::Swimlane, x.id.clone()),
+                type_ref::Ref::Schema(x) => (EntityKind::Schema, x.id.clone()),
             };
             if let Some(id) = id {
                 out.push(OutboundRef {
@@ -2226,6 +2227,9 @@ fn retarget_field_refs(
                     (trogon_atlas_proto::type_ref::Ref::Swimlane(x), EntityKind::Swimlane) => {
                         x.id.as_ref() == Some(from_id)
                     }
+                    (trogon_atlas_proto::type_ref::Ref::Schema(x), EntityKind::Schema) => {
+                        x.id.as_ref() == Some(from_id)
+                    }
                     _ => false,
                 };
                 if matched {
@@ -2242,6 +2246,9 @@ fn retarget_field_refs(
                         trogon_atlas_proto::type_ref::Ref::Ui(x) => x.id = Some(to_id.clone()),
                         trogon_atlas_proto::type_ref::Ref::Persona(x) => x.id = Some(to_id.clone()),
                         trogon_atlas_proto::type_ref::Ref::Swimlane(x) => {
+                            x.id = Some(to_id.clone());
+                        }
+                        trogon_atlas_proto::type_ref::Ref::Schema(x) => {
                             x.id = Some(to_id.clone());
                         }
                     }
@@ -3717,6 +3724,70 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    fn field_spec_ref_schema(name: &str, target: Id) -> FieldSpec {
+        FieldSpec {
+            name: name.into(),
+            r#type: Some(FieldType {
+                kind: Some(field_type::Kind::Ref(RefType {
+                    r#ref: Some(TypeRef {
+                        r#ref: Some(type_ref::Ref::Schema(SchemaRef { id: Some(target) })),
+                    }),
+                })),
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// A field whose type is a `TypeRef::Schema` (a structural ref to a
+    /// named top-level Schema entity, distinct from the Decision #33
+    /// Any-bytes nominal-typing route) must be an outbound ref, so
+    /// GetIncomingReferences / GetImpact / DANGLING_REF can see it.
+    #[test]
+    fn schema_ref_in_type_ref_must_appear_in_outbound_refs() {
+        let target = id("ns", "invoice-source");
+        let entity = make_entity(entity::Kind::ReadModel(ReadModel {
+            id: Some(id("ns", "order-summary")),
+            schema: Some(crate::schema::pack_fields(vec![field_spec_ref_schema(
+                "source",
+                target.clone(),
+            )])),
+            ..Default::default()
+        }));
+        let refs = outbound_refs(&entity);
+        assert!(
+            refs.iter().any(|r| {
+                r.to_kind == Some(EntityKind::Schema)
+                    && r.to_id == target
+                    && r.from_field == "schema.fields[0].ref"
+            }),
+            "TypeRef::Schema must be an outbound ref; got {refs:?}"
+        );
+    }
+
+    /// Mirror of the above: RetargetReferences must rewrite a
+    /// `TypeRef::Schema` the same way it already rewrites every other
+    /// TypeRef variant.
+    #[test]
+    fn schema_ref_in_type_ref_must_be_retargetable() {
+        let old = id("ns", "invoice-source");
+        let new = id("ns", "invoice-source-v2");
+        let mut entity = make_entity(entity::Kind::ReadModel(ReadModel {
+            id: Some(id("ns", "order-summary")),
+            schema: Some(crate::schema::pack_fields(vec![field_spec_ref_schema(
+                "source",
+                old.clone(),
+            )])),
+            ..Default::default()
+        }));
+        let rewritten = retarget_refs(&mut entity, EntityKind::Schema, &old, &new);
+        assert_eq!(rewritten, vec!["schema.fields[0].ref".to_string()]);
+        let refs = outbound_refs(&entity);
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].to_kind, Some(EntityKind::Schema));
+        assert_eq!(refs[0].to_id, new);
+        assert_eq!(refs[0].from_field, "schema.fields[0].ref");
     }
 
     /// BUG: `Swimlane.state` is a load-bearing FieldSpec list (aggregate
