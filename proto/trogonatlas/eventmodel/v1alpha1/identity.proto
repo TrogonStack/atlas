@@ -96,7 +96,12 @@ enum EntityKind {
   ENTITY_KIND_DATA_PRODUCT = 33;
   ENTITY_KIND_TEAM = 34;
   ENTITY_KIND_PERSON = 35;
+  ENTITY_KIND_DECISION = 36;
+  ENTITY_KIND_DOCUMENT = 37;
 }
 
 message TeamRef { trogonatlas.type.v1alpha1.Id id = 1; }
 message PersonRef { trogonatlas.type.v1alpha1.Id id = 1; }
+
+message DecisionRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message DocumentRef { trogonatlas.type.v1alpha1.Id id = 1; }

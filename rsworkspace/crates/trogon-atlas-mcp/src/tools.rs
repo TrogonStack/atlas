@@ -1292,3 +1292,12 @@ pub struct ResponsibilityQueryParams {
     )]
     pub request_json: JsonPayload,
 }
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogQueryParams {
+    #[schemars(
+        description = "Exact native query request in proto3 JSON. Preserve selector alternatives, UID, local identity, digest pin presence and checked scope. No inferred historical hydration."
+    )]
+    pub request_json: JsonPayload,
+}

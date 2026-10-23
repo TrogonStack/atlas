@@ -1,3 +1,4 @@
+import { DecisionDocumentInspector } from '@/components/DecisionDocumentInspector';
 import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ResponsibilityInspector } from '@/components/ResponsibilityInspector';
@@ -634,6 +635,7 @@ export function Inspector({
             </section>
           ) : null}
           <ResponsibilityInspector entity={entity} asOf={asOf} />
+          <DecisionDocumentInspector entity={entity} asOf={asOf} />
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />
           {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} asOf={asOf} />}

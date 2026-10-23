@@ -89,6 +89,8 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::DataProduct(x) => x.supersedes.as_ref(),
         EntityOneof::Team(x) => x.supersedes.as_ref(),
         EntityOneof::Person(x) => x.supersedes.as_ref(),
+        EntityOneof::Decision(x) => x.supersedes.as_ref(),
+        EntityOneof::Document(x) => x.supersedes.as_ref(),
     };
     if let Some(s) = supersedes_of {
         if let Some(self_kind) = entity_kind(entity) {
@@ -802,6 +804,9 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::Team(_) | EntityOneof::Person(_) => {
             crate::responsibility_refs::outbound(entity, &mut out);
         }
+        EntityOneof::Decision(_) | EntityOneof::Document(_) => {
+            crate::decision_document_refs::outbound(entity, &mut out);
+        }
         EntityOneof::DataStore(x) => {
             for (i, attachment) in x.attachments.iter().enumerate() {
                 if let Some(id) = attachment.read_model.as_ref().and_then(|r| r.id.as_ref()) {
@@ -1091,6 +1096,8 @@ pub fn entity_kind(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::DataProduct(_) => EntityKind::DataProduct,
         EntityOneof::Team(_) => EntityKind::Team,
         EntityOneof::Person(_) => EntityKind::Person,
+        EntityOneof::Decision(_) => EntityKind::Decision,
+        EntityOneof::Document(_) => EntityKind::Document,
     })
 }
 
@@ -1135,6 +1142,8 @@ pub fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::DataProduct(x) => x.id.as_ref(),
         EntityOneof::Team(x) => x.id.as_ref(),
         EntityOneof::Person(x) => x.id.as_ref(),
+        EntityOneof::Decision(x) => x.id.as_ref(),
+        EntityOneof::Document(x) => x.id.as_ref(),
     }
 }
 
@@ -1199,6 +1208,8 @@ pub fn retarget_refs(
             EntityOneof::DataProduct(x) => x.supersedes.as_mut(),
             EntityOneof::Team(x) => x.supersedes.as_mut(),
             EntityOneof::Person(x) => x.supersedes.as_mut(),
+            EntityOneof::Decision(x) => x.supersedes.as_mut(),
+            EntityOneof::Document(x) => x.supersedes.as_mut(),
         };
         if self_kind_matches {
             if let Some(s) = supersedes_opt {
@@ -1968,6 +1979,15 @@ pub fn retarget_refs(
         EntityOneof::DataProduct(x) => {
             crate::data_product_refs::retarget(x, from_kind, from_id, to_id, &mut rewritten);
         }
+        EntityOneof::Decision(_) | EntityOneof::Document(_) => {
+            crate::decision_document_refs::retarget(
+                entity,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+        }
         EntityOneof::Team(_) | EntityOneof::Person(_) => {
             crate::responsibility_refs::retarget(entity, from_kind, from_id, to_id, &mut rewritten);
         }
@@ -2172,6 +2192,8 @@ fn matches_kind(kind: &EntityOneof, ek: EntityKind) -> bool {
             | (EntityOneof::DataProduct(_), EntityKind::DataProduct)
             | (EntityOneof::Team(_), EntityKind::Team)
             | (EntityOneof::Person(_), EntityKind::Person)
+            | (EntityOneof::Decision(_), EntityKind::Decision)
+            | (EntityOneof::Document(_), EntityKind::Document)
     )
 }
 

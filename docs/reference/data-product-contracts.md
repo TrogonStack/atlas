@@ -335,8 +335,9 @@ Admission ceilings are 1,024 total ports, 4,096 total associations
 across all nested collections, and 1 MiB for the complete protobuf-encoded
 DataProduct. Each LineageInput counts as an association. Existing lower entity,
 RPC and store limits still apply. Exceeding a ceiling rejects atomically, without
-truncating ports or references. DataProduct uses entity kind `33`, entity union
-field `34`, and wire contract revision `12` with matching mutation revision floors.
+truncating ports or references. DataProduct uses entity kind `33` and entity union
+field `34`. It was introduced with wire contract revision `12`; connected clients
+and servers must satisfy the current advertised mutation revision floors.
 
 The required visible resource scan budget is 5,000 rows combined across
 DataProducts, Channels, DataStores and Specifications in visible namespaces.

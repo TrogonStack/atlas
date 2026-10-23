@@ -1,9 +1,10 @@
 # Decision and Document acceptance
 
-Status: proposed acceptance requirements for the
-[contract](decision-and-document-contracts.md). Decision/Document runtime and
-client support are unimplemented. Existing source fixtures below establish
-reusable native anchors, not passing acceptance for these resources.
+Status: native Decision/Document schema, backend and client surfaces are
+implemented under the [contract](decision-and-document-contracts.md). The
+coverage section links executable cases and separates their evidence from
+remaining acceptance requirements. Source fixtures below establish reusable
+native anchors; their existence alone does not prove the new resource behavior.
 
 ## Connected fixture anchors
 
@@ -14,9 +15,10 @@ reusable native anchors, not passing acceptance for these resources.
 | [DataProduct fixture](../../rsworkspace/crates/trogon-atlas-server/tests/data_product_fixture.rs) | Namespace `product-fixture`, version 1: `orders`, `api`, `warehouse`, `delivery`, `placed`, `place`, `handle`, `project` and `observe` connect product access and lineage to native behavior. `Submitted` and `Placed` are input port display names, not IDs. |
 | [Ecommerce fixture](../../rsworkspace/crates/trogon-atlas-server/tests/phase10_ecommerce_fixture.rs) | `order-to-fulfillment` Storyboard includes `place-order-slice`, `orders-list-slice`, `auto-capture-payment`, `capture-payment-slice` and subsequent fulfillment steps in authored order. Namespace `ecommerce`, version 1; use returned identities, not display positions. |
 
-The proposed connected extension creates Decision `receipt-delivery-choice@1`
+The [connected extension](../../rsworkspace/crates/trogon-atlas-server/tests/decision_document_fixture.rs)
+creates Decision `receipt-delivery-choice@1`
 and Document `receipt-delivery-note@1` in `responsibility-fixture`. These are new
-fixture requirements, not existing resources. The Decision accepts a retained
+fixture resources. The Decision accepts a retained
 option with rationale and a RISK consequence. The Document retains Markdown and
 a declared `delivery` anchor. Both select `receipt`, each distinct observation
 ConnectionRef, the Receipt MESSAGE member and Receipts OUTPUT port. Capture
@@ -53,7 +55,7 @@ UIDs or describe an assembled query as a historical transaction snapshot.
 | Stale connection UID, duplicate/malformed persisted IDs, removed occurrence or wrong native context | Reject selection after complete owner identity validation; no index/endpoint fallback. |
 | Selected owner has an unrelated invalid declaration | Resolve the selected identity/context without recursively validating unrelated outgoing edges; report independent diagnostics separately. |
 | New Decision/Document entity or association as CatalogSubject | Reject under the closed inventory. Support/navigation/RELATED do not create recursive subject kinds. |
-| Team/Person assignment to proposed entity kinds | Preserve direct kinds and provenance; no inherited responsibility, authorization or authenticated approval. Assignment to anchors/options/new associations rejects. |
+| Team/Person assignment to Decision/Document entity kinds | Preserve direct kinds and provenance; no inherited responsibility, authorization or authenticated approval. Assignment to anchors/options/new associations rejects. |
 
 ## Retained content and navigation
 
@@ -99,8 +101,9 @@ UIDs or describe an assembled query as a historical transaction snapshot.
 | Hidden target direct read or query | NOT_FOUND without target titles, content, anchors, digest, path or existence disclosure; Reader mutation PERMISSION_DENIED. |
 | Readable owner with hidden target | Preserve already authored selectors; suppress new hydration details. Visible totals/pages reveal no hidden referrers. |
 | Exact target outside projection cap | Hydrate authorized owner independently of display caps; absence from projection is not nonexistence. |
-| Discovery resource ceiling | Share 5,000 rows across existing resource families and proposed resources; count each exact selected-view key once. At the boundary permit completed work, beyond it return RESOURCE_EXHAUSTED. |
-| Work/output ceilings | Share 10,000 examined association/anchor/replacement items and 4,096 output records request-wide. Repeated endpoints cost work; pages, batches and repeated queries within the request cannot reset budgets. |
+| Discovery resource ceiling | Share 5,000 rows across existing resource families and Decision/Document; count each exact selected-view key once. At the boundary permit completed work, beyond it return RESOURCE_EXHAUSTED. |
+| Work/output ceilings | Typed catalog queries and replacement admission share 10,000 examined association/anchor/replacement items request-wide; queries return at most 4,096 records. Repeated endpoints cost work; pages, batches and repeated queries within the request cannot reset budgets. |
+| Complete retarget enumeration | Unrelated discovery occurrences do not block migration. Preserve complete resource-row bounds, staged-write admission and lower Store batch limits; reject output beyond 4,096 results before preview/apply can publish writes. |
 | Replacement admission cannot finish within budget | Reject atomically, never infer cycle absence or ACCEPTED termination from partial discovery. |
 | Bounded impact/closure/export truncation | Explicit incomplete metadata and visited identities; no verified negative claim or complete reapply artifact. |
 | Safe-delete reporting exceeds visible row budget | Existing capped reporting may be incomplete, but independent complete cross-namespace guard must still protect every target. |
@@ -117,5 +120,25 @@ authored storyboard order and repeated occurrences. Browser/deployed evidence
 must be recorded separately from source and local test evidence.
 
 No existing fixture, successful documentation check or contract approval marks
-these implementation requirements complete. This slice defines no runtime,
-linter execution architecture or deployment acceptance.
+every acceptance requirement complete. Linter execution and deployment
+acceptance remain separate work.
+
+## Executable coverage and remaining evidence
+
+| Source | Exercised behavior |
+| --- | --- |
+| [Connected fixture](../../rsworkspace/crates/trogon-atlas-server/tests/decision_document_fixture.rs) | Uses exact version 1 in `responsibility-fixture`, a ReadModel, repeated observation occurrences, a Specification MESSAGE and a DataProduct OUTPUT port. Checks adopted choice, retained bytes and digest-pinned anchor, whole versus anchor incoming declarations, direct responsibility assignments, generic reference/impact provenance, reorder, stale byte pins and guarded/forced deletion with retained selectors. Exact hydration runs with display snapshot cap zero. |
+| [Core identity regressions](../../rsworkspace/crates/trogon-atlas-core/tests/decision_document.rs) | Values, complete local identities, exact anchor/digest resolution, id-less reapply, removal and fresh identity preparation, graph references and selector-preserving retarget rules. |
+| [Authenticated backend](../../rsworkspace/crates/trogon-atlas-server/tests/decision_document_backend.rs), [handler regressions](../../rsworkspace/crates/trogon-atlas-server/tests/handler_tests.rs) | Admission, replacement chains, typed detail/reverse lookup, hidden targets/referrers, repeated selectors, branches, final-batch delete protection, local-selector retarget refusal, operational failure and shared discovery/work/output ceilings. Delete-report tests distinguish reporting incompleteness from the independent complete safety guard. |
+| [Store routing and guards](../../rsworkspace/crates/trogon-atlas-store/tests/decision_document_routing.rs) | New resource keys, nested reference protection and branch-state incoming discovery. The existing complete Store guard remains independent of visible query caps. |
+| [Manifest/provenance checks](../../rsworkspace/crates/trogon-atlas-client/tests/decision_document_manifest.rs), [typed transport](../../rsworkspace/crates/trogon-atlas-client/tests/decision_document_transport.rs), [CLI](../../rsworkspace/crates/trogon-atlas-cli/tests/decision_document_cli_integration.rs), [MCP](../../rsworkspace/crates/trogon-atlas-mcp/tests/decision_document_mcp_integration.rs) | Native declarations, exact selectors, byte/pin and generated-ID preservation, unchanged reapply classification, typed operations, malformed input and incomplete-report transport/presentation. |
+| [Studio inspector](../../tsworkspace/webapps/studio/src/components/DecisionDocumentInspector.test.tsx), [API context](../../tsworkspace/webapps/studio/src/lib/decision-document-api.test.ts), [serializer boundary](../../tsworkspace/webapps/studio/server/decision-document-contract.test.mjs) | Read-only subject/detail review, exact navigation selections, historical no-current-hydration behavior and strict typed JSON validation before protobuf normalization can change request intent. |
+
+These tests establish the behavior they exercise, not exhaustive coverage of
+every row above. Full subject/association inventory permutations, all
+clone/merge and cross-namespace combinations, production-scale resource limits,
+retention operations and deployed-browser acceptance still require separate
+case-to-evidence records. Generic impact keeps an existing representative path
+per owner; the connected fixture does not prove enumeration of every parallel
+path. Native manifest round trips do not prove external import/synchronization
+or source export fidelity.

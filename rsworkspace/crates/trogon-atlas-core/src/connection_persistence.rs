@@ -10,7 +10,7 @@ use crate::{
         reconcile_branch_connection_ids, reconcile_connection_ids, renew_connection_ids,
         validate_stored_connection_ids, ConnectionError, ConnectionId,
     },
-    data_product, specification, stamp_system,
+    data_product, decision_document, specification, stamp_system,
 };
 
 /// Prepare an untrusted write against the value guarded by the store's CAS.
@@ -20,12 +20,14 @@ pub fn prepare_entity(
 ) -> Result<Entity, ConnectionError> {
     let mut prepared = proposed.clone();
     if let Some(previous) = previous {
-        if specification::equivalent_manifest(previous, proposed)?
+        if decision_document::equivalent_manifest(previous, proposed)?
+            || specification::equivalent_manifest(previous, proposed)?
             || data_product::equivalent_manifest(previous, proposed)?
         {
             return Ok(previous.clone());
         }
     }
+    decision_document::prepare_values(previous, &mut prepared, false)?;
     specification::prepare_members(previous, &mut prepared, false)?;
     data_product::prepare_ports(previous, &mut prepared, false)?;
     match previous {
@@ -49,6 +51,8 @@ pub fn prepare_landing(
     previous: Option<&Entity>,
     branch: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    let removed_values = decision_document::removed_values(base, previous, branch)?;
+    decision_document::reject_removed(branch, &removed_values)?;
     let removed_ports = data_product::removed_ports(base, previous, branch)?;
     data_product::reject_removed(branch, &removed_ports)?;
     let removed_members = specification::removed_members(base, previous, branch)?;
@@ -63,6 +67,7 @@ pub fn prepare_landing(
     }
     let previous = previous.filter(|entity| same_incarnation(entity, branch));
     let mut prepared = branch.clone();
+    decision_document::prepare_values(previous, &mut prepared, true)?;
     specification::prepare_members(previous, &mut prepared, true)?;
     data_product::prepare_ports(previous, &mut prepared, true)?;
     if let Some(previous) = previous {
@@ -90,6 +95,8 @@ pub fn prepare_resolution(
     let removed = removed_base_ids(base, discarded, selected)?;
     let mut resolved = selected.clone();
     renew_connection_ids(&mut resolved, &removed)?;
+    let removed_values = decision_document::removed_values(base, discarded, selected)?;
+    decision_document::restore_values(&mut resolved, &removed_values)?;
     let removed_members = specification::removed_members(base, discarded, selected)?;
     specification::restore_members(&mut resolved, &removed_members)?;
     let removed_ports = data_product::removed_ports(base, discarded, selected)?;

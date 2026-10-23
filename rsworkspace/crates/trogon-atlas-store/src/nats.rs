@@ -57,8 +57,7 @@ use prost::Message as _;
 use tokio::sync::{broadcast, Notify};
 use trogon_atlas_core::{NamespaceId, NamespaceName, OwnerId, WriterRole};
 use trogon_atlas_proto::{
-    canonical::ALL_KINDS, entity::Kind as EntityOneof, Entity, EntityKey, EntityKind, EntityRef,
-    Id, IdKey,
+    canonical::ALL_KINDS, Entity, EntityKey, EntityKind, EntityRef, Id, IdKey,
 };
 
 use crate::{
@@ -2113,83 +2112,11 @@ fn decode_entity_logged(bytes: &[u8], key: &str) -> StoreResult<Entity> {
 }
 
 fn kind_of(entity: &Entity) -> Option<EntityKind> {
-    Some(match entity.kind.as_ref()? {
-        EntityOneof::Event(_) => EntityKind::Event,
-        EntityOneof::Command(_) => EntityKind::Command,
-        EntityOneof::ReadModel(_) => EntityKind::ReadModel,
-        EntityOneof::Processor(_) => EntityKind::Processor,
-        EntityOneof::Ui(_) => EntityKind::Ui,
-        EntityOneof::Persona(_) => EntityKind::Persona,
-        EntityOneof::Swimlane(_) => EntityKind::Swimlane,
-        EntityOneof::CommandSlice(_) => EntityKind::CommandSlice,
-        EntityOneof::ReadModelSlice(_) => EntityKind::ReadModelSlice,
-        EntityOneof::AutomationSlice(_) => EntityKind::AutomationSlice,
-        EntityOneof::Storyboard(_) => EntityKind::Storyboard,
-        EntityOneof::EventModel(_) => EntityKind::EventModel,
-        EntityOneof::Component(_) => EntityKind::Component,
-        EntityOneof::ExternalSystem(_) => EntityKind::ExternalSystem,
-        EntityOneof::Tracker(_) => EntityKind::Tracker,
-        EntityOneof::BoundedContext(_) => EntityKind::BoundedContext,
-        EntityOneof::Domain(_) => EntityKind::Domain,
-        EntityOneof::Subdomain(_) => EntityKind::Subdomain,
-        EntityOneof::Schema(_) => EntityKind::Schema,
-        EntityOneof::Project(_) => EntityKind::Project,
-        EntityOneof::Screen(_) => EntityKind::Screen,
-        EntityOneof::Term(_) => EntityKind::Term,
-        EntityOneof::Ambiguity(_) => EntityKind::Ambiguity,
-        EntityOneof::UiSlice(_) => EntityKind::UiSlice,
-        EntityOneof::ServiceLevelIndicator(_) => EntityKind::ServiceLevelIndicator,
-        EntityOneof::ServiceLevelObjective(_) => EntityKind::ServiceLevelObjective,
-        EntityOneof::AlertPolicy(_) => EntityKind::AlertPolicy,
-        EntityOneof::AlertNotificationTarget(_) => EntityKind::AlertNotificationTarget,
-        EntityOneof::TypeLibrary(_) => EntityKind::TypeLibrary,
-        EntityOneof::Channel(_) => EntityKind::Channel,
-        EntityOneof::DataStore(_) => EntityKind::DataStore,
-        EntityOneof::DataProduct(_) => EntityKind::DataProduct,
-        EntityOneof::Specification(_) => EntityKind::Specification,
-        EntityOneof::Team(_) => EntityKind::Team,
-        EntityOneof::Person(_) => EntityKind::Person,
-    })
+    trogon_atlas_core::refs::entity_kind(entity)
 }
 
 fn entity_id(entity: &Entity) -> Option<&Id> {
-    match entity.kind.as_ref()? {
-        EntityOneof::Event(x) => x.id.as_ref(),
-        EntityOneof::Command(x) => x.id.as_ref(),
-        EntityOneof::ReadModel(x) => x.id.as_ref(),
-        EntityOneof::Processor(x) => x.id.as_ref(),
-        EntityOneof::Ui(x) => x.id.as_ref(),
-        EntityOneof::Persona(x) => x.id.as_ref(),
-        EntityOneof::Swimlane(x) => x.id.as_ref(),
-        EntityOneof::CommandSlice(x) => x.id.as_ref(),
-        EntityOneof::ReadModelSlice(x) => x.id.as_ref(),
-        EntityOneof::AutomationSlice(x) => x.id.as_ref(),
-        EntityOneof::Storyboard(x) => x.id.as_ref(),
-        EntityOneof::EventModel(x) => x.id.as_ref(),
-        EntityOneof::Component(x) => x.id.as_ref(),
-        EntityOneof::ExternalSystem(x) => x.id.as_ref(),
-        EntityOneof::Tracker(x) => x.id.as_ref(),
-        EntityOneof::BoundedContext(x) => x.id.as_ref(),
-        EntityOneof::Domain(x) => x.id.as_ref(),
-        EntityOneof::Subdomain(x) => x.id.as_ref(),
-        EntityOneof::Schema(x) => x.id.as_ref(),
-        EntityOneof::Project(x) => x.id.as_ref(),
-        EntityOneof::Screen(x) => x.id.as_ref(),
-        EntityOneof::Term(x) => x.id.as_ref(),
-        EntityOneof::Ambiguity(x) => x.id.as_ref(),
-        EntityOneof::UiSlice(x) => x.id.as_ref(),
-        EntityOneof::ServiceLevelIndicator(x) => x.id.as_ref(),
-        EntityOneof::ServiceLevelObjective(x) => x.id.as_ref(),
-        EntityOneof::AlertPolicy(x) => x.id.as_ref(),
-        EntityOneof::AlertNotificationTarget(x) => x.id.as_ref(),
-        EntityOneof::TypeLibrary(x) => x.id.as_ref(),
-        EntityOneof::Channel(x) => x.id.as_ref(),
-        EntityOneof::DataStore(x) => x.id.as_ref(),
-        EntityOneof::DataProduct(x) => x.id.as_ref(),
-        EntityOneof::Specification(x) => x.id.as_ref(),
-        EntityOneof::Team(x) => x.id.as_ref(),
-        EntityOneof::Person(x) => x.id.as_ref(),
-    }
+    trogon_atlas_core::refs::entity_id(entity)
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/connections.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
+
+message CatalogTitle { string value = 1; }
+message CatalogText { string value = 1; }
+message LocalValueId { string value = 1; }
+message ExternalDocumentLink { string value = 1; }
+message AnchorFragment { string value = 1; }
+message CatalogSubject {
+  oneof selection {
+    EntityRef entity = 1;
+    ConnectionRef connection = 2;
+    ContractMemberRef member = 3;
+    DataPortRef port = 4;
+  }
+}
+message SubjectAssociation {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  CatalogSubject subject = 2;
+  CatalogText doc = 3;
+}
+enum DecisionStatus {
+  DECISION_STATUS_UNSPECIFIED = 0;
+  DECISION_STATUS_PROPOSED = 1;
+  DECISION_STATUS_ACCEPTED = 2;
+  DECISION_STATUS_REJECTED = 3;
+  DECISION_STATUS_WITHDRAWN = 4;
+  DECISION_STATUS_SUPERSEDED = 5;
+}
+message DecisionOption {
+  LocalValueId option_id = 1;
+  CatalogTitle title = 2;
+  CatalogText description = 3;
+}
+message DecisionConsequence {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_BENEFIT = 1;
+    KIND_COST = 2;
+    KIND_RISK = 3;
+  }
+  Kind kind = 1;
+  CatalogText text = 2;
+}
+message DecisionReplacement {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DecisionRef decision = 2;
+}
+message RelatedDecision {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DecisionRef decision = 2;
+  CatalogText doc = 3;
+}
+message DocumentAnchorRef {
+  DocumentRef document = 1;
+  string owner_uid = 2;
+  LocalValueId anchor_id = 3;
+  ContentDigest expected_digest = 4;
+}
+message DocumentSelection {
+  oneof selection {
+    DocumentRef document = 1;
+    DocumentAnchorRef anchor = 2;
+  }
+}
+message SupportingDocument {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DocumentSelection document = 2;
+  CatalogText doc = 3;
+}
+message Decision {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  CatalogTitle title = 2;
+  optional string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  repeated SubjectAssociation subjects = 6;
+  DecisionStatus status = 7;
+  CatalogText context = 8;
+  CatalogText rationale = 9;
+  repeated DecisionOption options = 10;
+  LocalValueId selected_option = 11;
+  repeated DecisionConsequence consequences = 12;
+  DecisionReplacement replaced_by = 13;
+  repeated RelatedDecision related_decisions = 14;
+  repeated SupportingDocument documents = 15;
+}
+message RetainedDocumentText {
+  MediaType media_type = 1;
+  string content = 2;
+  ContentDigest digest = 3;
+}
+message DocumentAnchor {
+  LocalValueId anchor_id = 1;
+  AnchorFragment fragment = 2;
+  CatalogTitle label = 3;
+}
+message DocumentNavigation {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DocumentSelection document = 2;
+  CatalogTitle label = 3;
+}
+message Document {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  CatalogTitle title = 2;
+  optional string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  repeated SubjectAssociation subjects = 6;
+  oneof body {
+    RetainedDocumentText retained = 7;
+    ExternalDocumentLink link = 8;
+  }
+  repeated DocumentAnchor anchors = 9;
+  repeated DocumentNavigation navigation = 10;
+}

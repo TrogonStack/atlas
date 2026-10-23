@@ -213,7 +213,10 @@ pub fn describe(
     let line = |r: &pb::Reference, other: Option<&pb::EntityRef>| -> Result<RefLine> {
         let provenance = (!r.from_uid.is_empty()
             || r.responsibility.is_some()
-            || r.membership.is_some())
+            || r.membership.is_some()
+            || r.catalog_subject.is_some()
+            || r.document_selection.is_some()
+            || r.connection_id.is_some())
         .then(|| types.message_json_value("trogonatlas.api.eventmodel.v1alpha1.Reference", r))
         .transpose()
         .context("encode exact reference provenance")?;

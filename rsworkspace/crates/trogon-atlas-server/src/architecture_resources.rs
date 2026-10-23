@@ -119,7 +119,7 @@ impl<'a> ArchitectureContext<'a> {
     }
 }
 
-pub(super) fn is_resource(entity: &pb::Entity) -> bool {
+pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
         Some(
@@ -129,6 +129,8 @@ pub(super) fn is_resource(entity: &pb::Entity) -> bool {
                 | pb::entity::Kind::DataProduct(_)
                 | pb::entity::Kind::Team(_)
                 | pb::entity::Kind::Person(_)
+                | pb::entity::Kind::Decision(_)
+                | pb::entity::Kind::Document(_)
         )
     )
 }
@@ -310,6 +312,12 @@ pub(super) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
 ) -> Vec<pb::ValidationIssue> {
+    if matches!(
+        entity.kind,
+        Some(pb::entity::Kind::Decision(_) | pb::entity::Kind::Document(_))
+    ) {
+        return crate::decision_document_resources::validate_in_context(entity, context);
+    }
     if matches!(entity.kind, Some(pb::entity::Kind::DataProduct(_))) {
         return crate::data_product_resources::validate_in_context(entity, context);
     }

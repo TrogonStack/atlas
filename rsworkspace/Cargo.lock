@@ -4479,6 +4479,7 @@ dependencies = [
  "proptest",
  "prost",
  "prost-types",
+ "serde_json",
  "thiserror",
  "tokio",
  "tracing",

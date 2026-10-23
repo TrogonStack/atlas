@@ -127,6 +127,42 @@ enum Cmd {
         /// or an id that `describe` prints.
         entity: String,
     },
+    /// List Decisions for an exact subject using proto3 JSON `ListSubjectDecisionsRequest`.
+    ListSubjectDecisions {
+        /// Proto3 JSON `ListSubjectDecisionsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// List Documents for an exact subject using proto3 JSON `ListSubjectDocumentsRequest`.
+    ListSubjectDocuments {
+        /// Proto3 JSON `ListSubjectDocumentsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect a Decision using proto3 JSON `GetDecisionDetailRequest`.
+    GetDecisionDetail {
+        /// Proto3 JSON `GetDecisionDetailRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect a whole Document or anchor using proto3 JSON `GetDocumentDetailRequest`.
+    GetDocumentDetail {
+        /// Proto3 JSON `GetDocumentDetailRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Find declarations selecting a Decision using proto3 JSON `ListIncomingDecisionDeclarationsRequest`.
+    ListIncomingDecisionDeclarations {
+        /// Proto3 JSON `ListIncomingDecisionDeclarationsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Find declarations selecting a Document using proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
+    ListIncomingDocumentDeclarations {
+        /// Proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
+        #[arg(long)]
+        request: String,
+    },
     /// Inspect authoritative DataProduct selections and checked model evidence.
     InspectDataProduct {
         /// Exact `data_product/<namespace>/<slug>@<version>` address.
@@ -846,6 +882,136 @@ async fn run(
                 },
                 Some(data),
             ))
+        }
+        Cmd::ListSubjectDecisions { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListSubjectDecisionsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::decision_document::list_subject_decisions(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSubjectDocuments { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListSubjectDocumentsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::decision_document::list_subject_documents(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetDecisionDetail { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "GetDecisionDetailRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::decision_document::get_decision_detail(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetDocumentDetail { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "GetDocumentDetailRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::decision_document::get_document_detail(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListIncomingDecisionDeclarations { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListIncomingDecisionDeclarationsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::decision_document::list_incoming_decision_declarations(
+                    &mut client,
+                    request,
+                )
+                .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListIncomingDocumentDeclarations { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListIncomingDocumentDeclarationsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::decision_document::list_incoming_document_declarations(
+                    &mut client,
+                    request,
+                )
+                .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
         }
         Cmd::InspectDataProduct { entity } => {
             let address = view::parse_address(&entity)?;

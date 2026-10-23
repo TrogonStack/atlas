@@ -294,6 +294,8 @@ fn kind_label(k: pb::EntityKind) -> &'static str {
         pb::EntityKind::DataProduct => "data_product",
         pb::EntityKind::Team => "team",
         pb::EntityKind::Person => "person",
+        pb::EntityKind::Decision => "decision",
+        pb::EntityKind::Document => "document",
         pb::EntityKind::Unspecified => "unspecified",
     }
 }

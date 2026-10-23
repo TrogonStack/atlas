@@ -97,6 +97,8 @@ pub enum ConnectionError {
     RemovedFromBranchBase(ConnectionId),
     #[error("specification identity error: {0}")]
     Member(String),
+    #[error("catalog identity error: {0}")]
+    Catalog(String),
     #[error("data port identity error: {0}")]
     Port(String),
     #[error("connection encoding error: {0}")]
@@ -208,7 +210,7 @@ fn visit(
         && wrapper_target(descriptor.full_name()).is_none()
     {
         let mut endpoint = message.clone();
-        for name in ["connection_id", "doc"] {
+        for name in ["connection_id", "doc", "label"] {
             if let Some(field) = descriptor.get_field_by_name(name) {
                 endpoint.clear_field(&field);
             }

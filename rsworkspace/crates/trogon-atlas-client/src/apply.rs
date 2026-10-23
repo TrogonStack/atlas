@@ -68,8 +68,10 @@ pub fn classify(desired: &pb::Entity, current: Option<&pb::Entity>) -> Action {
             if cur.encode_to_vec() == want.encode_to_vec() {
                 return Action::Unchanged;
             }
-            if trogon_atlas_core::connections::equivalent_with_unassigned_ids(&cur, &want)
+            if trogon_atlas_core::decision_document::equivalent_manifest(&cur, &want)
                 .unwrap_or(false)
+                || trogon_atlas_core::connections::equivalent_with_unassigned_ids(&cur, &want)
+                    .unwrap_or(false)
             {
                 return Action::Unchanged;
             }

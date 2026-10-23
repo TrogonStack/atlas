@@ -46,7 +46,7 @@ Resource contracts and acceptance:
 - [DataProduct acceptance criteria](reference/data-product-acceptance.md)
 - [Responsibility contracts](reference/responsibility-contracts.md)
 - [Responsibility acceptance criteria](reference/responsibility-acceptance.md)
-- [Decision and Document contracts (proposed)](reference/decision-and-document-contracts.md)
+- [Decision and Document contracts](reference/decision-and-document-contracts.md)
 - [Decision and Document acceptance requirements](reference/decision-and-document-acceptance.md)
 
 ## Explanation

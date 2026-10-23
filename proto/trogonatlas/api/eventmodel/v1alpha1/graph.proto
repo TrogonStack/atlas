@@ -4,6 +4,8 @@ package trogonatlas.api.eventmodel.v1alpha1;
 
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/responsibility.proto";
+import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
 
 // A typed pointer hit. `from` is the entity that holds the pointer (e.g. a
 // slice), `from_field` is the structural path inside that entity to the
@@ -15,6 +17,9 @@ message Reference {
   trogonatlas.eventmodel.v1alpha1.Responsibility responsibility = 4;
   trogonatlas.eventmodel.v1alpha1.TeamMember membership = 5;
   string from_uid = 6;
+  trogonatlas.eventmodel.v1alpha1.CatalogSubject catalog_subject = 7;
+  trogonatlas.eventmodel.v1alpha1.DocumentSelection document_selection = 8;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 9;
 }
 
 message ImpactNode {

@@ -106,6 +106,15 @@ it carries its own code rather than an `ErrorInfo` reason:
 | `INVALID_OP` | The op itself was structurally invalid in a way request-time validation did not already reject (for example, violating a store-level invariant). |
 | `BATCH_OP_FAILED` | Fallback for any other store failure (a backend error, a lost change event, corrupt stored data). Not actionable by the caller beyond retrying or reporting it; the detail stays in the server log, not the response. |
 
+## Catalog validation diagnostics
+
+`CATALOG_REFERENCE_UNRESOLVED` identifies invalid Decision/Document values or
+unresolved selected subjects, document anchors and decision relationships in
+validation results. `ListValidationRules` publishes its rule metadata;
+`ValidateProject` issues retain that metadata and the visible field selection.
+This issue code is distinct from a transport `ErrorInfo` reason. Operational
+lookup failures remain errors rather than model diagnostics.
+
 ## CLI exit codes
 
 `trogon-atlas`'s exit code is a direct function of the failure category (see

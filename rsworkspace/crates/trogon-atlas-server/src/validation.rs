@@ -172,6 +172,10 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "A retained team profile with explicit membership and catalog responsibility."),
         k(pb::EntityKind::Person, "ENTITY_KIND_PERSON", "person", "Person", "People",
           "A retained directory profile with explicit catalog responsibility."),
+        k(pb::EntityKind::Decision, "ENTITY_KIND_DECISION", "decision", "Decision", "Decisions",
+          "A catalog choice and its rationale against exact model subjects."),
+        k(pb::EntityKind::Document, "ENTITY_KIND_DOCUMENT", "document", "Document", "Documents",
+          "Retained authored text or an unverified external link with exact model associations."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -224,6 +228,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         category: category.into(),
     };
     vec![
+        r("CATALOG_REFERENCE_UNRESOLVED", Error, "Catalog declaration does not resolve",
+          "Decision and Document declarations require valid native values and exact readable subject, relationship, ancestry and local selections. Repair the visible declaration using current returned identities and content pins.",
+          Unspecified, "", "architecture"),
         r("RESPONSIBILITY_VALUE_INVALID", Error, "Invalid responsibility declaration",
           "Profiles and assignments must satisfy the native responsibility contract.",
           pb::EntityKind::Team, "", "architecture"),
@@ -614,6 +621,7 @@ mod catalog_drift_tests {
     // OR remove one, update both the catalog AND this list so the diff
     // test below can guard against drift.
     const EMITTED_CODES: &[&str] = &[
+        "CATALOG_REFERENCE_UNRESOLVED",
         "RESPONSIBILITY_VALUE_INVALID",
         "RESPONSIBILITY_REFERENCE_UNRESOLVED",
         "DATA_PRODUCT_VALUE_INVALID",
@@ -777,6 +785,8 @@ mod catalog_drift_tests {
             pb::EntityKind::DataProduct,
             pb::EntityKind::Team,
             pb::EntityKind::Person,
+            pb::EntityKind::Decision,
+            pb::EntityKind::Document,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -1149,6 +1159,8 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::DataProduct(x)) => &x.metadata,
         Some(pb::entity::Kind::Team(x)) => &x.metadata,
         Some(pb::entity::Kind::Person(x)) => &x.metadata,
+        Some(pb::entity::Kind::Decision(x)) => &x.metadata,
+        Some(pb::entity::Kind::Document(x)) => &x.metadata,
         None => &[],
     }
 }

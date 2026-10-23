@@ -46,6 +46,154 @@ async fn svc() -> EventModelServiceImpl {
     EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap()
 }
 
+fn catalog_decision(slug: &str, subjects: Vec<pb::CatalogSubject>) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::Decision(pb::Decision {
+            id: Some(id("catalog-exact", slug, 1)),
+            title: Some(pb::CatalogTitle {
+                value: "Choice".into(),
+            }),
+            status: pb::DecisionStatus::Proposed as i32,
+            context: Some(pb::CatalogText {
+                value: "Choose an exact subject".into(),
+            }),
+            rationale: Some(pb::CatalogText {
+                value: "Retain the declaration".into(),
+            }),
+            options: vec![pb::DecisionOption {
+                title: Some(pb::CatalogTitle {
+                    value: "Retain".into(),
+                }),
+                description: Some(pb::CatalogText {
+                    value: "Keep the selected subject".into(),
+                }),
+                ..Default::default()
+            }],
+            subjects: subjects
+                .into_iter()
+                .map(|subject| pb::SubjectAssociation {
+                    subject: Some(subject),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn catalog_entity_subject_does_not_read_unselected_library_dependencies() {
+    let dependency = id("catalog-exact", "unselected-dependency", 1);
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut backend = FailingBatchStore::with_failure(|| {
+        StoreError::Backend("unselected dependency must not be hydrated".into())
+    })
+    .await;
+    backend.get_failure = Some((dependency.clone(), armed));
+    let library = id("catalog-exact", "selected-library", 1);
+    backend
+        .inner
+        .create(
+            pb::EntityKind::TypeLibrary,
+            &pb::Entity {
+                kind: Some(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+                    id: Some(library.clone()),
+                    title: "Selected library".into(),
+                    dependencies: vec![pb::TypeLibraryRef {
+                        id: Some(dependency),
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let service = EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(0);
+    let subject = pb::CatalogSubject {
+        selection: Some(pb::catalog_subject::Selection::Entity(pb::EntityRef {
+            kind: pb::EntityKind::TypeLibrary as i32,
+            id: Some(library),
+        })),
+    };
+    let saved = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(catalog_decision("library-choice", vec![subject.clone()])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let detail = service
+        .get_decision_detail(Request::new(pb::GetDecisionDetailRequest {
+            decision: Some(pb::DecisionRef {
+                id: trogon_atlas_server::conv::entity_to_ref(&saved).unwrap().id,
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        detail.declarations[0].state,
+        pb::CatalogResolutionState::Resolved as i32
+    );
+    assert!(detail.scope.unwrap().visited.iter().all(|checked| checked
+        .owner
+        .as_ref()
+        .and_then(|owner| owner.id.as_ref())
+        .is_none_or(|id| id.slug != "unselected-dependency")));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn catalog_batch_charges_work_before_any_subject_hydration() {
+    let mut backend = FailingBatchStore::with_failure(|| {
+        StoreError::Backend("oversized batch must be rejected before subject hydration".into())
+    })
+    .await;
+    backend.fail_batches = false;
+    backend.get_failure = Some((
+        id("catalog-exact", "subject-999", 1),
+        Arc::new(std::sync::atomic::AtomicBool::new(true)),
+    ));
+    let service = EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(0);
+    let subjects: Vec<_> = (0..1_000)
+        .map(|index| pb::CatalogSubject {
+            selection: Some(pb::catalog_subject::Selection::Entity(pb::EntityRef {
+                kind: pb::EntityKind::ReadModel as i32,
+                id: Some(id("catalog-exact", &format!("subject-{index}"), 1)),
+            })),
+        })
+        .collect();
+    let ops = (0..11)
+        .map(|index| pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                entity: Some(catalog_decision(
+                    &format!("choice-{index}"),
+                    subjects.clone(),
+                )),
+                ..Default::default()
+            })),
+        })
+        .collect();
+    let failure = service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            ops,
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code(), tonic::Code::ResourceExhausted, "{failure}");
+}
+
 // ===== validate_project tests =====
 
 #[tokio::test(flavor = "multi_thread")]

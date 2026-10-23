@@ -452,6 +452,218 @@ impl DataProductOfferingState {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogQueryFailure {
+    #[prost(string, tag="1")]
+    pub field: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(int32, tag="3")]
+    pub code: i32,
+    #[prost(string, tag="4")]
+    pub message: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogCheckedOwner {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub uid: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub etag: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CatalogCheckedScope {
+    #[prost(string, optional, tag="1")]
+    pub branch: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag="2")]
+    pub authorized_namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, tag="3")]
+    pub revision: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub visited: ::prost::alloc::vec::Vec<CatalogCheckedOwner>,
+    #[prost(message, repeated, tag="5")]
+    pub visited_subjects: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::CatalogSubject>,
+    #[prost(message, repeated, tag="6")]
+    pub visited_documents: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::DocumentSelection>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogDeclaration {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<CatalogCheckedOwner>,
+    #[prost(string, tag="2")]
+    pub field: ::prost::alloc::string::String,
+    #[prost(enumeration="CatalogResolutionState", tag="3")]
+    pub state: i32,
+    #[prost(oneof="catalog_declaration::Declaration", tags="4, 5, 6, 7, 8")]
+    pub declaration: ::core::option::Option<catalog_declaration::Declaration>,
+}
+/// Nested message and enum types in `CatalogDeclaration`.
+pub mod catalog_declaration {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Declaration {
+        #[prost(message, tag="4")]
+        Subject(super::super::super::super::eventmodel::v1alpha1::SubjectAssociation),
+        #[prost(message, tag="5")]
+        Replacement(super::super::super::super::eventmodel::v1alpha1::DecisionReplacement),
+        #[prost(message, tag="6")]
+        Related(super::super::super::super::eventmodel::v1alpha1::RelatedDecision),
+        #[prost(message, tag="7")]
+        Supporting(super::super::super::super::eventmodel::v1alpha1::SupportingDocument),
+        #[prost(message, tag="8")]
+        Navigation(super::super::super::super::eventmodel::v1alpha1::DocumentNavigation),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListSubjectDecisionsRequest {
+    #[prost(message, optional, tag="1")]
+    pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::CatalogSubject>,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::DecisionStatus", optional, tag="2")]
+    pub status: ::core::option::Option<i32>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSubjectDecisionsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="4")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+    #[prost(enumeration="CatalogResolutionState", tag="5")]
+    pub subject_state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListSubjectDocumentsRequest {
+    #[prost(message, optional, tag="1")]
+    pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::CatalogSubject>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSubjectDocumentsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="4")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+    #[prost(enumeration="CatalogResolutionState", tag="5")]
+    pub subject_state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDecisionDetailRequest {
+    #[prost(message, optional, tag="1")]
+    pub decision: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DecisionRef>,
+    #[prost(bool, tag="2")]
+    pub follow_replacement: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetDecisionDetailResponse {
+    #[prost(message, optional, tag="1")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::Entity>,
+    #[prost(string, tag="2")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(message, optional, tag="4")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="5")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="6")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+    #[prost(message, repeated, tag="7")]
+    pub replacement_chain: ::prost::alloc::vec::Vec<CatalogCheckedOwner>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDocumentDetailRequest {
+    #[prost(message, optional, tag="1")]
+    pub document: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DocumentSelection>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetDocumentDetailResponse {
+    #[prost(message, optional, tag="1")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::Entity>,
+    #[prost(string, tag="2")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub anchor: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DocumentAnchor>,
+    #[prost(message, repeated, tag="4")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(message, optional, tag="5")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="6")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="7")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+    #[prost(enumeration="CatalogResolutionState", tag="8")]
+    pub selection_state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListIncomingDecisionDeclarationsRequest {
+    #[prost(message, optional, tag="1")]
+    pub decision: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DecisionRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListIncomingDecisionDeclarationsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="4")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListIncomingDocumentDeclarationsRequest {
+    #[prost(message, optional, tag="1")]
+    pub document: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DocumentSelection>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListIncomingDocumentDeclarationsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="4")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CatalogResolutionState {
+    Unspecified = 0,
+    Resolved = 1,
+    Unavailable = 2,
+    Unresolved = 3,
+}
+impl CatalogResolutionState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CATALOG_RESOLUTION_STATE_UNSPECIFIED",
+            Self::Resolved => "CATALOG_RESOLUTION_STATE_RESOLVED",
+            Self::Unavailable => "CATALOG_RESOLUTION_STATE_UNAVAILABLE",
+            Self::Unresolved => "CATALOG_RESOLUTION_STATE_UNRESOLVED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CATALOG_RESOLUTION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CATALOG_RESOLUTION_STATE_RESOLVED" => Some(Self::Resolved),
+            "CATALOG_RESOLUTION_STATE_UNAVAILABLE" => Some(Self::Unavailable),
+            "CATALOG_RESOLUTION_STATE_UNRESOLVED" => Some(Self::Unresolved),
+            _ => None,
+        }
+    }
+}
 /// Static catalog of every EntityKind the system stores. Same shape and
 /// motivation as ListValidationRules: avoids the per-client three-name
 /// map (proto enum string ENTITY_KIND_FOO, JSON discriminator `event`,
@@ -494,6 +706,12 @@ pub struct Reference {
     pub membership: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TeamMember>,
     #[prost(string, tag="6")]
     pub from_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="7")]
+    pub catalog_subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::CatalogSubject>,
+    #[prost(message, optional, tag="8")]
+    pub document_selection: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DocumentSelection>,
+    #[prost(message, optional, tag="9")]
+    pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImpactNode {
@@ -1540,6 +1758,8 @@ pub struct DeleteEntityResponse {
     /// current view to judge.
     #[prost(message, repeated, tag="3")]
     pub validation: ::prost::alloc::vec::Vec<ValidationIssue>,
+    #[prost(bool, tag="4")]
+    pub referrers_incomplete: bool,
 }
 // ---------- Batch mutation (atomic multi-entity write) -----------------------
 //

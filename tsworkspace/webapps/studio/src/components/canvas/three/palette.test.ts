@@ -38,6 +38,8 @@ const KINDS: Record<EntityKind, true> = {
   dataStore: true,
   team: true,
   person: true,
+  decision: true,
+  document: true,
   dataProduct: true,
   specification: true,
 };

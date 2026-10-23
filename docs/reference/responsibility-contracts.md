@@ -6,8 +6,9 @@ native client surfaces are implemented. The
 coverage from remaining acceptance requirements and deployed-browser evidence.
 
 Team and Person use entity kinds 34 and 35 and union fields 35 and 36.
-Contract revision and minimum client/server mutation revisions are 13;
-upgrade connected clients and servers together.
+These resources were introduced with contract revision 13. Connected clients
+and servers must satisfy the current advertised mutation revision floors;
+upgrade them together.
 
 ## Scope and authority
 
