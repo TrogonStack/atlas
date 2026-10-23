@@ -604,6 +604,23 @@ describe('validationFixPrompt for strategic findings', () => {
     expect(loaded(prompt)).not.toContain('boundedContext:unrelated/unrelated@1');
   });
 
+  it('follows the pinned version when a context realizes one of several loaded subdomain versions', () => {
+    const model = buildModel([
+      { domain: { id: sid('acme', 'acme') } },
+      { domain: { id: id('acme', '2', 'acme') } },
+      { subdomain: { id: sid('acme', 'identity'), domain: { id: sid('acme', 'acme') } } },
+      { subdomain: { id: id('identity', '2', 'acme'), domain: { id: id('acme', '2', 'acme') } } },
+      { boundedContext: { id: sid('accounts', 'accounts'), realizes: [{ id: id('identity', '2', 'acme') }] } },
+    ]);
+    const prompt = validationFixPrompt(
+      model,
+      strategicFinding({ kind: 'boundedContext', id: sid('accounts', 'accounts') }, 'REALIZES_MIXED_CLASSIFICATIONS'),
+    );
+    expect(loaded(prompt)).toEqual(expect.arrayContaining(['subdomain:acme/identity@2', 'domain:acme/acme@2']));
+    expect(loaded(prompt)).not.toContain('subdomain:acme/identity@1');
+    expect(loaded(prompt)).not.toContain('domain:acme/acme@1');
+  });
+
   it('treats the project reference of a domain as a reference to fetch', () => {
     const model = buildModel([{ domain: { id: sid('acme', 'acme'), project: { id: sid('acme', 'acme') } } }]);
     const prompt = validationFixPrompt(model, strategicFinding({ kind: 'domain', id: sid('acme', 'acme') }));

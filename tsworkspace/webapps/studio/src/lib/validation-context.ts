@@ -154,6 +154,10 @@ function strategicNeighbors(model: Model, subject: Entity): Entity[] {
   const realizedBy = (subdomain: Entity) =>
     contexts.filter((bc) => realizesOf(bc).some((id) => slugIdentity(id) === slugIdentity(subdomain.id)));
   const inNamespace = (entities: Entity[]) => entities.filter((entity) => entity.id.namespace === subject.id.namespace);
+  const pinned = (kind: EntityKind, id: EntityId | undefined) => {
+    const entity = id && model.byKey.get(entityKey(kind, id));
+    return entity ? [entity] : [];
+  };
 
   if (subject.kind === 'domain') {
     const children = subdomains.filter((sd) => {
@@ -166,20 +170,15 @@ function strategicNeighbors(model: Model, subject: Entity): Entity[] {
     const parent = domainOf(subject);
     return [
       ...realizedBy(subject),
-      ...domains.filter((d) => parent && slugIdentity(d.id) === slugIdentity(parent)),
+      ...pinned('domain', parent),
       ...subdomains.filter((sd) => {
         const other = domainOf(sd);
         return sd.key !== subject.key && parent && other && slugIdentity(other) === slugIdentity(parent);
       }),
     ];
   }
-  const realized = realizesOf(subject)
-    .map((id) => subdomains.find((sd) => slugIdentity(sd.id) === slugIdentity(id)))
-    .filter((sd): sd is Entity => Boolean(sd));
-  const parents = realized.flatMap((sd) => {
-    const parent = domainOf(sd);
-    return parent ? domains.filter((d) => slugIdentity(d.id) === slugIdentity(parent)) : [];
-  });
+  const realized = realizesOf(subject).flatMap((id) => pinned('subdomain', id));
+  const parents = realized.flatMap((sd) => pinned('domain', domainOf(sd)));
   return [
     ...realized,
     ...parents,
