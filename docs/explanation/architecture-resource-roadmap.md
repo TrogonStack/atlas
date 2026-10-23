@@ -108,9 +108,11 @@ are later milestones with explicit acceptance criteria. Native Channel and
 DataStore support does not require a source connector, a source overlay,
 Specification resources or format-specific compatibility checking.
 
-Native manifest export already exists. Source integration still needs its own
-mapping, provenance, reconciliation and export-fidelity contracts; it must
-preserve the existing behavioral anchors and exact selections.
+Native manifest export already exists. The
+[supplied bundle profile](../reference/source-bundle-profile.md) implements strict
+byte intake and deterministic digests in Rust core. Source mapping, retained
+provenance, reconciliation and export fidelity remain pending; they must preserve
+the existing behavioral anchors and exact selections.
 
 The proposed [source integration contract](../reference/source-integration-contracts.md)
 defines a native-first boundary for immutable supplied bundles, explicit
@@ -118,7 +120,7 @@ identity and version mappings, provenance and guarded reconciliation. Its
 [acceptance requirements](../reference/source-integration-acceptance.md) distinguish
 same-store reapply from migration into a new store, where incarnation-bound
 selectors require explicit rebinding. These are proposed contracts; source
-records, reconciliation operations and executable acceptance are not implemented.
+records, reconciliation operations and their executable acceptance remain pending.
 Remote connectors and additional format compilers remain separate milestones.
 
 ## Atlas Linter comes after the architecture resources

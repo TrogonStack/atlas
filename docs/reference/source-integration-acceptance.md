@@ -5,8 +5,11 @@ Status: proposed acceptance requirements for the
 records and source run operations are not implemented by this document. Linked
 native fixtures provide existing anchors and examples of native behavior;
 they do not prove source registration, snapshot retention, reconciliation,
-coordinated publication, cancellation or fidelity reporting. Every source case
-below requires future executable evidence.
+coordinated publication, cancellation or fidelity reporting. The [supplied bundle profile](source-bundle-profile.md) has executable core
+[boundary tests](../../rsworkspace/crates/trogon-atlas-core/tests/source_bundle.rs)
+and [digest vectors](../../rsworkspace/crates/trogon-atlas-core/tests/source_bundle_vectors.rs).
+They cover intake only. Source retention, native mapping and run cases below
+require future executable evidence.
 
 ## Connected fixture inputs
 
