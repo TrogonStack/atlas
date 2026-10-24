@@ -128,6 +128,28 @@ impl Principal {
 #[allow(clippy::match_same_arms)]
 pub fn required_role(grpc_path: &str) -> Option<Role> {
     Some(match grpc_path {
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CreateSourceRegistration" => Role::Admin,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UpdateSourceRegistration" => Role::Admin,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSourceRegistration" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSourceRegistrations" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteSourceRegistration" => Role::Admin,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/AcceptSourceSnapshot" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSourceSnapshot" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSourceSnapshots" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CreateSourceMapping" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UpdateSourceMapping" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSourceMapping" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSourceMappings" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteSourceMapping" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSourceOverlay" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/PreviewSourceRun" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ApplySourceRun" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CancelSourceRun" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSourceRun" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSourceRuns" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/RecoverSourceRun" => Role::Writer,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSourceRunResults" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSourceRunOperations" => Role::Reader,
         // Bootstrap
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetServerInfo" => Role::Reader,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListNamespaces" => Role::Reader,

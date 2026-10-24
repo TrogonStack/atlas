@@ -1,15 +1,32 @@
 # Source integration acceptance
 
-Status: proposed acceptance requirements for the
-[source integration contract](source-integration-contracts.md). Source control
-records and source run operations are not implemented by this document. Linked
-native fixtures provide existing anchors and examples of native behavior;
-they do not prove source registration, snapshot retention, reconciliation,
-coordinated publication, cancellation or fidelity reporting. The [supplied bundle profile](source-bundle-profile.md) has executable core
+Status: executable source acceptance and connected client workflows are
+implemented. These requirements govern
+the [source integration contract](source-integration-contracts.md). Linked native
+fixtures provide anchors and examples; they do not independently prove source
+registration, retention, publication or recovery. The
+[supplied bundle profile](source-bundle-profile.md) has executable core
 [boundary tests](../../rsworkspace/crates/trogon-atlas-core/tests/source_bundle.rs)
 and [digest vectors](../../rsworkspace/crates/trogon-atlas-core/tests/source_bundle_vectors.rs).
-They cover intake only. Source retention, native mapping and run cases below
-require future executable evidence.
+They cover intake only. Source-specific evidence is separated below.
+
+## Executable coverage
+
+| Test target | Source behavior exercised |
+| --- | --- |
+| [Core ownership and merge](../../rsworkspace/crates/trogon-atlas-core/tests/source_integration.rs) | Closed ownership units, presence, ordered values, merge dispositions and profile bounds. |
+| [Connected fixture](../../rsworkspace/crates/trogon-atlas-server/tests/source_integration_fixture.rs) | Explicit adoption, repeated native observations, immutable bytes, ordered overlay fidelity, separate accepted source/native bases, drift and replay. |
+| [Backend boundaries](../../rsworkspace/crates/trogon-atlas-server/tests/source_integration_backend.rs) | Authenticated scope and pagination, incomplete payload fidelity, independent retention, quotas, prepare interruption, tenant types and phase deadlines. |
+| [Lifecycle and selectors](../../rsworkspace/crates/trogon-atlas-server/tests/source_lifecycle_acceptance.rs) | Creation, stale guards, partial/complete inventory, safe deletion, final overlay, branches, cancellation and exact descriptive local selectors. |
+| [Store publication](../../rsworkspace/crates/trogon-atlas-store/tests/source_publication.rs) | Baseline/branch fault boundaries, restarted writer epochs, reader fencing, exact postimages, chunk reclamation and physical quota accounting. |
+| [Native client workflow](../../rsworkspace/crates/trogon-atlas-client/tests/source_backend_roundtrip.rs), [CLI](../../rsworkspace/crates/trogon-atlas-cli/tests/source_cli_integration.rs), [MCP](../../rsworkspace/crates/trogon-atlas-mcp/tests/source_mcp_integration.rs) | Authenticated registration, snapshot, mapping, preview, apply and report workflows, including tenant type context and native-owner input. |
+
+A test's presence is not a passing run or proof of every requirement below.
+The independent fixture composition described below remains a broader capture
+scenario. Existing registry rules do not permit a read-scoped Admin, while
+verified COMPLETE inventory is Admin-only. Source deletion tests therefore
+separate scoped Writer permission refusal from an Admin's surviving-referrer
+guard; they do not claim a hidden-to-applying-principal deletion execution.
 
 ## Connected fixture inputs
 
@@ -30,11 +47,11 @@ display names never substitute for returned local IDs or owner UIDs.
 Capture each owner's returned UID, local IDs, association IDs, etag, branch,
 source bytes, resolved tenant type context and authorized scope before making
 selectors. Native exports omit system metadata, so retain observed identity
-evidence separately in the proposed control records. Do not fabricate UUIDs or
+evidence separately in source control records. Do not fabricate UUIDs or
 derive them from fixture array indices. Verify supplied bytes and complete
 inventory independently of native semantic equality.
 
-The proposed source fixture adds a registration and immutable snapshot with
+The broader fixture composition adds a registration and immutable snapshot with
 explicit opaque source version text, complete partition declarations and typed
 source-to-native mappings. Add separate partial snapshots, unsupported retained
 files, ordered repeated source pointers, ambiguous mappings, a foreign readable
@@ -54,7 +71,8 @@ stores/branches or reset fixtures and retain exact returned identities.
 | Link, absolute/traversal path, network pointer, executable content or archive expansion beyond budget | No fetch, host path access or execution. Reject invalid bundle locators/unsupported packaging; permitted inert content remains retained with explicit disposition. |
 | Unsupported declaration or partial relation | Keep original bytes/pointer in authorized overlay and report DEFERRED or another exact status. Create no phantom native entity, edge, member or endpoint. |
 | Repeated equal source pointers | Distinct source occurrence identities and authored order. Reordering preserves known occurrence continuity; absent stable keys cannot be rematched by index or endpoint. |
-| RESOLVED/MISSING/AMBIGUOUS/DEFERRED/CONFLICT | Exercise every status with checked context and authorized candidates. Failed, hidden or incomplete lookup cannot produce a verified MISSING or RESOLVED result. |
+| RESOLVED/MISSING/DEFERRED/CONFLICT/UNAVAILABLE | Exercise the initial profile's statuses with checked context. MISSING requires a definitive exact owner read after namespace authorization. Hidden or stale selections remain UNAVAILABLE; failed or incomplete lookup cannot prove absence or resolution. |
+| Multiple correspondence proposals | Reject a second active mapping for the same source key and branch. Keep the original checked selection; do not choose by title, endpoint or position. AMBIGUOUS is reserved for a candidate-enumerating profile and is not emitted by `supplied-native-v1`. |
 | Request, response and notification messages | Preserve individual ReadModel mappings and operation roles. No source label creates Command/Event behavior. |
 | Channel and DataStore | Preserve exact observation-to-Processor context and exact ReadModel attachments. Source transport/storage labels alone cannot supply missing anchors. |
 | DataProduct, Team/Person and Decision/Document | Preserve declared versus checked lineage, exact access, explicit responsibility, membership, rationale and document selections. Source ownership grants no native authority, approval or runtime guarantee. |
@@ -164,7 +182,7 @@ stores/branches or reset fixtures and retain exact returned identities.
 
 ## Required executable evidence
 
-Future source acceptance must link case IDs to executable tests and retained
+Source acceptance must link case IDs to executable tests and retained
 results, covering typed input/control persistence, native admission, authenticated
 backend authorization, final-overlay reference checks, identity lifecycle,
 coordinated recovery fault injection, budgets, retention and CLI/MCP transport.
@@ -181,7 +199,7 @@ An assembled read is not historical transactional proof; unavailable history
 and retention gaps must remain visible.
 
 Existing native export/apply, resource fixture and identity tests establish only
-their exercised native behavior. Documentation checks and this proposed fixture
-do not establish an implemented source runtime. Remote connector, scheduler,
+their exercised native behavior. Documentation checks and unexecuted fixture
+composition do not establish runtime acceptance. Remote connector, scheduler,
 watcher, portable migration, schema semantic compilation, deployed-browser and
 Atlas Linter/WASM acceptance remain separate future work.

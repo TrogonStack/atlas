@@ -453,6 +453,11 @@ pub struct NatsStore {
     revisions_kv: KvStore,
     /// KV bucket holding the journal of baseline batches in flight.
     batches_kv: KvStore,
+    source_kv: KvStore,
+    lease_kv: KvStore,
+    source_document_lock: Arc<tokio::sync::Mutex<()>>,
+    source_native_lock: Arc<tokio::sync::RwLock<()>>,
+    source_observer: Option<Arc<dyn crate::source::SourcePublicationObserver>>,
     inflight_journals: Arc<journal::InflightJournals>,
     #[cfg(test)]
     faults: Arc<parking_lot::Mutex<journal::FaultPlan>>,
@@ -518,6 +523,9 @@ impl NatsStore {
         changeset: Option<ChangesetRef<'_>>,
         msg_id: Option<&str>,
     ) -> StoreResult<u64> {
+        if self.source_internal() {
+            return Ok(0);
+        }
         let subject = change_subject(&self.config.subject_root, kind, entity_ref)?;
         if self.faults().fail_publish {
             return Err(StoreError::ChangeEventLost);
@@ -648,6 +656,12 @@ impl NatsStore {
             "Event Modeling namespace registry (namespace id -> owner + name)",
         )
         .await?;
+        let source_kv = ensure_kv(
+            &js,
+            &format!("{}-sources", config.batches_bucket),
+            "Source control documents and immutable content chunks",
+        )
+        .await?;
         let operations_kv = ensure_kv_with_max_age(
             &js,
             &config.operations_bucket,
@@ -693,6 +707,11 @@ impl NatsStore {
             changesets_kv,
             revisions_kv,
             batches_kv,
+            source_kv,
+            lease_kv,
+            source_document_lock: Arc::default(),
+            source_native_lock: Arc::default(),
+            source_observer: None,
             inflight_journals: Arc::default(),
             #[cfg(test)]
             faults: Arc::default(),
@@ -1479,6 +1498,9 @@ impl NatsStore {
         ctx: WriteContext<'_>,
         revision: &Revision,
     ) -> Result<(), String> {
+        if self.source_internal() {
+            return Ok(());
+        }
         let Some(changeset) = ctx.changeset() else {
             return Ok(());
         };
@@ -2549,18 +2571,21 @@ impl Store for NatsStore {
         id: &Id,
         branch: Option<&str>,
     ) -> StoreResult<StoredEntity> {
-        if let Some(branch) = branch {
-            return branch_merged_get(&self.kv, &self.branches_kv, branch, kind, id)
-                .await?
-                .ok_or(StoreError::NotFound);
-        }
-        let key = entity_key(kind, id);
-        let entry = kv_entry_timeout(&self.kv, key.clone()).await?;
-        let entry = live_entry(entry).ok_or(StoreError::NotFound)?;
-        Ok(StoredEntity {
-            entity: decode_entity(&entry.value)?,
-            etag: entry.revision.to_string(),
+        self.source_guarded(async {
+            if let Some(branch) = branch {
+                return branch_merged_get(&self.kv, &self.branches_kv, branch, kind, id)
+                    .await?
+                    .ok_or(StoreError::NotFound);
+            }
+            let key = entity_key(kind, id);
+            let entry = kv_entry_timeout(&self.kv, key.clone()).await?;
+            let entry = live_entry(entry).ok_or(StoreError::NotFound)?;
+            Ok(StoredEntity {
+                entity: decode_entity(&entry.value)?,
+                etag: entry.revision.to_string(),
+            })
         })
+        .await
     }
 
     async fn batch_get(
@@ -2568,55 +2593,58 @@ impl Store for NatsStore {
         keys: &[(EntityKind, Id)],
         branch: Option<&str>,
     ) -> StoreResult<Vec<Option<StoredEntity>>> {
-        if keys.len() > BATCH_GET_HARD_CAP {
-            return Err(StoreError::InvalidArgument(format!(
-                "batch_get: key slice length {} exceeds hard cap {}",
-                keys.len(),
-                BATCH_GET_HARD_CAP,
-            )));
-        }
-        let span = tracing::debug_span!("batch_get", key_count = keys.len(), branch);
-        let _enter = span.enter();
-        if let Some(branch) = branch {
+        self.source_guarded(async {
+            if keys.len() > BATCH_GET_HARD_CAP {
+                return Err(StoreError::InvalidArgument(format!(
+                    "batch_get: key slice length {} exceeds hard cap {}",
+                    keys.len(),
+                    BATCH_GET_HARD_CAP,
+                )));
+            }
+            let span = tracing::debug_span!("batch_get", key_count = keys.len(), branch);
+            let _enter = span.enter();
+            if let Some(branch) = branch {
+                let kv = self.kv.clone();
+                let branches_kv = self.branches_kv.clone();
+                let branch = branch.to_string();
+                let owned: Vec<(EntityKind, Id)> = keys.to_vec();
+                // `buffered` (not unordered) preserves input-key order while still
+                // overlapping up to LIST_FETCH_CONCURRENCY in-flight gets.
+                let results = futures::stream::iter(owned.into_iter().map(|(kind, id)| {
+                    let kv = kv.clone();
+                    let branches_kv = branches_kv.clone();
+                    let branch = branch.clone();
+                    async move { branch_merged_get(&kv, &branches_kv, &branch, kind, &id).await }
+                }))
+                .buffered(LIST_FETCH_CONCURRENCY)
+                .collect::<Vec<StoreResult<Option<StoredEntity>>>>()
+                .await;
+                return results.into_iter().collect();
+            }
             let kv = self.kv.clone();
-            let branches_kv = self.branches_kv.clone();
-            let branch = branch.to_string();
-            let owned: Vec<(EntityKind, Id)> = keys.to_vec();
-            // `buffered` (not unordered) preserves input-key order while still
-            // overlapping up to LIST_FETCH_CONCURRENCY in-flight gets.
-            let results = futures::stream::iter(owned.into_iter().map(|(kind, id)| {
+            let owned_keys: Vec<String> = keys.iter().map(|(k, id)| entity_key(*k, id)).collect();
+            let results = futures::stream::iter(owned_keys.into_iter().map(|key| {
                 let kv = kv.clone();
-                let branches_kv = branches_kv.clone();
-                let branch = branch.clone();
-                async move { branch_merged_get(&kv, &branches_kv, &branch, kind, &id).await }
+                async move {
+                    match kv_entry_timeout(&kv, key.clone()).await {
+                        Ok(entry) => match live_entry(entry) {
+                            Some(entry) => Ok(Some(StoredEntity {
+                                entity: decode_entity(&entry.value)?,
+                                etag: entry.revision.to_string(),
+                            })),
+                            None => Ok(None),
+                        },
+                        Err(e) => Err(e),
+                    }
+                }
             }))
             .buffered(LIST_FETCH_CONCURRENCY)
             .collect::<Vec<StoreResult<Option<StoredEntity>>>>()
             .await;
-            return results.into_iter().collect();
-        }
-        let kv = self.kv.clone();
-        let owned_keys: Vec<String> = keys.iter().map(|(k, id)| entity_key(*k, id)).collect();
-        let results = futures::stream::iter(owned_keys.into_iter().map(|key| {
-            let kv = kv.clone();
-            async move {
-                match kv_entry_timeout(&kv, key.clone()).await {
-                    Ok(entry) => match live_entry(entry) {
-                        Some(entry) => Ok(Some(StoredEntity {
-                            entity: decode_entity(&entry.value)?,
-                            etag: entry.revision.to_string(),
-                        })),
-                        None => Ok(None),
-                    },
-                    Err(e) => Err(e),
-                }
-            }
-        }))
-        .buffered(LIST_FETCH_CONCURRENCY)
-        .collect::<Vec<StoreResult<Option<StoredEntity>>>>()
-        .await;
 
-        results.into_iter().collect()
+            results.into_iter().collect()
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self, entity), fields(kind = ?kind, branch))]
@@ -2626,219 +2654,34 @@ impl Store for NatsStore {
         entity: &Entity,
         ctx: WriteContext<'_>,
     ) -> StoreResult<Written> {
-        self.require_writer()?;
-        let id = Self::validate(kind, entity)?.clone();
-        if let Some(branch) = ctx.branch_name() {
-            let wrote = branch_write_delta(
-                &self.kv,
-                &self.branches_kv,
-                branch,
-                kind,
-                &id,
-                |prev_entity, _prev_etag, base| {
-                    if prev_entity.is_some() {
-                        return Err(StoreError::AlreadyExists);
-                    }
-                    let stamped = prepare_entity(None, entity)?;
-                    let (base_entity, base_etag) = match base {
-                        Some((e, etag)) => (Some(e), etag),
-                        None => (None, String::new()),
-                    };
-                    Ok(Some(trogon_atlas_proto::BranchDelta {
-                        base: base_entity,
-                        base_etag,
-                        ours: Some(stamped),
-                        tombstone: false,
-                    }))
-                },
-            )
-            .await?;
-            self.record_revision(
-                ctx,
-                &Revision {
+        self.source_guarded(async {
+            self.require_writer()?;
+            let id = Self::validate(kind, entity)?.clone();
+            if let Some(branch) = ctx.branch_name() {
+                let wrote = branch_write_delta(
+                    &self.kv,
+                    &self.branches_kv,
+                    branch,
                     kind,
-                    id,
-                    change: ChangeKind::Put,
-                    before: wrote.before,
-                    after: Some(wrote.written.entity.clone()),
-                },
-            )
-            .await;
-            return Ok(wrote.written);
-        }
-        let key = entity_key(kind, &id);
-        let stamped = prepare_entity(None, entity)?;
-        let bytes = encode_entity(&stamped);
-        let rev = match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.create(&key, bytes.clone()))
-            .await
-            .map_err(|_| StoreError::Backend(format!("kv.create {key}: timeout")))?
-        {
-            Ok(rev) => rev,
-            Err(e) => {
-                use async_nats::jetstream::kv::CreateErrorKind;
-                if !matches!(e.kind(), CreateErrorKind::AlreadyExists) {
-                    return Err(StoreError::Backend(format!("kv.create {key}: {e}")));
-                }
-                // Empty-Put tombstones (delete sentinel when kv.delete never
-                // lands) still look like an existing key to NATS create, but
-                // the merged view is absent. CAS-overwrite the tombstone.
-                match kv_entry_timeout(&self.kv, key.clone()).await? {
-                    None => {
-                        // Race: key vanished between create AlreadyExists and
-                        // the entry read. Retry create once for the absent view.
-                        match tokio::time::timeout(
-                            KV_OP_TIMEOUT,
-                            self.kv.create(&key, bytes.clone()),
-                        )
-                        .await
-                        .map_err(|_| StoreError::Backend(format!("kv.create {key}: timeout")))?
-                        {
-                            Ok(rev) => rev,
-                            Err(e2) => {
-                                if matches!(e2.kind(), CreateErrorKind::AlreadyExists) {
-                                    return Err(StoreError::AlreadyExists);
-                                }
-                                return Err(StoreError::Backend(format!("kv.create {key}: {e2}")));
-                            }
+                    &id,
+                    |prev_entity, _prev_etag, base| {
+                        if prev_entity.is_some() {
+                            return Err(StoreError::AlreadyExists);
                         }
-                    }
-                    Some(entry) if live_entry(Some(entry.clone())).is_some() => {
-                        return Err(StoreError::AlreadyExists);
-                    }
-                    Some(entry) => {
-                        match tokio::time::timeout(
-                            KV_OP_TIMEOUT,
-                            self.kv.update(&key, bytes.clone(), entry.revision),
-                        )
-                        .await
-                        .map_err(|_| StoreError::Backend(format!("kv.update {key}: timeout")))?
-                        {
-                            Ok(rev) => rev,
-                            Err(update_err) => {
-                                use async_nats::jetstream::kv::UpdateErrorKind;
-                                if !matches!(update_err.kind(), UpdateErrorKind::WrongLastRevision)
-                                {
-                                    return Err(StoreError::Backend(format!(
-                                        "kv.update {key}: {update_err}"
-                                    )));
-                                }
-                                // Another writer won the tombstone CAS. If they
-                                // left a live row, AlreadyExists is correct; if
-                                // the key is still absent (purge), retry create.
-                                match kv_entry_timeout(&self.kv, key.clone()).await? {
-                                    Some(e) if live_entry(Some(e.clone())).is_some() => {
-                                        return Err(StoreError::AlreadyExists);
-                                    }
-                                    _ => {
-                                        match tokio::time::timeout(
-                                            KV_OP_TIMEOUT,
-                                            self.kv.create(&key, bytes),
-                                        )
-                                        .await
-                                        .map_err(|_| {
-                                            StoreError::Backend(format!("kv.create {key}: timeout"))
-                                        })? {
-                                            Ok(rev) => rev,
-                                            Err(e2) => {
-                                                if matches!(
-                                                    e2.kind(),
-                                                    CreateErrorKind::AlreadyExists
-                                                ) {
-                                                    return Err(StoreError::AlreadyExists);
-                                                }
-                                                return Err(StoreError::Backend(format!(
-                                                    "kv.create {key}: {e2}"
-                                                )));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        };
-        let revision = Revision {
-            kind,
-            id,
-            change: ChangeKind::Put,
-            before: None,
-            after: Some(stamped.clone()),
-        };
-        let entity_ref = revision.entity_ref();
-        if let Err(StoreError::ChangeEventLost) = self
-            .record_change(ChangeKind::Put, &entity_ref, ctx.changeset())
-            .await
-        {
-            self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            self.config.metrics.record_change_event_lost();
-            tracing::error!(
-                entity_ref = ?entity_ref,
-                "create: change event lost after successful KV write"
-            );
-        }
-        self.record_revision(ctx, &revision).await;
-        Ok(Written {
-            etag: rev.to_string(),
-            wrote: true,
-            entity: stamped,
-        })
-    }
-
-    #[tracing::instrument(skip(self, entity), fields(kind = ?kind, branch))]
-    async fn put(
-        &self,
-        kind: EntityKind,
-        entity: &Entity,
-        force: bool,
-        ctx: WriteContext<'_>,
-    ) -> StoreResult<Written> {
-        self.require_writer()?;
-        let id = Self::validate(kind, entity)?.clone();
-        if let Some(branch) = ctx.branch_name() {
-            let wrote = branch_write_delta(
-                &self.kv,
-                &self.branches_kv,
-                branch,
-                kind,
-                &id,
-                |prev_entity, _prev_etag, base| {
-                    let prepared = match ctx.connection_admission() {
-                        crate::store::ConnectionAdmission::Active => {
-                            prepare_entity(prev_entity.as_ref(), entity)?
-                        }
-                        crate::store::ConnectionAdmission::BranchMerge { base } => {
-                            trogon_atlas_core::connection_persistence::prepare_landing(
-                                Some(base),
-                                prev_entity.as_ref(),
-                                entity,
-                            )
-                            .map_err(|error| StoreError::InvalidArgument(error.to_string()))?
-                        }
-                    };
-                    if !force {
-                        if let Some(prev) = prev_entity.as_ref() {
-                            if unchanged_entity(prev, &prepared) {
-                                return Ok(None);
-                            }
-                        }
-                    }
-                    let stamped = prepared;
-                    let (base_entity, base_etag) = match base {
-                        Some((e, etag)) => (Some(e), etag),
-                        None => (None, String::new()),
-                    };
-                    Ok(Some(trogon_atlas_proto::BranchDelta {
-                        base: base_entity,
-                        base_etag,
-                        ours: Some(stamped),
-                        tombstone: false,
-                    }))
-                },
-            )
-            .await?;
-            if wrote.written.wrote {
+                        let stamped = prepare_entity(None, entity)?;
+                        let (base_entity, base_etag) = match base {
+                            Some((e, etag)) => (Some(e), etag),
+                            None => (None, String::new()),
+                        };
+                        Ok(Some(trogon_atlas_proto::BranchDelta {
+                            base: base_entity,
+                            base_etag,
+                            ours: Some(stamped),
+                            tombstone: false,
+                        }))
+                    },
+                )
+                .await?;
                 self.record_revision(
                     ctx,
                     &Revision {
@@ -2850,35 +2693,232 @@ impl Store for NatsStore {
                     },
                 )
                 .await;
+                return Ok(wrote.written);
             }
-            return Ok(wrote.written);
-        }
-        let wrote = self.put_inner(kind, entity, force).await?;
-        // A skipped write changed nothing: no change event, no revision.
-        if !wrote.written.wrote {
-            return Ok(wrote.written);
-        }
-        let revision = Revision {
-            kind,
-            id,
-            change: ChangeKind::Put,
-            before: wrote.before,
-            after: Some(wrote.written.entity.clone()),
-        };
-        let entity_ref = revision.entity_ref();
-        if let Err(StoreError::ChangeEventLost) = self
-            .record_change(ChangeKind::Put, &entity_ref, ctx.changeset())
-            .await
-        {
-            self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            self.config.metrics.record_change_event_lost();
-            tracing::error!(
-                entity_ref = ?entity_ref,
-                "put: change event lost after successful KV write"
-            );
-        }
-        self.record_revision(ctx, &revision).await;
-        Ok(wrote.written)
+            let key = entity_key(kind, &id);
+            let stamped = prepare_entity(None, entity)?;
+            let bytes = encode_entity(&stamped);
+            let rev = match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.create(&key, bytes.clone()))
+                .await
+                .map_err(|_| StoreError::Backend(format!("kv.create {key}: timeout")))?
+            {
+                Ok(rev) => rev,
+                Err(e) => {
+                    use async_nats::jetstream::kv::CreateErrorKind;
+                    if !matches!(e.kind(), CreateErrorKind::AlreadyExists) {
+                        return Err(StoreError::Backend(format!("kv.create {key}: {e}")));
+                    }
+                    // Empty-Put tombstones (delete sentinel when kv.delete never
+                    // lands) still look like an existing key to NATS create, but
+                    // the merged view is absent. CAS-overwrite the tombstone.
+                    match kv_entry_timeout(&self.kv, key.clone()).await? {
+                        None => {
+                            // Race: key vanished between create AlreadyExists and
+                            // the entry read. Retry create once for the absent view.
+                            match tokio::time::timeout(
+                                KV_OP_TIMEOUT,
+                                self.kv.create(&key, bytes.clone()),
+                            )
+                            .await
+                            .map_err(|_| StoreError::Backend(format!("kv.create {key}: timeout")))?
+                            {
+                                Ok(rev) => rev,
+                                Err(e2) => {
+                                    if matches!(e2.kind(), CreateErrorKind::AlreadyExists) {
+                                        return Err(StoreError::AlreadyExists);
+                                    }
+                                    return Err(StoreError::Backend(format!(
+                                        "kv.create {key}: {e2}"
+                                    )));
+                                }
+                            }
+                        }
+                        Some(entry) if live_entry(Some(entry.clone())).is_some() => {
+                            return Err(StoreError::AlreadyExists);
+                        }
+                        Some(entry) => {
+                            match tokio::time::timeout(
+                                KV_OP_TIMEOUT,
+                                self.kv.update(&key, bytes.clone(), entry.revision),
+                            )
+                            .await
+                            .map_err(|_| StoreError::Backend(format!("kv.update {key}: timeout")))?
+                            {
+                                Ok(rev) => rev,
+                                Err(update_err) => {
+                                    use async_nats::jetstream::kv::UpdateErrorKind;
+                                    if !matches!(
+                                        update_err.kind(),
+                                        UpdateErrorKind::WrongLastRevision
+                                    ) {
+                                        return Err(StoreError::Backend(format!(
+                                            "kv.update {key}: {update_err}"
+                                        )));
+                                    }
+                                    // Another writer won the tombstone CAS. If they
+                                    // left a live row, AlreadyExists is correct; if
+                                    // the key is still absent (purge), retry create.
+                                    match kv_entry_timeout(&self.kv, key.clone()).await? {
+                                        Some(e) if live_entry(Some(e.clone())).is_some() => {
+                                            return Err(StoreError::AlreadyExists);
+                                        }
+                                        _ => {
+                                            match tokio::time::timeout(
+                                                KV_OP_TIMEOUT,
+                                                self.kv.create(&key, bytes),
+                                            )
+                                            .await
+                                            .map_err(|_| {
+                                                StoreError::Backend(format!(
+                                                    "kv.create {key}: timeout"
+                                                ))
+                                            })? {
+                                                Ok(rev) => rev,
+                                                Err(e2) => {
+                                                    if matches!(
+                                                        e2.kind(),
+                                                        CreateErrorKind::AlreadyExists
+                                                    ) {
+                                                        return Err(StoreError::AlreadyExists);
+                                                    }
+                                                    return Err(StoreError::Backend(format!(
+                                                        "kv.create {key}: {e2}"
+                                                    )));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+            let revision = Revision {
+                kind,
+                id,
+                change: ChangeKind::Put,
+                before: None,
+                after: Some(stamped.clone()),
+            };
+            let entity_ref = revision.entity_ref();
+            if let Err(StoreError::ChangeEventLost) = self
+                .record_change(ChangeKind::Put, &entity_ref, ctx.changeset())
+                .await
+            {
+                self.change_events_lost.fetch_add(1, Ordering::Relaxed);
+                self.config.metrics.record_change_event_lost();
+                tracing::error!(
+                    entity_ref = ?entity_ref,
+                    "create: change event lost after successful KV write"
+                );
+            }
+            self.record_revision(ctx, &revision).await;
+            Ok(Written {
+                etag: rev.to_string(),
+                wrote: true,
+                entity: stamped,
+            })
+        })
+        .await
+    }
+
+    #[tracing::instrument(skip(self, entity), fields(kind = ?kind, branch))]
+    async fn put(
+        &self,
+        kind: EntityKind,
+        entity: &Entity,
+        force: bool,
+        ctx: WriteContext<'_>,
+    ) -> StoreResult<Written> {
+        self.source_guarded(async {
+            self.require_writer()?;
+            let id = Self::validate(kind, entity)?.clone();
+            if let Some(branch) = ctx.branch_name() {
+                let wrote = branch_write_delta(
+                    &self.kv,
+                    &self.branches_kv,
+                    branch,
+                    kind,
+                    &id,
+                    |prev_entity, _prev_etag, base| {
+                        let prepared = match ctx.connection_admission() {
+                            crate::store::ConnectionAdmission::Active => {
+                                prepare_entity(prev_entity.as_ref(), entity)?
+                            }
+                            crate::store::ConnectionAdmission::BranchMerge { base } => {
+                                trogon_atlas_core::connection_persistence::prepare_landing(
+                                    Some(base),
+                                    prev_entity.as_ref(),
+                                    entity,
+                                )
+                                .map_err(|error| StoreError::InvalidArgument(error.to_string()))?
+                            }
+                        };
+                        if !force {
+                            if let Some(prev) = prev_entity.as_ref() {
+                                if unchanged_entity(prev, &prepared) {
+                                    return Ok(None);
+                                }
+                            }
+                        }
+                        let stamped = prepared;
+                        let (base_entity, base_etag) = match base {
+                            Some((e, etag)) => (Some(e), etag),
+                            None => (None, String::new()),
+                        };
+                        Ok(Some(trogon_atlas_proto::BranchDelta {
+                            base: base_entity,
+                            base_etag,
+                            ours: Some(stamped),
+                            tombstone: false,
+                        }))
+                    },
+                )
+                .await?;
+                if wrote.written.wrote {
+                    self.record_revision(
+                        ctx,
+                        &Revision {
+                            kind,
+                            id,
+                            change: ChangeKind::Put,
+                            before: wrote.before,
+                            after: Some(wrote.written.entity.clone()),
+                        },
+                    )
+                    .await;
+                }
+                return Ok(wrote.written);
+            }
+            let wrote = self.put_inner(kind, entity, force).await?;
+            // A skipped write changed nothing: no change event, no revision.
+            if !wrote.written.wrote {
+                return Ok(wrote.written);
+            }
+            let revision = Revision {
+                kind,
+                id,
+                change: ChangeKind::Put,
+                before: wrote.before,
+                after: Some(wrote.written.entity.clone()),
+            };
+            let entity_ref = revision.entity_ref();
+            if let Err(StoreError::ChangeEventLost) = self
+                .record_change(ChangeKind::Put, &entity_ref, ctx.changeset())
+                .await
+            {
+                self.change_events_lost.fetch_add(1, Ordering::Relaxed);
+                self.config.metrics.record_change_event_lost();
+                tracing::error!(
+                    entity_ref = ?entity_ref,
+                    "put: change event lost after successful KV write"
+                );
+            }
+            self.record_revision(ctx, &revision).await;
+            Ok(wrote.written)
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self, entity), fields(kind = ?kind, expected_etag, branch))]
@@ -2890,149 +2930,153 @@ impl Store for NatsStore {
         force: bool,
         ctx: WriteContext<'_>,
     ) -> StoreResult<Written> {
-        self.require_writer()?;
-        let id = Self::validate(kind, entity)?.clone();
-        if let Some(branch) = ctx.branch_name() {
-            let expected_etag = expected_etag.to_string();
-            let wrote = branch_write_delta(
-                &self.kv,
-                &self.branches_kv,
-                branch,
-                kind,
-                &id,
-                |prev_entity, prev_etag, base| {
-                    let Some(prev) = prev_entity else {
-                        return Err(StoreError::NotFound);
-                    };
-                    let found = prev_etag.clone().unwrap_or_default();
-                    if prev_etag.as_deref() != Some(expected_etag.as_str()) {
-                        return Err(StoreError::EtagMismatch {
-                            expected: expected_etag.clone(),
-                            found,
-                        });
-                    }
-                    let prepared = prepare_entity(Some(&prev), entity)?;
-                    if !force && unchanged_entity(&prev, &prepared) {
-                        return Ok(None);
-                    }
-                    let stamped = prepared;
-                    let (base_entity, base_etag) = match base {
-                        Some((e, etag)) => (Some(e), etag),
-                        None => (None, String::new()),
-                    };
-                    Ok(Some(trogon_atlas_proto::BranchDelta {
-                        base: base_entity,
-                        base_etag,
-                        ours: Some(stamped),
-                        tombstone: false,
-                    }))
-                },
-            )
-            .await?;
-            if wrote.written.wrote {
-                self.record_revision(
-                    ctx,
-                    &Revision {
-                        kind,
-                        id,
-                        change: ChangeKind::Put,
-                        before: wrote.before,
-                        after: Some(wrote.written.entity.clone()),
+        self.source_guarded(async {
+            self.require_writer()?;
+            let id = Self::validate(kind, entity)?.clone();
+            if let Some(branch) = ctx.branch_name() {
+                let expected_etag = expected_etag.to_string();
+                let wrote = branch_write_delta(
+                    &self.kv,
+                    &self.branches_kv,
+                    branch,
+                    kind,
+                    &id,
+                    |prev_entity, prev_etag, base| {
+                        let Some(prev) = prev_entity else {
+                            return Err(StoreError::NotFound);
+                        };
+                        let found = prev_etag.clone().unwrap_or_default();
+                        if prev_etag.as_deref() != Some(expected_etag.as_str()) {
+                            return Err(StoreError::EtagMismatch {
+                                expected: expected_etag.clone(),
+                                found,
+                            });
+                        }
+                        let prepared = prepare_entity(Some(&prev), entity)?;
+                        if !force && unchanged_entity(&prev, &prepared) {
+                            return Ok(None);
+                        }
+                        let stamped = prepared;
+                        let (base_entity, base_etag) = match base {
+                            Some((e, etag)) => (Some(e), etag),
+                            None => (None, String::new()),
+                        };
+                        Ok(Some(trogon_atlas_proto::BranchDelta {
+                            base: base_entity,
+                            base_etag,
+                            ours: Some(stamped),
+                            tombstone: false,
+                        }))
                     },
                 )
-                .await;
+                .await?;
+                if wrote.written.wrote {
+                    self.record_revision(
+                        ctx,
+                        &Revision {
+                            kind,
+                            id,
+                            change: ChangeKind::Put,
+                            before: wrote.before,
+                            after: Some(wrote.written.entity.clone()),
+                        },
+                    )
+                    .await;
+                }
+                return Ok(wrote.written);
             }
-            return Ok(wrote.written);
-        }
-        let key = entity_key(kind, &id);
-        let expected: u64 = expected_etag
-            .parse()
-            .map_err(|_| StoreError::EtagMismatch {
-                expected: expected_etag.into(),
-                found: String::new(),
-            })?;
-        // Capture the revision we saw at decode time for no-op detection and
-        // system stamping. CAS failures re-read via `live_found_etag` so
-        // `EtagMismatch.found` is not this stale pre-CAS value.
-        let (prev, prev_revision) = match kv_entry_timeout(&self.kv, key.clone()).await? {
-            Some(e) if live_entry(Some(e.clone())).is_some() => {
-                let rev = e.revision;
-                let prev = match decode_entity(&e.value) {
-                    Ok(entity) => Some(entity),
-                    Err(err) => {
-                        tracing::error!(
-                            key = %key,
-                            error = %err,
-                            "corrupt entity in KV store during update; \
-                             proceeding without prior value for system stamp"
-                        );
-                        None
+            let key = entity_key(kind, &id);
+            let expected: u64 = expected_etag
+                .parse()
+                .map_err(|_| StoreError::EtagMismatch {
+                    expected: expected_etag.into(),
+                    found: String::new(),
+                })?;
+            // Capture the revision we saw at decode time for no-op detection and
+            // system stamping. CAS failures re-read via `live_found_etag` so
+            // `EtagMismatch.found` is not this stale pre-CAS value.
+            let (prev, prev_revision) = match kv_entry_timeout(&self.kv, key.clone()).await? {
+                Some(e) if live_entry(Some(e.clone())).is_some() => {
+                    let rev = e.revision;
+                    let prev = match decode_entity(&e.value) {
+                        Ok(entity) => Some(entity),
+                        Err(err) => {
+                            tracing::error!(
+                                key = %key,
+                                error = %err,
+                                "corrupt entity in KV store during update; \
+                                 proceeding without prior value for system stamp"
+                            );
+                            None
+                        }
+                    };
+                    (prev, Some(rev))
+                }
+                // Key is absent or is a tombstone -- map to NotFound so callers
+                // can distinguish "key vanished" from a generic backend error.
+                _ => return Err(StoreError::NotFound),
+            };
+            let prepared = prepare_entity(prev.as_ref(), entity)?;
+            // Same no-op semantics as `put`: the etag guard must still hold,
+            // and a semantically identical row is not rewritten.
+            if !force {
+                if let (Some(prev_entity), Some(rev)) = (prev.as_ref(), prev_revision) {
+                    if rev == expected && unchanged_entity(prev_entity, &prepared) {
+                        return Ok(Written {
+                            etag: rev.to_string(),
+                            wrote: false,
+                            entity: prev_entity.clone(),
+                        });
+                    }
+                }
+            }
+            let stamped = prepared;
+            let bytes = encode_entity(&stamped);
+            let rev =
+                match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.update(&key, bytes, expected))
+                    .await
+                    .map_err(|_| StoreError::Backend(format!("kv.update {key}: timeout")))?
+                {
+                    Ok(rev) => rev,
+                    Err(e) => {
+                        use async_nats::jetstream::kv::UpdateErrorKind;
+                        if matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
+                            let found = live_found_etag(&self.kv, &key).await;
+                            return Err(StoreError::EtagMismatch {
+                                expected: expected_etag.into(),
+                                found,
+                            });
+                        }
+                        return Err(StoreError::Backend(format!("kv.update {key}: {e}")));
                     }
                 };
-                (prev, Some(rev))
+            let revision = Revision {
+                kind,
+                id,
+                change: ChangeKind::Put,
+                before: prev,
+                after: Some(stamped.clone()),
+            };
+            let entity_ref = revision.entity_ref();
+            if let Err(StoreError::ChangeEventLost) = self
+                .record_change(ChangeKind::Put, &entity_ref, ctx.changeset())
+                .await
+            {
+                self.change_events_lost.fetch_add(1, Ordering::Relaxed);
+                self.config.metrics.record_change_event_lost();
+                tracing::error!(
+                    entity_ref = ?entity_ref,
+                    "update: change event lost after successful KV write"
+                );
             }
-            // Key is absent or is a tombstone -- map to NotFound so callers
-            // can distinguish "key vanished" from a generic backend error.
-            _ => return Err(StoreError::NotFound),
-        };
-        let prepared = prepare_entity(prev.as_ref(), entity)?;
-        // Same no-op semantics as `put`: the etag guard must still hold,
-        // and a semantically identical row is not rewritten.
-        if !force {
-            if let (Some(prev_entity), Some(rev)) = (prev.as_ref(), prev_revision) {
-                if rev == expected && unchanged_entity(prev_entity, &prepared) {
-                    return Ok(Written {
-                        etag: rev.to_string(),
-                        wrote: false,
-                        entity: prev_entity.clone(),
-                    });
-                }
-            }
-        }
-        let stamped = prepared;
-        let bytes = encode_entity(&stamped);
-        let rev = match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.update(&key, bytes, expected))
-            .await
-            .map_err(|_| StoreError::Backend(format!("kv.update {key}: timeout")))?
-        {
-            Ok(rev) => rev,
-            Err(e) => {
-                use async_nats::jetstream::kv::UpdateErrorKind;
-                if matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
-                    let found = live_found_etag(&self.kv, &key).await;
-                    return Err(StoreError::EtagMismatch {
-                        expected: expected_etag.into(),
-                        found,
-                    });
-                }
-                return Err(StoreError::Backend(format!("kv.update {key}: {e}")));
-            }
-        };
-        let revision = Revision {
-            kind,
-            id,
-            change: ChangeKind::Put,
-            before: prev,
-            after: Some(stamped.clone()),
-        };
-        let entity_ref = revision.entity_ref();
-        if let Err(StoreError::ChangeEventLost) = self
-            .record_change(ChangeKind::Put, &entity_ref, ctx.changeset())
-            .await
-        {
-            self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-            self.config.metrics.record_change_event_lost();
-            tracing::error!(
-                entity_ref = ?entity_ref,
-                "update: change event lost after successful KV write"
-            );
-        }
-        self.record_revision(ctx, &revision).await;
-        Ok(Written {
-            etag: rev.to_string(),
-            wrote: true,
-            entity: stamped,
+            self.record_revision(ctx, &revision).await;
+            Ok(Written {
+                etag: rev.to_string(),
+                wrote: true,
+                entity: stamped,
+            })
         })
+        .await
     }
 
     #[tracing::instrument(skip(self), fields(kind = ?kind, id.namespace = %id.namespace, id.slug = %id.slug, branch))]
@@ -3043,6 +3087,7 @@ impl Store for NatsStore {
         expected_etag: Option<&str>,
         ctx: WriteContext<'_>,
     ) -> StoreResult<()> {
+        self.source_guarded(async {
         self.require_writer()?;
         if let Some(branch) = ctx.branch_name() {
             let expected_etag = expected_etag.map(str::to_string);
@@ -3248,6 +3293,7 @@ impl Store for NatsStore {
                 }
             }
         }
+        }).await
     }
 
     #[tracing::instrument(skip(self, targets))]
@@ -3256,8 +3302,11 @@ impl Store for NatsStore {
         targets: &[EntityKey],
         branch: Option<&str>,
     ) -> StoreResult<HashSet<EntityKey>> {
-        self.referenced_targets_with_overlay(targets, branch, &[])
-            .await
+        self.source_guarded(async {
+            self.referenced_targets_with_overlay(targets, branch, &[])
+                .await
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self, targets, overlay))]
@@ -3267,73 +3316,50 @@ impl Store for NatsStore {
         branch: Option<&str>,
         overlay: &[(EntityKey, Option<Entity>)],
     ) -> StoreResult<HashSet<EntityKey>> {
-        if targets.is_empty() {
-            return Ok(HashSet::new());
-        }
-        tokio::time::timeout(LIST_TOTAL_TIMEOUT, async {
-            if let Some(branch) = branch {
-                let metadata = kv_entry_timeout(&self.branches_kv, branch_meta_key(branch)).await?;
-                if live_entry(metadata).is_none() {
-                    return Err(StoreError::NotFound);
-                }
+        self.source_guarded(async {
+            if targets.is_empty() {
+                return Ok(HashSet::new());
             }
-            let mut replacements = HashMap::new();
-            for (key, value) in overlay {
-                if let Some(entity) = value {
-                    let id = Self::validate(key.kind, entity)?;
-                    if EntityKey::new(key.kind, id) != *key {
+            tokio::time::timeout(LIST_TOTAL_TIMEOUT, async {
+                if let Some(branch) = branch {
+                    let metadata =
+                        kv_entry_timeout(&self.branches_kv, branch_meta_key(branch)).await?;
+                    if live_entry(metadata).is_none() {
+                        return Err(StoreError::NotFound);
+                    }
+                }
+                let mut replacements = HashMap::new();
+                for (key, value) in overlay {
+                    if let Some(entity) = value {
+                        let id = Self::validate(key.kind, entity)?;
+                        if EntityKey::new(key.kind, id) != *key {
+                            return Err(StoreError::InvalidArgument(
+                                "overlay entity key mismatch".into(),
+                            ));
+                        }
+                    }
+                    if replacements.insert(key.clone(), value.as_ref()).is_some() {
                         return Err(StoreError::InvalidArgument(
-                            "overlay entity key mismatch".into(),
+                            "duplicate overlay owner".into(),
                         ));
                     }
                 }
-                if replacements.insert(key.clone(), value.as_ref()).is_some() {
-                    return Err(StoreError::InvalidArgument(
-                        "duplicate overlay owner".into(),
-                    ));
-                }
-            }
-            let targets: HashSet<_> = targets.iter().cloned().collect();
-            let slice_ids: HashSet<_> = targets
-                .iter()
-                .filter(|target| {
-                    matches!(
-                        target.kind,
-                        EntityKind::CommandSlice
-                            | EntityKind::ReadModelSlice
-                            | EntityKind::AutomationSlice
-                            | EntityKind::UiSlice
-                    )
-                })
-                .map(|target| IdKey::new(&target.id()))
-                .collect();
-            let mut untyped_kinds = HashMap::new();
-            for id_key in slice_ids {
-                for candidate in [
-                    EntityKind::CommandSlice,
-                    EntityKind::ReadModelSlice,
-                    EntityKind::AutomationSlice,
-                    EntityKind::UiSlice,
-                ] {
-                    let key = EntityKey::new(candidate, &id_key.id());
-                    if let Some(value) = replacements.get(&key) {
-                        if value.is_some() {
-                            untyped_kinds.insert(id_key.clone(), candidate);
-                            break;
-                        }
-                        continue;
-                    }
-                    match self.get(candidate, &id_key.id(), branch).await {
-                        Ok(_) => {
-                            untyped_kinds.insert(id_key.clone(), candidate);
-                            break;
-                        }
-                        Err(StoreError::NotFound) => {}
-                        Err(error) => return Err(error),
-                    }
-                }
-                // A retained raw ref cannot authorize deletion of its last selected slice.
-                if !untyped_kinds.contains_key(&id_key) {
+                let targets: HashSet<_> = targets.iter().cloned().collect();
+                let slice_ids: HashSet<_> = targets
+                    .iter()
+                    .filter(|target| {
+                        matches!(
+                            target.kind,
+                            EntityKind::CommandSlice
+                                | EntityKind::ReadModelSlice
+                                | EntityKind::AutomationSlice
+                                | EntityKind::UiSlice
+                        )
+                    })
+                    .map(|target| IdKey::new(&target.id()))
+                    .collect();
+                let mut untyped_kinds = HashMap::new();
+                for id_key in slice_ids {
                     for candidate in [
                         EntityKind::CommandSlice,
                         EntityKind::ReadModelSlice,
@@ -3341,83 +3367,113 @@ impl Store for NatsStore {
                         EntityKind::UiSlice,
                     ] {
                         let key = EntityKey::new(candidate, &id_key.id());
-                        if replacements.get(&key).is_some_and(Option::is_none) {
-                            match self.get(candidate, &id_key.id(), branch).await {
-                                Ok(_) => {
-                                    untyped_kinds.insert(id_key.clone(), candidate);
-                                    break;
+                        if let Some(value) = replacements.get(&key) {
+                            if value.is_some() {
+                                untyped_kinds.insert(id_key.clone(), candidate);
+                                break;
+                            }
+                            continue;
+                        }
+                        match self.get(candidate, &id_key.id(), branch).await {
+                            Ok(_) => {
+                                untyped_kinds.insert(id_key.clone(), candidate);
+                                break;
+                            }
+                            Err(StoreError::NotFound) => {}
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    // A retained raw ref cannot authorize deletion of its last selected slice.
+                    if !untyped_kinds.contains_key(&id_key) {
+                        for candidate in [
+                            EntityKind::CommandSlice,
+                            EntityKind::ReadModelSlice,
+                            EntityKind::AutomationSlice,
+                            EntityKind::UiSlice,
+                        ] {
+                            let key = EntityKey::new(candidate, &id_key.id());
+                            if replacements.get(&key).is_some_and(Option::is_none) {
+                                match self.get(candidate, &id_key.id(), branch).await {
+                                    Ok(_) => {
+                                        untyped_kinds.insert(id_key.clone(), candidate);
+                                        break;
+                                    }
+                                    Err(StoreError::NotFound) => {}
+                                    Err(error) => return Err(error),
                                 }
-                                Err(StoreError::NotFound) => {}
-                                Err(error) => return Err(error),
                             }
                         }
                     }
                 }
-            }
-            let references = |entity: &Entity| {
-                trogon_atlas_core::refs::outbound_refs(entity)
-                    .iter()
-                    .filter_map(|reference| {
-                        let kind = reference.to_kind.or_else(|| {
-                            untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
-                        })?;
-                        let target = EntityKey::new(kind, &reference.to_id);
-                        targets.contains(&target).then_some(target)
-                    })
-                    .collect::<Vec<_>>()
-            };
-            let mut referenced = HashSet::new();
-            for entity in replacements.values().flatten() {
-                referenced.extend(references(entity));
-            }
-
-            for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
-                if delta_keys && branch.is_none() {
-                    continue;
+                let references = |entity: &Entity| {
+                    trogon_atlas_core::refs::outbound_refs(entity)
+                        .iter()
+                        .filter_map(|reference| {
+                            let kind = reference.to_kind.or_else(|| {
+                                untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
+                            })?;
+                            let target = EntityKey::new(kind, &reference.to_id);
+                            targets.contains(&target).then_some(target)
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let mut referenced = HashSet::new();
+                for entity in replacements.values().flatten() {
+                    referenced.extend(references(entity));
                 }
-                let keys = tokio::time::timeout(KV_OP_TIMEOUT, kv.keys())
-                    .await
-                    .map_err(|_| StoreError::Backend("reference key scan: timeout".into()))?
-                    .map_err(|error| StoreError::Backend(format!("reference key scan: {error}")))?;
-                let replacements = &replacements;
-                let references = &references;
-                let mut checks = keys
-                    .map(|item| async move {
-                        let key = item.map_err(|error| {
+
+                for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
+                    if delta_keys && branch.is_none() {
+                        continue;
+                    }
+                    let keys = tokio::time::timeout(KV_OP_TIMEOUT, kv.keys())
+                        .await
+                        .map_err(|_| StoreError::Backend("reference key scan: timeout".into()))?
+                        .map_err(|error| {
                             StoreError::Backend(format!("reference key scan: {error}"))
                         })?;
-                        let owner = if delta_keys {
-                            branch
-                                .and_then(|branch| crate::key::parse_branch_delta_key(branch, &key))
-                        } else {
-                            parse_entity_key(&key)
-                        };
-                        let Some((owner_kind, owner_id)) = owner else {
-                            return Ok(Vec::new());
-                        };
-                        if replacements.contains_key(&EntityKey::new(owner_kind, &owner_id)) {
-                            return Ok(Vec::new());
+                    let replacements = &replacements;
+                    let references = &references;
+                    let mut checks = keys
+                        .map(|item| async move {
+                            let key = item.map_err(|error| {
+                                StoreError::Backend(format!("reference key scan: {error}"))
+                            })?;
+                            let owner = if delta_keys {
+                                branch.and_then(|branch| {
+                                    crate::key::parse_branch_delta_key(branch, &key)
+                                })
+                            } else {
+                                parse_entity_key(&key)
+                            };
+                            let Some((owner_kind, owner_id)) = owner else {
+                                return Ok(Vec::new());
+                            };
+                            if replacements.contains_key(&EntityKey::new(owner_kind, &owner_id)) {
+                                return Ok(Vec::new());
+                            }
+                            // Merged gets suppress tombstones and replaced baseline references.
+                            let stored = match self.get(owner_kind, &owner_id, branch).await {
+                                Ok(stored) => stored,
+                                Err(StoreError::NotFound) => return Ok(Vec::new()),
+                                Err(error) => return Err(error),
+                            };
+                            Ok(references(&stored.entity))
+                        })
+                        .buffer_unordered(LIST_FETCH_CONCURRENCY);
+                    while let Some(found) = checks.next().await {
+                        referenced.extend(found?);
+                        if referenced.len() == targets.len() {
+                            return Ok(referenced);
                         }
-                        // Merged gets suppress tombstones and replaced baseline references.
-                        let stored = match self.get(owner_kind, &owner_id, branch).await {
-                            Ok(stored) => stored,
-                            Err(StoreError::NotFound) => return Ok(Vec::new()),
-                            Err(error) => return Err(error),
-                        };
-                        Ok(references(&stored.entity))
-                    })
-                    .buffer_unordered(LIST_FETCH_CONCURRENCY);
-                while let Some(found) = checks.next().await {
-                    referenced.extend(found?);
-                    if referenced.len() == targets.len() {
-                        return Ok(referenced);
                     }
                 }
-            }
-            Ok(referenced)
+                Ok(referenced)
+            })
+            .await
+            .map_err(|_| StoreError::Backend("reference scan exceeded its time limit".into()))?
         })
         .await
-        .map_err(|_| StoreError::Backend("reference scan exceeded its time limit".into()))?
     }
 
     #[tracing::instrument(skip(self, filter), fields(limit, branch))]
@@ -3427,163 +3483,171 @@ impl Store for NatsStore {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> StoreResult<Vec<StoredEntity>> {
-        if let Some(branch) = branch {
-            return self.list_branch_merged(filter, limit, branch).await;
-        }
-        // Guard the entire key-enumeration and entry-fetch pipeline with a
-        // single wall-clock bound. Individual per-key fetches are already
-        // guarded by KV_OP_TIMEOUT, but up to LIST_HARD_CAP keys means the
-        // cumulative worst case without this bound is ~10,000 * KV_OP_TIMEOUT.
-        let kv = self.kv.clone();
-        let kinds: Vec<EntityKind> = filter.kinds.to_vec();
-        let namespaces: Vec<String> = filter.namespaces.to_vec();
-        let latest_versions_only = filter.latest_versions_only;
-        tokio::time::timeout(LIST_TOTAL_TIMEOUT, async move {
-            let effective_limit = limit.unwrap_or(LIST_HARD_CAP).min(LIST_HARD_CAP);
-
-            let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, kv.keys())
-                .await
-                .map_err(|_| StoreError::Backend("kv.keys: timeout".into()))?
-                .map_err(|e| StoreError::Backend(format!("kv.keys: {e}")))?;
-
-            // Pre-compute prefixes for cheap kind/namespace filtering. Empty
-            // filters mean "no constraint" -- every key passes.
-            //
-            // When namespaces are specified but kinds are not, expand over all
-            // concrete EntityKind variants using `namespace_prefix` so we avoid
-            // a full-bucket scan and the `parse_entity_key` call it requires.
-            let prefixes: Vec<String> = if kinds.is_empty() && namespaces.is_empty() {
-                Vec::new()
-            } else if kinds.is_empty() {
-                let mut p = Vec::with_capacity(ALL_KINDS.len() * namespaces.len());
-                for &k in ALL_KINDS {
-                    for ns in &namespaces {
-                        p.push(namespace_prefix(k, ns));
-                    }
-                }
-                p
-            } else if namespaces.is_empty() {
-                kinds.iter().map(|k| kind_prefix(*k)).collect()
-            } else {
-                let mut p = Vec::with_capacity(kinds.len() * namespaces.len());
-                for k in &kinds {
-                    for ns in &namespaces {
-                        p.push(namespace_prefix(*k, ns));
-                    }
-                }
-                p
-            };
-
-            // Collect matching keys. Live entries are materialized up to
-            // LIST_HARD_CAP after the tombstone filter; the caller `limit`
-            // is applied only after sort + latest_versions_only. A bucket of
-            // pure tombstones (e.g., after bulk deletes) will scan matching
-            // keys up to the raw-key memory ceiling within LIST_TOTAL_TIMEOUT
-            // before returning an empty result -- the outer timeout prevents
-            // unbounded blocking in that worst case.
-            // Each step of the key stream is guarded by KV_OP_TIMEOUT to prevent
-            // a stalled NATS connection from blocking list() forever.
-            let mut matching_keys: Vec<String> = Vec::new();
-            loop {
-                let next = tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next())
-                    .await
-                    .map_err(|_| {
-                        StoreError::Backend("kv.keys stream: timeout waiting for next key".into())
-                    })?;
-                let Some(item) = next else { break };
-                let key = item.map_err(|e| StoreError::Backend(format!("kv.keys stream: {e}")))?;
-                if key == SCHEMA_VERSION_KEY {
-                    continue;
-                }
-                if !prefixes.is_empty() && !prefixes.iter().any(|p| key.starts_with(p)) {
-                    continue;
-                }
-                matching_keys.push(key);
-                // Memory ceiling for the raw key set. Callers observe the
-                // live-entry cap; this bound only keeps a pathological
-                // tombstone-heavy bucket from allocating without limit.
-                if matching_keys.len() >= LIST_HARD_CAP * 10 {
-                    tracing::warn!(
-                        raw_key_cap = LIST_HARD_CAP * 10,
-                        "list: raw key scan hit the memory ceiling; results may \
-                         undercount live entities in a tombstone-heavy bucket"
-                    );
-                    break;
-                }
+        self.source_guarded(async {
+            if let Some(branch) = branch {
+                return self.list_branch_merged(filter, limit, branch).await;
             }
+            // Guard the entire key-enumeration and entry-fetch pipeline with a
+            // single wall-clock bound. Individual per-key fetches are already
+            // guarded by KV_OP_TIMEOUT, but up to LIST_HARD_CAP keys means the
+            // cumulative worst case without this bound is ~10,000 * KV_OP_TIMEOUT.
+            let kv = self.kv.clone();
+            let kinds: Vec<EntityKind> = filter.kinds.to_vec();
+            let namespaces: Vec<String> = filter.namespaces.to_vec();
+            let latest_versions_only = filter.latest_versions_only;
+            tokio::time::timeout(LIST_TOTAL_TIMEOUT, async move {
+                let effective_limit = limit.unwrap_or(LIST_HARD_CAP).min(LIST_HARD_CAP);
 
-            // Fetch live entries concurrently up to LIST_HARD_CAP. The caller
-            // `limit` is applied only after sort + latest_versions_only so
-            // truncation cannot drop later slug groups that would survive
-            // dedup (mirrors list_branch_merged). Tombstones do not count.
-            let total_keys = matching_keys.len();
-            let mut out: Vec<StoredEntity> = Vec::with_capacity(LIST_HARD_CAP.min(total_keys));
-            let kv2 = kv.clone();
-            let mut stream = futures::stream::iter(matching_keys.into_iter().map(move |key| {
-                let kv = kv2.clone();
-                async move {
-                    let entry = kv_entry_timeout(&kv, key.clone()).await?;
-                    let Some(entry) = live_entry(entry) else {
-                        return Ok::<Option<StoredEntity>, StoreError>(None);
-                    };
-                    let entity = decode_entity_logged(&entry.value, &key)?;
-                    Ok(Some(StoredEntity {
-                        entity,
-                        etag: entry.revision.to_string(),
-                    }))
-                }
-            }))
-            .buffer_unordered(LIST_FETCH_CONCURRENCY);
+                let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, kv.keys())
+                    .await
+                    .map_err(|_| StoreError::Backend("kv.keys: timeout".into()))?
+                    .map_err(|e| StoreError::Backend(format!("kv.keys: {e}")))?;
 
-            while let Some(result) = stream.next().await {
-                if let Some(stored) = result? {
-                    out.push(stored);
-                    if out.len() >= LIST_HARD_CAP {
+                // Pre-compute prefixes for cheap kind/namespace filtering. Empty
+                // filters mean "no constraint" -- every key passes.
+                //
+                // When namespaces are specified but kinds are not, expand over all
+                // concrete EntityKind variants using `namespace_prefix` so we avoid
+                // a full-bucket scan and the `parse_entity_key` call it requires.
+                let prefixes: Vec<String> = if kinds.is_empty() && namespaces.is_empty() {
+                    Vec::new()
+                } else if kinds.is_empty() {
+                    let mut p = Vec::with_capacity(ALL_KINDS.len() * namespaces.len());
+                    for &k in ALL_KINDS {
+                        for ns in &namespaces {
+                            p.push(namespace_prefix(k, ns));
+                        }
+                    }
+                    p
+                } else if namespaces.is_empty() {
+                    kinds.iter().map(|k| kind_prefix(*k)).collect()
+                } else {
+                    let mut p = Vec::with_capacity(kinds.len() * namespaces.len());
+                    for k in &kinds {
+                        for ns in &namespaces {
+                            p.push(namespace_prefix(*k, ns));
+                        }
+                    }
+                    p
+                };
+
+                // Collect matching keys. Live entries are materialized up to
+                // LIST_HARD_CAP after the tombstone filter; the caller `limit`
+                // is applied only after sort + latest_versions_only. A bucket of
+                // pure tombstones (e.g., after bulk deletes) will scan matching
+                // keys up to the raw-key memory ceiling within LIST_TOTAL_TIMEOUT
+                // before returning an empty result -- the outer timeout prevents
+                // unbounded blocking in that worst case.
+                // Each step of the key stream is guarded by KV_OP_TIMEOUT to prevent
+                // a stalled NATS connection from blocking list() forever.
+                let mut matching_keys: Vec<String> = Vec::new();
+                loop {
+                    let next = tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next())
+                        .await
+                        .map_err(|_| {
+                            StoreError::Backend(
+                                "kv.keys stream: timeout waiting for next key".into(),
+                            )
+                        })?;
+                    let Some(item) = next else { break };
+                    let key =
+                        item.map_err(|e| StoreError::Backend(format!("kv.keys stream: {e}")))?;
+                    if key == SCHEMA_VERSION_KEY {
+                        continue;
+                    }
+                    if !prefixes.is_empty() && !prefixes.iter().any(|p| key.starts_with(p)) {
+                        continue;
+                    }
+                    matching_keys.push(key);
+                    // Memory ceiling for the raw key set. Callers observe the
+                    // live-entry cap; this bound only keeps a pathological
+                    // tombstone-heavy bucket from allocating without limit.
+                    if matching_keys.len() >= LIST_HARD_CAP * 10 {
+                        tracing::warn!(
+                            raw_key_cap = LIST_HARD_CAP * 10,
+                            "list: raw key scan hit the memory ceiling; results may \
+                         undercount live entities in a tombstone-heavy bucket"
+                        );
                         break;
                     }
                 }
-            }
 
-            out.sort_by(|a, b| {
-                let ka = kind_of(&a.entity).unwrap_or(EntityKind::Unspecified) as i32;
-                let kb = kind_of(&b.entity).unwrap_or(EntityKind::Unspecified) as i32;
-                let ida = entity_id(&a.entity).cloned().unwrap_or_default();
-                let idb = entity_id(&b.entity).cloned().unwrap_or_default();
-                ka.cmp(&kb)
-                    .then_with(|| ida.namespace.cmp(&idb.namespace))
-                    .then_with(|| ida.slug.cmp(&idb.slug))
-                    .then_with(|| ida.version.cmp(&idb.version))
-            });
+                // Fetch live entries concurrently up to LIST_HARD_CAP. The caller
+                // `limit` is applied only after sort + latest_versions_only so
+                // truncation cannot drop later slug groups that would survive
+                // dedup (mirrors list_branch_merged). Tombstones do not count.
+                let total_keys = matching_keys.len();
+                let mut out: Vec<StoredEntity> = Vec::with_capacity(LIST_HARD_CAP.min(total_keys));
+                let kv2 = kv.clone();
+                let mut stream = futures::stream::iter(matching_keys.into_iter().map(move |key| {
+                    let kv = kv2.clone();
+                    async move {
+                        let entry = kv_entry_timeout(&kv, key.clone()).await?;
+                        let Some(entry) = live_entry(entry) else {
+                            return Ok::<Option<StoredEntity>, StoreError>(None);
+                        };
+                        let entity = decode_entity_logged(&entry.value, &key)?;
+                        Ok(Some(StoredEntity {
+                            entity,
+                            etag: entry.revision.to_string(),
+                        }))
+                    }
+                }))
+                .buffer_unordered(LIST_FETCH_CONCURRENCY);
 
-            if latest_versions_only {
-                let mut latest: BTreeMap<(EntityKind, String, String), StoredEntity> =
-                    BTreeMap::new();
-                for s in out.drain(..) {
-                    let (Some(k), Some(id)) = (kind_of(&s.entity), entity_id(&s.entity)) else {
-                        continue;
-                    };
-                    let group_key = (k, id.namespace.clone(), id.slug.clone());
-                    let keep = latest
-                        .get(&group_key)
-                        .and_then(|cur| entity_id(&cur.entity).map(|cid| cid.version < id.version))
-                        .unwrap_or(true);
-                    if keep {
-                        latest.insert(group_key, s);
+                while let Some(result) = stream.next().await {
+                    if let Some(stored) = result? {
+                        out.push(stored);
+                        if out.len() >= LIST_HARD_CAP {
+                            break;
+                        }
                     }
                 }
-                out = latest.into_values().collect();
-            }
 
-            out.truncate(effective_limit);
-            Ok(out)
+                out.sort_by(|a, b| {
+                    let ka = kind_of(&a.entity).unwrap_or(EntityKind::Unspecified) as i32;
+                    let kb = kind_of(&b.entity).unwrap_or(EntityKind::Unspecified) as i32;
+                    let ida = entity_id(&a.entity).cloned().unwrap_or_default();
+                    let idb = entity_id(&b.entity).cloned().unwrap_or_default();
+                    ka.cmp(&kb)
+                        .then_with(|| ida.namespace.cmp(&idb.namespace))
+                        .then_with(|| ida.slug.cmp(&idb.slug))
+                        .then_with(|| ida.version.cmp(&idb.version))
+                });
+
+                if latest_versions_only {
+                    let mut latest: BTreeMap<(EntityKind, String, String), StoredEntity> =
+                        BTreeMap::new();
+                    for s in out.drain(..) {
+                        let (Some(k), Some(id)) = (kind_of(&s.entity), entity_id(&s.entity)) else {
+                            continue;
+                        };
+                        let group_key = (k, id.namespace.clone(), id.slug.clone());
+                        let keep = latest
+                            .get(&group_key)
+                            .and_then(|cur| {
+                                entity_id(&cur.entity).map(|cid| cid.version < id.version)
+                            })
+                            .unwrap_or(true);
+                        if keep {
+                            latest.insert(group_key, s);
+                        }
+                    }
+                    out = latest.into_values().collect();
+                }
+
+                out.truncate(effective_limit);
+                Ok(out)
+            })
+            .await
+            .map_err(|_| {
+                StoreError::Backend(format!(
+                    "list: total timeout exceeded ({}s)",
+                    LIST_TOTAL_TIMEOUT.as_secs()
+                ))
+            })?
         })
         .await
-        .map_err(|_| {
-            StoreError::Backend(format!(
-                "list: total timeout exceeded ({}s)",
-                LIST_TOTAL_TIMEOUT.as_secs()
-            ))
-        })?
     }
 
     /// Publish a change event for the given entity. Returns the assigned
@@ -3607,11 +3671,13 @@ impl Store for NatsStore {
         entity_ref: &EntityRef,
         changeset: Option<ChangesetRef<'_>>,
     ) -> StoreResult<u64> {
-        self.publish_change(kind, entity_ref, changeset, None).await
+        self.source_guarded(async { self.publish_change(kind, entity_ref, changeset, None).await })
+            .await
     }
 
     #[tracing::instrument(skip(self), fields(since, limit))]
     async fn read_changes(&self, since: u64, limit: usize) -> StoreResult<Vec<ChangeRecord>> {
+        self.source_guarded(async {
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -3721,14 +3787,19 @@ impl Store for NatsStore {
             }
         }
         Ok(out)
+        }).await
     }
 
     async fn current_change_seq(&self) -> StoreResult<u64> {
-        let info = self.stream_info().await?;
-        Ok(info.state.last_sequence)
+        self.source_guarded(async {
+            let info = self.stream_info().await?;
+            Ok(info.state.last_sequence)
+        })
+        .await
     }
 
     async fn prune_changes(&self, before_seq: u64) -> StoreResult<()> {
+        self.source_guarded(async {
         // JetStream retention policies handle pruning server-side via the
         // configured max_age/max_msgs/max_bytes limits on the changes stream.
         // The `async-nats` 0.45 `stream.purge().sequence(..)` API exists but
@@ -3741,26 +3812,30 @@ impl Store for NatsStore {
             "prune_changes called; no-op for NatsStore (JetStream retention handles pruning server-side)"
         );
         Ok(())
+        }).await
     }
 
     async fn change_stream_stats(&self) -> StoreResult<Option<crate::store::ChangeStreamStats>> {
-        let info = self.stream_info().await?;
-        let oldest = info.state.first_timestamp;
-        let oldest_secs = if info.state.messages == 0 {
-            None
-        } else {
-            let secs = oldest.unix_timestamp();
-            if secs >= 0 {
-                Some(secs)
-            } else {
+        self.source_guarded(async {
+            let info = self.stream_info().await?;
+            let oldest = info.state.first_timestamp;
+            let oldest_secs = if info.state.messages == 0 {
                 None
-            }
-        };
-        Ok(Some(crate::store::ChangeStreamStats {
-            messages: info.state.messages,
-            bytes: info.state.bytes,
-            oldest_message_unix_seconds: oldest_secs,
-        }))
+            } else {
+                let secs = oldest.unix_timestamp();
+                if secs >= 0 {
+                    Some(secs)
+                } else {
+                    None
+                }
+            };
+            Ok(Some(crate::store::ChangeStreamStats {
+                messages: info.state.messages,
+                bytes: info.state.bytes,
+                oldest_message_unix_seconds: oldest_secs,
+            }))
+        })
+        .await
     }
 
     #[tracing::instrument(skip(self, ops), fields(op_count = ops.len(), branch))]
@@ -3769,6 +3844,7 @@ impl Store for NatsStore {
         ops: &[MutationOp],
         ctx: WriteContext<'_>,
     ) -> StoreResult<Vec<MutationOutcome>> {
+        self.source_guarded(async {
         self.require_writer()?;
         if ops.len() > BATCH_APPLY_MAX_OPS {
             return Err(StoreError::InvalidArgument(format!(
@@ -4294,13 +4370,15 @@ impl Store for NatsStore {
         }
 
         Ok(outcomes)
+        }).await
     }
 
     async fn recover_batches(
         &self,
         policy: crate::recovery::RecoveryPolicy,
     ) -> StoreResult<crate::recovery::BatchRecoveryReport> {
-        self.recover_journaled_batches(policy).await
+        self.source_guarded(async { self.recover_journaled_batches(policy).await })
+            .await
     }
 
     fn subscribe(&self) -> broadcast::Receiver<ChangeRecord> {
@@ -4315,14 +4393,17 @@ impl Store for NatsStore {
         parent: &OwnerId,
         created_by: &str,
     ) -> StoreResult<NamespaceClaim> {
-        self.require_writer()?;
-        self.claim_namespace(
-            NamespaceId::generate(),
-            name,
-            parent,
-            created_by,
-            &NamespaceTenure::Permanent,
-        )
+        self.source_guarded(async {
+            self.require_writer()?;
+            self.claim_namespace(
+                NamespaceId::generate(),
+                name,
+                parent,
+                created_by,
+                &NamespaceTenure::Permanent,
+            )
+            .await
+        })
         .await
     }
 
@@ -4332,65 +4413,85 @@ impl Store for NatsStore {
         parent: &OwnerId,
         tenure: &NamespaceTenure,
     ) -> StoreResult<NamespaceClaim> {
-        self.require_writer()?;
-        self.claim_namespace(
-            NamespaceId::adopt_legacy(name),
-            name,
-            parent,
-            LEGACY_ADOPTION_AUTHOR,
-            tenure,
-        )
+        self.source_guarded(async {
+            self.require_writer()?;
+            self.claim_namespace(
+                NamespaceId::adopt_legacy(name),
+                name,
+                parent,
+                LEGACY_ADOPTION_AUTHOR,
+                tenure,
+            )
+            .await
+        })
         .await
     }
 
     async fn restore_namespace(&self, record: &NamespaceRecord) -> StoreResult<NamespaceClaim> {
-        self.require_writer()?;
-        self.claim_namespace_record(record.clone()).await
+        self.source_guarded(async {
+            self.require_writer()?;
+            self.claim_namespace_record(record.clone()).await
+        })
+        .await
     }
 
     async fn release_namespace(&self, id: &NamespaceId) -> StoreResult<()> {
-        self.require_writer()?;
-        let Some((record, _)) = self.read_namespace_row(id).await? else {
-            return Ok(());
-        };
-        // The index row goes first. A crash between the two leaves a record
-        // nothing resolves to, which the next claim of the name repairs; the
-        // opposite order leaves a name pointing at a record that is gone,
-        // which nothing repairs.
-        let index_key = namespace_name_key(record.parent.as_str(), record.name.as_str());
-        let _ = tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&index_key)).await;
-        let record_key = namespace_record_key(id.as_str());
-        tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&record_key))
-            .await
-            .map_err(|_| StoreError::Backend(format!("namespace kv.delete {record_key}: timeout")))?
-            .map_err(|e| StoreError::Backend(format!("namespace kv.delete {record_key}: {e}")))?;
-        Ok(())
+        self.source_guarded(async {
+            self.require_writer()?;
+            let Some((record, _)) = self.read_namespace_row(id).await? else {
+                return Ok(());
+            };
+            // The index row goes first. A crash between the two leaves a record
+            // nothing resolves to, which the next claim of the name repairs; the
+            // opposite order leaves a name pointing at a record that is gone,
+            // which nothing repairs.
+            let index_key = namespace_name_key(record.parent.as_str(), record.name.as_str());
+            let _ =
+                tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&index_key)).await;
+            let record_key = namespace_record_key(id.as_str());
+            tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&record_key))
+                .await
+                .map_err(|_| {
+                    StoreError::Backend(format!("namespace kv.delete {record_key}: timeout"))
+                })?
+                .map_err(|e| {
+                    StoreError::Backend(format!("namespace kv.delete {record_key}: {e}"))
+                })?;
+            Ok(())
+        })
+        .await
     }
 
     async fn promote_namespace(&self, id: &NamespaceId) -> StoreResult<Option<NamespaceRecord>> {
-        self.require_writer()?;
-        let Some((record, revision)) = self.read_namespace_row(id).await? else {
-            return Ok(None);
-        };
-        if record.tenure == NamespaceTenure::Permanent {
-            return Ok(Some(record));
-        }
-        let promoted = NamespaceRecord {
-            tenure: NamespaceTenure::Permanent,
-            ..record
-        };
-        let record_key = namespace_record_key(id.as_str());
-        // CAS, so a concurrent move or release loses rather than being
-        // silently reverted by this write.
-        tokio::time::timeout(
-            KV_OP_TIMEOUT,
-            self.namespaces_kv
-                .update(&record_key, encode_namespace_record(&promoted), revision),
-        )
+        self.source_guarded(async {
+            self.require_writer()?;
+            let Some((record, revision)) = self.read_namespace_row(id).await? else {
+                return Ok(None);
+            };
+            if record.tenure == NamespaceTenure::Permanent {
+                return Ok(Some(record));
+            }
+            let promoted = NamespaceRecord {
+                tenure: NamespaceTenure::Permanent,
+                ..record
+            };
+            let record_key = namespace_record_key(id.as_str());
+            // CAS, so a concurrent move or release loses rather than being
+            // silently reverted by this write.
+            tokio::time::timeout(
+                KV_OP_TIMEOUT,
+                self.namespaces_kv.update(
+                    &record_key,
+                    encode_namespace_record(&promoted),
+                    revision,
+                ),
+            )
+            .await
+            .map_err(|_| StoreError::Backend(format!("namespace kv.update {record_key}: timeout")))?
+            .map_err(|e| StoreError::Backend(format!("namespace kv.update {record_key}: {e}")))?;
+            Ok(Some(promoted))
+        })
         .await
-        .map_err(|_| StoreError::Backend(format!("namespace kv.update {record_key}: timeout")))?
-        .map_err(|e| StoreError::Backend(format!("namespace kv.update {record_key}: {e}")))?;
-        Ok(Some(promoted))
     }
 
     async fn get_namespace(&self, id: &NamespaceId) -> StoreResult<Option<NamespaceRecord>> {
@@ -4451,62 +4552,68 @@ impl Store for NatsStore {
         id: &NamespaceId,
         new_parent: &OwnerId,
     ) -> StoreResult<NamespaceRecord> {
-        self.require_writer()?;
-        let (record, revision) = self
-            .read_namespace_row(id)
-            .await?
-            .ok_or(StoreError::NotFound)?;
-        if &record.parent == new_parent {
-            return Ok(record);
-        }
+        self.source_guarded(async {
+            self.require_writer()?;
+            let (record, revision) = self
+                .read_namespace_row(id)
+                .await?
+                .ok_or(StoreError::NotFound)?;
+            if &record.parent == new_parent {
+                return Ok(record);
+            }
 
-        let old_index = namespace_name_key(record.parent.as_str(), record.name.as_str());
-        let new_index = namespace_name_key(new_parent.as_str(), record.name.as_str());
+            let old_index = namespace_name_key(record.parent.as_str(), record.name.as_str());
+            let new_index = namespace_name_key(new_parent.as_str(), record.name.as_str());
 
-        // Claim the destination name before touching anything. If the target
-        // owner already has a namespace by this name, the move must fail
-        // having changed nothing, or that owner ends up with two namespaces
-        // the resolver cannot tell apart.
-        if self
-            .follow_name_index(&new_index, new_parent, &record.name)
-            .await?
-            .is_some()
-        {
-            return Err(StoreError::AlreadyExists);
-        }
-        let stale_revision = self.read_name_index(&new_index).await?.map(|(_, rev)| rev);
-        self.write_name_index(&new_index, id, stale_revision)
-            .await?;
+            // Claim the destination name before touching anything. If the target
+            // owner already has a namespace by this name, the move must fail
+            // having changed nothing, or that owner ends up with two namespaces
+            // the resolver cannot tell apart.
+            if self
+                .follow_name_index(&new_index, new_parent, &record.name)
+                .await?
+                .is_some()
+            {
+                return Err(StoreError::AlreadyExists);
+            }
+            let stale_revision = self.read_name_index(&new_index).await?.map(|(_, rev)| rev);
+            self.write_name_index(&new_index, id, stale_revision)
+                .await?;
 
-        let moved = NamespaceRecord {
-            parent: new_parent.clone(),
-            ..record
-        };
-        let record_key = namespace_record_key(id.as_str());
-        // CAS on the revision read above: a concurrent move must lose rather
-        // than be silently overwritten.
-        let updated = tokio::time::timeout(
-            KV_OP_TIMEOUT,
-            self.namespaces_kv
-                .update(&record_key, encode_namespace_record(&moved), revision),
-        )
-        .await
-        .map_err(|_| StoreError::Backend(format!("namespace kv.update {record_key}: timeout")))?;
-        if let Err(e) = updated {
-            // Undo the destination claim so a failed move leaves no trace.
+            let moved = NamespaceRecord {
+                parent: new_parent.clone(),
+                ..record
+            };
+            let record_key = namespace_record_key(id.as_str());
+            // CAS on the revision read above: a concurrent move must lose rather
+            // than be silently overwritten.
+            let updated = tokio::time::timeout(
+                KV_OP_TIMEOUT,
+                self.namespaces_kv
+                    .update(&record_key, encode_namespace_record(&moved), revision),
+            )
+            .await
+            .map_err(|_| {
+                StoreError::Backend(format!("namespace kv.update {record_key}: timeout"))
+            })?;
+            if let Err(e) = updated {
+                // Undo the destination claim so a failed move leaves no trace.
+                let _ = tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&new_index))
+                    .await;
+                return Err(StoreError::Backend(format!(
+                    "namespace kv.update {record_key}: {e}"
+                )));
+            }
+
+            // Release the old name last. A leftover row here is harmless: it
+            // points at a namespace whose parent no longer matches, so
+            // `follow_name_index` reports it as absent and the next claim of that
+            // name under the old owner repairs it.
             let _ =
-                tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&new_index)).await;
-            return Err(StoreError::Backend(format!(
-                "namespace kv.update {record_key}: {e}"
-            )));
-        }
-
-        // Release the old name last. A leftover row here is harmless: it
-        // points at a namespace whose parent no longer matches, so
-        // `follow_name_index` reports it as absent and the next claim of that
-        // name under the old owner repairs it.
-        let _ = tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&old_index)).await;
-        Ok(moved)
+                tokio::time::timeout(KV_OP_TIMEOUT, self.namespaces_kv.delete(&old_index)).await;
+            Ok(moved)
+        })
+        .await
     }
 
     // Thin forwards to the inherent methods in `operations.rs`: an inherent
@@ -4522,11 +4629,13 @@ impl Store for NatsStore {
         rpc: &str,
         branch: Option<&str>,
     ) -> StoreResult<ClaimOutcome> {
-        self.claim_operation(key, digest, rpc, branch).await
+        self.source_guarded(async { self.claim_operation(key, digest, rpc, branch).await })
+            .await
     }
 
     async fn settle_operation_applied(&self, key: &str, changeset_id: &str) -> StoreResult<()> {
-        self.settle_operation_applied(key, changeset_id).await
+        self.source_guarded(async { self.settle_operation_applied(key, changeset_id).await })
+            .await
     }
 
     async fn settle_operation_rejected(
@@ -4535,119 +4644,191 @@ impl Store for NatsStore {
         code: &str,
         message: &str,
     ) -> StoreResult<()> {
-        self.settle_operation_rejected(key, code, message).await
+        self.source_guarded(async { self.settle_operation_rejected(key, code, message).await })
+            .await
     }
 
     async fn settle_operation_not_applied(&self, key: &str) -> StoreResult<()> {
-        self.settle_operation_not_applied(key).await
+        self.source_guarded(async { self.settle_operation_not_applied(key).await })
+            .await
     }
 
     async fn get_operation(&self, key: &str) -> StoreResult<Option<OperationRecord>> {
-        self.get_operation(key).await
+        self.source_guarded(async { self.get_operation(key).await })
+            .await
+    }
+
+    async fn source_expire_transaction(
+        &self,
+        registration: &crate::source::SourceDocumentKey,
+        run_id: &str,
+        plan_digest: &str,
+    ) -> StoreResult<()> {
+        self.expire_source_transaction(registration, run_id, plan_digest)
+            .await
+    }
+
+    async fn source_prepare(
+        &self,
+        publication: &crate::source::SourcePublication,
+    ) -> StoreResult<()> {
+        self.prepare_source(publication).await
+    }
+
+    async fn source_publish(
+        &self,
+        publication: &crate::source::SourcePublication,
+    ) -> StoreResult<crate::source::SourcePublicationOutcome> {
+        self.publish_source(publication).await
+    }
+
+    async fn source_recover(
+        &self,
+        registration: &crate::source::SourceDocumentKey,
+        run_id: &str,
+        plan_digest: &str,
+    ) -> StoreResult<crate::source::SourcePublicationOutcome> {
+        self.recover_source(registration, run_id, plan_digest).await
+    }
+
+    async fn source_get(
+        &self,
+        key: &crate::source::SourceDocumentKey,
+    ) -> StoreResult<Option<crate::source::SourceDocument>> {
+        self.read_source_document(key).await
+    }
+
+    async fn source_compare_and_swap(
+        &self,
+        key: &crate::source::SourceDocumentKey,
+        expected_revision: Option<u64>,
+        bytes: &[u8],
+        storage_limit: u64,
+    ) -> StoreResult<crate::source::SourceDocument> {
+        self.write_source_document(key, expected_revision, bytes, storage_limit)
+            .await
+    }
+
+    async fn source_list(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> StoreResult<crate::source::SourceDocumentPage> {
+        self.list_source_documents(after, limit).await
     }
 
     async fn create_branch(&self, name: &str, doc: &str) -> StoreResult<BranchInfo> {
-        self.require_writer()?;
-        if crate::key::is_reserved_branch_name(name) {
-            return Err(StoreError::InvalidArgument(format!(
-                "branch name {name:?} is reserved"
-            )));
-        }
-        let base_change_token = self.current_change_seq().await?.to_string();
-        let fork_changeset_id = self.newest_baseline_changeset().await?;
-        let info = BranchInfo {
-            name: name.to_string(),
-            doc: doc.to_string(),
-            created_at: now_rfc3339(),
-            base_change_token,
-            delta_count: 0,
-            fork_changeset_id,
-        };
-        let meta_key = branch_meta_key(name);
-        let bytes = encode_branch_info(&info);
-        match tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.create(&meta_key, bytes))
-            .await
-            .map_err(|_| StoreError::Backend(format!("branch kv.create {meta_key}: timeout")))?
-        {
-            Ok(_) => Ok(info),
-            Err(e) => {
-                use async_nats::jetstream::kv::CreateErrorKind;
-                if matches!(e.kind(), CreateErrorKind::AlreadyExists) {
-                    Err(StoreError::AlreadyExists)
-                } else {
-                    Err(StoreError::Backend(format!(
-                        "branch kv.create {meta_key}: {e}"
-                    )))
+        self.source_guarded(async {
+            self.require_writer()?;
+            if crate::key::is_reserved_branch_name(name) {
+                return Err(StoreError::InvalidArgument(format!(
+                    "branch name {name:?} is reserved"
+                )));
+            }
+            let base_change_token = self.current_change_seq().await?.to_string();
+            let fork_changeset_id = self.newest_baseline_changeset().await?;
+            let info = BranchInfo {
+                name: name.to_string(),
+                doc: doc.to_string(),
+                created_at: now_rfc3339(),
+                base_change_token,
+                delta_count: 0,
+                fork_changeset_id,
+            };
+            let meta_key = branch_meta_key(name);
+            let bytes = encode_branch_info(&info);
+            match tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.create(&meta_key, bytes))
+                .await
+                .map_err(|_| StoreError::Backend(format!("branch kv.create {meta_key}: timeout")))?
+            {
+                Ok(_) => Ok(info),
+                Err(e) => {
+                    use async_nats::jetstream::kv::CreateErrorKind;
+                    if matches!(e.kind(), CreateErrorKind::AlreadyExists) {
+                        Err(StoreError::AlreadyExists)
+                    } else {
+                        Err(StoreError::Backend(format!(
+                            "branch kv.create {meta_key}: {e}"
+                        )))
+                    }
                 }
             }
-        }
+        })
+        .await
     }
 
     async fn set_branch_fork_point(&self, name: &str, fork_changeset_id: &str) -> StoreResult<()> {
-        self.require_writer()?;
-        validate_changeset_id(fork_changeset_id)?;
-        let meta_key = branch_meta_key(name);
-        let entry = live_entry(kv_entry_timeout(&self.branches_kv, meta_key.clone()).await?)
-            .ok_or(StoreError::NotFound)?;
-        // `delta_count` is derived at read time and never persisted, so the
-        // zero passed here is discarded by `encode_branch_info` anyway.
-        let mut info = decode_branch_info(&entry.value, 0)?;
-        info.fork_changeset_id = Some(fork_changeset_id.to_owned());
-        let bytes = encode_branch_info(&info);
-        // CAS on the revision read above: a concurrent rename or fork-point
-        // advance must lose rather than be silently overwritten.
-        tokio::time::timeout(
-            KV_OP_TIMEOUT,
-            self.branches_kv.update(&meta_key, bytes, entry.revision),
-        )
+        self.source_guarded(async {
+            self.require_writer()?;
+            validate_changeset_id(fork_changeset_id)?;
+            let meta_key = branch_meta_key(name);
+            let entry = live_entry(kv_entry_timeout(&self.branches_kv, meta_key.clone()).await?)
+                .ok_or(StoreError::NotFound)?;
+            // `delta_count` is derived at read time and never persisted, so the
+            // zero passed here is discarded by `encode_branch_info` anyway.
+            let mut info = decode_branch_info(&entry.value, 0)?;
+            info.fork_changeset_id = Some(fork_changeset_id.to_owned());
+            let bytes = encode_branch_info(&info);
+            // CAS on the revision read above: a concurrent rename or fork-point
+            // advance must lose rather than be silently overwritten.
+            tokio::time::timeout(
+                KV_OP_TIMEOUT,
+                self.branches_kv.update(&meta_key, bytes, entry.revision),
+            )
+            .await
+            .map_err(|_| StoreError::Backend(format!("branch kv.update {meta_key}: timeout")))?
+            .map_err(|e| StoreError::Backend(format!("branch kv.update {meta_key}: {e}")))?;
+            Ok(())
+        })
         .await
-        .map_err(|_| StoreError::Backend(format!("branch kv.update {meta_key}: timeout")))?
-        .map_err(|e| StoreError::Backend(format!("branch kv.update {meta_key}: {e}")))?;
-        Ok(())
     }
 
     async fn list_branches(&self) -> StoreResult<Vec<BranchInfo>> {
-        const META_PREFIX: &str = "meta.";
-        let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.keys())
-            .await
-            .map_err(|_| StoreError::Backend("branch kv.keys: timeout".into()))?
-            .map_err(|e| StoreError::Backend(format!("branch kv.keys: {e}")))?;
-        let mut meta_keys: Vec<String> = Vec::new();
-        loop {
-            let next = tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next())
+        self.source_guarded(async {
+            const META_PREFIX: &str = "meta.";
+            let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.keys())
                 .await
-                .map_err(|_| {
-                    StoreError::Backend(
-                        "branch kv.keys stream: timeout waiting for next key".into(),
-                    )
-                })?;
-            let Some(item) = next else { break };
-            let key =
-                item.map_err(|e| StoreError::Backend(format!("branch kv.keys stream: {e}")))?;
-            if key.starts_with(META_PREFIX) {
-                meta_keys.push(key);
+                .map_err(|_| StoreError::Backend("branch kv.keys: timeout".into()))?
+                .map_err(|e| StoreError::Backend(format!("branch kv.keys: {e}")))?;
+            let mut meta_keys: Vec<String> = Vec::new();
+            loop {
+                let next = tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next())
+                    .await
+                    .map_err(|_| {
+                        StoreError::Backend(
+                            "branch kv.keys stream: timeout waiting for next key".into(),
+                        )
+                    })?;
+                let Some(item) = next else { break };
+                let key =
+                    item.map_err(|e| StoreError::Backend(format!("branch kv.keys stream: {e}")))?;
+                if key.starts_with(META_PREFIX) {
+                    meta_keys.push(key);
+                }
             }
-        }
 
-        let mut branches: Vec<BranchInfo> = Vec::with_capacity(meta_keys.len());
-        for meta_key in meta_keys {
-            let Some(branch_name_enc) = meta_key.strip_prefix(META_PREFIX) else {
-                continue;
-            };
-            let Some(name) = crate::key::decode_component_pub(branch_name_enc) else {
-                continue;
-            };
-            let entry = kv_entry_timeout(&self.branches_kv, meta_key.clone()).await?;
-            let Some(entry) = live_entry(entry) else {
-                continue;
-            };
-            let delta_count = self.count_branch_deltas(&name).await?;
-            branches.push(decode_branch_info(&entry.value, delta_count)?);
-        }
-        Ok(branches)
+            let mut branches: Vec<BranchInfo> = Vec::with_capacity(meta_keys.len());
+            for meta_key in meta_keys {
+                let Some(branch_name_enc) = meta_key.strip_prefix(META_PREFIX) else {
+                    continue;
+                };
+                let Some(name) = crate::key::decode_component_pub(branch_name_enc) else {
+                    continue;
+                };
+                let entry = kv_entry_timeout(&self.branches_kv, meta_key.clone()).await?;
+                let Some(entry) = live_entry(entry) else {
+                    continue;
+                };
+                let delta_count = self.count_branch_deltas(&name).await?;
+                branches.push(decode_branch_info(&entry.value, delta_count)?);
+            }
+            Ok(branches)
+        })
+        .await
     }
 
     async fn delete_branch(&self, name: &str) -> StoreResult<()> {
+        self.source_guarded(async {
         self.require_writer()?;
         let meta_key = branch_meta_key(name);
         let meta_entry = kv_entry_timeout(&self.branches_kv, meta_key.clone()).await?;
@@ -4695,31 +4876,36 @@ impl Store for NatsStore {
             .map_err(|_| StoreError::Backend(format!("branch kv.purge {meta_key}: timeout")))?
             .map_err(|e| StoreError::Backend(format!("branch kv.purge {meta_key}: {e}")))?;
         Ok(())
+        }).await
     }
 
     async fn list_branch_deltas(&self, branch: &str) -> StoreResult<Vec<BranchDeltaEntry>> {
-        let delta_keys = enumerate_branch_delta_keys(&self.branches_kv, branch).await?;
-        let mut out = Vec::with_capacity(delta_keys.len());
-        for key in delta_keys {
-            let Some((kind, id)) = crate::key::parse_branch_delta_key(branch, &key) else {
-                continue;
-            };
-            let Some(entry) = live_entry(kv_entry_timeout(&self.branches_kv, key.clone()).await?)
-            else {
-                continue;
-            };
-            let delta = decode_branch_delta(&entry.value)?;
-            out.push(BranchDeltaEntry {
-                kind,
-                id,
-                base: delta.base,
-                base_etag: delta.base_etag,
-                ours: delta.ours,
-                tombstone: delta.tombstone,
-                etag: entry.revision.to_string(),
-            });
-        }
-        Ok(out)
+        self.source_guarded(async {
+            let delta_keys = enumerate_branch_delta_keys(&self.branches_kv, branch).await?;
+            let mut out = Vec::with_capacity(delta_keys.len());
+            for key in delta_keys {
+                let Some((kind, id)) = crate::key::parse_branch_delta_key(branch, &key) else {
+                    continue;
+                };
+                let Some(entry) =
+                    live_entry(kv_entry_timeout(&self.branches_kv, key.clone()).await?)
+                else {
+                    continue;
+                };
+                let delta = decode_branch_delta(&entry.value)?;
+                out.push(BranchDeltaEntry {
+                    kind,
+                    id,
+                    base: delta.base,
+                    base_etag: delta.base_etag,
+                    ours: delta.ours,
+                    tombstone: delta.tombstone,
+                    etag: entry.revision.to_string(),
+                });
+            }
+            Ok(out)
+        })
+        .await
     }
 
     async fn land_branch_merge(
@@ -4728,310 +4914,328 @@ impl Store for NatsStore {
         ops: &[BranchLandOp],
         ctx: WriteContext<'_>,
     ) -> StoreResult<Vec<MutationOutcome>> {
-        self.require_writer()?;
-        // Snapshot the prior baseline state of every touched key so a
-        // failure partway through can be rolled back. Also verify the
-        // etag guard up front so a stale diff is caught before any write.
-        let mut snapshot: BTreeMap<String, Option<(Entity, u64)>> = BTreeMap::new();
-        for (i, op) in ops.iter().enumerate() {
-            let (key, expected) = match op {
-                BranchLandOp::Put {
-                    kind,
-                    ours,
-                    base: _,
-                    expected_baseline_etag,
-                } => {
-                    let id = Self::validate(*kind, ours)
-                        .map_err(|source| StoreError::BatchFailed {
-                            index: i,
-                            source: Box::new(source),
-                        })?
-                        .clone();
-                    (entity_key(*kind, &id), expected_baseline_etag.clone())
-                }
-                BranchLandOp::Delete {
-                    kind,
-                    id,
-                    expected_baseline_etag,
-                } => (entity_key(*kind, id), Some(expected_baseline_etag.clone())),
-            };
-            if let std::collections::btree_map::Entry::Vacant(slot) = snapshot.entry(key.clone()) {
-                let prior = kv_entry_timeout(&self.kv, key.clone())
-                    .await
-                    .map_err(|source| StoreError::BatchFailed {
-                        index: i,
-                        source: Box::new(source),
-                    })?;
-                let prior_live = live_entry(prior).and_then(|entry| {
-                    decode_entity(&entry.value)
-                        .ok()
-                        .map(|ent| (ent, entry.revision))
-                });
-                let found = prior_live.as_ref().map(|(_, rev)| rev.to_string());
-                if expected != found {
-                    return Err(StoreError::BatchFailed {
-                        index: i,
-                        source: Box::new(StoreError::EtagMismatch {
-                            expected: expected.unwrap_or_default(),
-                            found: found.unwrap_or_default(),
-                        }),
-                    });
-                }
-                slot.insert(prior_live);
-            }
-        }
-
-        let mut outcomes: Vec<MutationOutcome> = Vec::with_capacity(ops.len());
-        let mut deferred: Vec<Revision> = Vec::with_capacity(ops.len());
-        let mut landed_keys: Vec<(EntityKind, Id)> = Vec::with_capacity(ops.len());
-        // The pre-image of a landing is the baseline row the merge replaced,
-        // which the rollback snapshot above already holds.
-        let baseline_before = |kind: EntityKind, id: &Id| -> Option<Entity> {
-            snapshot
-                .get(&entity_key(kind, id))
-                .and_then(|prior| prior.as_ref().map(|(entity, _)| entity.clone()))
-        };
-
-        for (i, op) in ops.iter().enumerate() {
-            let result: StoreResult<(MutationOutcome, Revision)> = match op {
-                BranchLandOp::Put {
-                    kind,
-                    ours,
-                    base,
-                    expected_baseline_etag,
-                } => 'put: {
-                    let id = match Self::validate(*kind, ours) {
-                        Ok(id) => id.clone(),
-                        Err(e) => break 'put Err(e),
-                    };
-                    let key = entity_key(*kind, &id);
-                    let before = baseline_before(*kind, &id);
-                    let prepared = match trogon_atlas_core::connection_persistence::prepare_landing(
-                        base.as_deref(),
-                        before.as_ref(),
+        self.source_guarded(async {
+            self.require_writer()?;
+            // Snapshot the prior baseline state of every touched key so a
+            // failure partway through can be rolled back. Also verify the
+            // etag guard up front so a stale diff is caught before any write.
+            let mut snapshot: BTreeMap<String, Option<(Entity, u64)>> = BTreeMap::new();
+            for (i, op) in ops.iter().enumerate() {
+                let (key, expected) = match op {
+                    BranchLandOp::Put {
+                        kind,
                         ours,
-                    ) {
-                        Ok(prepared) => prepared,
-                        Err(error) => {
-                            break 'put Err(StoreError::InvalidArgument(error.to_string()));
-                        }
-                    };
-                    let bytes = encode_entity(&prepared);
-                    let cas_result = match expected_baseline_etag {
-                        Some(exp) => match exp.parse::<u64>() {
-                            Ok(rev) => tokio::time::timeout(
-                                KV_OP_TIMEOUT,
-                                self.kv.update(&key, bytes, rev),
-                            )
-                            .await
-                            .map_err(|_| StoreError::Backend(format!("kv.update {key}: timeout")))?
-                            .map_err(|e| {
-                                use async_nats::jetstream::kv::UpdateErrorKind;
-                                if matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
-                                    StoreError::EtagMismatch {
-                                        expected: rev.to_string(),
-                                        found: String::new(),
-                                    }
-                                } else {
-                                    StoreError::Backend(format!("kv.update {key}: {e}"))
-                                }
-                            }),
-                            Err(_) => Err(StoreError::EtagMismatch {
-                                expected: exp.clone(),
-                                found: String::new(),
-                            }),
-                        },
-                        None => tokio::time::timeout(KV_OP_TIMEOUT, self.kv.create(&key, bytes))
-                            .await
-                            .map_err(|_| StoreError::Backend(format!("kv.create {key}: timeout")))?
-                            .map_err(|e| {
-                                use async_nats::jetstream::kv::CreateErrorKind;
-                                if matches!(e.kind(), CreateErrorKind::AlreadyExists) {
-                                    StoreError::EtagMismatch {
-                                        expected: "absent".into(),
-                                        found: "present".into(),
-                                    }
-                                } else {
-                                    StoreError::Backend(format!("kv.create {key}: {e}"))
-                                }
-                            }),
-                    };
-                    match cas_result {
-                        Ok(rev) => Ok((
-                            MutationOutcome::Wrote {
-                                etag: rev.to_string(),
-                                entity: prepared.clone(),
-                            },
-                            Revision {
-                                kind: *kind,
-                                change: ChangeKind::Put,
-                                before: baseline_before(*kind, &id),
-                                after: Some(prepared),
-                                id,
-                            },
-                        )),
-                        Err(e) => Err(e),
+                        base: _,
+                        expected_baseline_etag,
+                    } => {
+                        let id = Self::validate(*kind, ours)
+                            .map_err(|source| StoreError::BatchFailed {
+                                index: i,
+                                source: Box::new(source),
+                            })?
+                            .clone();
+                        (entity_key(*kind, &id), expected_baseline_etag.clone())
                     }
-                }
-                BranchLandOp::Delete {
-                    kind,
-                    id,
-                    expected_baseline_etag,
-                } => 'delete: {
-                    let key = entity_key(*kind, id);
-                    let current: u64 = match expected_baseline_etag.parse() {
-                        Ok(v) => v,
-                        Err(_) => {
-                            break 'delete Err(StoreError::EtagMismatch {
-                                expected: expected_baseline_etag.clone(),
-                                found: String::new(),
-                            });
-                        }
-                    };
-                    let bytes = Bytes::new();
-                    match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.update(&key, bytes, current))
-                        .await
-                    {
-                        Err(_) => Err(StoreError::Backend(format!(
-                            "kv.delete (update step) {key}: timeout"
-                        ))),
-                        Ok(Ok(_)) => {
-                            let mut delete_err: Option<String> = None;
-                            for attempt in 0..DELETE_RETRY_ATTEMPTS {
-                                match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.delete(&key))
-                                    .await
-                                    .map_err(|_| format!("kv.delete {key}: timeout"))
-                                    .and_then(|r| r.map_err(|e| format!("kv.delete {key}: {e}")))
-                                {
-                                    Ok(()) => {
-                                        delete_err = None;
-                                        break;
-                                    }
-                                    Err(e) => {
-                                        delete_err = Some(e);
-                                        if attempt + 1 < DELETE_RETRY_ATTEMPTS {
-                                            tokio::time::sleep(
-                                                DELETE_RETRY_BASE * 2u32.pow(attempt),
-                                            )
-                                            .await;
-                                        }
-                                    }
-                                }
-                            }
-                            if let Some(e) = delete_err {
-                                tracing::error!(
-                                    key = %key,
-                                    error = %e,
-                                    "land_branch_merge kv.delete after conditional update \
-                                     failed after retries; entry left as empty-Put tombstone"
-                                );
-                            }
-                            Ok((
-                                MutationOutcome::Deleted,
-                                Revision {
-                                    kind: *kind,
-                                    id: id.clone(),
-                                    change: ChangeKind::Delete,
-                                    before: baseline_before(*kind, id),
-                                    after: None,
-                                },
-                            ))
-                        }
-                        Ok(Err(e)) => {
-                            use async_nats::jetstream::kv::UpdateErrorKind;
-                            if matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
-                                Err(StoreError::EtagMismatch {
-                                    expected: current.to_string(),
-                                    found: String::new(),
-                                })
-                            } else {
-                                Err(StoreError::Backend(format!("kv.delete {key}: {e}")))
-                            }
-                        }
-                    }
-                }
-            };
-
-            match result {
-                Ok((outcome, revision)) => {
-                    landed_keys.push((revision.kind, revision.id.clone()));
-                    deferred.push(revision);
-                    outcomes.push(outcome);
-                }
-                Err(source) => {
-                    let failed_keys = rollback_baseline_snapshot(&snapshot, &self.kv).await;
-                    if !failed_keys.is_empty() {
+                    BranchLandOp::Delete {
+                        kind,
+                        id,
+                        expected_baseline_etag,
+                    } => (entity_key(*kind, id), Some(expected_baseline_etag.clone())),
+                };
+                if let std::collections::btree_map::Entry::Vacant(slot) =
+                    snapshot.entry(key.clone())
+                {
+                    let prior =
+                        kv_entry_timeout(&self.kv, key.clone())
+                            .await
+                            .map_err(|source| StoreError::BatchFailed {
+                                index: i,
+                                source: Box::new(source),
+                            })?;
+                    let prior_live = live_entry(prior).and_then(|entry| {
+                        decode_entity(&entry.value)
+                            .ok()
+                            .map(|ent| (ent, entry.revision))
+                    });
+                    let found = prior_live.as_ref().map(|(_, rev)| rev.to_string());
+                    if expected != found {
                         return Err(StoreError::BatchFailed {
                             index: i,
-                            source: Box::new(StoreError::PartialApply {
-                                keys: failed_keys,
-                                journal: None,
+                            source: Box::new(StoreError::EtagMismatch {
+                                expected: expected.unwrap_or_default(),
+                                found: found.unwrap_or_default(),
                             }),
                         });
                     }
-                    return Err(StoreError::BatchFailed {
-                        index: i,
-                        source: Box::new(source),
-                    });
+                    slot.insert(prior_live);
                 }
             }
-        }
 
-        // Every KV write committed. Publish ordinary baseline change events
-        // (a merge landing is an ordinary baseline write for every purpose
-        // downstream: change feed, git mirror, search index -- see
-        // docs/explanation/branching.md).
-        for revision in deferred {
-            let eref = revision.entity_ref();
-            match self
-                .record_change(revision.change, &eref, ctx.changeset())
-                .await
-            {
-                Ok(_) => {}
-                Err(StoreError::ChangeEventLost) => {
-                    self.change_events_lost.fetch_add(1, Ordering::Relaxed);
-                    self.config.metrics.record_change_event_lost();
-                    tracing::error!(
-                        entity_ref = ?eref,
-                        "land_branch_merge: change event lost after successful KV write"
-                    );
+            let mut outcomes: Vec<MutationOutcome> = Vec::with_capacity(ops.len());
+            let mut deferred: Vec<Revision> = Vec::with_capacity(ops.len());
+            let mut landed_keys: Vec<(EntityKind, Id)> = Vec::with_capacity(ops.len());
+            // The pre-image of a landing is the baseline row the merge replaced,
+            // which the rollback snapshot above already holds.
+            let baseline_before = |kind: EntityKind, id: &Id| -> Option<Entity> {
+                snapshot
+                    .get(&entity_key(kind, id))
+                    .and_then(|prior| prior.as_ref().map(|(entity, _)| entity.clone()))
+            };
+
+            for (i, op) in ops.iter().enumerate() {
+                let result: StoreResult<(MutationOutcome, Revision)> = match op {
+                    BranchLandOp::Put {
+                        kind,
+                        ours,
+                        base,
+                        expected_baseline_etag,
+                    } => 'put: {
+                        let id = match Self::validate(*kind, ours) {
+                            Ok(id) => id.clone(),
+                            Err(e) => break 'put Err(e),
+                        };
+                        let key = entity_key(*kind, &id);
+                        let before = baseline_before(*kind, &id);
+                        let prepared =
+                            match trogon_atlas_core::connection_persistence::prepare_landing(
+                                base.as_deref(),
+                                before.as_ref(),
+                                ours,
+                            ) {
+                                Ok(prepared) => prepared,
+                                Err(error) => {
+                                    break 'put Err(StoreError::InvalidArgument(error.to_string()));
+                                }
+                            };
+                        let bytes = encode_entity(&prepared);
+                        let cas_result = match expected_baseline_etag {
+                            Some(exp) => match exp.parse::<u64>() {
+                                Ok(rev) => tokio::time::timeout(
+                                    KV_OP_TIMEOUT,
+                                    self.kv.update(&key, bytes, rev),
+                                )
+                                .await
+                                .map_err(|_| {
+                                    StoreError::Backend(format!("kv.update {key}: timeout"))
+                                })?
+                                .map_err(|e| {
+                                    use async_nats::jetstream::kv::UpdateErrorKind;
+                                    if matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
+                                        StoreError::EtagMismatch {
+                                            expected: rev.to_string(),
+                                            found: String::new(),
+                                        }
+                                    } else {
+                                        StoreError::Backend(format!("kv.update {key}: {e}"))
+                                    }
+                                }),
+                                Err(_) => Err(StoreError::EtagMismatch {
+                                    expected: exp.clone(),
+                                    found: String::new(),
+                                }),
+                            },
+                            None => {
+                                tokio::time::timeout(KV_OP_TIMEOUT, self.kv.create(&key, bytes))
+                                    .await
+                                    .map_err(|_| {
+                                        StoreError::Backend(format!("kv.create {key}: timeout"))
+                                    })?
+                                    .map_err(|e| {
+                                        use async_nats::jetstream::kv::CreateErrorKind;
+                                        if matches!(e.kind(), CreateErrorKind::AlreadyExists) {
+                                            StoreError::EtagMismatch {
+                                                expected: "absent".into(),
+                                                found: "present".into(),
+                                            }
+                                        } else {
+                                            StoreError::Backend(format!("kv.create {key}: {e}"))
+                                        }
+                                    })
+                            }
+                        };
+                        match cas_result {
+                            Ok(rev) => Ok((
+                                MutationOutcome::Wrote {
+                                    etag: rev.to_string(),
+                                    entity: prepared.clone(),
+                                },
+                                Revision {
+                                    kind: *kind,
+                                    change: ChangeKind::Put,
+                                    before: baseline_before(*kind, &id),
+                                    after: Some(prepared),
+                                    id,
+                                },
+                            )),
+                            Err(e) => Err(e),
+                        }
+                    }
+                    BranchLandOp::Delete {
+                        kind,
+                        id,
+                        expected_baseline_etag,
+                    } => 'delete: {
+                        let key = entity_key(*kind, id);
+                        let current: u64 = match expected_baseline_etag.parse() {
+                            Ok(v) => v,
+                            Err(_) => {
+                                break 'delete Err(StoreError::EtagMismatch {
+                                    expected: expected_baseline_etag.clone(),
+                                    found: String::new(),
+                                });
+                            }
+                        };
+                        let bytes = Bytes::new();
+                        match tokio::time::timeout(
+                            KV_OP_TIMEOUT,
+                            self.kv.update(&key, bytes, current),
+                        )
+                        .await
+                        {
+                            Err(_) => Err(StoreError::Backend(format!(
+                                "kv.delete (update step) {key}: timeout"
+                            ))),
+                            Ok(Ok(_)) => {
+                                let mut delete_err: Option<String> = None;
+                                for attempt in 0..DELETE_RETRY_ATTEMPTS {
+                                    match tokio::time::timeout(KV_OP_TIMEOUT, self.kv.delete(&key))
+                                        .await
+                                        .map_err(|_| format!("kv.delete {key}: timeout"))
+                                        .and_then(|r| {
+                                            r.map_err(|e| format!("kv.delete {key}: {e}"))
+                                        }) {
+                                        Ok(()) => {
+                                            delete_err = None;
+                                            break;
+                                        }
+                                        Err(e) => {
+                                            delete_err = Some(e);
+                                            if attempt + 1 < DELETE_RETRY_ATTEMPTS {
+                                                tokio::time::sleep(
+                                                    DELETE_RETRY_BASE * 2u32.pow(attempt),
+                                                )
+                                                .await;
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(e) = delete_err {
+                                    tracing::error!(
+                                        key = %key,
+                                        error = %e,
+                                        "land_branch_merge kv.delete after conditional update \
+                                         failed after retries; entry left as empty-Put tombstone"
+                                    );
+                                }
+                                Ok((
+                                    MutationOutcome::Deleted,
+                                    Revision {
+                                        kind: *kind,
+                                        id: id.clone(),
+                                        change: ChangeKind::Delete,
+                                        before: baseline_before(*kind, id),
+                                        after: None,
+                                    },
+                                ))
+                            }
+                            Ok(Err(e)) => {
+                                use async_nats::jetstream::kv::UpdateErrorKind;
+                                if matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
+                                    Err(StoreError::EtagMismatch {
+                                        expected: current.to_string(),
+                                        found: String::new(),
+                                    })
+                                } else {
+                                    Err(StoreError::Backend(format!("kv.delete {key}: {e}")))
+                                }
+                            }
+                        }
+                    }
+                };
+
+                match result {
+                    Ok((outcome, revision)) => {
+                        landed_keys.push((revision.kind, revision.id.clone()));
+                        deferred.push(revision);
+                        outcomes.push(outcome);
+                    }
+                    Err(source) => {
+                        let failed_keys = rollback_baseline_snapshot(&snapshot, &self.kv).await;
+                        if !failed_keys.is_empty() {
+                            return Err(StoreError::BatchFailed {
+                                index: i,
+                                source: Box::new(StoreError::PartialApply {
+                                    keys: failed_keys,
+                                    journal: None,
+                                }),
+                            });
+                        }
+                        return Err(StoreError::BatchFailed {
+                            index: i,
+                            source: Box::new(source),
+                        });
+                    }
                 }
-                Err(e) => {
+            }
+
+            // Every KV write committed. Publish ordinary baseline change events
+            // (a merge landing is an ordinary baseline write for every purpose
+            // downstream: change feed, git mirror, search index -- see
+            // docs/explanation/branching.md).
+            for revision in deferred {
+                let eref = revision.entity_ref();
+                match self
+                    .record_change(revision.change, &eref, ctx.changeset())
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(StoreError::ChangeEventLost) => {
+                        self.change_events_lost.fetch_add(1, Ordering::Relaxed);
+                        self.config.metrics.record_change_event_lost();
+                        tracing::error!(
+                            entity_ref = ?eref,
+                            "land_branch_merge: change event lost after successful KV write"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            entity_ref = ?eref,
+                            "land_branch_merge: unexpected error publishing change event"
+                        );
+                    }
+                }
+                // Baseline history, not branch history: `ctx` is the merge RPC's
+                // own baseline context, so the revision lands on the baseline log
+                // beside every other baseline write.
+                self.record_revision(ctx, &revision).await;
+            }
+
+            // Purge the landed delta rows -- these keys are now ordinary
+            // baseline entities/tombstones, so the branch overlay for them must
+            // disappear. Best-effort: a failure here leaves an orphaned delta
+            // that a later diff/merge will simply see as CONVERGED (ours now
+            // equals the freshly-landed baseline) or re-detect cleanly.
+            for (kind, id) in landed_keys {
+                let delta_key = branch_delta_key(branch, kind, &id);
+                if let Err(e) =
+                    tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
+                        .await
+                        .map_err(|_| "timeout".to_string())
+                        .and_then(|r| r.map_err(|e| e.to_string()))
+                {
                     tracing::error!(
+                        key = %delta_key,
                         error = %e,
-                        entity_ref = ?eref,
-                        "land_branch_merge: unexpected error publishing change event"
+                        "land_branch_merge: failed to purge landed delta row; \
+                         branch may retain a stale (now-converged) delta"
                     );
                 }
             }
-            // Baseline history, not branch history: `ctx` is the merge RPC's
-            // own baseline context, so the revision lands on the baseline log
-            // beside every other baseline write.
-            self.record_revision(ctx, &revision).await;
-        }
 
-        // Purge the landed delta rows -- these keys are now ordinary
-        // baseline entities/tombstones, so the branch overlay for them must
-        // disappear. Best-effort: a failure here leaves an orphaned delta
-        // that a later diff/merge will simply see as CONVERGED (ours now
-        // equals the freshly-landed baseline) or re-detect cleanly.
-        for (kind, id) in landed_keys {
-            let delta_key = branch_delta_key(branch, kind, &id);
-            if let Err(e) = tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
-                .await
-                .map_err(|_| "timeout".to_string())
-                .and_then(|r| r.map_err(|e| e.to_string()))
-            {
-                tracing::error!(
-                    key = %delta_key,
-                    error = %e,
-                    "land_branch_merge: failed to purge landed delta row; \
-                     branch may retain a stale (now-converged) delta"
-                );
-            }
-        }
-
-        Ok(outcomes)
+            Ok(outcomes)
+        })
+        .await
     }
 
     async fn rebase_branch_deltas(
@@ -5039,65 +5243,68 @@ impl Store for NatsStore {
         branch: &str,
         rebases: &[(EntityKind, Id, Option<(Entity, String)>)],
     ) -> StoreResult<u32> {
-        self.require_writer()?;
-        let mut count = 0u32;
-        for (kind, id, new_base) in rebases {
-            let delta_key = branch_delta_key(branch, *kind, id);
-            let Some(entry) =
-                live_entry(kv_entry_timeout(&self.branches_kv, delta_key.clone()).await?)
-            else {
-                continue;
-            };
-            let delta = decode_branch_delta(&entry.value)?;
-            match new_base {
-                None => {
-                    // CONVERGED: the delta collapses to nothing since
-                    // `ours` already matches the new baseline.
-                    tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
+        self.source_guarded(async {
+            self.require_writer()?;
+            let mut count = 0u32;
+            for (kind, id, new_base) in rebases {
+                let delta_key = branch_delta_key(branch, *kind, id);
+                let Some(entry) =
+                    live_entry(kv_entry_timeout(&self.branches_kv, delta_key.clone()).await?)
+                else {
+                    continue;
+                };
+                let delta = decode_branch_delta(&entry.value)?;
+                match new_base {
+                    None => {
+                        // CONVERGED: the delta collapses to nothing since
+                        // `ours` already matches the new baseline.
+                        tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
+                            .await
+                            .map_err(|_| {
+                                StoreError::Backend(format!("branch kv.purge {delta_key}: timeout"))
+                            })?
+                            .map_err(|e| {
+                                StoreError::Backend(format!("branch kv.purge {delta_key}: {e}"))
+                            })?;
+                    }
+                    Some((base_entity, base_etag)) => {
+                        let ours = delta
+                            .ours
+                            .as_ref()
+                            .map(|ours| {
+                                trogon_atlas_core::connection_persistence::prepare_landing(
+                                    delta.base.as_ref(),
+                                    Some(base_entity),
+                                    ours,
+                                )
+                                .map_err(|error| StoreError::InvalidArgument(error.to_string()))
+                            })
+                            .transpose()?;
+                        let updated = trogon_atlas_proto::BranchDelta {
+                            base: Some(base_entity.clone()),
+                            base_etag: base_etag.clone(),
+                            ours,
+                            tombstone: delta.tombstone,
+                        };
+                        let bytes = encode_branch_delta(&updated);
+                        tokio::time::timeout(
+                            KV_OP_TIMEOUT,
+                            self.branches_kv.update(&delta_key, bytes, entry.revision),
+                        )
                         .await
                         .map_err(|_| {
-                            StoreError::Backend(format!("branch kv.purge {delta_key}: timeout"))
+                            StoreError::Backend(format!("branch kv.update {delta_key}: timeout"))
                         })?
                         .map_err(|e| {
-                            StoreError::Backend(format!("branch kv.purge {delta_key}: {e}"))
+                            StoreError::Backend(format!("branch kv.update {delta_key}: {e}"))
                         })?;
+                    }
                 }
-                Some((base_entity, base_etag)) => {
-                    let ours = delta
-                        .ours
-                        .as_ref()
-                        .map(|ours| {
-                            trogon_atlas_core::connection_persistence::prepare_landing(
-                                delta.base.as_ref(),
-                                Some(base_entity),
-                                ours,
-                            )
-                            .map_err(|error| StoreError::InvalidArgument(error.to_string()))
-                        })
-                        .transpose()?;
-                    let updated = trogon_atlas_proto::BranchDelta {
-                        base: Some(base_entity.clone()),
-                        base_etag: base_etag.clone(),
-                        ours,
-                        tombstone: delta.tombstone,
-                    };
-                    let bytes = encode_branch_delta(&updated);
-                    tokio::time::timeout(
-                        KV_OP_TIMEOUT,
-                        self.branches_kv.update(&delta_key, bytes, entry.revision),
-                    )
-                    .await
-                    .map_err(|_| {
-                        StoreError::Backend(format!("branch kv.update {delta_key}: timeout"))
-                    })?
-                    .map_err(|e| {
-                        StoreError::Backend(format!("branch kv.update {delta_key}: {e}"))
-                    })?;
-                }
+                count += 1;
             }
-            count += 1;
-        }
-        Ok(count)
+            Ok(count)
+        })
+        .await
     }
 
     async fn resolve_branch_entry(
@@ -5107,192 +5314,209 @@ impl Store for NatsStore {
         id: &Id,
         take_theirs: bool,
     ) -> StoreResult<()> {
-        let delta_key = branch_delta_key(branch, kind, id);
-        let Some(entry) = live_entry(kv_entry_timeout(&self.branches_kv, delta_key.clone()).await?)
-        else {
-            return Err(StoreError::NotFound);
-        };
-        let delta = decode_branch_delta(&entry.value)?;
+        self.require_writer()?;
+        self.source_guarded(async {
+            let delta_key = branch_delta_key(branch, kind, id);
+            let Some(entry) =
+                live_entry(kv_entry_timeout(&self.branches_kv, delta_key.clone()).await?)
+            else {
+                return Err(StoreError::NotFound);
+            };
+            let delta = decode_branch_delta(&entry.value)?;
 
-        if take_theirs {
-            let base_key = entity_key(kind, id);
-            let base_entry = kv_entry_timeout(&self.kv, base_key).await?;
-            match live_entry(base_entry) {
-                Some(be) => {
-                    let baseline_entity = decode_entity(&be.value)?;
-                    let baseline_etag = be.revision.to_string();
-                    let ours = trogon_atlas_core::connection_persistence::prepare_resolution(
-                        delta.base.as_ref(),
-                        delta.ours.as_ref(),
-                        &baseline_entity,
-                    )
-                    .map_err(|error| StoreError::InvalidArgument(error.to_string()))?;
-                    let updated = trogon_atlas_proto::BranchDelta {
-                        base: Some(baseline_entity.clone()),
-                        base_etag: baseline_etag,
-                        ours: Some(ours),
-                        tombstone: false,
-                    };
-                    let bytes = encode_branch_delta(&updated);
-                    tokio::time::timeout(
-                        KV_OP_TIMEOUT,
-                        self.branches_kv.update(&delta_key, bytes, entry.revision),
-                    )
-                    .await
-                    .map_err(|_| {
-                        StoreError::Backend(format!("branch kv.update {delta_key}: timeout"))
-                    })?
-                    .map_err(|e| {
-                        StoreError::Backend(format!("branch kv.update {delta_key}: {e}"))
-                    })?;
-                }
-                None => {
-                    // Baseline no longer has this key: taking "theirs" means
-                    // the delta disappears entirely (nothing to overlay).
-                    tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
+            if take_theirs {
+                let base_key = entity_key(kind, id);
+                let base_entry = kv_entry_timeout(&self.kv, base_key).await?;
+                match live_entry(base_entry) {
+                    Some(be) => {
+                        let baseline_entity = decode_entity(&be.value)?;
+                        let baseline_etag = be.revision.to_string();
+                        let ours = trogon_atlas_core::connection_persistence::prepare_resolution(
+                            delta.base.as_ref(),
+                            delta.ours.as_ref(),
+                            &baseline_entity,
+                        )
+                        .map_err(|error| StoreError::InvalidArgument(error.to_string()))?;
+                        let updated = trogon_atlas_proto::BranchDelta {
+                            base: Some(baseline_entity.clone()),
+                            base_etag: baseline_etag,
+                            ours: Some(ours),
+                            tombstone: false,
+                        };
+                        let bytes = encode_branch_delta(&updated);
+                        tokio::time::timeout(
+                            KV_OP_TIMEOUT,
+                            self.branches_kv.update(&delta_key, bytes, entry.revision),
+                        )
                         .await
                         .map_err(|_| {
-                            StoreError::Backend(format!("branch kv.purge {delta_key}: timeout"))
+                            StoreError::Backend(format!("branch kv.update {delta_key}: timeout"))
                         })?
                         .map_err(|e| {
-                            StoreError::Backend(format!("branch kv.purge {delta_key}: {e}"))
+                            StoreError::Backend(format!("branch kv.update {delta_key}: {e}"))
                         })?;
+                    }
+                    None => {
+                        // Baseline no longer has this key: taking "theirs" means
+                        // the delta disappears entirely (nothing to overlay).
+                        tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
+                            .await
+                            .map_err(|_| {
+                                StoreError::Backend(format!("branch kv.purge {delta_key}: timeout"))
+                            })?
+                            .map_err(|e| {
+                                StoreError::Backend(format!("branch kv.purge {delta_key}: {e}"))
+                            })?;
+                    }
                 }
+                return Ok(());
             }
-            return Ok(());
-        }
 
-        // Keep ours: rebase base/base_etag forward to current baseline
-        // (which may be absent if baseline deleted the key).
-        let base_key = entity_key(kind, id);
-        let base_entry = kv_entry_timeout(&self.kv, base_key).await?;
-        let (new_base, new_base_etag) = match live_entry(base_entry) {
-            Some(be) => (Some(decode_entity(&be.value)?), be.revision.to_string()),
-            None => (None, String::new()),
-        };
-        let ours = delta
-            .ours
-            .as_ref()
-            .map(|ours| {
-                trogon_atlas_core::connection_persistence::prepare_resolution(
-                    delta.base.as_ref(),
-                    new_base.as_ref(),
-                    ours,
-                )
-                .map_err(|error| StoreError::InvalidArgument(error.to_string()))
-            })
-            .transpose()?;
-        let updated = trogon_atlas_proto::BranchDelta {
-            base: new_base,
-            base_etag: new_base_etag,
-            ours,
-            tombstone: delta.tombstone,
-        };
-        let bytes = encode_branch_delta(&updated);
-        tokio::time::timeout(
-            KV_OP_TIMEOUT,
-            self.branches_kv.update(&delta_key, bytes, entry.revision),
-        )
+            // Keep ours: rebase base/base_etag forward to current baseline
+            // (which may be absent if baseline deleted the key).
+            let base_key = entity_key(kind, id);
+            let base_entry = kv_entry_timeout(&self.kv, base_key).await?;
+            let (new_base, new_base_etag) = match live_entry(base_entry) {
+                Some(be) => (Some(decode_entity(&be.value)?), be.revision.to_string()),
+                None => (None, String::new()),
+            };
+            let ours = delta
+                .ours
+                .as_ref()
+                .map(|ours| {
+                    trogon_atlas_core::connection_persistence::prepare_resolution(
+                        delta.base.as_ref(),
+                        new_base.as_ref(),
+                        ours,
+                    )
+                    .map_err(|error| StoreError::InvalidArgument(error.to_string()))
+                })
+                .transpose()?;
+            let updated = trogon_atlas_proto::BranchDelta {
+                base: new_base,
+                base_etag: new_base_etag,
+                ours,
+                tombstone: delta.tombstone,
+            };
+            let bytes = encode_branch_delta(&updated);
+            tokio::time::timeout(
+                KV_OP_TIMEOUT,
+                self.branches_kv.update(&delta_key, bytes, entry.revision),
+            )
+            .await
+            .map_err(|_| StoreError::Backend(format!("branch kv.update {delta_key}: timeout")))?
+            .map_err(|e| StoreError::Backend(format!("branch kv.update {delta_key}: {e}")))?;
+            Ok(())
+        })
         .await
-        .map_err(|_| StoreError::Backend(format!("branch kv.update {delta_key}: timeout")))?
-        .map_err(|e| StoreError::Backend(format!("branch kv.update {delta_key}: {e}")))?;
-        Ok(())
     }
 
     async fn append_changeset(&self, record: &ChangesetRecord) -> StoreResult<()> {
-        validate_changeset_id(&record.id)?;
-        if self.faults().fail_changeset_append {
-            return Err(journal::injected("changeset append"));
-        }
-        let bytes = Bytes::from(changeset_proto(record).encode_to_vec());
-        match tokio::time::timeout(KV_OP_TIMEOUT, self.changesets_kv.create(&record.id, bytes))
-            .await
-            .map_err(|_| {
-                StoreError::Backend(format!("changeset kv.create {id}: timeout", id = record.id))
-            })? {
-            Ok(_) => {}
-            Err(e) => {
-                use async_nats::jetstream::kv::CreateErrorKind;
-                // Idempotent on id: a retry that reuses the same changeset id
-                // must not append a second row. First write wins.
-                if !matches!(e.kind(), CreateErrorKind::AlreadyExists) {
-                    return Err(StoreError::Backend(format!(
-                        "changeset kv.create {id}: {e}",
+        self.source_guarded(async {
+            validate_changeset_id(&record.id)?;
+            if self.faults().fail_changeset_append {
+                return Err(journal::injected("changeset append"));
+            }
+            let bytes = Bytes::from(changeset_proto(record).encode_to_vec());
+            match tokio::time::timeout(KV_OP_TIMEOUT, self.changesets_kv.create(&record.id, bytes))
+                .await
+                .map_err(|_| {
+                    StoreError::Backend(format!(
+                        "changeset kv.create {id}: timeout",
                         id = record.id
-                    )));
+                    ))
+                })? {
+                Ok(_) => {}
+                Err(e) => {
+                    use async_nats::jetstream::kv::CreateErrorKind;
+                    // Idempotent on id: a retry that reuses the same changeset id
+                    // must not append a second row. First write wins.
+                    if !matches!(e.kind(), CreateErrorKind::AlreadyExists) {
+                        return Err(StoreError::Backend(format!(
+                            "changeset kv.create {id}: {e}",
+                            id = record.id
+                        )));
+                    }
                 }
             }
-        }
-        if record.branch.is_none() {
-            self.release_published_journal(&record.id).await;
-        }
-        Ok(())
+            if record.branch.is_none() {
+                self.release_published_journal(&record.id).await;
+            }
+            Ok(())
+        })
+        .await
     }
 
     async fn get_changeset(&self, id: &str) -> StoreResult<ChangesetRecord> {
-        validate_changeset_id(id)?;
-        let entry = live_entry(kv_entry_timeout(&self.changesets_kv, id.to_owned()).await?)
-            .ok_or(StoreError::NotFound)?;
-        decode_changeset(&entry.value)
+        self.source_guarded(async {
+            validate_changeset_id(id)?;
+            let entry = live_entry(kv_entry_timeout(&self.changesets_kv, id.to_owned()).await?)
+                .ok_or(StoreError::NotFound)?;
+            decode_changeset(&entry.value)
+        })
+        .await
     }
 
     async fn list_changesets(&self, page: ChangesetPage<'_>) -> StoreResult<Vec<ChangesetRecord>> {
-        let limit = page.limit.clamp(1, CHANGESET_LIST_HARD_CAP);
-        if let Some(before) = page.before {
-            validate_changeset_id(before)?;
-        }
-        let mut out: Vec<ChangesetRecord> = Vec::with_capacity(limit);
-        let mut cursor: Option<String> = page.before.map(str::to_owned);
-        // Under `ChangesetScope::All` one pass suffices. Under a narrower
-        // scope a pass can be filtered down to nothing, so keep walking
-        // backwards until the page fills or the bucket is exhausted.
-        loop {
-            let keys =
-                newest_keys_before(&self.changesets_kv, None, cursor.as_deref(), limit).await?;
-            let exhausted = keys.len() < limit;
-            let Some(last) = keys.last().cloned() else {
-                break;
-            };
-            cursor = Some(last);
-            for key in keys {
-                let Some(entry) =
-                    live_entry(kv_entry_timeout(&self.changesets_kv, key.clone()).await?)
-                else {
-                    // Enumerated then deleted, or a tombstone. Changesets are
-                    // never deleted by this crate, so this only happens under
-                    // external interference; skip rather than fail the page.
-                    continue;
+        self.source_guarded(async {
+            let limit = page.limit.clamp(1, CHANGESET_LIST_HARD_CAP);
+            if let Some(before) = page.before {
+                validate_changeset_id(before)?;
+            }
+            let mut out: Vec<ChangesetRecord> = Vec::with_capacity(limit);
+            let mut cursor: Option<String> = page.before.map(str::to_owned);
+            // Under `ChangesetScope::All` one pass suffices. Under a narrower
+            // scope a pass can be filtered down to nothing, so keep walking
+            // backwards until the page fills or the bucket is exhausted.
+            loop {
+                let keys =
+                    newest_keys_before(&self.changesets_kv, None, cursor.as_deref(), limit).await?;
+                let exhausted = keys.len() < limit;
+                let Some(last) = keys.last().cloned() else {
+                    break;
                 };
-                let record = match decode_changeset(&entry.value) {
-                    Ok(record) => record,
-                    Err(err) => {
-                        tracing::warn!(
-                            key = %key,
-                            error = %err,
-                            "list_changesets: skipping undecodable changeset"
-                        );
+                cursor = Some(last);
+                for key in keys {
+                    let Some(entry) =
+                        live_entry(kv_entry_timeout(&self.changesets_kv, key.clone()).await?)
+                    else {
+                        // Enumerated then deleted, or a tombstone. Changesets are
+                        // never deleted by this crate, so this only happens under
+                        // external interference; skip rather than fail the page.
+                        continue;
+                    };
+                    let record = match decode_changeset(&entry.value) {
+                        Ok(record) => record,
+                        Err(err) => {
+                            tracing::warn!(
+                                key = %key,
+                                error = %err,
+                                "list_changesets: skipping undecodable changeset"
+                            );
+                            continue;
+                        }
+                    };
+                    if !page.scope.admits(record.branch.as_deref()) {
                         continue;
                     }
-                };
-                if !page.scope.admits(record.branch.as_deref()) {
-                    continue;
+                    if page
+                        .namespace
+                        .is_some_and(|ns| !crate::store::touches_namespace(&record, ns))
+                    {
+                        continue;
+                    }
+                    out.push(record);
+                    if out.len() >= limit {
+                        return Ok(out);
+                    }
                 }
-                if page
-                    .namespace
-                    .is_some_and(|ns| !crate::store::touches_namespace(&record, ns))
-                {
-                    continue;
-                }
-                out.push(record);
-                if out.len() >= limit {
-                    return Ok(out);
+                if exhausted {
+                    break;
                 }
             }
-            if exhausted {
-                break;
-            }
-        }
-        Ok(out)
+            Ok(out)
+        })
+        .await
     }
 
     async fn list_entity_revisions(
@@ -5301,39 +5525,43 @@ impl Store for NatsStore {
         id: &Id,
         page: RevisionPage<'_>,
     ) -> StoreResult<Vec<EntityRevisionRecord>> {
-        let limit = page.limit.clamp(1, CHANGESET_LIST_HARD_CAP);
-        if let Some(before) = page.before {
-            validate_changeset_id(before)?;
-        }
-        let prefix = revision_prefix(page.branch, kind, id);
-        let cursor = page.before.map(|before| format!("{prefix}{before}"));
-        let keys = newest_keys_before(
-            &self.revisions_kv,
-            Some(prefix.as_str()),
-            cursor.as_deref(),
-            limit,
-        )
-        .await?;
-        let mut out = Vec::with_capacity(keys.len());
-        for key in keys {
-            let Some(entry) = live_entry(kv_entry_timeout(&self.revisions_kv, key.clone()).await?)
-            else {
-                // Purged by a rolled-back batch between the key scan and the
-                // read. Skip rather than fail the page.
-                continue;
-            };
-            match decode_entity_revision(&entry.value) {
-                Ok(record) => out.push(record),
-                Err(err) => {
-                    tracing::warn!(
-                        key = %key,
-                        error = %err,
-                        "list_entity_revisions: skipping undecodable revision"
-                    );
+        self.source_guarded(async {
+            let limit = page.limit.clamp(1, CHANGESET_LIST_HARD_CAP);
+            if let Some(before) = page.before {
+                validate_changeset_id(before)?;
+            }
+            let prefix = revision_prefix(page.branch, kind, id);
+            let cursor = page.before.map(|before| format!("{prefix}{before}"));
+            let keys = newest_keys_before(
+                &self.revisions_kv,
+                Some(prefix.as_str()),
+                cursor.as_deref(),
+                limit,
+            )
+            .await?;
+            let mut out = Vec::with_capacity(keys.len());
+            for key in keys {
+                let Some(entry) =
+                    live_entry(kv_entry_timeout(&self.revisions_kv, key.clone()).await?)
+                else {
+                    // Purged by a rolled-back batch between the key scan and the
+                    // read. Skip rather than fail the page.
+                    continue;
+                };
+                match decode_entity_revision(&entry.value) {
+                    Ok(record) => out.push(record),
+                    Err(err) => {
+                        tracing::warn!(
+                            key = %key,
+                            error = %err,
+                            "list_entity_revisions: skipping undecodable revision"
+                        );
+                    }
                 }
             }
-        }
-        Ok(out)
+            Ok(out)
+        })
+        .await
     }
 
     async fn get_entity_revision(
@@ -5343,11 +5571,14 @@ impl Store for NatsStore {
         changeset_id: &str,
         branch: Option<&str>,
     ) -> StoreResult<EntityRevisionRecord> {
-        validate_changeset_id(changeset_id)?;
-        let key = revision_key(branch, kind, id, changeset_id);
-        let entry = live_entry(kv_entry_timeout(&self.revisions_kv, key).await?)
-            .ok_or(StoreError::NotFound)?;
-        decode_entity_revision(&entry.value)
+        self.source_guarded(async {
+            validate_changeset_id(changeset_id)?;
+            let key = revision_key(branch, kind, id, changeset_id);
+            let entry = live_entry(kv_entry_timeout(&self.revisions_kv, key).await?)
+                .ok_or(StoreError::NotFound)?;
+            decode_entity_revision(&entry.value)
+        })
+        .await
     }
 }
 
@@ -5745,6 +5976,15 @@ mod journal;
 
 #[path = "operations.rs"]
 mod operations;
+
+#[path = "source_control.rs"]
+mod source_control;
+
+#[path = "native_fence.rs"]
+mod native_fence;
+
+#[path = "source_publication.rs"]
+mod source_publication;
 
 #[path = "writer_lease.rs"]
 mod writer_lease;

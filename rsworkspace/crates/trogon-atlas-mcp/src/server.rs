@@ -32,8 +32,9 @@ use crate::{
         MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
         PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
         ResolveTypeParams, ResponsibilityQueryParams, RetargetReferencesParams,
-        RevertChangesetParams, SearchParams, SliceProjectionParams, SupersessionChainParams,
-        UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
+        RevertChangesetParams, SearchParams, SliceProjectionParams, SourceRequestParams,
+        SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
+        ValidateProjectParams,
     },
 };
 
@@ -254,6 +255,116 @@ pub struct ToolPolicy {
 }
 
 pub const TOOL_POLICIES: &[ToolPolicy] = &[
+    ToolPolicy {
+        tool: "list_source_run_operations",
+        rpcs: &["ListSourceRunOperations"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "create_source_registration",
+        rpcs: &["CreateSourceRegistration"],
+        min_role: ToolRole::Admin,
+    },
+    ToolPolicy {
+        tool: "update_source_registration",
+        rpcs: &["UpdateSourceRegistration"],
+        min_role: ToolRole::Admin,
+    },
+    ToolPolicy {
+        tool: "get_source_registration",
+        rpcs: &["GetSourceRegistration"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_source_registrations",
+        rpcs: &["ListSourceRegistrations"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "delete_source_registration",
+        rpcs: &["DeleteSourceRegistration"],
+        min_role: ToolRole::Admin,
+    },
+    ToolPolicy {
+        tool: "accept_source_snapshot",
+        rpcs: &["AcceptSourceSnapshot"],
+        min_role: ToolRole::Writer,
+    },
+    ToolPolicy {
+        tool: "get_source_snapshot",
+        rpcs: &["GetSourceSnapshot"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_source_snapshots",
+        rpcs: &["ListSourceSnapshots"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "create_source_mapping",
+        rpcs: &["CreateSourceMapping"],
+        min_role: ToolRole::Writer,
+    },
+    ToolPolicy {
+        tool: "update_source_mapping",
+        rpcs: &["UpdateSourceMapping"],
+        min_role: ToolRole::Writer,
+    },
+    ToolPolicy {
+        tool: "get_source_mapping",
+        rpcs: &["GetSourceMapping"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_source_mappings",
+        rpcs: &["ListSourceMappings"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "delete_source_mapping",
+        rpcs: &["DeleteSourceMapping"],
+        min_role: ToolRole::Writer,
+    },
+    ToolPolicy {
+        tool: "get_source_overlay",
+        rpcs: &["GetSourceOverlay"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "preview_source_run",
+        rpcs: &["PreviewSourceRun"],
+        min_role: ToolRole::Writer,
+    },
+    ToolPolicy {
+        tool: "apply_source_run",
+        rpcs: &["ApplySourceRun"],
+        min_role: ToolRole::Writer,
+    },
+    ToolPolicy {
+        tool: "cancel_source_run",
+        rpcs: &["CancelSourceRun"],
+        min_role: ToolRole::Writer,
+    },
+    ToolPolicy {
+        tool: "get_source_run",
+        rpcs: &["GetSourceRun"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_source_runs",
+        rpcs: &["ListSourceRuns"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "recover_source_run",
+        rpcs: &["RecoverSourceRun"],
+        min_role: ToolRole::Writer,
+    },
+    ToolPolicy {
+        tool: "list_source_run_results",
+        rpcs: &["ListSourceRunResults"],
+        min_role: ToolRole::Reader,
+    },
     ToolPolicy {
         tool: "list_subject_decisions",
         rpcs: &["ListSubjectDecisions"],
@@ -1467,6 +1578,839 @@ impl McpServer {
             .map_err(tool_err("list_entities"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "CreateSourceRegistration: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_source_registration(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "CreateSourceRegistrationRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result = trogon_atlas_client::source_integration::create_source_registration(
+            &mut client,
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "UpdateSourceRegistration: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn update_source_registration(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "UpdateSourceRegistrationRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result = trogon_atlas_client::source_integration::update_source_registration(
+            &mut client,
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetSourceRegistration: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_source_registration(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "GetSourceRegistrationRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::get_source_registration(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSourceRegistrations: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_source_registrations(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "ListSourceRegistrationsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::list_source_registrations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "DeleteSourceRegistration: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn delete_source_registration(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "DeleteSourceRegistrationRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result = trogon_atlas_client::source_integration::delete_source_registration(
+            &mut client,
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "AcceptSourceSnapshot: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn accept_source_snapshot(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "AcceptSourceSnapshotRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result =
+            trogon_atlas_client::source_integration::accept_source_snapshot(&mut client, request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetSourceSnapshot: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_source_snapshot(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "GetSourceSnapshotRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::get_source_snapshot(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSourceSnapshots: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_source_snapshots(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "ListSourceSnapshotsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::list_source_snapshots(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "CreateSourceMapping: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn create_source_mapping(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "CreateSourceMappingRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result = Box::pin(
+            trogon_atlas_client::source_integration::create_source_mapping(&mut client, request),
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "UpdateSourceMapping: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn update_source_mapping(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "UpdateSourceMappingRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result = Box::pin(
+            trogon_atlas_client::source_integration::update_source_mapping(&mut client, request),
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetSourceMapping: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_source_mapping(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "GetSourceMappingRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::get_source_mapping(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSourceMappings: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_source_mappings(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "ListSourceMappingsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::list_source_mappings(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "DeleteSourceMapping: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn delete_source_mapping(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "DeleteSourceMappingRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result =
+            trogon_atlas_client::source_integration::delete_source_mapping(&mut client, request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetSourceOverlay: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_source_overlay(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "GetSourceOverlayRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::get_source_overlay(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "PreviewSourceRun: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn preview_source_run(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let document = trogon_atlas_client::source_integration::prepare_preview_request(&json)
+            .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let request = document
+            .load(&mut client)
+            .await
+            .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result =
+            trogon_atlas_client::source_integration::preview_source_run(&mut client, request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ApplySourceRun: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn apply_source_run(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request =
+            trogon_atlas_client::source_integration::parse_request("ApplySourceRunRequest", &json)
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result =
+            trogon_atlas_client::source_integration::apply_source_run(&mut client, request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "CancelSourceRun: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn cancel_source_run(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request =
+            trogon_atlas_client::source_integration::parse_request("CancelSourceRunRequest", &json)
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result =
+            trogon_atlas_client::source_integration::cancel_source_run(&mut client, request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetSourceRun: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_source_run(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request =
+            trogon_atlas_client::source_integration::parse_request("GetSourceRunRequest", &json)
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result =
+            trogon_atlas_client::source_integration::get_source_run(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSourceRuns: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_source_runs(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request =
+            trogon_atlas_client::source_integration::parse_request("ListSourceRunsRequest", &json)
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result =
+            trogon_atlas_client::source_integration::list_source_runs(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "RecoverSourceRun: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn recover_source_run(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "RecoverSourceRunRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let mut client = self.client();
+        self.ensure_can_apply_plan(&mut client, false).await?;
+        let result =
+            trogon_atlas_client::source_integration::recover_source_run(&mut client, request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSourceRunResults: connected backend source control. Explicit selectors and ownership only. Returned scope, fidelity, incomplete and recovery state remain authoritative; preview is not an apply receipt.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_source_run_results(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > 48 * 1024 * 1024 {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "ListSourceRunResultsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::list_source_run_results(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSourceRunOperations: inspect bounded source plan operations and guards. Bind each page to returned run revision and preview digest; incomplete pages never establish complete safety.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_source_run_operations(
+        &self,
+        Parameters(p): Parameters<SourceRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "source request exceeds transport limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text)
+            .map_err(|_| rmcp::ErrorData::invalid_params("invalid source request JSON", None))?;
+        let request = trogon_atlas_client::source_integration::parse_request(
+            "ListSourceRunOperationsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::source_integration::list_source_run_operations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
     }
 
     #[tool(

@@ -1134,6 +1134,77 @@ pub trait Store: Send + Sync {
         let _ = key;
         Ok(None)
     }
+
+    async fn source_expire_transaction(
+        &self,
+        _registration: &crate::source::SourceDocumentKey,
+        _run_id: &str,
+        _plan_digest: &str,
+    ) -> StoreResult<()> {
+        Err(StoreError::Unavailable(
+            "source retention is unsupported".into(),
+        ))
+    }
+
+    async fn source_prepare(
+        &self,
+        _publication: &crate::source::SourcePublication,
+    ) -> StoreResult<()> {
+        Err(StoreError::Unavailable(
+            "coordinated source preparation is unsupported".into(),
+        ))
+    }
+
+    async fn source_publish(
+        &self,
+        _publication: &crate::source::SourcePublication,
+    ) -> StoreResult<crate::source::SourcePublicationOutcome> {
+        Err(StoreError::Unavailable(
+            "coordinated source publication is unsupported".into(),
+        ))
+    }
+
+    async fn source_recover(
+        &self,
+        _registration: &crate::source::SourceDocumentKey,
+        _run_id: &str,
+        _plan_digest: &str,
+    ) -> StoreResult<crate::source::SourcePublicationOutcome> {
+        Err(StoreError::Unavailable(
+            "coordinated source recovery is unsupported".into(),
+        ))
+    }
+
+    async fn source_get(
+        &self,
+        _key: &crate::source::SourceDocumentKey,
+    ) -> StoreResult<Option<crate::source::SourceDocument>> {
+        Err(StoreError::Unavailable(
+            "source persistence is unsupported".into(),
+        ))
+    }
+
+    async fn source_compare_and_swap(
+        &self,
+        _key: &crate::source::SourceDocumentKey,
+        _expected_revision: Option<u64>,
+        _bytes: &[u8],
+        _storage_limit: u64,
+    ) -> StoreResult<crate::source::SourceDocument> {
+        Err(StoreError::Unavailable(
+            "source persistence is unsupported".into(),
+        ))
+    }
+
+    async fn source_list(
+        &self,
+        _after: Option<&str>,
+        _limit: usize,
+    ) -> StoreResult<crate::source::SourceDocumentPage> {
+        Err(StoreError::Unavailable(
+            "source persistence is unsupported".into(),
+        ))
+    }
 }
 
 /// This process's writer role, lease epoch, and the last known lease

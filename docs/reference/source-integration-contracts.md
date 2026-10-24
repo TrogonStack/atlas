@@ -1,13 +1,12 @@
 # Source integration contracts
 
-Status: source control design proposed; the [supplied bundle profile](source-bundle-profile.md)
-and its Rust core validator are implemented. Source registration, retained snapshots,
-overlays, reconciliation runs and their persistence are not implemented by this
-reference. Channel/DataStore, Specification/API, DataProduct, Team/Person and
-Decision/Document are implemented native foundations. Their contracts remain
-authoritative. [Acceptance requirements](source-integration-acceptance.md)
-separate reusable native fixtures from future executable source acceptance.
-No protobuf tags, entity kinds, RPC names or storage keys are allocated here.
+Status: the supplied-bundle source control backend and client surfaces are
+implemented.
+The [API reference](source-control-api.md) records the typed control boundary.
+The [supplied bundle profile](source-bundle-profile.md) defines immutable intake.
+Native resource contracts remain authoritative.
+[Acceptance requirements](source-integration-acceptance.md) distinguish executable
+source coverage from reusable native fixtures and broader capture scenarios.
 
 ## Release scope
 
@@ -23,7 +22,7 @@ compilers, automatic inferred behavioral conversion and portable migration
 rebinding are deferred. Atlas Linter and its WASM/WIT execution boundary remain
 later work. Retaining a format label or opaque selector does not validate its
 semantics. A native TypeLibrary uses its existing supported admission path;
-this proposal adds no compiler for retained artifacts.
+source integration adds no compiler for retained artifacts.
 
 An initial run may create native entities and update explicitly adopted existing
 entities. Cross-owner incarnation selectors must already identify an authorized,
@@ -48,14 +47,15 @@ remain incomplete without creating incomplete native resources. Unmapped
 knowledge belongs in the source overlay. Native responsibility, declared lineage,
 checked model paths and runtime evidence remain distinct.
 
-## Proposed control records
+## Control records
 
-These names and shapes are design vocabulary, not new native model entities or
-an accepted wire/storage schema. They live in a proposed backend-owned source
-control plane and are queryable knowledge. They cannot be smuggled into arbitrary
-native annotations to bypass identity or reference validation.
+These records live in the backend-owned source control plane, outside native
+model entities. The typed wire definitions are in
+[`source_integration.proto`](../../proto/trogonatlas/api/eventmodel/v1alpha1/source_integration.proto).
+They cannot be smuggled into arbitrary native annotations to bypass identity or
+reference validation.
 
-| Proposed record | Required content |
+| Record | Required content |
 | --- | --- |
 | `SourceRegistration` | Opaque source identity, authorized administration scope, existing destination namespaces, input profile revision, field ownership policy revision, retention policy and run budgets. No connection secrets in the initial profile. |
 | `SourceSnapshot` | Registration identity, opaque source version, verified inventory and bundle digests, exact supplied file bytes/media types, inventory coverage, source resource/relation identities, source pointers and profile revision. Immutable after acceptance. |
@@ -161,10 +161,17 @@ original spelling; it is not a native reference or permission to fetch content.
 | Overlay status | Meaning |
 | --- | --- |
 | RESOLVED | Explicit mapping resolves its full typed selection in the recorded authorized context. It proves neither execution nor external pointer validity. |
-| MISSING | Complete authorized lookup establishes that the selected source/native item is absent in that checked scope. |
-| AMBIGUOUS | More than one correspondence remains; retain authorized candidates without selecting one. |
+| MISSING | An exact owner read, after namespace visibility is established, definitively establishes absence in the checked branch. |
+| AMBIGUOUS | Reserved for a profile that enumerates multiple authorized correspondences. The explicit-mapping `supplied-native-v1` profile does not emit it. |
 | DEFERRED | Mapping or interpretation was intentionally not attempted or is unsupported, including unavailable incarnation rebinding. |
 | CONFLICT | Conflicting declarations, ownership, byte identity, guards or merge decisions prevent acceptance. |
+| UNAVAILABLE | The selected target or local pin cannot be safely resolved. This makes no verified absence claim. |
+
+`supplied-native-v1` permits one active mapping per source key and branch. A
+second mapping is rejected rather than selecting a candidate. Unmapped resources
+and inert relation pointers remain DEFERRED; the profile performs no candidate
+search. A hidden namespace or stale local selector remains UNAVAILABLE, while a
+definitively absent owner in an authorized namespace can be MISSING.
 
 Hidden/missing hydration is indistinguishable when disclosure is unsafe; expose
 a generic unavailable diagnostic, not a verified MISSING assertion. Operational
@@ -320,8 +327,8 @@ are skipped and not guarded. Existing entity batches do not atomically store
 source mappings, accepted bases or source run receipts.
 
 Reliable publication of native writes and accepted source mappings/base/outcome
-is a **new backend requirement**. The proposed protocol has the following durable
-boundaries, including for branch-scoped runs:
+uses the source-specific durable Store protocol. Its required boundaries also
+apply to branch-scoped runs:
 
 - Before any native commit, persist a guarded intent containing run/plan identity,
   input/configuration/base revisions, authorization scope, complete guards and
@@ -331,7 +338,7 @@ boundaries, including for branch-scoped runs:
   the native effects. The marker binds run identity and plan digest to the exact
   committed entity values, assigned identities, resulting revisions and outcome.
   A crash must not leave native effects without their marker, or a committed
-  marker for effects that did not land. This is a new storage/backend contract;
+  marker for effects that did not land. This is a source storage/backend contract;
   an ordinary client-side sequence of entity writes and record writes does not
   satisfy it. A backend lacking this capability must refuse source apply.
 - Publish mapping/base revisions and the settled source outcome idempotently
@@ -349,11 +356,10 @@ boundaries, including for branch-scoped runs:
 Intermediate native effects may be visible while source evidence publication is
 recovering; readers must see an unsettled source run rather than a false applied
 outcome. This is not a distributed transaction claim. No cross-store clone or
-portable owner-UID restoration is promised by existing CLI primitives. Until
-these boundaries and their fault-injection evidence are implemented, preparation
-and preview cannot establish a source apply runtime. Concrete storage keys,
-transaction mechanism and wire encoding belong to the implementation review;
-they may not weaken these publication/recovery outcomes.
+portable owner-UID restoration is promised by existing CLI primitives.
+[Publication tests](../../rsworkspace/crates/trogon-atlas-store/tests/source_publication.rs)
+exercise durable fault boundaries and exact committed postimages. Preparation
+and preview alone do not establish apply or recovery success.
 
 Replay binds run identity to its exact request digest, scope, branch and caller
 authorization. Same identity/digest returns the recorded result; changed input
@@ -382,7 +388,7 @@ batches. The initial apply ceiling is at most 1,000 entity operations, honoring
 the lower Store limit rather than the service's 1,024 admission ceiling.
 Existing lower entity, artifact, RPC and reference-scan bounds still apply.
 Control-record writes and recovery work also require explicit separate bounds.
-The proposed `supplied-native-v1` ceilings below are contract limits, not measured
+The `supplied-native-v1` ceilings below are contract limits, not measured
 performance guarantees or existing server settings. Registration policy may
 lower them; it cannot raise them without a new profile revision. Lower native
 limits still take precedence.
