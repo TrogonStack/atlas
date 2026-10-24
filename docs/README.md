@@ -50,6 +50,7 @@ Resource contracts and acceptance:
 - [Decision and Document acceptance requirements](reference/decision-and-document-acceptance.md)
 - [Supplied source bundle profile](reference/source-bundle-profile.md)
 - [Source integration contracts](reference/source-integration-contracts.md)
+- [Source control API](reference/source-control-api.md)
 - [Source integration acceptance requirements](reference/source-integration-acceptance.md)
 
 ## Explanation

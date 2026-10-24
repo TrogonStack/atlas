@@ -20,6 +20,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 
 
 // =============================================================================
@@ -1156,6 +1157,29 @@ message ResolveBranchEntryResponse {
 //     DeleteBranch                       : branch lifecycle (Phase 1: Isolation)
 
 service EventModelService {
+  rpc CreateSourceRegistration(CreateSourceRegistrationRequest) returns (CreateSourceRegistrationResponse);
+  rpc UpdateSourceRegistration(UpdateSourceRegistrationRequest) returns (UpdateSourceRegistrationResponse);
+  rpc GetSourceRegistration(GetSourceRegistrationRequest) returns (GetSourceRegistrationResponse);
+  rpc ListSourceRegistrations(ListSourceRegistrationsRequest) returns (ListSourceRegistrationsResponse);
+  rpc DeleteSourceRegistration(DeleteSourceRegistrationRequest) returns (DeleteSourceRegistrationResponse);
+  rpc AcceptSourceSnapshot(AcceptSourceSnapshotRequest) returns (AcceptSourceSnapshotResponse);
+  rpc GetSourceSnapshot(GetSourceSnapshotRequest) returns (GetSourceSnapshotResponse);
+  rpc ListSourceSnapshots(ListSourceSnapshotsRequest) returns (ListSourceSnapshotsResponse);
+  rpc CreateSourceMapping(CreateSourceMappingRequest) returns (CreateSourceMappingResponse);
+  rpc UpdateSourceMapping(UpdateSourceMappingRequest) returns (UpdateSourceMappingResponse);
+  rpc GetSourceMapping(GetSourceMappingRequest) returns (GetSourceMappingResponse);
+  rpc ListSourceMappings(ListSourceMappingsRequest) returns (ListSourceMappingsResponse);
+  rpc DeleteSourceMapping(DeleteSourceMappingRequest) returns (DeleteSourceMappingResponse);
+  rpc GetSourceOverlay(GetSourceOverlayRequest) returns (GetSourceOverlayResponse);
+  rpc PreviewSourceRun(PreviewSourceRunRequest) returns (PreviewSourceRunResponse);
+  rpc ApplySourceRun(ApplySourceRunRequest) returns (ApplySourceRunResponse);
+  rpc CancelSourceRun(CancelSourceRunRequest) returns (CancelSourceRunResponse);
+  rpc GetSourceRun(GetSourceRunRequest) returns (GetSourceRunResponse);
+  rpc ListSourceRuns(ListSourceRunsRequest) returns (ListSourceRunsResponse);
+  rpc RecoverSourceRun(RecoverSourceRunRequest) returns (RecoverSourceRunResponse);
+  rpc ListSourceRunResults(ListSourceRunResultsRequest) returns (ListSourceRunResultsResponse);
+  rpc ListSourceRunOperations(ListSourceRunOperationsRequest) returns (ListSourceRunOperationsResponse);
+
   rpc ListSubjectDecisions(ListSubjectDecisionsRequest) returns (ListSubjectDecisionsResponse);
   rpc ListSubjectDocuments(ListSubjectDocumentsRequest) returns (ListSubjectDocumentsResponse);
   rpc GetDecisionDetail(GetDecisionDetailRequest) returns (GetDecisionDetailResponse);

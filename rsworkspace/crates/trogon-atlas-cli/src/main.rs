@@ -67,6 +67,132 @@ enum Format {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Read the exact bounded operation and guard page for a source preview.
+    ListSourceRunOperations {
+        #[arg(long)]
+        request: String,
+    },
+    /// Declare source administration and destination scope with explicit budgets and retention.
+    CreateSourceRegistration {
+        #[arg(long)]
+        request: String,
+    },
+    /// Revise source policy under its current revision guard; prior previews remain immutable.
+    UpdateSourceRegistration {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect source policy and its current revision before proposing changes.
+    GetSourceRegistration {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect source registrations in an explicitly selected administration namespace.
+    ListSourceRegistrations {
+        #[arg(long)]
+        request: String,
+    },
+    /// Retire source administration without deleting native resources; unsettled recovery blocks deletion.
+    DeleteSourceRegistration {
+        #[arg(long)]
+        request: String,
+    },
+    /// Retain supplied snapshot bytes. Intake acceptance establishes no native commit or accepted merge base.
+    AcceptSourceSnapshot {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect retained snapshot evidence; exact byte recovery requires includeBytes and available bytes.
+    GetSourceSnapshot {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect independently addressable source versions without interpreting their version text.
+    ListSourceSnapshots {
+        #[arg(long)]
+        request: String,
+    },
+    /// Declare an exact typed selection, explicit field ownership and guarded adoption decision.
+    CreateSourceMapping {
+        #[arg(long)]
+        request: String,
+    },
+    /// Revise explicit mapping decisions under current mapping and registration guards.
+    UpdateSourceMapping {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect exact selectors, adoption, ownership and accepted-base evidence.
+    GetSourceMapping {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect mapping decisions without inferring ownership from source labels or names.
+    ListSourceMappings {
+        #[arg(long)]
+        request: String,
+    },
+    /// Relinquish source mapping authority without deleting the native owner.
+    DeleteSourceMapping {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect ordered source declarations; incomplete or unavailable results do not prove absence.
+    GetSourceOverlay {
+        #[arg(long)]
+        request: String,
+    },
+    /// Review an immutable proposal. Declared COMPLETE is distinct from verified completeness; preview never commits.
+    PreviewSourceRun {
+        #[arg(long)]
+        request: String,
+        /// Explicit complete owner import: category=source-key=manifest-path. Exactly one owner per file.
+        #[arg(long = "native-owner")]
+        native_owners: Vec<String>,
+    },
+    /// Request the exact guarded preview commit. Unsettled outcomes require recovery, never a new-identity retry.
+    ApplySourceRun {
+        #[arg(long)]
+        request: String,
+    },
+    /// Request cancellation. A possible or completed commit is settled by recovery and cannot be undone here.
+    CancelSourceRun {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect run status and recovery needs; a preview or pending result is not an apply receipt.
+    GetSourceRun {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect retained run outcomes within their reported branch and authorization scope.
+    ListSourceRuns {
+        #[arg(long)]
+        request: String,
+    },
+    /// Resolve durable publication evidence for the same run without reapplying native changes.
+    RecoverSourceRun {
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect bounded fidelity and result evidence; remaining or incomplete pages do not prove losslessness.
+    ListSourceRunResults {
+        #[arg(long)]
+        request: String,
+    },
+    /// Retain only explicitly supplied files with logical locators and exact media types.
+    UploadSourceSnapshot {
+        #[arg(long)]
+        registration_id: String,
+        #[arg(long)]
+        registration_revision: String,
+        #[arg(long)]
+        inventory: PathBuf,
+        /// Repeat logical-name=media-type=explicit-path. No directory or pointer traversal.
+        #[arg(long = "file")]
+        files: Vec<String>,
+    },
+
     /// Apply manifests: create missing entities, overwrite drifted ones,
     /// skip unchanged ones. The whole change set is one atomic BatchMutate.
     /// Exits 3 without writing anything if another writer changed an entity
@@ -567,7 +693,7 @@ async fn main() -> ExitCode {
     let args = Args::parse();
     let format = args.format;
     let mut operation_id = None;
-    match run(args, &mut operation_id).await {
+    match Box::pin(run(args, &mut operation_id)).await {
         Ok((code, data)) => {
             if format == Format::Json {
                 let mut outcome = data.map_or_else(CommandOutcome::ok_empty, CommandOutcome::ok);
@@ -665,6 +791,36 @@ async fn connect_checked_client(
     let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, branch).await?;
     compat::ensure_can_mutate(&mut client, intent).await?;
     Ok(client)
+}
+
+struct PreparedNativeOwner {
+    key: trogon_atlas_core::source_bundle::ResourceKey,
+    bytes: Vec<u8>,
+}
+
+impl PreparedNativeOwner {
+    fn read(owner: &str) -> Result<Self> {
+        use trogon_atlas_core::source_bundle::{
+            ResourceKey, SourceCategory, SourceLocalKey, MAX_FILE_BYTES,
+        };
+        let parts = owner.splitn(3, '=').collect::<Vec<_>>();
+        let [category, key, path] = parts.as_slice() else {
+            return Err(trogon_atlas_client::failure::invalid_input(
+                "native-owner requires category=source-key=manifest-path",
+            ));
+        };
+        let key = ResourceKey::new(
+            SourceCategory::new(category)
+                .map_err(|error| trogon_atlas_client::failure::invalid_input(error.to_string()))?,
+            SourceLocalKey::new(key)
+                .map_err(|error| trogon_atlas_client::failure::invalid_input(error.to_string()))?,
+        );
+        let bytes = trogon_atlas_client::source_input::read_bounded_file(
+            std::path::Path::new(path),
+            MAX_FILE_BYTES,
+        )?;
+        Ok(Self { key, bytes })
+    }
 }
 
 async fn run(
@@ -882,6 +1038,589 @@ async fn run(
                 },
                 Some(data),
             ))
+        }
+        Cmd::CreateSourceRegistration { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "CreateSourceRegistrationRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::create_source_registration(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::UpdateSourceRegistration { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "UpdateSourceRegistrationRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::update_source_registration(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceRegistration { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceRegistrationRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::get_source_registration(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceRegistrations { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceRegistrationsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::list_source_registrations(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::DeleteSourceRegistration { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "DeleteSourceRegistrationRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::delete_source_registration(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::AcceptSourceSnapshot { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "AcceptSourceSnapshotRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::accept_source_snapshot(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceSnapshot { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceSnapshotRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::get_source_snapshot(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceSnapshots { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceSnapshotsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::list_source_snapshots(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::CreateSourceMapping { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "CreateSourceMappingRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = Box::pin(
+                trogon_atlas_client::source_integration::create_source_mapping(
+                    &mut client,
+                    request,
+                ),
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::UpdateSourceMapping { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "UpdateSourceMappingRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = Box::pin(
+                trogon_atlas_client::source_integration::update_source_mapping(
+                    &mut client,
+                    request,
+                ),
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceMapping { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceMappingRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::get_source_mapping(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceMappings { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceMappingsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::list_source_mappings(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::DeleteSourceMapping { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "DeleteSourceMappingRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::delete_source_mapping(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceOverlay { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceOverlayRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::get_source_overlay(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::PreviewSourceRun {
+            request,
+            native_owners,
+        } => {
+            let document = trogon_atlas_client::source_integration::prepare_preview_request(
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let native_owners = native_owners
+                .iter()
+                .map(|owner| PreparedNativeOwner::read(owner))
+                .collect::<Result<Vec<_>>>()?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let mut request = document.load(&mut client).await?;
+            for owner in native_owners {
+                let payload = trogon_atlas_client::source_integration::native_payload(
+                    &mut client,
+                    pb::SourceResourceKey {
+                        registration_id: request.registration_id.clone(),
+                        category: owner.key.category().as_str().to_owned(),
+                        key: owner.key.key().as_str().to_owned(),
+                    },
+                    &owner.bytes,
+                )
+                .await?;
+                request.native_payloads.push(payload);
+            }
+            let result =
+                trogon_atlas_client::source_integration::preview_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ApplySourceRun { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ApplySourceRunRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result =
+                trogon_atlas_client::source_integration::apply_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::CancelSourceRun { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "CancelSourceRunRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result =
+                trogon_atlas_client::source_integration::cancel_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetSourceRun { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "GetSourceRunRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::get_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceRuns { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceRunsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::source_integration::list_source_runs(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::RecoverSourceRun { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "RecoverSourceRunRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result =
+                trogon_atlas_client::source_integration::recover_source_run(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceRunResults { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceRunResultsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::list_source_run_results(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::UploadSourceSnapshot {
+            registration_id,
+            registration_revision,
+            inventory,
+            files,
+        } => {
+            let files = files
+                .iter()
+                .map(|value| {
+                    let parts = value.splitn(3, '=').collect::<Vec<_>>();
+                    if parts.len() != 3 {
+                        return Err(trogon_atlas_client::failure::invalid_input(
+                            "file requires logical-name=media-type=explicit-path",
+                        ));
+                    }
+                    trogon_atlas_client::source_input::SuppliedFilePath::new(
+                        parts[0],
+                        parts[1],
+                        PathBuf::from(parts[2]),
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let bundle =
+                trogon_atlas_client::source_input::read_supplied_bundle(&inventory, &files)?;
+            let request = trogon_atlas_client::source_integration::snapshot_request(
+                registration_id,
+                registration_revision,
+                &bundle,
+            );
+            let mut client = connect_checked_client(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch.clone(),
+                compat::MutationIntent {
+                    branch_scoped: branch.is_some(),
+                    state_preconditions: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            let result = trogon_atlas_client::source_integration::accept_source_snapshot(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSourceRunOperations { request } => {
+            let request = trogon_atlas_client::source_integration::parse_request(
+                "ListSourceRunOperationsRequest",
+                &serde_json::from_str::<Value>(&request).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("invalid source request JSON")
+                })?,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::source_integration::list_source_run_operations(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
         }
         Cmd::ListSubjectDecisions { request } => {
             let json = serde_json::from_str(&request).map_err(|error| {

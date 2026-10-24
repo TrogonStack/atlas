@@ -188,6 +188,7 @@ vi.mock('protobufjs', async (importOriginal) => {
     resolvePath: () => '',
     load: () => Promise.resolve(fakeRoot),
     lookupType: (name) => {
+      if (/\.(GetSource|ListSource)/.test(name)) return responsibilityRoot.lookupType(name);
       if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations)Request$/.test(name)) return responsibilityRoot.lookupType(name);
       return { decode: () => ({}), toObject: () => ({}) };
     },
@@ -2570,5 +2571,47 @@ describe('catalog strict gateway serializer boundary', () => {
     expect((await request(app).get('/api/catalog/putEntity').query({ request: '{}' })).status).toBe(400);
     expect((await request(app).get('/api/catalog/document-detail').query({ request: '{}', asOf: 'historical' })).status).toBe(400);
     expect((await request(app).post('/api/catalog/document-detail').send({ document })).status).toBe(403);
+  });
+});
+
+
+describe('source read-only gateway', () => {
+  it.each([
+    ['snapshot', 'GetSourceSnapshot', { registrationId: 'r', snapshotId: 's', includeBytes: false }],
+    ['overlay', 'GetSourceOverlay', { registrationId: 'r', snapshotId: 's', pageSize: 100 }],
+    ['run-results', 'ListSourceRunResults', { registrationId: 'r', runId: 'run', pageSize: 100, pageToken: 'opaque' }],
+    ['run-operations', 'ListSourceRunOperations', { registrationId: 'r', runId: 'run', pageSize: 100 }],
+  ])('forwards %s through the actual protobuf serializer and caller branch', async (route, rpc, input) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const root = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(root, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [root] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find(value => value.path.endsWith(`/${rpc}`));
+    const codec = definitions[`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`];
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = vi.fn((req, meta, _opts, cb) => cb(null, { received: codec.deserialize(method.requestSerialize(req)), branch: meta.get('x-trogon-atlas-branch')[0], incomplete: true, nextPageToken: 'more' }));
+    try {
+      const response = await request(app).get(`/api/source/${route}`).query({ request: JSON.stringify(input), branch: 'source-review' });
+      expect(response.status).toBe(200);
+      expect(response.body.received).toEqual(input);
+      expect(response.body.branch).toBe('source-review');
+      expect(response.body.incomplete).toBe(true);
+      expect(response.body.nextPageToken).toBe('more');
+    } finally { delete fakeClient[name]; }
+  });
+  it.each([
+    ['snapshot', { registrationId: 'r', includeBytes: 'false' }],
+    ['snapshot', { registrationId: 'r', surprise: true }],
+    ['runs', { registrationId: 'r', pageSize: '100' }],
+  ])('refuses malformed %s before calling the backend', async (route, input) => {
+    const name = route === 'runs' ? 'listSourceRuns' : 'getSourceSnapshot';
+    const invoke = vi.fn(); fakeClient[name] = invoke;
+    try {
+      const response = await request(app).get(`/api/source/${route}`).query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(400); expect(invoke).not.toHaveBeenCalled();
+    } finally { delete fakeClient[name]; }
+  });
+  it('exposes no source mutation route or historical hydration', async () => {
+    for (const query of ['apply', 'recover', 'cancel', 'preview', 'create-registration']) expect((await request(app).get(`/api/source/${query}`).query({ request: '{}' })).status).toBe(400);
+    expect((await request(app).get('/api/source/run').query({ request: '{"registrationId":"r","runId":"x"}', asOf: 'old' })).status).toBe(400);
   });
 });

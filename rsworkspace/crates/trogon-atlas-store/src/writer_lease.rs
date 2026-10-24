@@ -114,6 +114,24 @@ impl WriterLease {
         matches!(*self.last_renewed_at.lock(), Some(renewed_at) if renewed_at.elapsed() < self.lease_duration)
     }
 
+    pub(super) async fn verify_epoch(&self, kv: &KvStore, expected: Epoch) -> StoreResult<()> {
+        let entry = live_entry(kv_entry_timeout(kv, LEASE_KEY.into()).await?)
+            .ok_or_else(|| StoreError::Unavailable("writer lease unavailable".into()))?;
+        let row = LeaseRow::decode(entry.value.as_ref())
+            .map_err(|_| StoreError::Unavailable("writer lease unavailable".into()))?;
+        if row.epoch != expected.get()
+            || row.holder_id != self.holder_id
+            || row.expires_at_micros <= now_micros()
+            || !self.is_writer()
+        {
+            return Err(StoreError::NotWriter {
+                role: self.status().role,
+                epoch: expected,
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn current_epoch(&self) -> Epoch {
         Epoch::new(self.epoch.load(Ordering::Acquire))
     }
