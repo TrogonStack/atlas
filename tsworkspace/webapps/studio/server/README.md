@@ -32,7 +32,7 @@ Studio is an observation surface. Agents make every change, including namespace 
 | GET | `/api/validate-project` | Yes (when token configured) | Validate all EventModels in a project or domain |
 | GET | `/api/entity-kinds` | Yes (when token configured) | Static catalog of all EntityKind values |
 | GET | `/api/validation-rules` | Yes (when token configured) | Static catalog of all validation rules |
-| GET | `/api/by-domain/:namespace/:slug` | Yes (when token configured) | Entities scoped to a Domain |
+| GET | `/api/by-domain/:namespace/:slug` | Yes (when token configured) | Entities scoped to an exact Domain version, with [filter and pagination controls](../../../../docs/reference/domain-scoped-listing.md#studio-http-bridge) |
 | POST | `/api/type-libraries/compile` | Yes (when token configured) | Compiles a type library's source text without saving it; returns diagnostics and compatibility violations |
 | GET | `/api/type-libraries/messages` | Yes (when token configured) | Message full names the live type libraries in `?namespace=` declare |
 | GET | `/api/nats-auth` | Yes (when token configured) | Returns `{ token: string \| null, transport: "nats" \| "sse" }` naming the realtime channel the caller may use |

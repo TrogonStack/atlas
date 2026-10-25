@@ -60,10 +60,29 @@ record can prevent a realization chain from resolving. Empty results or an
 exhausted page token therefore do not establish whole-store completeness.
 
 MCP `list_entities_by_domain` requires an explicit positive Domain version and
-defaults `latest_versions_only` to true. Studio's current `/api/by-domain`
-route selects Domain version `1`; this backend query contract does not add a
-version selector to that route. `ValidateProject` has a separate scope path
-and is unchanged by this correction.
+defaults `latest_versions_only` to true. `ValidateProject` has a separate scope
+path and is unchanged by this query contract.
+
+## Studio HTTP bridge
+
+Studio's `GET /api/by-domain/:namespace/:slug` forwards the selected Domain to
+`ListEntitiesByDomain`. Its query parameters are:
+
+| Parameter | Accepted value | When omitted |
+| --- | --- | --- |
+| `version` | Positive decimal `uint64`, forwarded as a string without floating-point conversion. | Domain version `1`. |
+| `latestVersionsOnly` | `true` or `false`. | `true`. |
+| `kinds` | Comma-separated entity-kind tokens. | All kinds. |
+| `pageSize` | Positive decimal `int32`. The backend applies its page-size limit. | Backend default. |
+| `pageToken` | Opaque continuation token returned in `nextPageToken`. | First page. |
+
+Version, latest-only and pagination controls accept a single scalar value.
+Malformed or repeated values return HTTP `400` before the listing RPC. Branch
+and authentication context use the bridge's existing request handling.
+Responses preserve the backend's `entities` and `nextPageToken`; the bridge
+does not collect subsequent pages or resolve membership itself.
+
+These HTTP controls do not add a Domain version picker to Studio's overview.
 
 ## Executable coverage
 
@@ -75,3 +94,7 @@ and owner visibility.
 They use supported writes and authenticated gRPC against a real NATS Store.
 Their presence alone is not a recorded passing run or proof of every
 strategic-model acceptance case.
+
+The [HTTP bridge tests](../../tsworkspace/webapps/studio/server/index.test.mjs)
+exercise request forwarding and validation with a mocked upstream client.
+They do not establish native persistence or browser acceptance.
