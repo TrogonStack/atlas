@@ -7515,8 +7515,37 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let all = self.snapshot_for(branch.as_deref(), &vis).await?;
 
-        let (subdomain_domain, ns_to_dom) = build_domain_maps(all.as_ref());
-        let target = (dom_id.namespace.clone(), dom_id.slug.clone());
+        let target = pb::IdKey::new(&dom_id);
+        let subdomains: std::collections::HashSet<pb::IdKey> = all
+            .iter()
+            .filter_map(|se| {
+                let Some(pb::entity::Kind::Subdomain(subdomain)) = se.entity.kind.as_ref() else {
+                    return None;
+                };
+                let domain_id = subdomain.domain.as_ref()?.id.as_ref()?;
+                (pb::IdKey::new(domain_id) == target)
+                    .then(|| subdomain.id.as_ref().map(pb::IdKey::new))
+                    .flatten()
+            })
+            .collect();
+        let contexts: std::collections::HashSet<pb::IdKey> = all
+            .iter()
+            .filter_map(|se| {
+                let Some(pb::entity::Kind::BoundedContext(context)) = se.entity.kind.as_ref()
+                else {
+                    return None;
+                };
+                context
+                    .realizes
+                    .iter()
+                    .filter_map(|reference| reference.id.as_ref())
+                    .any(|id| subdomains.contains(&pb::IdKey::new(id)))
+                    .then(|| context.id.as_ref().map(pb::IdKey::new))
+                    .flatten()
+            })
+            .collect();
+        let namespaces: std::collections::HashSet<&str> =
+            contexts.iter().map(|id| id.namespace.as_str()).collect();
 
         let mut matched: Vec<pb::Entity> = Vec::new();
         for se in all.iter() {
@@ -7529,21 +7558,33 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if !kinds.is_empty() && !kinds.contains(&(k as i32)) {
                 continue;
             }
-            // The Domain itself, its Subdomains, and its BCs always belong;
-            // everything else has to chain back via the BC namespace.
             let belongs = match k {
-                pb::EntityKind::Domain => id.namespace == target.0 && id.slug == target.1,
-                pb::EntityKind::Subdomain => subdomain_domain
-                    .get(&(id.namespace.clone(), id.slug.clone()))
-                    .is_some_and(|d| d == &target),
-                pb::EntityKind::BoundedContext => {
-                    ns_to_dom.get(&id.namespace).is_some_and(|d| d == &target)
-                }
-                _ => ns_to_dom.get(&id.namespace).is_some_and(|d| d == &target),
+                pb::EntityKind::Domain => pb::IdKey::new(id) == target,
+                pb::EntityKind::Subdomain => subdomains.contains(&pb::IdKey::new(id)),
+                pb::EntityKind::BoundedContext => contexts.contains(&pb::IdKey::new(id)),
+                _ => namespaces.contains(id.namespace.as_str()),
             };
             if belongs {
                 matched.push(se.entity.clone());
             }
+        }
+        if req.latest_versions_only {
+            let mut latest = std::collections::HashMap::new();
+            for entity in &matched {
+                let (Ok(kind), Ok(id)) = (entity_kind(entity), entity_id(entity)) else {
+                    continue;
+                };
+                let version = latest
+                    .entry((kind, id.namespace.clone(), id.slug.clone()))
+                    .or_insert(id.version);
+                *version = (*version).max(id.version);
+            }
+            matched.retain(|entity| {
+                let (Ok(kind), Ok(id)) = (entity_kind(entity), entity_id(entity)) else {
+                    return false;
+                };
+                latest.get(&(kind, id.namespace.clone(), id.slug.clone())) == Some(&id.version)
+            });
         }
         let total = matched.len();
         let entities: Vec<pb::Entity> = matched.into_iter().skip(offset).take(page_size).collect();
