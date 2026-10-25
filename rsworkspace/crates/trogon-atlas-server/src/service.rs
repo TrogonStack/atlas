@@ -7501,6 +7501,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
     ) -> Result<Response<pb::ListEntitiesByDomainResponse>, Status> {
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
         let req = req.into_inner();
         let dom_id = req
             .domain_id

@@ -5,19 +5,41 @@ mod support;
 use std::{collections::HashSet, sync::Arc};
 
 use support::two_tenants::{
-    authed, authed_branch, make_registry, serve_with_registry, ACME_TOKEN, BETA_TOKEN, ROOT_TOKEN,
+    authed, authed_branch, serve_with_registry, ACME_TOKEN, BETA_TOKEN, ROOT_TOKEN,
 };
 use tonic::transport::Channel;
 use trogon_atlas_core::refs::{entity_id, entity_kind};
 use trogon_atlas_proto::{self as pb, event_model_service_client::EventModelServiceClient};
-use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
+use trogon_atlas_server::{
+    auth::{RegistryFile, TokenRegistry},
+    metrics::ServerMetrics,
+    service::EventModelServiceImpl,
+};
 
 type Client = EventModelServiceClient<Channel>;
 
 async fn client() -> Client {
     let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
     let svc = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
-    serve_with_registry(svc, make_registry()).await
+    let registry: RegistryFile = toml::from_str(&format!(
+        r#"
+[principals.acme]
+role = "writer"
+tokens = ["{ACME_TOKEN}"]
+parent = "acme"
+
+[principals.beta]
+role = "writer"
+tokens = ["{BETA_TOKEN}"]
+parent = "beta"
+
+[principals.root]
+role = "admin"
+tokens = ["{ROOT_TOKEN}"]
+"#
+    ))
+    .unwrap();
+    serve_with_registry(svc, TokenRegistry::from_file_contents(registry).unwrap()).await
 }
 
 async fn namespace(c: &mut Client, name: &str, token: &str) -> String {
@@ -341,6 +363,63 @@ async fn latest_flag_deduplicates_versions_without_affecting_unfiltered_results(
         .into_inner();
     assert_eq!(keys(&second.entities), keys(&[event(&bc, "beta", 3)]));
     assert_eq!(second.next_page_token, "");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn foreign_branch_cannot_disclose_staged_entities_owned_by_the_caller() {
+    let mut c = client().await;
+    let ns = namespace(&mut c, "strategy", BETA_TOKEN).await;
+    let bc = namespace(&mut c, "implementation", BETA_TOKEN).await;
+    let d = id(&ns, "domain", 1);
+    let s = id(&ns, "subdomain", 1);
+    let baseline = [
+        domain(&d),
+        subdomain(&s, &d),
+        context(&bc, 1, std::slice::from_ref(&s)),
+    ];
+    for entity in &baseline {
+        put(&mut c, entity.clone(), None).await;
+    }
+    let staged = event(&bc, "unmerged", 1);
+    let mut expected = baseline.to_vec();
+    expected.push(staged.clone());
+    for branch in ["@acme:membership", "@beta:membership"] {
+        c.create_branch(authed(
+            pb::CreateBranchRequest {
+                name: branch.into(),
+                doc: String::new(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap();
+        put(&mut c, staged.clone(), Some(branch)).await;
+        let root = c
+            .list_entities_by_domain(authed_branch(query(&d), ROOT_TOKEN, branch))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(keys(&root.entities), keys(&expected));
+    }
+    let beta_baseline = c
+        .list_entities_by_domain(authed(query(&d), BETA_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(keys(&beta_baseline.entities), keys(&baseline));
+    let beta_branch = c
+        .list_entities_by_domain(authed_branch(query(&d), BETA_TOKEN, "@beta:membership"))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(keys(&beta_branch.entities), keys(&expected));
+
+    let denied = c
+        .list_entities_by_domain(authed_branch(query(&d), BETA_TOKEN, "@acme:membership"))
+        .await
+        .expect_err("Beta must not read its unmerged entities through Acme's branch");
+    assert_eq!(denied.code(), tonic::Code::NotFound);
+    assert_eq!(denied.message(), "branch not found");
 }
 
 #[tokio::test(flavor = "multi_thread")]

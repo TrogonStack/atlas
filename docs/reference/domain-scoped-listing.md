@@ -51,6 +51,10 @@ Queries use the current authorized branch view. Branch-only entities appear
 only in that branch, and hidden namespaces cannot contribute returned entities
 or realization paths.
 
+Branch visibility is checked independently of namespace visibility. An
+inaccessible branch returns `NOT_FOUND`, even when it contains entities in a
+namespace the caller may otherwise read.
+
 Resolution uses the existing capped model snapshot. An omitted intermediate
 record can prevent a realization chain from resolving. Empty results or an
 exhausted page token therefore do not establish whole-store completeness.
@@ -66,7 +70,8 @@ and is unchanged by this correction.
 The [public transport regressions](../../rsworkspace/crates/trogon-atlas-server/tests/domain_query_membership.rs)
 exercise exact Domain/Subdomain versions, context-specific realizations,
 multiple and dangling realization paths, deduplication, latest matching
-versions before filtered pagination, branch overlays and owner visibility.
+versions before filtered pagination, branch overlays, foreign-branch refusal
+and owner visibility.
 They use supported writes and authenticated gRPC against a real NATS Store.
 Their presence alone is not a recorded passing run or proof of every
 strategic-model acceptance case.
