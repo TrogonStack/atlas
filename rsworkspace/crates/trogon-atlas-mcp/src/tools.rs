@@ -1301,3 +1301,12 @@ pub struct CatalogQueryParams {
     )]
     pub request_json: JsonPayload,
 }
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SourceRequestParams {
+    #[schemars(
+        description = "Exact source RPC proto3 JSON request. Supply complete native owners explicitly; preserve typed selectors, adoption, field ownership, guards and branch. Source pointers are inert; no source fetch or execution."
+    )]
+    pub request_json: JsonPayload,
+}

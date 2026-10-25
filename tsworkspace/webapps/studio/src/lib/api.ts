@@ -502,3 +502,35 @@ export function listIncomingDecisionDeclarations(decision: { id: EntityId }, opt
 export function listIncomingDocumentDeclarations(document: DocumentSelection, opts: FetchOptions = {}) {
   return catalogQuery('incoming-documents', { document }, opts);
 }
+
+export type SourceQuery =
+  | 'registration'
+  | 'registrations'
+  | 'snapshot'
+  | 'snapshots'
+  | 'mapping'
+  | 'mappings'
+  | 'overlay'
+  | 'run'
+  | 'runs'
+  | 'run-results'
+  | 'run-operations';
+export interface SourceInspection {
+  registration?: Record<string, unknown>;
+  snapshot?: Record<string, unknown>;
+  overlay?: Record<string, unknown>;
+  run?: Record<string, unknown>;
+  fidelity?: Record<string, unknown>;
+  incomplete?: boolean;
+  nextPageToken?: string;
+  runRevision?: string;
+  previewDigest?: string;
+  [key: string]: unknown;
+}
+export function inspectSource(
+  query: SourceQuery,
+  request: Record<string, unknown>,
+  opts: FetchOptions = {},
+): Promise<SourceInspection> {
+  return getJson(`/api/source/${query}?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
+}

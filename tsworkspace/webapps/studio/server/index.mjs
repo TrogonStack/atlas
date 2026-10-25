@@ -18,6 +18,7 @@ import express from "express";
 import { rateLimit as expressRateLimit } from "express-rate-limit";
 import protobuf from "protobufjs";
 import { validateCatalogRequest } from "./decision-document-request.mjs";
+import { validateSourceRequest } from "./source-request.mjs";
 import { validateResponsibilityRequest } from "./responsibility-request.mjs";
 import { isChangesetId, isSafeBranchName, isSafeNamespace } from "../shared/safe-namespace.mjs";
 
@@ -227,14 +228,17 @@ try {
   });
   process.exit(1);
 }
-/** @type {{ EventModelService: new (target: string, credentials: grpc.ChannelCredentials) => Record<string, Function> }} */
+/** @type {{ EventModelService: new (target: string, credentials: grpc.ChannelCredentials, options?: grpc.ChannelOptions) => Record<string, Function> }} */
 const pkg = /** @type {any} */ (grpc.loadPackageDefinition(definition)).trogonatlas.api.eventmodel.v1alpha1;
 const useTls = GRPC_ENDPOINT.startsWith("https://");
 const target = GRPC_ENDPOINT.replace(/^https?:\/\//, "");
 const credentials = useTls
   ? grpc.credentials.createSsl()
   : grpc.credentials.createInsecure();
-const client = new pkg.EventModelService(target, credentials);
+const client = new pkg.EventModelService(target, credentials, {
+  "grpc.max_receive_message_length": 36 * 1024 * 1024,
+  "grpc.max_send_message_length": 36 * 1024 * 1024,
+});
 
 /**
  * @param {string | undefined} requestId
@@ -318,6 +322,18 @@ function currentPrincipalToken() {
 // An allowlist rather than a denylist, so an RPC added to the proto later is
 // refused here until someone decides it is a read.
 const READ_RPCS = new Set([
+  "getSourceRegistration",
+  "listSourceRegistrations",
+  "getSourceSnapshot",
+  "listSourceSnapshots",
+  "getSourceMapping",
+  "listSourceMappings",
+  "getSourceOverlay",
+  "getSourceRun",
+  "listSourceRuns",
+  "listSourceRunResults",
+  "listSourceRunOperations",
+
   "compileTypeLibrary",
   "diffBranch",
   "exportEventModelManifests",
@@ -1871,6 +1887,32 @@ app.get(
     });
   }),
 );
+
+const SOURCE_QUERIES = new Map([
+  ["registration", "getSourceRegistration"],
+  ["registrations", "listSourceRegistrations"],
+  ["snapshot", "getSourceSnapshot"],
+  ["snapshots", "listSourceSnapshots"],
+  ["mapping", "getSourceMapping"],
+  ["mappings", "listSourceMappings"],
+  ["overlay", "getSourceOverlay"],
+  ["run", "getSourceRun"],
+  ["runs", "listSourceRuns"],
+  ["run-results", "listSourceRunResults"],
+  ["run-operations", "listSourceRunOperations"],
+]);
+
+app.get("/api/source/:query", branchHandler((req) => {
+  const method = SOURCE_QUERIES.get(String(req.params.query));
+  const reject = () => { throw Object.assign(new TypeError("invalid source query request"), { status: 400 }); };
+  if (!method || req.query.asOf !== undefined) return reject();
+  if (typeof req.query.request !== "string" || Buffer.byteLength(req.query.request) > 65536) return reject();
+  let input;
+  try { input = JSON.parse(req.query.request); } catch { return reject(); }
+  const requestType = protoRoot.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${method[0].toUpperCase()}${method.slice(1)}Request`);
+  validateSourceRequest(requestType, input);
+  return call(method, input);
+}));
 
 const CATALOG_QUERIES = new Map([
   ["subject-decisions", "listSubjectDecisions"],

@@ -187,7 +187,7 @@ struct Args {
     #[arg(
         long,
         env = "TROGON_ATLAS_MAX_MESSAGE_BYTES",
-        default_value_t = 4 * 1024 * 1024
+        default_value_t = 36 * 1024 * 1024
     )]
     max_message_bytes: usize,
     /// Maximum concurrent in-flight RPCs per connection.

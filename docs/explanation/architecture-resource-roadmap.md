@@ -103,24 +103,25 @@ exhaustive and deployed-browser evidence.
 
 ## Source integration and format support
 
-Source import, synchronization, export and additional schema-format validation
-are later milestones with explicit acceptance criteria. Native Channel and
-DataStore support does not require a source connector, a source overlay,
-Specification resources or format-specific compatibility checking.
+Source integration uses supplied immutable bundles and explicit native
+ownership. Native Channel and DataStore support remains independent of source
+connectors and format-specific compatibility checking.
 
 Native manifest export already exists. The
 [supplied bundle profile](../reference/source-bundle-profile.md) implements strict
-byte intake and deterministic digests in Rust core. Source mapping, retained
-provenance, reconciliation and export fidelity remain pending; they must preserve
-the existing behavioral anchors and exact selections.
+byte intake and deterministic digests in Rust core. The source control backend
+implements retained snapshots, mappings, overlays, guarded reconciliation and
+durable recovery. The acceptance reference records executable coverage and its
+limits.
 
-The proposed [source integration contract](../reference/source-integration-contracts.md)
+The [source integration contract](../reference/source-integration-contracts.md)
 defines a native-first boundary for immutable supplied bundles, explicit
 identity and version mappings, provenance and guarded reconciliation. Its
 [acceptance requirements](../reference/source-integration-acceptance.md) distinguish
 same-store reapply from migration into a new store, where incarnation-bound
-selectors require explicit rebinding. These are proposed contracts; source
-records, reconciliation operations and their executable acceptance remain pending.
+selectors require explicit rebinding. The
+[source control API](../reference/source-control-api.md) describes the concrete
+typed boundary and read-only review surface.
 Remote connectors and additional format compilers remain separate milestones.
 
 ## Atlas Linter comes after the architecture resources

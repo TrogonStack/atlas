@@ -1,3 +1,6 @@
+#[path = "source_integration.rs"]
+mod source_integration;
+
 #[path = "architecture_admission.rs"]
 mod architecture_admission;
 #[path = "data_product_events.rs"]
@@ -351,6 +354,7 @@ pub struct EventModelServiceImpl {
     /// dry-run apply+rollback) can never interleave with other writers.
     /// Cross-instance atomicity still requires a single writer deployment.
     mutation_lock: tokio::sync::Mutex<()>,
+    _source_retention_task: Option<source_integration::RetentionTask>,
     search_index: Arc<crate::search::SearchIndex>,
     search_ready: Arc<AtomicBool>,
     /// Indexes built for branch searches, keyed by branch and by a hash of
@@ -568,12 +572,14 @@ impl EventModelServiceImpl {
             crate::search::SearchIndex::new()
                 .map_err(|e| anyhow::anyhow!("initializing in-RAM search index: {e}"))?,
         );
+        let source_retention_task = source_integration::spawn_retention_sweep(store.clone());
         Ok(Self {
             store,
             git_mirror: None,
             llm_analyzer: None,
             jev_analyzer: None,
             mutation_lock: tokio::sync::Mutex::new(()),
+            _source_retention_task: source_retention_task,
             search_index,
             search_ready: Arc::new(AtomicBool::new(false)),
             branch_search_cache: Arc::new(crate::search::BranchIndexCache::default()),
@@ -2052,6 +2058,55 @@ impl EventModelServiceImpl {
         }
     }
 
+    async fn mirror_source_current(&self, marker: &pb::SourceCommitMarker, principal: &str) {
+        if marker.branch.is_some() || self.git_mirror.is_none() {
+            return;
+        }
+        let mut changes = Vec::with_capacity(marker.values.len());
+        for value in &marker.values {
+            let Some(owner) = value
+                .observed
+                .as_ref()
+                .and_then(|observed| observed.owner.as_ref())
+            else {
+                tracing::warn!("source mirror owner is unavailable");
+                self.metrics.record_git_mirror_failure();
+                return;
+            };
+            let (Ok(kind), Some(id)) = (pb::EntityKind::try_from(owner.kind), owner.id.as_ref())
+            else {
+                tracing::warn!("source mirror identity is unavailable");
+                self.metrics.record_git_mirror_failure();
+                return;
+            };
+            match self.store.get(kind, id, None).await {
+                Ok(current) => changes.push(MirrorChange::Put(current.entity)),
+                Err(trogon_atlas_store::StoreError::NotFound) => {
+                    changes.push(MirrorChange::Delete {
+                        kind,
+                        id: id.clone(),
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(error = %error, "source mirror current-state read failed");
+                    self.metrics.record_git_mirror_failure();
+                    return;
+                }
+            }
+        }
+        if !changes.is_empty() {
+            self.mirror_apply(MirrorBatch {
+                message: git_mirror::batch_commit_message(changes.len()),
+                changes,
+                author: MirrorAuthor {
+                    name: principal.to_owned(),
+                    email: format!("{principal}@trogon-atlas"),
+                },
+            })
+            .await;
+        }
+    }
+
     /// Seed the live search index from a full store snapshot on first use.
     /// The store scan happens entirely outside the mutation lock so writers are
     /// never blocked by index initialization. The ready flag is set with a
@@ -2679,6 +2734,160 @@ fn writer_status_to_pb(status: WriterStatus) -> pb::get_server_info_response::Wr
 
 #[tonic::async_trait]
 impl pb::event_model_service_server::EventModelService for EventModelServiceImpl {
+    async fn create_source_registration(
+        &self,
+        req: Request<pb::CreateSourceRegistrationRequest>,
+    ) -> Result<Response<pb::CreateSourceRegistrationResponse>, Status> {
+        source_integration::create_source_registration(self, req).await
+    }
+
+    async fn update_source_registration(
+        &self,
+        req: Request<pb::UpdateSourceRegistrationRequest>,
+    ) -> Result<Response<pb::UpdateSourceRegistrationResponse>, Status> {
+        source_integration::update_source_registration(self, req).await
+    }
+
+    async fn get_source_registration(
+        &self,
+        req: Request<pb::GetSourceRegistrationRequest>,
+    ) -> Result<Response<pb::GetSourceRegistrationResponse>, Status> {
+        source_integration::get_source_registration(self, req).await
+    }
+
+    async fn list_source_registrations(
+        &self,
+        req: Request<pb::ListSourceRegistrationsRequest>,
+    ) -> Result<Response<pb::ListSourceRegistrationsResponse>, Status> {
+        source_integration::list_source_registrations(self, req).await
+    }
+
+    async fn delete_source_registration(
+        &self,
+        req: Request<pb::DeleteSourceRegistrationRequest>,
+    ) -> Result<Response<pb::DeleteSourceRegistrationResponse>, Status> {
+        source_integration::delete_source_registration(self, req).await
+    }
+
+    async fn accept_source_snapshot(
+        &self,
+        req: Request<pb::AcceptSourceSnapshotRequest>,
+    ) -> Result<Response<pb::AcceptSourceSnapshotResponse>, Status> {
+        source_integration::accept_source_snapshot(self, req).await
+    }
+
+    async fn get_source_snapshot(
+        &self,
+        req: Request<pb::GetSourceSnapshotRequest>,
+    ) -> Result<Response<pb::GetSourceSnapshotResponse>, Status> {
+        source_integration::get_source_snapshot(self, req).await
+    }
+
+    async fn list_source_snapshots(
+        &self,
+        req: Request<pb::ListSourceSnapshotsRequest>,
+    ) -> Result<Response<pb::ListSourceSnapshotsResponse>, Status> {
+        source_integration::list_source_snapshots(self, req).await
+    }
+
+    async fn create_source_mapping(
+        &self,
+        req: Request<pb::CreateSourceMappingRequest>,
+    ) -> Result<Response<pb::CreateSourceMappingResponse>, Status> {
+        source_integration::create_source_mapping(self, req).await
+    }
+
+    async fn update_source_mapping(
+        &self,
+        req: Request<pb::UpdateSourceMappingRequest>,
+    ) -> Result<Response<pb::UpdateSourceMappingResponse>, Status> {
+        source_integration::update_source_mapping(self, req).await
+    }
+
+    async fn get_source_mapping(
+        &self,
+        req: Request<pb::GetSourceMappingRequest>,
+    ) -> Result<Response<pb::GetSourceMappingResponse>, Status> {
+        source_integration::get_source_mapping(self, req).await
+    }
+
+    async fn list_source_mappings(
+        &self,
+        req: Request<pb::ListSourceMappingsRequest>,
+    ) -> Result<Response<pb::ListSourceMappingsResponse>, Status> {
+        source_integration::list_source_mappings(self, req).await
+    }
+
+    async fn delete_source_mapping(
+        &self,
+        req: Request<pb::DeleteSourceMappingRequest>,
+    ) -> Result<Response<pb::DeleteSourceMappingResponse>, Status> {
+        source_integration::delete_source_mapping(self, req).await
+    }
+
+    async fn get_source_overlay(
+        &self,
+        req: Request<pb::GetSourceOverlayRequest>,
+    ) -> Result<Response<pb::GetSourceOverlayResponse>, Status> {
+        source_integration::get_source_overlay(self, req).await
+    }
+
+    async fn preview_source_run(
+        &self,
+        req: Request<pb::PreviewSourceRunRequest>,
+    ) -> Result<Response<pb::PreviewSourceRunResponse>, Status> {
+        source_integration::preview_source_run(self, req).await
+    }
+
+    async fn apply_source_run(
+        &self,
+        req: Request<pb::ApplySourceRunRequest>,
+    ) -> Result<Response<pb::ApplySourceRunResponse>, Status> {
+        source_integration::apply_source_run(self, req).await
+    }
+
+    async fn cancel_source_run(
+        &self,
+        req: Request<pb::CancelSourceRunRequest>,
+    ) -> Result<Response<pb::CancelSourceRunResponse>, Status> {
+        source_integration::cancel_source_run(self, req).await
+    }
+
+    async fn get_source_run(
+        &self,
+        req: Request<pb::GetSourceRunRequest>,
+    ) -> Result<Response<pb::GetSourceRunResponse>, Status> {
+        source_integration::get_source_run(self, req).await
+    }
+
+    async fn list_source_runs(
+        &self,
+        req: Request<pb::ListSourceRunsRequest>,
+    ) -> Result<Response<pb::ListSourceRunsResponse>, Status> {
+        source_integration::list_source_runs(self, req).await
+    }
+
+    async fn recover_source_run(
+        &self,
+        req: Request<pb::RecoverSourceRunRequest>,
+    ) -> Result<Response<pb::RecoverSourceRunResponse>, Status> {
+        source_integration::recover_source_run(self, req).await
+    }
+
+    async fn list_source_run_results(
+        &self,
+        req: Request<pb::ListSourceRunResultsRequest>,
+    ) -> Result<Response<pb::ListSourceRunResultsResponse>, Status> {
+        source_integration::list_source_run_results(self, req).await
+    }
+
+    async fn list_source_run_operations(
+        &self,
+        req: Request<pb::ListSourceRunOperationsRequest>,
+    ) -> Result<Response<pb::ListSourceRunOperationsResponse>, Status> {
+        source_integration::list_source_run_operations(self, req).await
+    }
+
     async fn get_server_info(
         &self,
         _req: Request<pb::GetServerInfoRequest>,
@@ -5217,6 +5426,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::BatchMutateRequest>,
     ) -> Result<Response<pb::BatchMutateResponse>, Status> {
+        let source_execution = req
+            .extensions()
+            .get::<source_integration::SourceExecution>()
+            .cloned();
         let vis = Self::visibility_of(&req);
         let author = Self::author_from_metadata(&req);
         let branch = Self::branch_from_metadata(&req)?;
@@ -5840,6 +6053,35 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     operation_receipts::settle_for_status(&*self.store, key, &status).await;
                 }
                 return Err(status);
+            }
+
+            if let Some(execution) = source_execution {
+                let outcome = self
+                    .store
+                    .source_publish(&execution.publication)
+                    .await
+                    .map_err(store_err)?;
+                let applied = matches!(
+                    outcome,
+                    trogon_atlas_store::source::SourcePublicationOutcome::Committed(_)
+                );
+                *execution
+                    .outcome
+                    .lock()
+                    .map_err(|_| Status::internal("source outcome lock unavailable"))? =
+                    Some(outcome);
+                if applied {
+                    self.invalidate_snapshot().await;
+                    self.search_ready.store(false, Ordering::Release);
+                }
+                return Ok(Response::new(pb::BatchMutateResponse {
+                    status: if applied {
+                        pb::batch_mutate_response::Status::Applied as i32
+                    } else {
+                        pb::batch_mutate_response::Status::Failed as i32
+                    },
+                    ..Default::default()
+                }));
             }
 
             let mut changeset = PendingChangeset::mint("BatchMutate", &author, branch.as_deref())

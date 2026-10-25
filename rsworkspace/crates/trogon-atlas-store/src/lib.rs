@@ -3,6 +3,7 @@ pub mod key;
 pub mod metrics;
 pub mod nats;
 pub mod recovery;
+pub mod source;
 pub mod store;
 
 // `refs` moved to the dedicated `trogon-atlas-core` crate so any third-party

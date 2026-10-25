@@ -1,0 +1,648 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/connections.proto";
+import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
+import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+
+message SourceResourceKey {
+  string registration_id = 1;
+  string category = 2;
+  string key = 3;
+}
+message SourceSelection {
+  oneof selection {
+    trogonatlas.eventmodel.v1alpha1.EntityRef entity = 1;
+    trogonatlas.eventmodel.v1alpha1.ConnectionRef connection = 2;
+    trogonatlas.eventmodel.v1alpha1.ContractMemberRef contract_member = 3;
+    trogonatlas.eventmodel.v1alpha1.ContractTypeRef contract_type = 4;
+    trogonatlas.eventmodel.v1alpha1.DataPortRef data_port = 5;
+    trogonatlas.eventmodel.v1alpha1.DocumentSelection document = 6;
+  }
+}
+enum SourceOwnedField {
+  SOURCE_OWNED_FIELD_UNSPECIFIED = 0;
+  SOURCE_OWNED_FIELD_TITLE = 1;
+  SOURCE_OWNED_FIELD_DOC = 2;
+  SOURCE_OWNED_FIELD_ACCESS_MODE = 3;
+  SOURCE_OWNED_FIELD_ADDRESS = 4;
+  SOURCE_OWNED_FIELD_ALERT_POLICIES = 5;
+  SOURCE_OWNED_FIELD_ALERT_WHEN_BREACHING = 6;
+  SOURCE_OWNED_FIELD_ALERT_WHEN_NO_DATA = 7;
+  SOURCE_OWNED_FIELD_ALERT_WHEN_RESOLVED = 8;
+  SOURCE_OWNED_FIELD_ANCHORS = 9;
+  SOURCE_OWNED_FIELD_ARTIFACTS = 10;
+  SOURCE_OWNED_FIELD_ATTACHMENTS = 11;
+  SOURCE_OWNED_FIELD_AUDIENCE = 12;
+  SOURCE_OWNED_FIELD_AUTHORITATIVE = 13;
+  SOURCE_OWNED_FIELD_BINDINGS = 14;
+  SOURCE_OWNED_FIELD_BUDGETING_METHOD = 15;
+  SOURCE_OWNED_FIELD_CALLS = 16;
+  SOURCE_OWNED_FIELD_CLASSIFICATION = 17;
+  SOURCE_OWNED_FIELD_COLOR = 18;
+  SOURCE_OWNED_FIELD_COMMAND = 19;
+  SOURCE_OWNED_FIELD_COMMITMENT = 20;
+  SOURCE_OWNED_FIELD_CONDITIONS = 21;
+  SOURCE_OWNED_FIELD_CONNECTION = 22;
+  SOURCE_OWNED_FIELD_CONSEQUENCES = 23;
+  SOURCE_OWNED_FIELD_CONTACTS = 24;
+  SOURCE_OWNED_FIELD_CONTEXT = 25;
+  SOURCE_OWNED_FIELD_DELIVERY_GUARANTEE = 26;
+  SOURCE_OWNED_FIELD_DEPENDENCIES = 27;
+  SOURCE_OWNED_FIELD_DESIGN_REF = 28;
+  SOURCE_OWNED_FIELD_DIRECTORY_POINTER = 29;
+  SOURCE_OWNED_FIELD_DOC_TRIGGER = 30;
+  SOURCE_OWNED_FIELD_DOCUMENTS = 31;
+  SOURCE_OWNED_FIELD_DOMAIN = 32;
+  SOURCE_OWNED_FIELD_EMBODIED_BY = 33;
+  SOURCE_OWNED_FIELD_EMITTED_COMMAND = 34;
+  SOURCE_OWNED_FIELD_EMITTED_EVENTS = 35;
+  SOURCE_OWNED_FIELD_ENTRY = 36;
+  SOURCE_OWNED_FIELD_EXPOSURES = 37;
+  SOURCE_OWNED_FIELD_EXTERNAL_SOURCE = 38;
+  SOURCE_OWNED_FIELD_FIELDS = 39;
+  SOURCE_OWNED_FIELD_FILES = 40;
+  SOURCE_OWNED_FIELD_INDICATOR = 41;
+  SOURCE_OWNED_FIELD_INPUTS = 42;
+  SOURCE_OWNED_FIELD_ITEMS = 43;
+  SOURCE_OWNED_FIELD_KEY = 44;
+  SOURCE_OWNED_FIELD_KIND = 45;
+  SOURCE_OWNED_FIELD_LAYOUT = 46;
+  SOURCE_OWNED_FIELD_MEMBERS = 47;
+  SOURCE_OWNED_FIELD_MESSAGES = 48;
+  SOURCE_OWNED_FIELD_METADATA = 49;
+  SOURCE_OWNED_FIELD_NAVIGATION = 50;
+  SOURCE_OWNED_FIELD_NOTIFICATION_TARGETS = 51;
+  SOURCE_OWNED_FIELD_OBJECTIVES = 52;
+  SOURCE_OWNED_FIELD_OPERATIONS = 53;
+  SOURCE_OWNED_FIELD_OPTIONS = 54;
+  SOURCE_OWNED_FIELD_ORDER = 55;
+  SOURCE_OWNED_FIELD_OUTCOME = 56;
+  SOURCE_OWNED_FIELD_OUTPUTS = 57;
+  SOURCE_OWNED_FIELD_PERSONA = 58;
+  SOURCE_OWNED_FIELD_PROCESSOR = 59;
+  SOURCE_OWNED_FIELD_PROJECT = 60;
+  SOURCE_OWNED_FIELD_PROJECTION_ROLE = 61;
+  SOURCE_OWNED_FIELD_PROTOCOLS = 62;
+  SOURCE_OWNED_FIELD_PROVENANCE = 63;
+  SOURCE_OWNED_FIELD_PURPOSE = 64;
+  SOURCE_OWNED_FIELD_RATIONALE = 65;
+  SOURCE_OWNED_FIELD_READ_MODEL = 66;
+  SOURCE_OWNED_FIELD_REALIZES = 67;
+  SOURCE_OWNED_FIELD_RELATED_DECISIONS = 68;
+  SOURCE_OWNED_FIELD_RELATIONSHIPS = 69;
+  SOURCE_OWNED_FIELD_REPLACED_BY = 70;
+  SOURCE_OWNED_FIELD_RESIDENCY = 71;
+  SOURCE_OWNED_FIELD_RESPONSIBILITIES = 72;
+  SOURCE_OWNED_FIELD_RETENTION = 73;
+  SOURCE_OWNED_FIELD_ROLE = 74;
+  SOURCE_OWNED_FIELD_ROUTE = 75;
+  SOURCE_OWNED_FIELD_RULING = 76;
+  SOURCE_OWNED_FIELD_RUNBOOK = 77;
+  SOURCE_OWNED_FIELD_SCENARIOS = 78;
+  SOURCE_OWNED_FIELD_SCHEMA = 79;
+  SOURCE_OWNED_FIELD_SCHEMAS = 80;
+  SOURCE_OWNED_FIELD_SELECTED_OPTION = 81;
+  SOURCE_OWNED_FIELD_SERVICE = 82;
+  SOURCE_OWNED_FIELD_SIGNAL = 83;
+  SOURCE_OWNED_FIELD_SLICES = 84;
+  SOURCE_OWNED_FIELD_SLOT = 85;
+  SOURCE_OWNED_FIELD_SLOTS = 86;
+  SOURCE_OWNED_FIELD_SOURCE_EVENTS = 87;
+  SOURCE_OWNED_FIELD_SOURCE_READ_MODELS = 88;
+  SOURCE_OWNED_FIELD_SOURCE_REF = 89;
+  SOURCE_OWNED_FIELD_STATE = 90;
+  SOURCE_OWNED_FIELD_STATUS = 91;
+  SOURCE_OWNED_FIELD_STORE_CLASS = 92;
+  SOURCE_OWNED_FIELD_STREAM_ID = 93;
+  SOURCE_OWNED_FIELD_SUBJECTS = 94;
+  SOURCE_OWNED_FIELD_SUPERSEDES = 95;
+  SOURCE_OWNED_FIELD_SWIMLANE = 96;
+  SOURCE_OWNED_FIELD_TARGET = 97;
+  SOURCE_OWNED_FIELD_TECH = 98;
+  SOURCE_OWNED_FIELD_TECHNOLOGY = 99;
+  SOURCE_OWNED_FIELD_TERMS = 100;
+  SOURCE_OWNED_FIELD_TIME_WINDOW = 101;
+  SOURCE_OWNED_FIELD_TRACES = 102;
+  SOURCE_OWNED_FIELD_TRANSITIONS = 103;
+  SOURCE_OWNED_FIELD_UI = 104;
+  SOURCE_OWNED_FIELD_USAGES = 105;
+  SOURCE_OWNED_FIELD_BODY = 106;
+  SOURCE_OWNED_FIELD_BROKER = 107;
+  SOURCE_OWNED_FIELD_MEASURE = 108;
+}
+message SourceNoOwnership {}
+message SourceWholeOwnerOwnership {}
+message SourceOwnedFields {
+  repeated SourceOwnedField fields = 1;
+}
+message SourceFieldOwnership {
+  oneof policy {
+    SourceNoOwnership none = 1;
+    SourceWholeOwnerOwnership whole_owner = 2;
+    SourceOwnedFields fields = 3;
+  }
+}
+enum SourceDeletionPolicy {
+  SOURCE_DELETION_POLICY_UNSPECIFIED = 0;
+  SOURCE_DELETION_POLICY_RETAIN_NATIVE = 1;
+  SOURCE_DELETION_POLICY_EXCLUSIVE_SAFE_DELETE = 2;
+}
+message SourceRunBudgets {
+  uint64 supplied_bytes = 1;
+  uint32 files = 2;
+  uint32 resources = 3;
+  uint32 relations = 4;
+  uint32 mappings = 5;
+  uint32 hydrated_owners = 6;
+  uint32 examined_occurrences = 7;
+  uint32 native_operations = 8;
+  uint32 mapping_updates = 9;
+  uint32 control_transitions = 10;
+  uint32 result_records = 11;
+  uint64 result_bytes = 12;
+  uint64 phase_timeout_ms = 13;
+  uint32 page_records = 14;
+  uint64 page_bytes = 15;
+}
+message SourceRetentionPolicy {
+  uint64 registration_bytes = 1;
+  uint64 unaccepted_snapshot_seconds = 2;
+  uint64 preview_seconds = 3;
+  uint64 accepted_snapshot_seconds = 4;
+  uint64 base_seconds = 5;
+  uint64 settled_outcome_seconds = 6;
+  uint64 marker_seconds = 7;
+  uint64 audit_seconds = 8;
+  uint64 raw_bytes_seconds = 9;
+  uint64 overlay_seconds = 10;
+}
+message SourceRegistration {
+  string id = 1;
+  string revision = 2;
+  string administration_namespace = 3;
+  repeated string destination_namespaces = 4;
+  uint32 profile_revision = 5;
+  string ownership_policy_revision = 6;
+  SourceRunBudgets budgets = 7;
+  SourceRetentionPolicy retention = 8;
+  SourceDeletionPolicy deletion_policy = 9;
+  int64 created_at_unix_ms = 10;
+}
+message SourceFile {
+  string logical_name = 1;
+  string media_type = 2;
+  bytes content = 3;
+  string content_digest = 4;
+}
+enum SourceCoverage {
+  SOURCE_COVERAGE_UNSPECIFIED = 0;
+  SOURCE_COVERAGE_PARTIAL = 1;
+  SOURCE_COVERAGE_COMPLETE = 2;
+}
+message SourceSnapshot {
+  string id = 1;
+  string revision = 2;
+  string registration_id = 3;
+  string source_version = 4;
+  bytes inventory_bytes = 5;
+  repeated SourceFile files = 6;
+  string inventory_digest = 7;
+  string bundle_digest = 8;
+  SourceCoverage declared_coverage = 9;
+  int64 created_at_unix_ms = 10;
+  optional int64 accepted_at_unix_ms = 11;
+  int64 expires_at_unix_ms = 12;
+  bool bytes_available = 13;
+  uint32 profile_revision = 14;
+}
+message SourcePointer {
+  string kind = 1;
+  string raw = 2;
+}
+enum SourceOverlayStatus {
+  SOURCE_OVERLAY_STATUS_UNSPECIFIED = 0;
+  SOURCE_OVERLAY_STATUS_RESOLVED = 1;
+  SOURCE_OVERLAY_STATUS_MISSING = 2;
+  SOURCE_OVERLAY_STATUS_AMBIGUOUS = 3;
+  SOURCE_OVERLAY_STATUS_DEFERRED = 4;
+  SOURCE_OVERLAY_STATUS_CONFLICT = 5;
+  SOURCE_OVERLAY_STATUS_UNAVAILABLE = 6;
+}
+message SourceOverlayEntry {
+  SourceResourceKey source = 1;
+  optional string occurrence_key = 2;
+  optional string role = 3;
+  optional uint64 position = 4;
+  SourcePointer pointer = 5;
+  string logical_name = 6;
+  SourceOverlayStatus status = 7;
+  repeated SourceSelection authorized_candidates = 8;
+  string reason_code = 9;
+}
+message SourceOverlay {
+  string snapshot_id = 1;
+  string revision = 2;
+  optional string branch = 3;
+  repeated SourceOverlayEntry entries = 4;
+  bool incomplete = 5;
+}
+message SourceObservedOwner {
+  trogonatlas.eventmodel.v1alpha1.EntityRef owner = 1;
+  string uid = 2;
+  string etag = 3;
+}
+message SourceAdoption {
+  SourceObservedOwner observed = 1;
+  bool authorized_adoption = 2;
+}
+message SourceMergeBase {
+  string revision = 1;
+  string snapshot_id = 2;
+  string source_version = 3;
+  trogonatlas.eventmodel.v1alpha1.Entity source_value = 4;
+  trogonatlas.eventmodel.v1alpha1.Entity native_value = 5;
+  SourceObservedOwner observed = 6;
+  optional string branch = 7;
+  string ownership_policy_revision = 8;
+  int64 accepted_at_unix_ms = 9;
+  int64 expires_at_unix_ms = 10;
+  string run_id = 11;
+}
+message SourceMapping {
+  string id = 1;
+  string revision = 2;
+  SourceResourceKey source = 3;
+  SourceSelection selection = 4;
+  SourceFieldOwnership ownership = 5;
+  SourceAdoption adoption = 6;
+  SourceMergeBase base = 7;
+  optional string branch = 8;
+  bool detached = 9;
+  string last_accepted_run_id = 10;
+  SourceObservedOwner observed = 11;
+}
+enum SourceFidelityDisposition {
+  SOURCE_FIDELITY_DISPOSITION_UNSPECIFIED = 0;
+  SOURCE_FIDELITY_DISPOSITION_PRESERVED = 1;
+  SOURCE_FIDELITY_DISPOSITION_NORMALIZED = 2;
+  SOURCE_FIDELITY_DISPOSITION_RETAINED_OVERLAY_ONLY = 3;
+  SOURCE_FIDELITY_DISPOSITION_DEFERRED = 4;
+  SOURCE_FIDELITY_DISPOSITION_CONFLICTED = 5;
+  SOURCE_FIDELITY_DISPOSITION_SKIPPED = 6;
+  SOURCE_FIDELITY_DISPOSITION_TRUNCATED = 7;
+}
+message SourceFidelityRecord {
+  SourceResourceKey source = 1;
+  SourceSelection selection = 2;
+  optional string occurrence_key = 3;
+  optional SourceOwnedField field = 4;
+  SourceFidelityDisposition disposition = 5;
+  string reason_code = 6;
+  bool native_reapply_supported = 7;
+  bool original_bytes_recoverable = 8;
+}
+message SourceFidelityReport {
+  SourceCoverage checked_coverage = 1;
+  repeated SourceFidelityRecord records = 2;
+  bool incomplete = 3;
+  bool native_reapply_supported = 4;
+  bool original_bytes_recoverable = 5;
+  repeated SourceObservedOwner checked_owners = 6;
+  optional string branch = 7;
+  repeated string checked_namespaces = 8;
+  string bundle_digest = 9;
+}
+message SourceNativePayload {
+  SourceResourceKey source = 1;
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 2;
+}
+message SourceCompletenessDecision {
+  bool verified_complete = 1;
+  string inventory_digest = 2;
+  string base_snapshot_id = 3;
+}
+message SourceNativeGuard {
+  trogonatlas.eventmodel.v1alpha1.EntityRef owner = 1;
+  oneof condition {
+    SourceObservedOwner existing = 2;
+    bool absent = 3;
+  }
+}
+message SourceMappingGuard {
+  string mapping_id = 1;
+  string revision = 2;
+  string base_revision = 3;
+}
+message SourcePutOperation {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  SourceNativeGuard guard = 2;
+}
+message SourceDeleteOperation {
+  SourceNativeGuard guard = 1;
+}
+message SourceNativeOperation {
+  string mapping_id = 1;
+  SourceResourceKey source = 2;
+  oneof operation {
+    SourcePutOperation put = 3;
+    SourceDeleteOperation delete = 4;
+  }
+}
+enum SourceResultDisposition {
+  SOURCE_RESULT_DISPOSITION_UNSPECIFIED = 0;
+  SOURCE_RESULT_DISPOSITION_CREATE = 1;
+  SOURCE_RESULT_DISPOSITION_UPDATE = 2;
+  SOURCE_RESULT_DISPOSITION_UNCHANGED = 3;
+  SOURCE_RESULT_DISPOSITION_DELETE = 4;
+  SOURCE_RESULT_DISPOSITION_DETACH = 5;
+  SOURCE_RESULT_DISPOSITION_DEFERRED = 6;
+  SOURCE_RESULT_DISPOSITION_CONFLICT = 7;
+  SOURCE_RESULT_DISPOSITION_LOCAL_DRIFT = 8;
+  SOURCE_RESULT_DISPOSITION_CONVERGENT = 9;
+}
+message SourceRunResult {
+  SourceResourceKey source = 1;
+  string mapping_id = 2;
+  SourceSelection selection = 3;
+  SourceResultDisposition disposition = 4;
+  string reason_code = 5;
+  optional SourceOwnedField field = 6;
+}
+enum SourceRunStatus {
+  SOURCE_RUN_STATUS_UNSPECIFIED = 0;
+  SOURCE_RUN_STATUS_PREPARED = 1;
+  SOURCE_RUN_STATUS_PREVIEWED = 2;
+  SOURCE_RUN_STATUS_APPLYING = 3;
+  SOURCE_RUN_STATUS_APPLIED = 4;
+  SOURCE_RUN_STATUS_REJECTED = 5;
+  SOURCE_RUN_STATUS_CANCELLED = 6;
+  SOURCE_RUN_STATUS_OUTCOME_UNKNOWN = 7;
+}
+enum SourceCancellationDisposition {
+  SOURCE_CANCELLATION_DISPOSITION_UNSPECIFIED = 0;
+  SOURCE_CANCELLATION_DISPOSITION_NOT_REQUESTED = 1;
+  SOURCE_CANCELLATION_DISPOSITION_PREVENTED_PUBLICATION = 2;
+  SOURCE_CANCELLATION_DISPOSITION_REQUESTED_PENDING_RECOVERY = 3;
+  SOURCE_CANCELLATION_DISPOSITION_ALREADY_COMMITTED = 4;
+}
+message SourceRunPlan {
+  repeated SourceNativeOperation operations = 1;
+  repeated SourceNativeGuard native_guards = 2;
+  repeated SourceMappingGuard mapping_guards = 3;
+  string registration_revision = 4;
+  optional string branch = 5;
+  string branch_revision = 6;
+  SourceCompletenessDecision completeness = 7;
+}
+message SourceCommittedValue {
+  SourceResourceKey source = 1;
+  string mapping_id = 2;
+  SourceObservedOwner observed = 3;
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 4;
+  bool deleted = 5;
+}
+message SourceCommitMarker {
+  string run_id = 1;
+  string plan_digest = 2;
+  optional string branch = 3;
+  repeated SourceCommittedValue values = 4;
+  string native_operation_id = 5;
+  int64 committed_at_unix_ms = 6;
+}
+message ReconciliationRun {
+  string id = 1;
+  string revision = 2;
+  string registration_id = 3;
+  string snapshot_id = 4;
+  string request_digest = 5;
+  string configuration_digest = 6;
+  string preview_digest = 7;
+  SourceRunStatus status = 8;
+  SourceRunPlan plan = 9;
+  repeated SourceRunResult results = 10;
+  SourceFidelityReport fidelity = 11;
+  SourceRunBudgets budgets = 12;
+  SourceCancellationDisposition cancellation = 13;
+  SourceCommitMarker marker = 14;
+  int64 created_at_unix_ms = 15;
+  int64 expires_at_unix_ms = 16;
+  optional int64 settled_at_unix_ms = 17;
+  bool recovery_required = 18;
+  bool overlay_only = 19;
+  bool incomplete = 20;
+  optional string branch = 21;
+  string authorized_scope_digest = 22;
+  string principal = 23;
+  bool details_omitted = 24;
+  uint32 result_count = 25;
+  uint32 operation_count = 26;
+}
+message SourceIdentityTombstone {
+  string registration_id = 1;
+  oneof identity {
+    string source_version = 2;
+    string run_id = 3;
+  }
+  string request_digest = 4;
+  optional string branch = 5;
+}
+message CreateSourceRegistrationRequest {
+  SourceRegistration registration = 1;
+}
+message CreateSourceRegistrationResponse {
+  SourceRegistration registration = 1;
+}
+message UpdateSourceRegistrationRequest {
+  SourceRegistration registration = 1;
+  string if_match = 2;
+}
+message UpdateSourceRegistrationResponse {
+  SourceRegistration registration = 1;
+}
+message GetSourceRegistrationRequest {
+  string registration_id = 1;
+}
+message GetSourceRegistrationResponse {
+  SourceRegistration registration = 1;
+}
+message ListSourceRegistrationsRequest {
+  string administration_namespace = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+message ListSourceRegistrationsResponse {
+  repeated SourceRegistration registrations = 1;
+  string next_page_token = 2;
+}
+message DeleteSourceRegistrationRequest {
+  string registration_id = 1;
+  string if_match = 2;
+}
+message DeleteSourceRegistrationResponse {}
+message AcceptSourceSnapshotRequest {
+  string registration_id = 1;
+  string registration_revision = 2;
+  bytes inventory_bytes = 3;
+  repeated SourceFile files = 4;
+}
+message AcceptSourceSnapshotResponse {
+  SourceSnapshot snapshot = 1;
+}
+message GetSourceSnapshotRequest {
+  string registration_id = 1;
+  string snapshot_id = 2;
+  bool include_bytes = 3;
+}
+message GetSourceSnapshotResponse {
+  SourceSnapshot snapshot = 1;
+}
+message ListSourceSnapshotsRequest {
+  string registration_id = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+message ListSourceSnapshotsResponse {
+  repeated SourceSnapshot snapshots = 1;
+  string next_page_token = 2;
+}
+message CreateSourceMappingRequest {
+  SourceMapping mapping = 1;
+  string registration_revision = 2;
+}
+message CreateSourceMappingResponse {
+  SourceMapping mapping = 1;
+}
+message UpdateSourceMappingRequest {
+  SourceMapping mapping = 1;
+  string if_match = 2;
+  string registration_revision = 3;
+}
+message UpdateSourceMappingResponse {
+  SourceMapping mapping = 1;
+}
+message GetSourceMappingRequest {
+  string registration_id = 1;
+  string mapping_id = 2;
+}
+message GetSourceMappingResponse {
+  SourceMapping mapping = 1;
+}
+message ListSourceMappingsRequest {
+  string registration_id = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+message ListSourceMappingsResponse {
+  repeated SourceMapping mappings = 1;
+  string next_page_token = 2;
+}
+message DeleteSourceMappingRequest {
+  string registration_id = 1;
+  string mapping_id = 2;
+  string if_match = 3;
+  string registration_revision = 4;
+}
+message DeleteSourceMappingResponse {}
+message GetSourceOverlayRequest {
+  string registration_id = 1;
+  string snapshot_id = 2;
+  uint32 page_size = 3;
+  string page_token = 4;
+}
+message GetSourceOverlayResponse {
+  SourceOverlay overlay = 1;
+  string next_page_token = 2;
+}
+message PreviewSourceRunRequest {
+  string registration_id = 1;
+  string registration_revision = 2;
+  string snapshot_id = 3;
+  string run_id = 4;
+  repeated SourceNativePayload native_payloads = 5;
+  SourceCompletenessDecision completeness = 6;
+  bool overlay_only = 7;
+}
+message PreviewSourceRunResponse {
+  ReconciliationRun run = 1;
+}
+message ApplySourceRunRequest {
+  string registration_id = 1;
+  string run_id = 2;
+  string if_match = 3;
+  string preview_digest = 4;
+}
+message ApplySourceRunResponse {
+  ReconciliationRun run = 1;
+}
+message CancelSourceRunRequest {
+  string registration_id = 1;
+  string run_id = 2;
+  string if_match = 3;
+}
+message CancelSourceRunResponse {
+  ReconciliationRun run = 1;
+}
+message GetSourceRunRequest {
+  string registration_id = 1;
+  string run_id = 2;
+}
+message GetSourceRunResponse {
+  ReconciliationRun run = 1;
+}
+message ListSourceRunsRequest {
+  string registration_id = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+message ListSourceRunsResponse {
+  repeated ReconciliationRun runs = 1;
+  string next_page_token = 2;
+}
+message RecoverSourceRunRequest {
+  string registration_id = 1;
+  string run_id = 2;
+  string if_match = 3;
+}
+message RecoverSourceRunResponse {
+  ReconciliationRun run = 1;
+}
+
+message ListSourceRunResultsRequest {
+  string registration_id = 1;
+  string run_id = 2;
+  uint32 page_size = 3;
+  string page_token = 4;
+}
+message ListSourceRunResultsResponse {
+  repeated SourceRunResult results = 1;
+  SourceFidelityReport fidelity = 2;
+  string next_page_token = 3;
+  bool incomplete = 4;
+  string run_revision = 5;
+  string preview_digest = 6;
+}
+message SourceRunOperationEntry {
+  oneof entry {
+    SourceNativeOperation operation = 1;
+    SourceNativeGuard native_guard = 2;
+    SourceMappingGuard mapping_guard = 3;
+  }
+}
+message ListSourceRunOperationsRequest {
+  string registration_id = 1;
+  string run_id = 2;
+  uint32 page_size = 3;
+  string page_token = 4;
+}
+message ListSourceRunOperationsResponse {
+  repeated SourceRunOperationEntry entries = 1;
+  string next_page_token = 2;
+  string run_revision = 3;
+  string preview_digest = 4;
+  bool incomplete = 5;
+}
