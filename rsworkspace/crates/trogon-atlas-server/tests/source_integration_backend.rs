@@ -858,6 +858,303 @@ async fn raw_expiry_keeps_logical_overlay_without_claiming_original_bytes() {
 }
 
 #[tokio::test]
+async fn raw_expiry_preserves_native_reapply_fidelity() {
+    let mut server = server(trogon_atlas_testsupport::shared().await.store().await).await;
+    let seed = seed(&mut server.client, None, vec![pb::SourceOwnedField::Title]).await;
+    let run = preview(
+        &mut server.client,
+        &seed,
+        "raw-native-fidelity",
+        entity(&seed.namespace, "source title", "local doc"),
+        None,
+    )
+    .await;
+    let (_, before) = reports(&mut server.client, &run, 1).await;
+    assert!(before.native_reapply_supported);
+    assert!(before.original_bytes_recoverable);
+    assert_ne!(before.records, []);
+    assert!(before
+        .records
+        .iter()
+        .all(|record| { record.native_reapply_supported && record.original_bytes_recoverable }));
+    let native_flags: Vec<_> = before
+        .records
+        .iter()
+        .map(|record| record.native_reapply_supported)
+        .collect();
+    let mut registration = seed.registration.clone();
+    registration.retention.as_mut().unwrap().raw_bytes_seconds = 1;
+    server
+        .client
+        .update_source_registration(req(
+            ADMIN,
+            pb::UpdateSourceRegistrationRequest {
+                registration: Some(registration),
+                if_match: seed.registration.revision.clone(),
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+    wait_backend_expiry(
+        seed.snapshot
+            .accepted_at_unix_ms
+            .unwrap_or(seed.snapshot.created_at_unix_ms)
+            + 1000,
+    )
+    .await;
+    let expired = server
+        .client
+        .get_source_snapshot(req(
+            READER,
+            pb::GetSourceSnapshotRequest {
+                registration_id: seed.registration.id.clone(),
+                snapshot_id: seed.snapshot.id.clone(),
+                include_bytes: true,
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .snapshot
+        .unwrap();
+    assert!(!expired.bytes_available);
+    assert_eq!(expired.inventory_bytes, Vec::<u8>::new());
+    assert_eq!(expired.files, []);
+    let (_, after) = reports(&mut server.client, &run, 1).await;
+    assert!(!after.original_bytes_recoverable);
+    assert!(after
+        .records
+        .iter()
+        .all(|record| !record.original_bytes_recoverable));
+    assert_eq!(
+        after.native_reapply_supported, before.native_reapply_supported,
+        "raw byte expiry must preserve same-store native reapply fidelity"
+    );
+    assert_eq!(
+        after
+            .records
+            .iter()
+            .map(|record| record.native_reapply_supported)
+            .collect::<Vec<_>>(),
+        native_flags,
+        "raw byte expiry must preserve per-record native reapply fidelity"
+    );
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct RetainedRunAudit {
+    #[prost(message, optional, tag = "1")]
+    run: Option<pb::ReconciliationRun>,
+    #[prost(message, repeated, tag = "2")]
+    payloads: Vec<pb::SourceNativePayload>,
+    #[prost(message, repeated, tag = "3")]
+    values: Vec<pb::SourceCommittedValue>,
+}
+
+// The service omits retained audit payloads, so inspect their persisted wire fields.
+async fn retained_run_audit(store: &NatsStore, run: &pb::ReconciliationRun) -> RetainedRunAudit {
+    use prost::Message;
+    use trogon_atlas_store::{source::SourceDocumentKey, Store};
+
+    #[derive(Clone, PartialEq, Message)]
+    struct RetainedSourceRuns {
+        #[prost(message, repeated, tag = "4")]
+        runs: Vec<RetainedRunAudit>,
+    }
+
+    let document = store
+        .source_get(&SourceDocumentKey::new(run.registration_id.clone()).unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    RetainedSourceRuns::decode(document.bytes.as_slice())
+        .unwrap()
+        .runs
+        .into_iter()
+        .find(|stored| stored.run.as_ref().is_some_and(|value| value.id == run.id))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn outcome_expiry_preserves_independent_marker_and_audit_retention() {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let mut server = server(store.clone()).await;
+    let mut seed = seed(&mut server.client, None, vec![pb::SourceOwnedField::Title]).await;
+    let mut configuration = seed.registration.clone();
+    let retention = configuration.retention.as_mut().unwrap();
+    retention.settled_outcome_seconds = 1;
+    retention.marker_seconds = 5;
+    retention.audit_seconds = 10;
+    seed.registration = server
+        .client
+        .update_source_registration(req(
+            ADMIN,
+            pb::UpdateSourceRegistrationRequest {
+                registration: Some(configuration),
+                if_match: seed.registration.revision.clone(),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .registration
+        .unwrap();
+    let previewed = preview(
+        &mut server.client,
+        &seed,
+        "independent-outcome-retention",
+        entity(&seed.namespace, "source title", "local doc"),
+        None,
+    )
+    .await;
+    let applied = apply(&mut server.client, &previewed).await;
+    assert_eq!(applied.status, pb::SourceRunStatus::Applied as i32);
+    let before = retained_run_audit(&store, &applied).await;
+    assert!(before.run.as_ref().unwrap().marker.is_some());
+    assert_ne!(before.payloads, []);
+    assert_ne!(before.values, []);
+    wait_backend_expiry(applied.expires_at_unix_ms).await;
+    seed.registration = server
+        .client
+        .update_source_registration(req(
+            ADMIN,
+            pb::UpdateSourceRegistrationRequest {
+                registration: Some(seed.registration.clone()),
+                if_match: seed.registration.revision.clone(),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .registration
+        .unwrap();
+    let after = retained_run_audit(&store, &applied).await;
+    let expired = after.run.as_ref().unwrap();
+    assert!(expired.details_omitted);
+    assert_eq!(expired.results, []);
+    assert!(expired.fidelity.is_none());
+    assert_eq!(
+        (expired.marker.as_ref(), &after.payloads, &after.values),
+        (
+            before.run.as_ref().unwrap().marker.as_ref(),
+            &before.payloads,
+            &before.values
+        ),
+        "outcome expiry must preserve marker and audit until their independent deadlines"
+    );
+    let settled = applied.settled_at_unix_ms.unwrap();
+    wait_backend_expiry(settled + 5000).await;
+    seed.registration = server
+        .client
+        .update_source_registration(req(
+            ADMIN,
+            pb::UpdateSourceRegistrationRequest {
+                registration: Some(seed.registration.clone()),
+                if_match: seed.registration.revision.clone(),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .registration
+        .unwrap();
+    let marker_expired = retained_run_audit(&store, &applied).await;
+    assert!(marker_expired.run.as_ref().unwrap().marker.is_none());
+    assert_eq!(marker_expired.payloads, before.payloads);
+    assert_eq!(marker_expired.values, before.values);
+    wait_backend_expiry(settled + 10_000).await;
+    server
+        .client
+        .update_source_registration(req(
+            ADMIN,
+            pb::UpdateSourceRegistrationRequest {
+                registration: Some(seed.registration.clone()),
+                if_match: seed.registration.revision.clone(),
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+    let audit_expired = retained_run_audit(&store, &applied).await;
+    assert_eq!(audit_expired.payloads, []);
+    assert_eq!(audit_expired.values, []);
+    assert_eq!(
+        title(
+            get_native(&mut server.client, &seed, None)
+                .await
+                .entity
+                .as_ref()
+                .unwrap()
+        ),
+        "source title"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn automatic_sweep_discards_expired_unpublished_native_payloads() {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let mut server = server(store.clone()).await;
+    let mut seed = seed(&mut server.client, None, vec![pb::SourceOwnedField::Title]).await;
+    let mut configuration = seed.registration.clone();
+    let retention = configuration.retention.as_mut().unwrap();
+    retention.preview_seconds = 1;
+    retention.audit_seconds = 300;
+    seed.registration = server
+        .client
+        .update_source_registration(req(
+            ADMIN,
+            pb::UpdateSourceRegistrationRequest {
+                registration: Some(configuration),
+                if_match: seed.registration.revision.clone(),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .registration
+        .unwrap();
+    let run = preview(
+        &mut server.client,
+        &seed,
+        "abandoned-native-preview",
+        entity(&seed.namespace, "source title", "local doc"),
+        None,
+    )
+    .await;
+    let before = retained_run_audit(&store, &run).await;
+    assert_ne!(before.payloads, []);
+    assert_ne!(before.values, []);
+    let after = tokio::time::timeout(std::time::Duration::from_secs(90), async {
+        loop {
+            let stored = retained_run_audit(&store, &run).await;
+            if stored.run.as_ref().unwrap().settled_at_unix_ms.is_some() {
+                break stored;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .expect("the real retention sweep must settle an expired unpublished preview");
+    let expired = after.run.unwrap();
+    assert_eq!(expired.status, pb::SourceRunStatus::Rejected as i32);
+    assert_eq!(expired.settled_at_unix_ms, Some(run.expires_at_unix_ms));
+    assert!(expired.details_omitted);
+    assert!(expired.marker.is_none());
+    assert_eq!(after.payloads, []);
+    assert_eq!(after.values, []);
+    assert_eq!(
+        get_native(&mut server.client, &seed, None).await.etag,
+        seed.etag
+    );
+}
+
+#[tokio::test]
 async fn overlay_expiry_keeps_raw_bytes_without_claiming_a_retained_overlay() {
     let mut server = server(trogon_atlas_testsupport::shared().await.store().await).await;
     let namespace = namespace(&mut server.client, "overlay-retention", "visible-owner").await;

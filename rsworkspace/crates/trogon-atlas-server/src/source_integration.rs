@@ -230,10 +230,8 @@ fn expire(state: &mut SourceState) {
                     .is_none_or(|snapshot| !snapshot.bytes_available)
                 {
                     report.original_bytes_recoverable = false;
-                    report.native_reapply_supported = false;
                     for record in &mut report.records {
                         record.original_bytes_recoverable = false;
-                        record.native_reapply_supported = false;
                     }
                 }
                 if expired_overlays.contains(&run.snapshot_id) {
@@ -276,12 +274,14 @@ fn expire(state: &mut SourceState) {
                         guard.condition = None;
                     }
                 }
-                run.marker = None;
+                if run.settled_at_unix_ms.is_none() {
+                    run.marker = None;
+                    stored.payloads.clear();
+                    stored.values.clear();
+                }
                 run.results.clear();
                 run.fidelity = None;
                 run.details_omitted = true;
-                stored.payloads.clear();
-                stored.values.clear();
             }
         }
     }
@@ -3299,6 +3299,8 @@ async fn sweep_registration(
             run.status = pb::SourceRunStatus::Rejected as i32;
             run.settled_at_unix_ms = Some(run.expires_at_unix_ms);
             run.revision = revision();
+            stored.payloads.clear();
+            stored.values.clear();
         }
     }
     for run in state.runs.iter().filter_map(|r| r.run.as_ref()) {
