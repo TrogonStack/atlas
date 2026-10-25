@@ -873,6 +873,29 @@ fn selection_owner(selection: &pb::SourceSelection) -> Result<pb::EntityRef, Sta
         }
     }
 }
+fn native_relationships_only(
+    current: Option<&pb::Entity>,
+    incoming: Option<&pb::Entity>,
+    ownership: &pb::SourceFieldOwnership,
+) -> Result<(), Status> {
+    let has_relationships = |entity: &pb::Entity| {
+        !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
+    };
+    let whole_owner = matches!(
+        ownership.policy,
+        Some(pb::source_field_ownership::Policy::WholeOwner(_))
+    );
+    if (current.is_none() && incoming.is_some_and(has_relationships))
+        || (whole_owner
+            && (current.is_some_and(has_relationships) || incoming.is_some_and(has_relationships)))
+    {
+        return Err(Status::invalid_argument(
+            "architectural relationships support native authoring only",
+        ));
+    }
+    Ok(())
+}
+
 fn resolve_selection(selection: &pb::SourceSelection, entity: &pb::Entity) -> Result<(), Status> {
     use pb::source_selection::Selection;
     match selection.selection.as_ref().ok_or_else(invalid)? {
@@ -1052,6 +1075,7 @@ async fn prepare_mapping(
     }
     match checked_selection(service, ctx, selection).await {
         Ok(current) => {
+            native_relationships_only(Some(&current.entity), None, policy)?;
             bounded(core::validate_ownership(&current.entity, policy))?;
             let observation = observed(&owner, &current);
             let adoption = value.adoption.as_ref().ok_or_else(|| {
@@ -1864,6 +1888,11 @@ async fn preview_source_run_attempt(
                 Err(StoreError::NotFound) => None,
                 Err(e) => return Err(store_err(e)),
             };
+            native_relationships_only(
+                current.as_ref().map(|value| &value.entity),
+                Some(incoming),
+                ownership,
+            )?;
             let guard = native_guard(&owner, current.as_ref());
             if !plan.native_guards.contains(&guard) {
                 plan.native_guards.push(guard.clone());
@@ -2126,6 +2155,11 @@ async fn preview_source_run_attempt(
                     )
                     .await
                     .map_err(store_err)?;
+                native_relationships_only(
+                    Some(&current.entity),
+                    None,
+                    mapping.ownership.as_ref().ok_or_else(invalid)?,
+                )?;
                 let guard = native_guard(&owner, Some(&current));
                 if !plan.native_guards.contains(&guard) {
                     plan.native_guards.push(guard.clone());

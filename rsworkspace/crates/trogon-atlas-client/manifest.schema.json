@@ -289,6 +289,46 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.ArchitecturalEndpoint": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "component",
+              "externalSystem"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ComponentRef"
+        },
+        "externalSystem": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalSystemRef"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "label": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "target": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ArchitecturalEndpoint"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.ArtifactPath": {
       "additionalProperties": false,
       "properties": {
@@ -1125,6 +1165,12 @@
               "@type"
             ],
             "type": "object"
+          },
+          "type": "array"
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship"
           },
           "type": "array"
         },
@@ -2787,6 +2833,12 @@
               "@type"
             ],
             "type": "object"
+          },
+          "type": "array"
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship"
           },
           "type": "array"
         },

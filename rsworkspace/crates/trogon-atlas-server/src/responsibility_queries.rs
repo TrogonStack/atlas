@@ -23,6 +23,8 @@ pub(super) struct ResponsibilityQuery {
     lens: Lens,
     branch: Option<String>,
     examined: usize,
+    examined_owners: HashSet<pb::EntityKey>,
+    resource_rows: HashSet<pb::EntityKey>,
     output: usize,
     subjects: Vec<pb::ResponsibilitySubject>,
 }
@@ -38,6 +40,22 @@ impl ResponsibilityQuery {
             return Err(Status::resource_exhausted(
                 "responsibility occurrence budget exceeded",
             ));
+        }
+        Ok(())
+    }
+
+    fn owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+        let key = pb::EntityKey::new(entity_kind(entity)?, entity_id(entity)?);
+        if crate::validation::architecture_resources::is_resource(entity)
+            && self.resource_rows.insert(key.clone())
+            && self.resource_rows.len() > 5_000
+        {
+            return Err(Status::resource_exhausted(
+                "responsibility resource budget exceeded",
+            ));
+        }
+        if self.examined_owners.insert(key) {
+            self.examine(occurrences(entity))?;
         }
         Ok(())
     }
@@ -201,13 +219,17 @@ impl EventModelServiceImpl {
                 incomplete = true;
                 break;
             }
-            let Some(row) = self.responsibility_read(&mut query, &reference).await? else {
+            let Some(row) = self.responsibility_lookup(&mut query, &reference).await? else {
                 incomplete = true;
                 continue;
             };
-            if !query.examine_within_budget(occurrences(&row.entity)) {
-                incomplete = true;
-                break;
+            match query.owner(&row.entity) {
+                Ok(()) => {}
+                Err(status) if status.code() == tonic::Code::ResourceExhausted => {
+                    incomplete = true;
+                    break;
+                }
+                Err(status) => return Err(status),
             }
             for target in trogon_atlas_core::refs::outbound_refs(&row.entity) {
                 if let Some(kind) = target.to_kind {
@@ -232,7 +254,7 @@ impl EventModelServiceImpl {
                             id: Some(target.to_id.clone()),
                         };
                         if self
-                            .responsibility_read(&mut query, &reference)
+                            .responsibility_lookup(&mut query, &reference)
                             .await?
                             .is_some()
                         {
@@ -279,12 +301,14 @@ impl EventModelServiceImpl {
             lens,
             branch: branch.map(str::to_owned),
             examined: 0,
+            examined_owners: HashSet::new(),
+            resource_rows: HashSet::new(),
             output: 0,
             subjects: Vec::new(),
         })
     }
 
-    async fn responsibility_read(
+    async fn responsibility_lookup(
         &self,
         query: &mut ResponsibilityQuery,
         reference: &pb::EntityRef,
@@ -295,8 +319,8 @@ impl EventModelServiceImpl {
             return Err(Status::not_found("target not found"));
         }
         let key = pb::EntityKey::new(kind, id);
-        if let Some(row) = query.world.get(&key) {
-            return Ok(row.clone());
+        if let Some(row) = query.world.get(&key).cloned() {
+            return Ok(row);
         }
         let row = match self.store.get(kind, id, query.branch.as_deref()).await {
             Ok(row) => Some(row),
@@ -304,6 +328,18 @@ impl EventModelServiceImpl {
             Err(error) => return Err(store_err(error)),
         };
         query.world.insert(key, row.clone());
+        Ok(row)
+    }
+
+    async fn responsibility_read(
+        &self,
+        query: &mut ResponsibilityQuery,
+        reference: &pb::EntityRef,
+    ) -> Result<Option<StoredEntity>, Status> {
+        let row = self.responsibility_lookup(query, reference).await?;
+        if let Some(row) = &row {
+            query.owner(&row.entity)?;
+        }
         Ok(row)
     }
 
@@ -331,18 +367,30 @@ impl EventModelServiceImpl {
         if trogon_atlas_core::responsibility::resolve_subject(subject, &row.entity).is_err() {
             return Ok(State::Unresolved);
         }
+        let architectural = matches!(
+            row.entity.kind,
+            Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+        );
         for (kind, id) in selected_endpoints(subject, &row.entity) {
             if !query.lens.admits(&id.namespace) {
-                return Ok(State::Inaccessible);
+                return Ok(if architectural {
+                    State::Unresolved
+                } else {
+                    State::Inaccessible
+                });
             }
-            self.responsibility_read(
-                query,
-                &pb::EntityRef {
-                    kind: kind as i32,
-                    id: Some(id),
-                },
-            )
-            .await?;
+            let target = self
+                .responsibility_read(
+                    query,
+                    &pb::EntityRef {
+                        kind: kind as i32,
+                        id: Some(id),
+                    },
+                )
+                .await?;
+            if architectural && target.is_none() {
+                return Ok(State::Unresolved);
+            }
         }
         Ok(State::Resolved)
     }
@@ -370,7 +418,7 @@ impl EventModelServiceImpl {
         }
         let mut found = Vec::new();
         for row in query.rows.clone() {
-            query.examine(occurrences(&row.entity))?;
+            query.owner(&row.entity)?;
             for assignment in assignments(&row.entity) {
                 if assignment.subject.as_ref() == Some(&subject)
                     && filter.is_none_or(|kind| assignment.kind == kind)
@@ -409,7 +457,7 @@ impl EventModelServiceImpl {
             .responsibility_read(&mut query, &reference)
             .await?
             .ok_or_else(|| Status::not_found("assignee not found"))?;
-        query.examine(occurrences(&row.entity))?;
+        query.owner(&row.entity)?;
         let mut found = Vec::new();
         for assignment in assignments(&row.entity) {
             if filter.is_some_and(|kind| assignment.kind != kind) {
@@ -485,7 +533,7 @@ impl EventModelServiceImpl {
         let Some(pb::entity::Kind::Team(value)) = &row.entity.kind else {
             return Err(Status::internal("invalid stored team"));
         };
-        query.examine(occurrences(&row.entity))?;
+        query.owner(&row.entity)?;
         let mut found = Vec::new();
         for member in &value.members {
             query.output()?;
@@ -521,7 +569,7 @@ impl EventModelServiceImpl {
         .ok_or_else(|| Status::not_found("person not found"))?;
         let mut found = Vec::new();
         for row in query.rows.clone() {
-            query.examine(occurrences(&row.entity))?;
+            query.owner(&row.entity)?;
             if let Some(pb::entity::Kind::Team(team)) = &row.entity.kind {
                 for member in &team.members {
                     if member.person.as_ref() == Some(&person) {

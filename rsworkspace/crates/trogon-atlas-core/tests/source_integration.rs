@@ -313,11 +313,18 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
             dynamic.set_field(&variant, prost_reflect::Value::Message(native));
             use prost::Message;
             let entity = Entity::decode(dynamic.encode_to_vec().as_slice()).expect("entity");
-            assert!(
-                validate_ownership(&entity, &ownership(&[field])).is_ok(),
-                "unit {enum_name} on {}",
-                owner.full_name()
-            );
+            let result = validate_ownership(&entity, &ownership(&[field]));
+            if name == "relationships"
+                && matches!(
+                    owner.full_name(),
+                    "trogonatlas.eventmodel.v1alpha1.Component"
+                        | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
+                )
+            {
+                assert_eq!(result, Err(SourceError::UnsupportedUnit));
+            } else {
+                assert!(result.is_ok(), "unit {enum_name} on {}", owner.full_name());
+            }
         }
     }
 }
