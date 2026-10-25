@@ -124,6 +124,16 @@ selectors require explicit rebinding. The
 typed boundary and read-only review surface.
 Remote connectors and additional format compilers remain separate milestones.
 
+## Proposed system relationship layer
+
+The [system relationship proposal](../reference/system-relationship-contracts.md)
+builds on existing Component and ExternalSystem boundaries. Its
+[acceptance requirements](../reference/system-relationship-acceptance.md)
+keep authored declarations distinct from checked behavioral paths and runtime
+evidence. This is a specification milestone, not native implementation or
+completed acceptance. Richer grouping and actor-interaction boundaries remain
+explicit in the proposal.
+
 ## Atlas Linter comes after the architecture resources
 
 The [remaining contract boundaries](../reference/architecture-resource-coverage.md#remaining-contract-boundaries)
