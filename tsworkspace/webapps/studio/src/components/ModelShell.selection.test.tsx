@@ -93,6 +93,23 @@ describe('ModelShell selection drawer routing', () => {
   });
   afterEach(cleanup);
 
+  it.each([
+    ['decision', 'delivery-choice', 'Delivery choice'],
+    ['document', 'delivery-note', 'Delivery note'],
+  ] as const)('opens the inspector from a %s focus deep link', async (kind, slug, title) => {
+    const model = buildModel([{ [kind]: { id: { namespace: 'shop', slug }, title: { value: title } } }]);
+    const entity = model.entities[0];
+    expect(entity.kind).toBe(kind);
+    rtlRender(<ModelShell model={model} scopedTitle="Shop" />, {
+      wrapper: withNuqsTestingAdapter({ searchParams: `?focus=${kind}:shop/${slug}` }),
+    });
+
+    await waitFor(() => expect(screen.getByTestId('inspector').textContent).toBe(title));
+    const board = screen.getByTestId('board');
+    expect(JSON.parse(board.getAttribute('data-selections') ?? 'null')).toEqual([{ type: 'entity', key: entity.key }]);
+    expect(JSON.parse(board.getAttribute('data-focus') ?? 'null')).toEqual({ key: entity.key, n: 1 });
+  });
+
   it('passes retained historical context to the inspector before the URL catches up', async () => {
     const model = buildModel([
       { event: { id: { namespace: 'shop', slug: 'order.placed', version: '1' }, title: 'Retained event' } },

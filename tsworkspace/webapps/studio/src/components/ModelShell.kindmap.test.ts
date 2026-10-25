@@ -38,6 +38,8 @@ const ALL_ENTITY_KINDS: EntityKind[] = [
   'person',
   'dataProduct',
   'specification',
+  'decision',
+  'document',
 ];
 
 describe('KIND_SHORT_TO_CAMEL registry completeness', () => {
