@@ -1189,6 +1189,33 @@ app.get(
   "/api/by-domain/:namespace/:slug",
   branchHandler(async (req) => {
     const { ns: nsParam, slug: slugParam } = namespaceSlugParams(req);
+    /** @param {string} name */
+    function scalarQuery(name) {
+      const value = req.query[name];
+      if (Object.keys(req.query).some((key) => key.startsWith(`${name}[`))) {
+        throw badRequest(`${name} must be a scalar query value`);
+      }
+      if (typeof value === "string") return value;
+      if (value === undefined) return undefined;
+      throw badRequest(`${name} must be a scalar query value`);
+    }
+    const version = scalarQuery("version") ?? "1";
+    if (!/^[1-9][0-9]*$/.test(version) || version.length > 20 || BigInt(version) > 18446744073709551615n) {
+      throw badRequest("version must be a positive uint64 decimal string");
+    }
+    const latest = scalarQuery("latestVersionsOnly");
+    if (latest !== undefined && latest !== "true" && latest !== "false") {
+      throw badRequest("latestVersionsOnly must be true or false");
+    }
+    const rawPageSize = scalarQuery("pageSize");
+    let pageSize;
+    if (rawPageSize !== undefined) {
+      if (!/^[1-9][0-9]*$/.test(rawPageSize) || rawPageSize.length > 10 || Number(rawPageSize) > 2147483647) {
+        throw badRequest("pageSize must be a positive int32");
+      }
+      pageSize = Number(rawPageSize);
+    }
+    const pageToken = scalarQuery("pageToken");
     const kinds = [];
     if (req.query.kinds) {
       for (const raw of String(req.query.kinds).split(",").filter(Boolean)) {
@@ -1207,10 +1234,12 @@ app.get(
       domainId: {
         namespace: nsParam,
         slug: slugParam,
-        version: "1",
+        version,
       },
       kinds,
-      latestVersionsOnly: true,
+      latestVersionsOnly: latest !== "false",
+      ...(pageSize !== undefined ? { pageSize } : {}),
+      ...(pageToken !== undefined ? { pageToken } : {}),
     });
   }),
 );

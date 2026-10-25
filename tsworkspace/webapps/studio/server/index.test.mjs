@@ -921,6 +921,80 @@ describe('GET /api/by-domain kinds query parity', () => {
   });
 });
 
+describe('GET /api/by-domain query controls', () => {
+  let invoke;
+
+  beforeEach(() => {
+    invoke = vi.spyOn(fakeClient, 'listEntitiesByDomain').mockImplementation((_req, _meta, _opts, cb) => {
+      cb(null, { entities: [], nextPageToken: 'next+/= token' });
+    });
+  });
+
+  afterEach(() => {
+    invoke.mockRestore();
+  });
+
+  it('preserves omitted defaults without adding page controls', async () => {
+    const res = await request(app).get('/api/by-domain/my-ns/checkout');
+    expect(res.status).toBe(200);
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke.mock.calls[0][0]).toEqual({
+      domainId: { namespace: 'my-ns', slug: 'checkout', version: '1' },
+      kinds: [],
+      latestVersionsOnly: true,
+    });
+    expect(res.body).toEqual({ entities: [], nextPageToken: 'next+/= token' });
+  });
+
+  it.each(['9007199254740993', '18446744073709551615'])(
+    'forwards exact version %s, false, page controls, kinds and branch metadata', async (version) => {
+      const res = await request(app).get('/api/by-domain/my-ns/checkout').query({
+        version, latestVersionsOnly: 'false', pageSize: '2147483647',
+        pageToken: 'opaque+/= token&value', kinds: 'read-model,commandslice,ENTITY_KIND_EVENT',
+        branch: 'review/domain',
+      });
+      expect(res.status).toBe(200);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0][0]).toEqual({
+        domainId: { namespace: 'my-ns', slug: 'checkout', version },
+        kinds: [3, 8, 1], latestVersionsOnly: false,
+        pageSize: 2147483647, pageToken: 'opaque+/= token&value',
+      });
+      expect(invoke.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['review/domain']);
+      expect(res.body).toEqual({ entities: [], nextPageToken: 'next+/= token' });
+    },
+  );
+
+  it('accepts explicit true, minimum numbers, an empty cursor and the branch header', async () => {
+    const res = await request(app).get('/api/by-domain/my-ns/checkout')
+      .set('x-trogon-atlas-branch', 'review/domain')
+      .query({ version: '1', latestVersionsOnly: 'true', pageSize: '1', pageToken: '' });
+    expect(res.status).toBe(200);
+    expect(invoke.mock.calls[0][0]).toEqual({
+      domainId: { namespace: 'my-ns', slug: 'checkout', version: '1' },
+      kinds: [], latestVersionsOnly: true, pageSize: 1, pageToken: '',
+    });
+    expect(invoke.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['review/domain']);
+  });
+
+  it.each([
+    ...['', '0', '-1', '1.5', '1e2', '+1', ' 1', '01', 'Infinity', '18446744073709551616', '999999999999999999999']
+      .map((value) => `version=${encodeURIComponent(value)}`),
+    ...['', '0', '-1', '1.5', '1e2', '+1', ' 1', '01', 'Infinity', '2147483648']
+      .map((value) => `pageSize=${encodeURIComponent(value)}`),
+    ...['', 'TRUE', 'False', '1', '0', 'yes', ' false']
+      .map((value) => `latestVersionsOnly=${encodeURIComponent(value)}`),
+    ...['version', 'latestVersionsOnly', 'pageSize', 'pageToken'].flatMap((key) => [
+      `${key}=1&${key}=1`, `${key}[]=1`, `${key}[value]=1`,
+    ]),
+  ])('rejects invalid query %s before RPC', async (query) => {
+    const res = await request(app).get(`/api/by-domain/my-ns/checkout?${query}`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toEqual(expect.any(String));
+    expect(invoke).not.toHaveBeenCalled();
+  });
+});
+
 describe('GET /api/search branch context', () => {
   it('forwards the branch so a preview searches the branch index', async () => {
     // service.proto used to say SearchEntities ignored this header, and the
@@ -1928,6 +2002,28 @@ describe('TROGON_ATLAS_AUTH_PASSTHROUGH', () => {
       .set('Authorization', 'Bearer alice-key');
     expect(res.status).toBe(200);
     expect(upstreamCalls.authorization).toBe('Bearer alice-key');
+  });
+
+  it('forwards by-domain query controls with caller authorization and branch', async () => {
+    const invoke = vi.spyOn(fakeClient, 'listEntitiesByDomain').mockImplementation((_req, _meta, _opts, cb) => {
+      cb(null, { entities: [], nextPageToken: 'next-domain-page' });
+    });
+    try {
+      const res = await request(ptApp).get('/api/by-domain/acme/checkout')
+        .set('Authorization', 'Bearer domain-caller')
+        .query({ version: '9007199254740993', latestVersionsOnly: 'false', pageSize: '501', pageToken: 'cursor', branch: 'review/domain' });
+      expect(res.status).toBe(200);
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke.mock.calls[0][0]).toEqual({
+        domainId: { namespace: 'acme', slug: 'checkout', version: '9007199254740993' },
+        kinds: [], latestVersionsOnly: false, pageSize: 501, pageToken: 'cursor',
+      });
+      expect(invoke.mock.calls[0][1].get('authorization')).toEqual(['Bearer domain-caller']);
+      expect(invoke.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['review/domain']);
+      expect(res.body).toEqual({ entities: [], nextPageToken: 'next-domain-page' });
+    } finally {
+      invoke.mockRestore();
+    }
   });
 
   it('never substitutes the bridge identity for a caller that has one', async () => {
