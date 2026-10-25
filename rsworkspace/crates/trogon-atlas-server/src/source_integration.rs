@@ -2600,6 +2600,11 @@ async fn settle(
     doc.state.runs[index].run = Some(run.clone());
     save(service, doc).await?;
     service.invalidate_snapshot().await;
+    if run.status == pb::SourceRunStatus::Applied as i32 && !run.overlay_only {
+        service
+            .search_ready
+            .store(false, std::sync::atomic::Ordering::Release);
+    }
     Ok(run)
 }
 fn live_publication_bases(state: &SourceState, index: usize) -> Result<(), Status> {
@@ -2790,6 +2795,12 @@ async fn apply_source_run_attempt(
     let _lock = service.lock_mutations().await;
     let mut doc = load(service, &ctx, &req.registration_id, true).await?;
     let index = run_index(&doc.state, &req.run_id)?;
+    let current = doc.state.runs[index].run.as_ref().ok_or_else(invalid)?;
+    if !current.recovery_required || current.status != pb::SourceRunStatus::Applying as i32 {
+        return Ok(Response::new(pb::ApplySourceRunResponse {
+            run: Some(summary(current)),
+        }));
+    }
     let outcome = execution
         .outcome
         .lock()
@@ -3205,100 +3216,113 @@ pub(super) fn spawn_retention_sweep(
     let runtime = tokio::runtime::Handle::try_current().ok()?;
     Some(RetentionTask(runtime.spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut cursor = None;
+        let mut pending = std::collections::VecDeque::<SourceDocumentKey>::new();
+        let mut end_of_pass = false;
         loop {
             interval.tick().await;
             if !store.is_writer() {
                 continue;
             }
+            let mut active_key = None;
             let attempt = async {
-                let mut cursor = None;
                 loop {
-                    let page = store.source_list(cursor.as_deref(), 100).await?;
-                    for key in page.keys {
-                        let Some(document) = store.source_get(&key).await? else {
-                            continue;
-                        };
-                        let mut state =
-                            SourceState::decode(document.bytes.as_slice()).map_err(|_| {
-                                StoreError::Unavailable("source retention state unavailable".into())
-                            })?;
-                        if state.deleted {
-                            continue;
+                    if let Some(key) = pending.pop_front() {
+                        // Cancellation must not pin later registrations behind this key.
+                        active_key = Some(key.as_str().to_owned());
+                        if let Err(error) = sweep_registration(&*store, &key).await {
+                            tracing::warn!(registration = key.as_str(), %error, "source retention sweep skipped a registration");
                         }
-                        let retention = state
-                            .registration
-                            .as_ref()
-                            .and_then(|r| r.retention)
-                            .ok_or_else(|| {
-                                StoreError::Unavailable(
-                                    "source retention configuration unavailable".into(),
-                                )
-                            })?;
-                        for stored in &mut state.runs {
-                            let Some(run) = &mut stored.run else {
-                                continue;
-                            };
-                            if !run.recovery_required
-                                && run.settled_at_unix_ms.is_none()
-                                && run.expires_at_unix_ms <= now()
-                                && matches!(
-                                    pb::SourceRunStatus::try_from(run.status),
-                                    Ok(pb::SourceRunStatus::Previewed
-                                        | pb::SourceRunStatus::Prepared
-                                        | pb::SourceRunStatus::Rejected)
-                                )
-                            {
-                                settle_unpublished_intent(
-                                    &*store,
-                                    &key,
-                                    document.revision,
-                                    run,
-                                    retention.registration_bytes,
-                                )
-                                .await?;
-                                run.status = pb::SourceRunStatus::Rejected as i32;
-                                run.settled_at_unix_ms = Some(run.expires_at_unix_ms);
-                                run.revision = revision();
-                            }
-                        }
-                        for run in state.runs.iter().filter_map(|r| r.run.as_ref()) {
-                            if !run.recovery_required
-                                && run.settled_at_unix_ms.is_some_and(|at| {
-                                    at.saturating_add(retention.marker_seconds.cast_signed() * 1000)
-                                        <= now()
-                                })
-                            {
-                                store
-                                    .source_expire_transaction(&key, &run.id, &run.preview_digest)
-                                    .await?;
-                            }
-                        }
-                        expire(&mut state);
-                        let bytes = state.encode_to_vec();
-                        if bytes != document.bytes {
-                            store
-                                .source_compare_and_swap(
-                                    &key,
-                                    Some(document.revision),
-                                    &bytes,
-                                    retention.registration_bytes,
-                                )
-                                .await?;
-                        }
-                    }
-                    cursor = page.next_cursor;
-                    if cursor.is_none() {
+                        active_key = None;
+                    } else if end_of_pass {
+                        end_of_pass = false;
                         break;
+                    } else {
+                        let page = store.source_list(cursor.as_deref(), 100).await?;
+                        cursor = page.next_cursor;
+                        pending.extend(page.keys);
+                        end_of_pass = cursor.is_none();
                     }
                 }
                 Ok::<(), StoreError>(())
             };
-            if !matches!(
-                tokio::time::timeout(std::time::Duration::from_secs(60), attempt).await,
-                Ok(Ok(()))
-            ) {
-                tracing::warn!("source retention sweep remains incomplete");
+            match tokio::time::timeout(std::time::Duration::from_secs(60), attempt).await {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => tracing::warn!(%error, "source retention sweep could not list registrations"),
+                Err(_) => tracing::warn!(registration = ?active_key, "source retention sweep timed out; remaining registrations resume next tick"),
             }
         }
     })))
+}
+
+async fn sweep_registration(
+    store: &dyn trogon_atlas_store::Store,
+    key: &SourceDocumentKey,
+) -> Result<(), StoreError> {
+    let Some(document) = store.source_get(key).await? else {
+        return Ok(());
+    };
+    let mut state = SourceState::decode(document.bytes.as_slice())
+        .map_err(|_| StoreError::Unavailable("source retention state unavailable".into()))?;
+    if state.deleted {
+        return Ok(());
+    }
+    let retention = state
+        .registration
+        .as_ref()
+        .and_then(|r| r.retention)
+        .ok_or_else(|| {
+            StoreError::Unavailable("source retention configuration unavailable".into())
+        })?;
+    for stored in &mut state.runs {
+        let Some(run) = &mut stored.run else {
+            continue;
+        };
+        if !run.recovery_required
+            && run.settled_at_unix_ms.is_none()
+            && run.expires_at_unix_ms <= now()
+            && matches!(
+                pb::SourceRunStatus::try_from(run.status),
+                Ok(pb::SourceRunStatus::Previewed
+                    | pb::SourceRunStatus::Prepared
+                    | pb::SourceRunStatus::Rejected)
+            )
+        {
+            settle_unpublished_intent(
+                store,
+                key,
+                document.revision,
+                run,
+                retention.registration_bytes,
+            )
+            .await?;
+            run.status = pb::SourceRunStatus::Rejected as i32;
+            run.settled_at_unix_ms = Some(run.expires_at_unix_ms);
+            run.revision = revision();
+        }
+    }
+    for run in state.runs.iter().filter_map(|r| r.run.as_ref()) {
+        if !run.recovery_required
+            && run.settled_at_unix_ms.is_some_and(|at| {
+                at.saturating_add(retention.marker_seconds.cast_signed() * 1000) <= now()
+            })
+        {
+            store
+                .source_expire_transaction(key, &run.id, &run.preview_digest)
+                .await?;
+        }
+    }
+    expire(&mut state);
+    let bytes = state.encode_to_vec();
+    if bytes != document.bytes {
+        store
+            .source_compare_and_swap(
+                key,
+                Some(document.revision),
+                &bytes,
+                retention.registration_bytes,
+            )
+            .await?;
+    }
+    Ok(())
 }

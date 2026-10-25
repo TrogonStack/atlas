@@ -187,7 +187,9 @@ fn malformed_source_request_fails_locally_and_does_not_disclose_file_path() {
             r#"{"includeBytes":"false"}"#,
         ],
     );
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(5));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["failure"]["category"], "validation");
     let output = command(
         "http://127.0.0.1:1",
         "unused",
@@ -201,7 +203,9 @@ fn malformed_source_request_fails_locally_and_does_not_disclose_file_path() {
             "/private/unavailable-source-file",
         ],
     );
-    assert!(!output.status.success());
+    assert_eq!(output.status.code(), Some(5));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["failure"]["category"], "validation");
     assert!(!String::from_utf8_lossy(&output.stdout).contains("/private/unavailable-source-file"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains("/private/unavailable-source-file"));
 }

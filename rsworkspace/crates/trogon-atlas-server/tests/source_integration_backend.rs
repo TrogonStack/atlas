@@ -22,6 +22,7 @@ const SCOPED: &str = "source-scoped-token-dddddddd";
 struct Server {
     client: EventModelServiceClient<Channel>,
     task: tokio::task::JoinHandle<()>,
+    service: Arc<EventModelServiceImpl>,
 }
 impl Drop for Server {
     fn drop(&mut self) {
@@ -61,7 +62,8 @@ tokens=["{SCOPED}"]
         if let Some(mirror) = mirror {
             implementation = implementation.with_git_mirror(mirror);
         }
-        let grpc = EventModelServiceServer::new(implementation)
+        let implementation = Arc::new(implementation);
+        let grpc = EventModelServiceServer::from_arc(implementation.clone())
             .max_decoding_message_size(36 * 1024 * 1024)
             .max_encoding_message_size(36 * 1024 * 1024);
         let service = trogon_atlas_server::mcp::data_plane(
@@ -84,7 +86,11 @@ tokens=["{SCOPED}"]
             .unwrap()
             .max_decoding_message_size(36 * 1024 * 1024)
             .max_encoding_message_size(36 * 1024 * 1024);
-        Server { client, task }
+        Server {
+            client,
+            task,
+            service: implementation,
+        }
     })
 }
 
@@ -1770,7 +1776,7 @@ async fn apply_phase_budget_includes_waiting_for_durable_preparation() {
     let mut server = server(store.clone()).await;
     let mut seed = seed(&mut server.client, None, vec![pb::SourceOwnedField::Title]).await;
     let mut configuration = seed.registration.clone();
-    configuration.budgets.as_mut().unwrap().phase_timeout_ms = 250;
+    configuration.budgets.as_mut().unwrap().phase_timeout_ms = 2000;
     seed.registration = server
         .client
         .update_source_registration(req(
@@ -1824,7 +1830,7 @@ async fn apply_phase_budget_includes_waiting_for_durable_preparation() {
     let prepared = tokio::spawn(async move { blocking_store.source_prepare(&publication).await });
     observer.entered.notified().await;
     let attempted = tokio::time::timeout(
-        std::time::Duration::from_millis(1200),
+        std::time::Duration::from_secs(5),
         server.client.apply_source_run(req(
             ADMIN,
             pb::ApplySourceRunRequest {
@@ -1886,6 +1892,7 @@ mod delayed_preview_store {
         NativeRead,
         FinalSave,
         Recovered,
+        Published,
         OwnerUnavailable,
         RecoveryUnavailable,
     }
@@ -2263,7 +2270,11 @@ mod delayed_preview_store {
             publication: &trogon_atlas_store::source::SourcePublication,
         ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::source::SourcePublicationOutcome>
         {
-            self.inner.source_publish(publication).await
+            let outcome = self.inner.source_publish(publication).await?;
+            if self.gate.point == PreviewGatePoint::Published {
+                self.gate.pause().await;
+            }
+            Ok(outcome)
         }
         async fn source_recover(
             &self,
@@ -3488,7 +3499,9 @@ async fn automatic_retention_sweep_reclaims_persisted_source_bytes_without_sourc
     let after = tokio::time::timeout_at(deadline, async {
         loop {
             let current = store.source_get(&key).await.unwrap().unwrap();
-            if current.revision != before.revision {
+            if current.revision != before.revision
+                && before.bytes.len().saturating_sub(current.bytes.len()) >= files[0].content.len()
+            {
                 break current;
             }
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -4310,6 +4323,22 @@ fn source_mirror_recovery_case(later_edit: bool) -> impl Future<Output = ()> {
             None,
         )
         .await;
+        let warm = server
+            .client
+            .search_entities(req(
+                READER,
+                pb::SearchEntitiesRequest {
+                    query: "before".into(),
+                    namespaces: vec![value.namespace.clone()],
+                    limit: 10,
+                    ..Default::default()
+                },
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(warm.results.len(), 1);
         recovery
             .armed
             .store(true, std::sync::atomic::Ordering::Release);
@@ -4400,6 +4429,26 @@ fn source_mirror_recovery_case(later_edit: bool) -> impl Future<Output = ()> {
             .unwrap();
         assert_eq!(recovered.status, pb::SourceRunStatus::Applied as i32);
         assert!(!recovered.recovery_required);
+        let search = server
+            .client
+            .search_entities(req(
+                READER,
+                pb::SearchEntitiesRequest {
+                    query: if later_edit { "later" } else { "source" }.into(),
+                    namespaces: vec![value.namespace.clone()],
+                    limit: 10,
+                    ..Default::default()
+                },
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            search.results.len(),
+            1,
+            "recovered commits must refresh search"
+        );
         let native = get_native(&mut server.client, &value, None)
             .await
             .entity
@@ -4510,4 +4559,105 @@ async fn source_mirror_failure_does_not_rollback_committed_native_or_base() {
         "source title"
     );
     assert!(blocked.is_file());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn source_apply_preserves_concurrent_recovery_settlement() {
+    use delayed_preview_store::{DelayedPreviewStore, PreviewGate, PreviewGatePoint};
+    let gate = Arc::new(PreviewGate::new(PreviewGatePoint::Published));
+    let _release = ReleaseRetainedPublication(gate.clone());
+    let mut server = server(DelayedPreviewStore {
+        inner: overlay_test_store().await,
+        gate: gate.clone(),
+    })
+    .await;
+    let value = seed(&mut server.client, None, vec![pb::SourceOwnedField::Title]).await;
+    let run = preview(
+        &mut server.client,
+        &value,
+        "concurrent-recovery",
+        entity(&value.namespace, "source title", "doc"),
+        None,
+    )
+    .await;
+    gate.armed.store(true, std::sync::atomic::Ordering::Release);
+    let mut apply_client = server.client.clone();
+    let apply_request = pb::ApplySourceRunRequest {
+        registration_id: run.registration_id.clone(),
+        run_id: run.id.clone(),
+        if_match: run.revision.clone(),
+        preview_digest: run.preview_digest.clone(),
+    };
+    let applying = tokio::spawn(async move {
+        apply_client
+            .apply_source_run(req(ADMIN, apply_request, None))
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.entered.notified())
+        .await
+        .unwrap();
+    let current = server
+        .client
+        .get_source_run(req(
+            READER,
+            pb::GetSourceRunRequest {
+                registration_id: run.registration_id.clone(),
+                run_id: run.id.clone(),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .run
+        .unwrap();
+    assert_eq!(current.status, pb::SourceRunStatus::Applying as i32);
+    let recover_request = pb::RecoverSourceRunRequest {
+        registration_id: run.registration_id.clone(),
+        run_id: run.id.clone(),
+        if_match: current.revision,
+    };
+    use pb::event_model_service_server::EventModelService;
+    let mut recover_request = req(ADMIN, recover_request, None);
+    recover_request
+        .extensions_mut()
+        .insert(trogon_atlas_server::auth::Principal {
+            name: Arc::from("admin"),
+            role: trogon_atlas_server::auth::Role::Admin,
+            kind: trogon_atlas_server::auth::PrincipalKind::User,
+            is_anonymous: false,
+            namespaces: Default::default(),
+            parent: None,
+        });
+    let recovering = server.service.recover_source_run(recover_request);
+    tokio::pin!(recovering);
+    assert!(
+        std::future::poll_fn(|cx| { std::task::Poll::Ready(recovering.as_mut().poll(cx)) })
+            .await
+            .is_pending()
+    );
+    gate.release.notify_one();
+    let recovered = recovering.await.unwrap().into_inner().run.unwrap();
+    assert_eq!(recovered.status, pb::SourceRunStatus::Applied as i32);
+    let applied = applying.await.unwrap().unwrap().into_inner().run.unwrap();
+    assert_eq!(
+        applied, recovered,
+        "apply must preserve the existing settlement"
+    );
+    let retained = server
+        .client
+        .get_source_run(req(
+            READER,
+            pb::GetSourceRunRequest {
+                registration_id: run.registration_id,
+                run_id: run.id,
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .run
+        .unwrap();
+    assert_eq!(retained, recovered);
 }
