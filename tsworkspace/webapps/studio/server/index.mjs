@@ -1192,11 +1192,12 @@ app.get(
     /** @param {string} name */
     function scalarQuery(name) {
       const value = req.query[name];
-      if (
-        Object.keys(req.query).some((key) => key.startsWith(`${name}[`)) ||
-        (value !== undefined && typeof value !== "string")
-      ) throw badRequest(`${name} must be a scalar query value`);
-      return value;
+      if (Object.keys(req.query).some((key) => key.startsWith(`${name}[`))) {
+        throw badRequest(`${name} must be a scalar query value`);
+      }
+      if (typeof value === "string") return value;
+      if (value === undefined) return undefined;
+      throw badRequest(`${name} must be a scalar query value`);
     }
     const version = scalarQuery("version") ?? "1";
     if (!/^[1-9][0-9]*$/.test(version) || version.length > 20 || BigInt(version) > 18446744073709551615n) {
