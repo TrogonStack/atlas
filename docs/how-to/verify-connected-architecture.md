@@ -42,20 +42,22 @@ is disposable. Do not seed or restart an existing deployment for this proof.
 
 ## Inspect with CLI and MCP
 
-Build the CLI, then replace `<namespace>` with the READY value:
+Build the CLI, then replace `<namespace>` and `<grpc-endpoint>` with the
+`namespace=` and `grpc=` values reported in `READY`:
 
 ```sh
 mise exec -- cargo build --manifest-path rsworkspace/Cargo.toml \
   -p trogon-atlas-cli --bin trogon-atlas
 mise exec -- rsworkspace/target/debug/trogon-atlas \
-  --endpoint http://127.0.0.1:19473 --auth-token connected-fixture-admin \
+  --endpoint '<grpc-endpoint>' --auth-token connected-fixture-admin \
   --format json describe component/<namespace>/receipt-service@1
 mise exec -- rsworkspace/target/debug/trogon-atlas \
-  --endpoint http://127.0.0.1:19473 --auth-token connected-fixture-admin \
+  --endpoint '<grpc-endpoint>' --auth-token connected-fixture-admin \
   --format json inspect-data-product data_product/<namespace>/receipts@1
 ```
 
-Connect an MCP client using Streamable HTTP and the same bearer. Initialize
+Connect an MCP client to the `mcp=` value reported in `READY`, using
+Streamable HTTP and the same bearer. Initialize
 the connection and discover `tools/list` before invoking tools. Query
 `get_entity_json` for `automation_slice`, slug `observe`, exact namespace and
 version `1`. Its equal ReadModel endpoints must retain distinct connection IDs.
@@ -83,11 +85,12 @@ new-store selector rebinding or a new source publication through either client.
 
 ## Inspect with Studio
 
-Build and start the repository's bridge against the fixture in another terminal:
+Build and start the repository's bridge against the fixture in another terminal.
+Replace `<grpc-endpoint>` with the `grpc=` value reported in `READY`:
 
 ```sh
 mise exec -- pnpm --dir tsworkspace/webapps/studio build
-mise exec -- env TROGON_ATLAS_GRPC=http://127.0.0.1:19473 \
+mise exec -- env TROGON_ATLAS_GRPC='<grpc-endpoint>' \
   TROGON_ATLAS_AUTH_TOKEN=connected-fixture-admin \
   TROGON_ATLAS_AUTH_PASSTHROUGH=true PORT=19475 HOST=127.0.0.1 \
   node tsworkspace/webapps/studio/server/index.mjs
