@@ -1,10 +1,10 @@
 # Architecture resources
 
-Status: the native Channel and DataStore resource slice is implemented. Its
-[contract reference](../reference/channel-and-datastore-contracts.md) describes
-the supported fields and lifecycle. The
-[acceptance fixture](../reference/channel-and-datastore-acceptance.md) links the
-executable coverage and records its verification boundaries.
+Status: native transport, storage, Specification, DataProduct, responsibility,
+Decision and Document resources are implemented, alongside supplied-bundle
+source reconciliation. The [coverage reference](../reference/architecture-resource-coverage.md)
+links their field and connection contracts and separates implementation from
+acceptance evidence. The remaining design scope is described below.
 
 ## Start with the behavioral model
 
@@ -125,6 +125,14 @@ typed boundary and read-only review surface.
 Remote connectors and additional format compilers remain separate milestones.
 
 ## Atlas Linter comes after the architecture resources
+
+The [remaining contract boundaries](../reference/architecture-resource-coverage.md#remaining-contract-boundaries)
+distinguish existing strategic references and Component membership from richer
+system/service relationships, unconfirmed communication, agent metadata,
+business-data relationships and arbitrary design topology. These require
+explicit scope decisions. Their absence does not make the implemented native
+resource slices proposals again. Connected acceptance must record which
+supported relationships and client workflows were actually exercised.
 
 Atlas Linter is deferred until the remaining architecture resources and source
 integration concerns are defined. Its rules can inspect model consistency,

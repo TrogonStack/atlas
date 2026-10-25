@@ -35,4 +35,6 @@ export const KIND_SHORT_TO_CAMEL: Record<string, string> = {
   person: 'person',
   data_product: 'dataProduct',
   specification: 'specification',
+  decision: 'decision',
+  document: 'document',
 };

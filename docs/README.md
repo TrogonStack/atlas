@@ -26,6 +26,7 @@ Solve a specific problem:
 - [Ship a breaking proto change](how-to/ship-a-breaking-proto-change.md)
 - [Start an event model from scratch](how-to/start-a-model-from-scratch.md)
 - [Track a version migration](how-to/track-a-migration.md)
+- [Verify a connected architecture graph](how-to/verify-connected-architecture.md)
 
 ## Reference
 
@@ -38,6 +39,7 @@ Look up exact behavior:
 
 Resource contracts and acceptance:
 
+- [Architecture resource coverage](reference/architecture-resource-coverage.md)
 - [Channel and DataStore contracts](reference/channel-and-datastore-contracts.md)
 - [Channel and DataStore acceptance fixture](reference/channel-and-datastore-acceptance.md)
 - [Specification and API contracts](reference/specification-and-api-contracts.md)

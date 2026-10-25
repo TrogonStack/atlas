@@ -16,14 +16,17 @@ They cover intake only. Source-specific evidence is separated below.
 | --- | --- |
 | [Core ownership and merge](../../rsworkspace/crates/trogon-atlas-core/tests/source_integration.rs) | Closed ownership units, presence, ordered values, merge dispositions and profile bounds. |
 | [Connected fixture](../../rsworkspace/crates/trogon-atlas-server/tests/source_integration_fixture.rs) | Explicit adoption, repeated native observations, immutable bytes, ordered overlay fidelity, separate accepted source/native bases, drift and replay. |
+| [Composed architecture fixture](../../rsworkspace/crates/trogon-atlas-server/tests/connected_architecture_fixture.rs) | One real-store graph with Component membership, Channel/DataStore, Specification, DataProduct, responsibility and Decision/Document selectors; title-only source adoption preserves other native owners and exact selections through reorder and same-store manifest reapply. |
 | [Backend boundaries](../../rsworkspace/crates/trogon-atlas-server/tests/source_integration_backend.rs) | Authenticated scope and pagination, incomplete payload fidelity, independent retention, quotas, prepare interruption, tenant types and phase deadlines. |
 | [Lifecycle and selectors](../../rsworkspace/crates/trogon-atlas-server/tests/source_lifecycle_acceptance.rs) | Creation, stale guards, partial/complete inventory, safe deletion, final overlay, branches, cancellation and exact descriptive local selectors. |
 | [Store publication](../../rsworkspace/crates/trogon-atlas-store/tests/source_publication.rs) | Baseline/branch fault boundaries, restarted writer epochs, reader fencing, exact postimages, chunk reclamation and physical quota accounting. |
 | [Native client workflow](../../rsworkspace/crates/trogon-atlas-client/tests/source_backend_roundtrip.rs), [CLI](../../rsworkspace/crates/trogon-atlas-cli/tests/source_cli_integration.rs), [MCP](../../rsworkspace/crates/trogon-atlas-mcp/tests/source_mcp_integration.rs) | Authenticated registration, snapshot, mapping, preview, apply and report workflows, including tenant type context and native-owner input. |
 
 A test's presence is not a passing run or proof of every requirement below.
-The independent fixture composition described below remains a broader capture
-scenario. Existing registry rules do not permit a read-scoped Admin, while
+The composed architecture fixture provides a bounded shared graph. The complete
+independent-fixture capture described below remains a broader scenario;
+the composed graph does not cover every table row. Existing registry rules do
+not permit a read-scoped Admin, while
 verified COMPLETE inventory is Admin-only. Source deletion tests therefore
 separate scoped Writer permission refusal from an Admin's surviving-referrer
 guard; they do not claim a hidden-to-applying-principal deletion execution.
@@ -31,8 +34,9 @@ guard; they do not claim a hidden-to-applying-principal deletion execution.
 ## Connected fixture inputs
 
 Capture a bounded native manifest/file bundle from the existing fixtures, keeping
-each fixture's namespaces separate. Fixture composition is a future acceptance
-extension, not an assertion that these independent tests share a running store.
+each fixture's namespaces separate. This full capture remains an acceptance
+extension beyond the bounded [composed graph](architecture-resource-coverage.md#composed-graph).
+The independent tests below do not share a running store.
 All identities below have numeric version 1. Record exact kind and namespace;
 display names never substitute for returned local IDs or owner UIDs.
 
