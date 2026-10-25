@@ -40,6 +40,7 @@ Look up exact behavior:
 Resource contracts and acceptance:
 
 - [Architecture resource coverage](reference/architecture-resource-coverage.md)
+- [Domain-scoped listing](reference/domain-scoped-listing.md)
 - [Channel and DataStore contracts](reference/channel-and-datastore-contracts.md)
 - [Channel and DataStore acceptance fixture](reference/channel-and-datastore-acceptance.md)
 - [Specification and API contracts](reference/specification-and-api-contracts.md)
