@@ -469,6 +469,119 @@ async fn nested_exact_relationship_owners_share_responsibility_occurrence_budget
     assert_eq!(error.code(), Code::ResourceExhausted, "{error}");
 }
 
+async fn unrelated_relationship_scan_fixture() -> EventModelServiceImpl {
+    let service = service().await;
+    save(&service, owner("target", true, vec![]), None).await;
+    for index in 0..10 {
+        save(
+            &service,
+            owner(
+                &format!("unrelated-{index}"),
+                index % 2 == 0,
+                vec![relationship("target", true); 1024],
+            ),
+            None,
+        )
+        .await;
+    }
+    save(
+        &service,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Person(pb::Person {
+                id: Some(id("maintainer")),
+                title: Some(pb::DirectoryDisplayName {
+                    value: "Maintainer".into(),
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        None,
+    )
+    .await;
+    save(
+        &service,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Team(pb::Team {
+                id: Some(id("team")),
+                title: Some(pb::DirectoryDisplayName {
+                    value: "Team".into(),
+                }),
+                members: vec![pb::TeamMember {
+                    person: Some(pb::PersonRef {
+                        id: Some(id("maintainer")),
+                    }),
+                    ..Default::default()
+                }],
+                responsibilities: vec![pb::Responsibility {
+                    kind: pb::ResponsibilityKind::Owner as i32,
+                    subject: Some(target_subject()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        None,
+    )
+    .await;
+    service
+}
+
+fn target_subject() -> pb::ResponsibilitySubject {
+    pb::ResponsibilitySubject {
+        selection: Some(pb::responsibility_subject::Selection::Entity(
+            pb::EntityRef {
+                kind: pb::EntityKind::ExternalSystem as i32,
+                id: Some(id("target")),
+            },
+        )),
+    }
+}
+
+#[tokio::test]
+async fn person_teams_does_not_examine_unrelated_relationship_occurrences() {
+    let service = unrelated_relationship_scan_fixture().await;
+    let response = service
+        .list_person_teams(Request::new(pb::ListPersonTeamsRequest {
+            person: Some(pb::PersonRef {
+                id: Some(id("maintainer")),
+            }),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!response.incomplete);
+    assert_eq!(response.memberships.len(), 1);
+    assert_eq!(
+        response.memberships[0].team.as_ref().unwrap().id,
+        Some(id("team"))
+    );
+}
+
+#[tokio::test]
+async fn subject_assignments_does_not_examine_unrelated_relationship_occurrences() {
+    let service = unrelated_relationship_scan_fixture().await;
+    let response = service
+        .list_subject_assignments(Request::new(pb::ListSubjectAssignmentsRequest {
+            subject: Some(target_subject()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!response.incomplete);
+    assert_eq!(
+        response.subject_state,
+        pb::ResponsibilityResolutionState::Resolved as i32
+    );
+    assert_eq!(response.assignments.len(), 1);
+    assert_eq!(
+        response.assignments[0].assignment.as_ref().unwrap().subject,
+        Some(target_subject())
+    );
+}
+
 #[tokio::test]
 async fn relationship_public_conflict_resolution_renews_only_restored_ids() {
     for take_theirs in [false, true] {

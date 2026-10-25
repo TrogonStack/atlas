@@ -47,7 +47,7 @@ export function resolveArchitecturalSubject(
 ): ArchitecturalDeclaration | undefined {
   if (!('connection' in subject)) return undefined;
   const { owner, ownerUid, id } = subject.connection;
-  if (!ownerUid || !id.value) return undefined;
+  if (!ownerUid || !id?.value) return undefined;
   const kind = wireKind(owner.kind);
   const entity = kind ? model.byKey.get(entityKey(kind, owner.id)) : undefined;
   if (!entity || entity.uid !== ownerUid) return undefined;

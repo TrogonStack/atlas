@@ -418,6 +418,12 @@ impl EventModelServiceImpl {
         }
         let mut found = Vec::new();
         for row in query.rows.clone() {
+            if !matches!(
+                row.entity.kind,
+                Some(pb::entity::Kind::Team(_) | pb::entity::Kind::Person(_))
+            ) {
+                continue;
+            }
             query.owner(&row.entity)?;
             for assignment in assignments(&row.entity) {
                 if assignment.subject.as_ref() == Some(&subject)
@@ -569,8 +575,8 @@ impl EventModelServiceImpl {
         .ok_or_else(|| Status::not_found("person not found"))?;
         let mut found = Vec::new();
         for row in query.rows.clone() {
-            query.owner(&row.entity)?;
             if let Some(pb::entity::Kind::Team(team)) = &row.entity.kind {
+                query.owner(&row.entity)?;
                 for member in &team.members {
                     if member.person.as_ref() == Some(&person) {
                         query.output()?;

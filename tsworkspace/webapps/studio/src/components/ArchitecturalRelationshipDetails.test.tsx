@@ -88,3 +88,31 @@ it('hydrates authored catalog subjects by exact UID and ID without attaching equ
   expect(screen.queryByText('out-b')).toBeNull();
   expect(architecturalDeclarations(catalog)).toEqual([]);
 });
+it.each(['document', 'decision'])(
+  'keeps %s inspection available for a raw connection subject without an ID',
+  (kind) => {
+    const model = fixture();
+    const subject = responsibilitySubjects(model.entities[0])[1].subject;
+    const catalog = buildModel([
+      {
+        [kind]: {
+          id: id('note'),
+          subjects: [
+            {
+              subject: {
+                connection: {
+                  owner: { kind: 'ENTITY_KIND_COMPONENT', id: id('checkout') },
+                  ownerUid: 'checkout-incarnation',
+                },
+              },
+            },
+            { subject },
+          ],
+        },
+      },
+    ]).entities[0];
+    render(<ArchitecturalRelationshipDetails entity={catalog} model={model} onSelect={vi.fn()} />);
+    expect(screen.getByText('out-a')).toBeDefined();
+    expect(screen.queryByText('out-b')).toBeNull();
+  },
+);
