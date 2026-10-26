@@ -2,7 +2,7 @@
 # trogon-atlas-store uses Duration::from_mins, stable since Rust 1.91.
 # Compile on the build platform and cross-link for the target: rustc and
 # cargo under QEMU arm64 emulation hang the image job for hours.
-FROM --platform=$BUILDPLATFORM bufbuild/buf:1.73.0@sha256:75d8f756f0919dcded71e67968a91adfe55fe4dd62c4900c57bbfcd7fe625608 AS buf
+FROM --platform=$BUILDPLATFORM bufbuild/buf:1.75.0@sha256:adf82c7170be6629ec81dc907921ac1699407cd11c4f7fd7521b13c74152f849 AS buf
 FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:e12566d5abc17a0da741628782cdb504b68b8961f5bfcf677936bf3e8b32de29 AS builder
 COPY --from=buf /usr/local/bin/buf /usr/local/bin/buf
 ARG TARGETARCH
