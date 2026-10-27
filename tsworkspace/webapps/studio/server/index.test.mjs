@@ -2589,6 +2589,10 @@ describe('responsibility strict production serializer boundary', () => {
     } finally { delete fakeClient[name]; }
   });
   it.each([
+    ...['ENTITY_KIND_COMPONENT', 'ENTITY_KIND_EXTERNAL_SYSTEM'].map((kind) => {
+      const input = { subject: { connection: { owner: { kind, id }, ownerUid: 'opaque-owner-UID', id: { value: 'occurrence-b' } } } };
+      return ['subject-assignments', 'ListSubjectAssignments', input, input];
+    }),
     ['subject-assignments', 'ListSubjectAssignments', { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }, { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }],
     ['subject-assignments', 'ListSubjectAssignments', { subject: { entity: { kind: 1, id } }, kind: 4 }, { subject, kind: 'RESPONSIBILITY_KIND_CONTACT' }],
     ['subject-assignments', 'ListSubjectAssignments', { subject, kind: 0 }, { subject, kind: 'RESPONSIBILITY_KIND_UNSPECIFIED' }],
@@ -2639,6 +2643,7 @@ describe('catalog strict gateway serializer boundary', () => {
     } finally { delete fakeClient[name]; }
   });
   it.each([
+    ...['ENTITY_KIND_COMPONENT', 'ENTITY_KIND_EXTERNAL_SYSTEM'].flatMap((kind) => ['subject-decisions', 'subject-documents'].map((route) => [route, route === 'subject-decisions' ? 'ListSubjectDecisions' : 'ListSubjectDocuments', { subject: { connection: { owner: { kind, id }, ownerUid: 'opaque-owner-UID', id: { value: 'occurrence-b' } } } }])),
     ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'DECISION_STATUS_ACCEPTED' }],
     ['subject-documents', 'ListSubjectDocuments', { subject }],
     ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: false }],
