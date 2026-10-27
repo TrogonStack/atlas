@@ -53,7 +53,7 @@ fn text(value: &str, limit: usize) -> Result<()> {
         "catalog text blank or byte limit exceeded",
     )
 }
-fn title(value: Option<&pb::CatalogTitle>) -> Result<()> {
+pub fn validate_catalog_title(value: Option<&pb::CatalogTitle>) -> Result<()> {
     text(
         &value
             .ok_or_else(|| CatalogError("catalog title required".into()))?
@@ -61,7 +61,7 @@ fn title(value: Option<&pb::CatalogTitle>) -> Result<()> {
         256,
     )
 }
-fn prose(value: Option<&pb::CatalogText>) -> Result<()> {
+pub fn validate_catalog_text(value: Option<&pb::CatalogText>) -> Result<()> {
     text(
         &value
             .ok_or_else(|| CatalogError("catalog text required".into()))?
@@ -247,7 +247,7 @@ fn validate_subjects(entity: &Entity) -> Result<()> {
             "duplicate full catalog subject",
         )?;
         if value.doc.is_some() {
-            prose(value.doc.as_ref())?;
+            validate_catalog_text(value.doc.as_ref())?;
         }
     }
     Ok(())
@@ -279,15 +279,15 @@ fn validate_selection_list<'a>(
             "duplicate full document selection",
         )?;
         if doc.is_some() {
-            prose(doc)?;
+            validate_catalog_text(doc)?;
         }
     }
     Ok(())
 }
 fn validate_decision(value: &pb::Decision) -> Result<()> {
-    title(value.title.as_ref())?;
-    prose(value.context.as_ref())?;
-    prose(value.rationale.as_ref())?;
+    validate_catalog_title(value.title.as_ref())?;
+    validate_catalog_text(value.context.as_ref())?;
+    validate_catalog_text(value.rationale.as_ref())?;
     let status = pb::DecisionStatus::try_from(value.status).map_err(failure)?;
     require(
         status != pb::DecisionStatus::Unspecified,
@@ -310,8 +310,8 @@ fn validate_decision(value: &pb::Decision) -> Result<()> {
         "option collection outside bounds",
     )?;
     for option in &value.options {
-        title(option.title.as_ref())?;
-        prose(option.description.as_ref())?;
+        validate_catalog_title(option.title.as_ref())?;
+        validate_catalog_text(option.description.as_ref())?;
     }
     if let Some(selected) = &value.selected_option {
         selected.value.parse::<LocalValueId>()?;
@@ -338,7 +338,7 @@ fn validate_decision(value: &pb::Decision) -> Result<()> {
             ),
             "unknown consequence kind",
         )?;
-        prose(consequence.text.as_ref())?;
+        validate_catalog_text(consequence.text.as_ref())?;
         require(
             seen.insert(consequence.encode_to_vec()),
             "duplicate consequence",
@@ -368,7 +368,7 @@ fn validate_decision(value: &pb::Decision) -> Result<()> {
             "self or duplicate related decision",
         )?;
         if related.doc.is_some() {
-            prose(related.doc.as_ref())?;
+            validate_catalog_text(related.doc.as_ref())?;
         }
     }
     validate_selection_list(
@@ -389,7 +389,7 @@ fn validate_decision(value: &pb::Decision) -> Result<()> {
     )
 }
 fn validate_document(value: &pb::Document) -> Result<()> {
-    title(value.title.as_ref())?;
+    validate_catalog_title(value.title.as_ref())?;
     match &value.body {
         Some(pb::document::Body::Retained(body)) => {
             require(
@@ -434,7 +434,7 @@ fn validate_document(value: &pb::Document) -> Result<()> {
     )?;
     let mut seen = HashSet::new();
     for anchor in &value.anchors {
-        title(anchor.label.as_ref())?;
+        validate_catalog_title(anchor.label.as_ref())?;
         let fragment = &anchor
             .fragment
             .as_ref()
@@ -460,7 +460,7 @@ fn validate_document(value: &pb::Document) -> Result<()> {
     )?;
     for nav in &value.navigation {
         if nav.label.is_some() {
-            title(nav.label.as_ref())?;
+            validate_catalog_title(nav.label.as_ref())?;
         }
     }
     require(

@@ -9,7 +9,7 @@ description = "Generated OpenTelemetry metric instruments from the otel/registry
 
 [dependencies]
 opentelemetry = { workspace = true }
-smallvec = { version = "=1.16.3", features = ["const_generics"] }
+smallvec = { version = "=1.16.4", features = ["const_generics"] }
 
 [lints]
 workspace = true

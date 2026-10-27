@@ -142,6 +142,8 @@ pub fn connection_subject_owner(kind: EntityKind) -> bool {
             | EntityKind::DataStore
             | EntityKind::Specification
             | EntityKind::DataProduct
+            | EntityKind::Component
+            | EntityKind::ExternalSystem
     )
 }
 
@@ -262,9 +264,20 @@ pub fn resolve_subject(subject: &pb::ResponsibilitySubject, owner: &Entity) -> R
     )?;
     match subject.selection.as_ref() {
         Some(Selection::Entity(_)) => Ok(()),
-        Some(Selection::Connection(reference)) => connections::resolve_connection(owner, reference)
-            .map(|_| ())
-            .map_err(|e| ResponsibilityError(e.to_string())),
+        Some(Selection::Connection(reference)) => {
+            if matches!(
+                entity_kind(owner),
+                Some(EntityKind::Component | EntityKind::ExternalSystem)
+            ) {
+                crate::architectural_relationships::resolve_connection_context(owner, reference)
+                    .map(|_| ())
+                    .map_err(|e| ResponsibilityError(e.to_string()))
+            } else {
+                connections::resolve_connection(owner, reference)
+                    .map(|_| ())
+                    .map_err(|e| ResponsibilityError(e.to_string()))
+            }
+        }
         Some(Selection::Member(reference)) => specification::resolve_member(owner, reference)
             .map(|_| ())
             .map_err(|e| ResponsibilityError(e.to_string())),

@@ -124,21 +124,61 @@ selectors require explicit rebinding. The
 typed boundary and read-only review surface.
 Remote connectors and additional format compilers remain separate milestones.
 
-## Proposed system relationship layer
+## Native system relationship layer
 
-The [system relationship proposal](../reference/system-relationship-contracts.md)
+The [system relationship contract](../reference/system-relationship-contracts.md)
 builds on existing Component and ExternalSystem boundaries. Its
 [acceptance requirements](../reference/system-relationship-acceptance.md)
 keep authored declarations distinct from checked behavioral paths and runtime
-evidence. This is a specification milestone, not native implementation or
-completed acceptance. Richer grouping and actor-interaction boundaries remain
-explicit in the proposal.
+evidence. Native schema, admission, exact occurrence identity, authoring and
+inspection are implemented. The acceptance reference links executable coverage
+without claiming exhaustive or deployed acceptance. Richer grouping and
+actor-interaction boundaries remain explicit in the contract.
+
+## Native communication intent layer
+
+The [communication intent contract](../reference/communication-intent-contracts.md)
+selects a declaration layer for exact Specification messages on existing
+implementation/external boundaries. SEND and RECEIVE record the declaring
+owner's intent; they do not assert the peer's agreement or create a behavioral
+path. Optional condition prose records context without another trigger grammar.
+Executable behavior still follows ReadModel observation through a Processor
+and its optional Command.
+
+The [acceptance requirements](../reference/communication-intent-acceptance.md)
+cover exact member selection, occurrence lifecycle, owner-relative authority,
+reference provenance, shared work bounds and native-only Source isolation.
+Native schema, core/backend admission, CLI/MCP authoring and read-only Studio
+inspection are implemented. The acceptance inventory separates executable
+coverage from exhaustive or deployed evidence. Verified behavioral binding,
+predicate execution and transport-message equivalence to native Commands/Events
+require separate contracts.
+
+## Proposed human interaction layer
+
+The [human interaction proposal](../reference/human-interaction-contracts.md)
+selects identified Component declarations that a UI is presented by that
+implementation boundary. This is separate from raw membership and does not
+claim exclusive runtime deployment or ownership of a Command handler.
+
+A supplied exact hosting selection and same-slice edge tuple would support a
+checked human issuance or display path. Persona identity alone cannot select
+the complete path. Display checks select an individual ReadModel observation,
+preserving repeated equal observations. The
+[acceptance requirements](../reference/human-interaction-acceptance.md) define
+identity, role, visibility and lifecycle obligations before implementation.
+
+This is a documentation-only proposal. No hosting field, interaction inspector
+RPC or runtime behavior is implemented. Exhaustive actor discovery, persisted
+composite interaction subjects and ExternalSystem hosting remain deferred.
+Checked per-owner revisions would describe a read set, not an atomic
+multi-owner snapshot or evidence of a human's runtime permissions.
 
 ## Atlas Linter comes after the architecture resources
 
 The [remaining contract boundaries](../reference/architecture-resource-coverage.md#remaining-contract-boundaries)
 distinguish existing strategic references and Component membership from richer
-system/service relationships, unconfirmed communication, agent metadata,
+system/service relationships, behavioral communication binding, agent metadata,
 business-data relationships and arbitrary design topology. These require
 explicit scope decisions. Their absence does not make the implemented native
 resource slices proposals again. Connected acceptance must record which

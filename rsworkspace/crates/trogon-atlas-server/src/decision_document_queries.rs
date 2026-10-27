@@ -243,6 +243,43 @@ impl EventModelServiceImpl {
                 return Ok(State::Unavailable);
             }
         }
+        if let Some(selection) =
+            crate::responsibility_resources::selected_message(&converted, &row.entity)
+        {
+            let Some(id) = selection
+                .specification
+                .as_ref()
+                .and_then(|reference| reference.id.as_ref())
+            else {
+                return Ok(State::Unavailable);
+            };
+            if !query.lens.admits(&id.namespace) {
+                return Ok(State::Unavailable);
+            }
+            let Some(specification) = self
+                .catalog_read(
+                    query,
+                    &pb::EntityRef {
+                        kind: pb::EntityKind::Specification as i32,
+                        id: Some(id.clone()),
+                    },
+                )
+                .await?
+            else {
+                return Ok(State::Unavailable);
+            };
+            query.budget.selection(
+                &pb::CatalogSubject {
+                    selection: Some(pb::catalog_subject::Selection::Member(selection.clone())),
+                },
+                &specification.entity,
+            )?;
+            if trogon_atlas_core::specification::resolve_member(&specification.entity, &selection)
+                .is_err()
+            {
+                return Ok(State::Unavailable);
+            }
+        }
         Ok(State::Resolved)
     }
 
