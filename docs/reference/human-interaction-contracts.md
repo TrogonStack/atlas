@@ -49,6 +49,15 @@ added. A future implementation must advance contract and mutation floors beyond
 current revision 17 before older writers could drop these fields. This proposal
 does not bump them.
 
+Hosting value validation must inspect `connection_id` presence before generic
+connection normalization or assignment. The current shared
+[connection helper](../../rsworkspace/crates/trogon-atlas-core/src/connections.rs)
+treats a present empty value as omitted; reuse alone does not enforce this
+contract. A hosting-specific check must reject present empty or malformed IDs
+while leaving omission available for assignment, following the existing
+[architectural value validator](../../rsworkspace/crates/trogon-atlas-core/src/architectural_relationships.rs).
+This proposal does not change the shared helper's behavior for other roles.
+
 Native manifests may use existing typed-field UIRef shorthand. Under the
 [manifest parser](../../rsworkspace/crates/trogon-atlas-client/src/manifest.rs),
 an omitted namespace uses the manifest namespace and an omitted version is

@@ -30,7 +30,7 @@ transport, CLI/MCP or deployed-browser receipts.
 | Case | Required public outcome |
 | --- | --- |
 | Create/read | Proposed fields preserve presence, Unicode and order. Equal UI assertions receive distinct IDs. Server owns Component UID. |
-| Supplied IDs | Omitted ID assigns; explicit empty/malformed IDs reject. Duplicate IDs across hostings, relationships and communications reject atomically. |
+| Supplied IDs | Omitted ID assigns; hosting-specific presence validation rejects explicit empty/malformed IDs before generic normalization or assignment. Assert no owner/revision publication on rejection. Duplicate IDs across hostings, relationships and communications reject atomically. |
 | Wording and reorder | Labels/docs and list order may change without renewing IDs or collapsing equal siblings. Checked wording still needs its etag. |
 | Semantic retarget | Exact UI target change requires a fresh occurrence ID; a retained old ID rejects. Old subjects do not follow the new occurrence. |
 | Remove/re-add | Removed selector stops resolving; later equal assertion receives a fresh ID. No deleted-ID resurrection through ordinary writes. |
@@ -55,7 +55,7 @@ transport, CLI/MCP or deployed-browser receipts.
 | Slice context edit | Retarget command/persona/UI or selected ReadModel under existing fingerprint rules. Old tuples containing renewed/removed edge IDs become unresolved; fresh authoritative tuples can resolve. |
 | Unrelated slice edit | Editing unselected emitted events, wording or an equal observation sibling preserves resolution where existing selected fingerprints/IDs remain active. Return current checked etag. |
 | Observation reorder | Reorder repeated source ReadModels, preserving IDs. Selection follows its ID, not old list position. |
-| Endpoint recreation | Force-delete/recreate the same exact UI/Persona/Command/ReadModel key. Plain references may resolve the replacement; report its new UID/etag and do not claim prior incarnation binding. |
+| Endpoint recreation | Force-delete/recreate the same UI/Persona/Command/ReadModel key. Endpoint `UIRef`, `PersonaRef`, `CommandRef` and `ReadModelRef` may resolve the replacement; report its new UID/etag and do not claim prior incarnation binding. Hosting/path `ConnectionRef`s still pin their containing owner UID and occurrence ID. |
 | Owner recreation | Recreated Component or slice at the same key has a different UID. Old hosting/path ConnectionRefs remain unresolved despite equal content or locally reused IDs. |
 | Membership-only control | Matching raw members without a selected hosting occurrence cannot pass inspection. Navigation, Screen composition and storyboard recurrence create no substitute path or IDs. |
 | Separate declarations | Communication intent and architectural labels do not certify a human path. A shared Decision/Document subject list creates no composite interaction subject. |
