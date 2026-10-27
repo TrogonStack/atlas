@@ -238,6 +238,7 @@ pub(crate) fn validate_in_context(
                 })
                 .is_some_and(|owner| {
                     trogon_atlas_core::decision_document::resolve_subject(subject, owner).is_ok()
+                        && crate::responsibility_resources::subject_resolves(&converted, context)
                         && crate::responsibility_resources::selected_endpoints(&converted, owner)
                             .into_iter()
                             .all(|(kind, id)| context.find(kind, &id).is_some())

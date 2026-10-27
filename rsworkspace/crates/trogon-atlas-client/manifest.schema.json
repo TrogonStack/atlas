@@ -1132,6 +1132,41 @@
       "properties": {},
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.CommunicationDeclaration": {
+      "additionalProperties": false,
+      "properties": {
+        "condition": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "direction": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CommunicationDirection"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "label": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "message": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
+        },
+        "peer": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ArchitecturalEndpoint"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.CommunicationDirection": {
+      "enum": [
+        "COMMUNICATION_DIRECTION_RECEIVE",
+        "COMMUNICATION_DIRECTION_SEND",
+        "COMMUNICATION_DIRECTION_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
     "trogonatlas.eventmodel.v1alpha1.Comparison": {
       "enum": [
         "COMPARISON_GT",
@@ -1145,6 +1180,12 @@
     "trogonatlas.eventmodel.v1alpha1.Component": {
       "additionalProperties": false,
       "properties": {
+        "communications": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CommunicationDeclaration"
+          },
+          "type": "array"
+        },
         "doc": {
           "type": "string"
         },
@@ -1693,32 +1734,25 @@
       "type": "string"
     },
     "trogonatlas.eventmodel.v1alpha1.ContractMemberRef": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/_ShorthandRef"
+      "additionalProperties": false,
+      "properties": {
+        "expectedDigest": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "expectedDigest": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
-            },
-            "kind": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberKind"
-            },
-            "memberId": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
-            },
-            "ownerUid": {
-              "type": "string"
-            },
-            "specification": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SpecificationRef"
-            }
-          },
-          "type": "object"
+        "kind": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberKind"
+        },
+        "memberId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+        },
+        "ownerUid": {
+          "type": "string"
+        },
+        "specification": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SpecificationRef"
         }
-      ]
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.ContractMessage": {
       "additionalProperties": false,
@@ -2819,6 +2853,12 @@
     "trogonatlas.eventmodel.v1alpha1.ExternalSystem": {
       "additionalProperties": false,
       "properties": {
+        "communications": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CommunicationDeclaration"
+          },
+          "type": "array"
+        },
         "doc": {
           "type": "string"
         },

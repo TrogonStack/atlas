@@ -79,11 +79,13 @@ fn unit_fields(
             return Err(SourceError::UnsupportedUnit);
         }
         if unit == OwnershipUnit::WholeOwner
-            && value
-                .get_field_by_name("relationships")
-                .as_deref()
-                .and_then(Value::as_list)
-                .is_some_and(|values| !values.is_empty())
+            && ["relationships", "communications"].iter().any(|name| {
+                value
+                    .get_field_by_name(name)
+                    .as_deref()
+                    .and_then(Value::as_list)
+                    .is_some_and(|values| !values.is_empty())
+            })
         {
             return Err(SourceError::UnsupportedUnit);
         }

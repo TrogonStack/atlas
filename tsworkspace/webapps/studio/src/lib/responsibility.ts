@@ -139,8 +139,8 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
   ],
   swimlane: ['transitions.*.next.*'],
   ui: ['transitions.*'],
-  component: ['relationships.*'],
-  externalSystem: ['relationships.*'],
+  component: ['relationships.*', 'communications.*'],
+  externalSystem: ['relationships.*', 'communications.*'],
   channel: ['bindings.*'],
   dataStore: ['attachments.*'],
   specification: [

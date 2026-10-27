@@ -118,6 +118,14 @@ pub fn resolve_connection_context(
         Some(EntityKind::Component) => "component.relationships[",
         _ => "external_system.relationships[",
     };
+    if occurrence.path.starts_with("component.communications[")
+        || occurrence
+            .path
+            .starts_with("external_system.communications[")
+    {
+        return crate::communication_intent::resolve_connection_context(owner, reference)
+            .map_err(|e| ArchitecturalRelationshipError(e.to_string()));
+    }
     require(
         occurrence.path.starts_with(prefix),
         "unsupported architectural connection role",

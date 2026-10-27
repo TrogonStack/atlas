@@ -135,7 +135,7 @@ inspection are implemented. The acceptance reference links executable coverage
 without claiming exhaustive or deployed acceptance. Richer grouping and
 actor-interaction boundaries remain explicit in the contract.
 
-## Proposed communication intent layer
+## Native communication intent layer
 
 The [communication intent contract](../reference/communication-intent-contracts.md)
 selects a declaration layer for exact Specification messages on existing
@@ -148,9 +148,11 @@ and its optional Command.
 The [acceptance requirements](../reference/communication-intent-acceptance.md)
 cover exact member selection, occurrence lifecycle, owner-relative authority,
 reference provenance, shared work bounds and native-only Source isolation.
-This layer remains proposed, with no schema or runtime implementation claimed.
-Verified behavioral binding, predicate execution and transport-message
-equivalence to native Commands/Events require separate contracts.
+Native schema, core/backend admission, CLI/MCP authoring and read-only Studio
+inspection are implemented. The acceptance inventory separates executable
+coverage from exhaustive or deployed evidence. Verified behavioral binding,
+predicate execution and transport-message equivalence to native Commands/Events
+require separate contracts.
 
 ## Atlas Linter comes after the architecture resources
 

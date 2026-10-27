@@ -974,6 +974,18 @@ fn catalog_provenance(
                 .get(index)
                 .and_then(|relationship| relationship.connection_id.clone());
     }
+    if let Some(index) = field
+        .strip_prefix("communications[")
+        .and_then(|rest| rest.split_once(']'))
+        .and_then(|(index, suffix)| {
+            (suffix.starts_with(".peer.") || suffix == ".message.specification").then_some(index)
+        })
+        .and_then(|index| index.parse::<usize>().ok())
+    {
+        reference.connection_id = trogon_atlas_core::communication_intent::declarations(entity)
+            .get(index)
+            .and_then(|declaration| declaration.connection_id.clone());
+    }
     (
         reference.catalog_subject,
         reference.document_selection,

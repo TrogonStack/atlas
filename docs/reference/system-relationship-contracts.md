@@ -33,7 +33,7 @@ duplicate handling or existing validation. It adds no membership ConnectionRef.
 | Abstract systems above deployables, independent system/service levels, authored strategic nesting | Deferred. Existing source establishes implementation and strategic meanings but no defensible shared taxonomy for these additional levels. No System, Service or Actor entity kind is introduced. |
 | External-system-owned membership | Deferred. ExternalSystem has no members field. A relationship labeled “contains” does not introduce membership; a Component proxy must not be invented for an external abstract group. |
 | System-level human interactions | Deferred. Existing slice occurrences can ground human behavior, but raw membership cannot identify which hosting assertion supports an interaction. A new aggregation/interaction selector and its lifecycle need a separate contract. |
-| General send/receive, conditional triggers and agent/tool communication | The separate [communication intent proposal](communication-intent-contracts.md) selects owner-local message declarations and condition prose, not executable triggers. It is not implemented by this layer. Agent/tool communication and behavioral binding remain deferred; existing typed API/observation paths retain their own meanings. |
+| General send/receive, conditional triggers and agent/tool communication | The separate native [communication intent contract](communication-intent-contracts.md) supports owner-local message declarations and condition prose, not executable triggers. Agent/tool communication and behavioral binding remain deferred; existing typed API/observation paths retain their own meanings. |
 
 ## Wire shape
 
@@ -129,7 +129,7 @@ reported independently, with ordinary edited-owner reference admission retained.
 
 | Surface | Required extension |
 | --- | --- |
-| Native authoring | Exact reads, guarded put/batch, validation, diff, branch operations, preview, native manifest/export and snapshot recovery preserve the fields and returned identities. Contract revision and mutation floors are 16; older writers are refused before they can drop relationships. |
+| Native authoring | Exact reads, guarded put/batch, validation, diff, branch operations, preview, native manifest/export and snapshot recovery preserve the fields and returned identities. Relationships were introduced at revision 16; current mutation floors are 17 with communication intent support. Older writers are refused before they can drop retained fields. |
 | Outgoing/incoming references | Add explicit extraction for `relationships[i].target.component` or `.external_system`, and return existing [Reference](../../proto/trogonatlas/api/eventmodel/v1alpha1/graph.proto) fields `from`, `from_uid`, `connection_id`, `from_field`, `to`. Preserve parallel occurrences and multiplicity. A path is diagnostic only. |
 | Subject discovery | ListSubjectAssignments, ListSubjectDecisions and ListSubjectDocuments match full ConnectionRef, preserving owner UID, occurrence ID and unchanged selector. Existing namespace visibility/budgets apply. New shapes must be explicitly included in scan/index provenance enrichment, not assumed indexed from protobuf reflection. |
 | Impact | Include declared target references with full occurrence provenance on returned paths. Existing owner-level reachability/one-path-per-owner behavior is not exhaustive parallel-path enumeration or a runtime dependency classifier. |
