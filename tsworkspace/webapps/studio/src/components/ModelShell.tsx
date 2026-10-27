@@ -41,6 +41,9 @@ import { isSafeNamespace } from '../../shared/safe-namespace.mjs';
 
 /** Stable identity for an edge across layout rebuilds (occurrence ids shift). */
 function edgeIdentity(data: BoardEdgeData): string {
+  if (data.connectionId?.value && data.slice?.uid) {
+    return `${data.slice.key}\0${data.slice.uid}\0${data.connectionId.value}`;
+  }
   return `${data.source.key}\0${data.relation}\0${data.target.key}`;
 }
 

@@ -438,7 +438,9 @@ pub(crate) fn shorthand_ref_field(
 ) -> Option<prost_reflect::FieldDescriptor> {
     if matches!(
         md.full_name(),
-        "trogonatlas.eventmodel.v1alpha1.ChannelAccess"
+        "trogonatlas.eventmodel.v1alpha1.ArchitecturalEndpoint"
+            | "trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
+            | "trogonatlas.eventmodel.v1alpha1.ChannelAccess"
             | "trogonatlas.eventmodel.v1alpha1.StoreAccess"
             | "trogonatlas.eventmodel.v1alpha1.ResponsibilitySubject"
             | "trogonatlas.eventmodel.v1alpha1.CatalogSubject"

@@ -1,9 +1,10 @@
 # System relationship acceptance requirements
 
-Status: proposed executable acceptance requirements for the
-[contract](system-relationship-contracts.md), not implemented and not run.
-Logical fixture notation below is not current manifest syntax or an available
-RPC payload. No backend, CLI/MCP, Studio or runtime acceptance is claimed.
+Status: native support for the [contract](system-relationship-contracts.md) is
+implemented. This reference defines acceptance requirements and links executable
+coverage below. Logical fixture notation is not verbatim manifest syntax or an
+RPC payload. Linked service, client and component tests establish different
+boundaries; they do not establish deployment or runtime behavior.
 
 ## Fixture and evidence
 
@@ -140,3 +141,24 @@ Studio inspection/browser evidence, when supplied, must identify the native
 backend, fixture and exact selectors. Mocked transport does not establish native
 persistence. Runtime observations require separate deployment/instrumentation
 evidence; no runtime proof is needed or supplied by this declaration contract.
+
+## Executable coverage inventory
+
+The implementation fixtures below exercise different boundaries. A fixture's
+presence is source evidence; its test result must be recorded separately.
+
+| Fixture | Covered boundary |
+| --- | --- |
+| [Core relationship tests](../../rsworkspace/crates/trogon-atlas-core/tests/architectural_relationships.rs) | Value validation, exact typed endpoints, occurrence inventory and lifecycle, retargeting, subject resolution and Source ownership restrictions. |
+| [Backend relationship tests](../../rsworkspace/crates/trogon-atlas-server/tests/system_relationship_backend.rs) | Service persistence, atomic final-overlay admission, reference provenance, safe/force deletion, branch lifecycle and nested discovery budgets. |
+| [Authenticated composed fixture](../../rsworkspace/crates/trogon-atlas-server/tests/system_relationship_acceptance.rs) | Public gRPC with a real Store, parallel declarations alongside raw membership, forward/reverse provenance and exact Document/Person subjects preserved through reorder and wording edits. |
+| [Source backend tests](../../rsworkspace/crates/trogon-atlas-server/tests/source_integration_backend.rs) | Native-only isolation during Source creation and updates, with retained local relationships. |
+| [Client manifest tests](../../rsworkspace/crates/trogon-atlas-client/tests/architectural_relationship_manifest.rs) | Explicit endpoint shape, native manifest decoding and preservation. |
+| [CLI integration tests](../../rsworkspace/crates/trogon-atlas-cli/tests/architectural_relationship_cli_integration.rs) | Native manifest authoring through the CLI. |
+| [MCP integration tests](../../rsworkspace/crates/trogon-atlas-mcp/tests/mcp_integration.rs) | Native tool authoring and exact query selectors through MCP. |
+| [Studio declaration tests](../../tsworkspace/webapps/studio/src/components/ArchitecturalRelationshipDetails.test.tsx) | Loaded-view declaration inspection, exact endpoint navigation and parallel occurrences, using component fixtures. |
+
+These fixtures do not add abstract grouping, ExternalSystem-owned membership
+or actor aggregation. Studio component fixtures do not establish a deployed
+browser workflow or native persistence. Their aggregate presence does not
+establish that every requirement above has been executed.
