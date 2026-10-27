@@ -9,6 +9,8 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
         .len()
         .saturating_add(match &entity.kind {
             Some(pb::entity::Kind::Team(value)) => value.members.len(),
+            Some(pb::entity::Kind::Component(value)) => value.relationships.len(),
+            Some(pb::entity::Kind::ExternalSystem(value)) => value.relationships.len(),
             _ => 0,
         })
 }

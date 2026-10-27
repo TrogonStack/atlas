@@ -2178,3 +2178,191 @@ async fn assert_generic_retarget_preserves_local_selectors(client: &mut Client) 
         owner
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn architectural_relationship_hidden_and_missing_endpoints_share_unavailable_state() {
+    let mut client = client().await;
+    let mut namespaces = Vec::new();
+    for (name, parent) in [
+        ("architectural-visible", "visible"),
+        ("architectural-private", "hidden"),
+    ] {
+        namespaces.push(
+            client
+                .register_namespace(request(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        parent: parent.into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let target_id = pb::Id {
+        namespace: namespaces[1].clone(),
+        slug: "private-provider".into(),
+        version: 1,
+    };
+    let target = entity(pb::entity::Kind::ExternalSystem(pb::ExternalSystem {
+        id: Some(target_id.clone()),
+        title: "Private provider title".into(),
+        ..Default::default()
+    }));
+    put(&mut client, target.clone(), None).await;
+    let source_id = pb::Id {
+        namespace: namespaces[0].clone(),
+        slug: "public-owner".into(),
+        version: 1,
+    };
+    let source = entity(pb::entity::Kind::Component(pb::Component {
+        id: Some(source_id.clone()),
+        title: "Readable owner".into(),
+        relationships: vec![pb::ArchitecturalRelationship {
+            target: Some(pb::ArchitecturalEndpoint {
+                target: Some(pb::architectural_endpoint::Target::ExternalSystem(
+                    pb::ExternalSystemRef {
+                        id: Some(target_id.clone()),
+                    },
+                )),
+            }),
+            label: Some(pb::CatalogTitle {
+                value: "calls".into(),
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    assert_eq!(
+        client
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(source.clone()),
+                    ..Default::default()
+                },
+                READER,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::PermissionDenied
+    );
+    assert_eq!(
+        client
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(source.clone()),
+                    ..Default::default()
+                },
+                LIMITED,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    let source = put(&mut client, source, None).await.entity.unwrap();
+    let occurrence = trogon_atlas_core::architectural_relationships::relationships(&source)[0]
+        .connection_id
+        .clone();
+    let selection = pb::ResponsibilitySubject {
+        selection: Some(pb::responsibility_subject::Selection::Connection(
+            pb::ConnectionRef {
+                owner: Some(reference(&source)),
+                owner_uid: source.system.as_ref().unwrap().uid.clone(),
+                id: occurrence,
+            },
+        )),
+    };
+    let person_id = pb::Id {
+        namespace: namespaces[0].clone(),
+        slug: "contact".into(),
+        version: 1,
+    };
+    let contact = entity(pb::entity::Kind::Person(pb::Person {
+        id: Some(person_id.clone()),
+        title: Some(pb::DirectoryDisplayName {
+            value: "Contact".into(),
+        }),
+        responsibilities: vec![pb::Responsibility {
+            kind: pb::ResponsibilityKind::Contact as i32,
+            subject: Some(selection.clone()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    put(&mut client, contact, None).await;
+    let query = pb::ListAssigneeResponsibilitiesRequest {
+        assignee: Some(pb::ResponsibilityAssignee {
+            selection: Some(pb::responsibility_assignee::Selection::Person(
+                pb::PersonRef {
+                    id: Some(person_id),
+                },
+            )),
+        }),
+        ..Default::default()
+    };
+    let hidden = client
+        .list_assignee_responsibilities(request(query.clone(), LIMITED, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(hidden.assignments.len(), 1);
+    assert_eq!(
+        hidden.assignments[0].assignment.as_ref().unwrap().subject,
+        Some(selection)
+    );
+    assert_eq!(
+        hidden.assignments[0].state,
+        pb::ResponsibilityResolutionState::Unresolved as i32
+    );
+    assert!(!format!("{hidden:?}").contains("Private provider title"));
+    assert_eq!(
+        client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::ExternalSystem as i32,
+                    id: Some(target_id.clone())
+                },
+                LIMITED,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    delete(&mut client, reference(&target), true, None)
+        .await
+        .unwrap();
+    let missing = client
+        .list_assignee_responsibilities(request(query, LIMITED, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(missing.assignments, hidden.assignments);
+    assert_eq!(
+        client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::Component as i32,
+                    id: Some(source_id)
+                },
+                LIMITED,
+                None
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .entity,
+        Some(source)
+    );
+}

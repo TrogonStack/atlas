@@ -134,7 +134,7 @@ fn new_kind_roundtrips_and_revision_floors_are_coherent() {
         canonical::parse_kind("DATA_PRODUCT"),
         Some(EntityKind::DataProduct)
     );
-    assert_eq!(CONTRACT_REVISION, 15);
+    assert_eq!(CONTRACT_REVISION, 16);
     assert_eq!(MIN_CLIENT_CONTRACT_REVISION, CONTRACT_REVISION);
     assert_eq!(MIN_SERVER_CONTRACT_REVISION, CONTRACT_REVISION);
     let value = stored();

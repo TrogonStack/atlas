@@ -1,9 +1,10 @@
 # System and service relationship contracts
 
-Status: proposed native contract, not implemented. This reference specifies
-backend requirements; it supplies no schema changes, executable acceptance
-results or runtime evidence. [Acceptance requirements](system-relationship-acceptance.md)
-remain unrun. Existing capabilities below are grounded in current source.
+Status: native relationship support is implemented in the schema, core, backend,
+CLI/MCP authoring and Studio inspection. The
+[infrastructure schema](../../proto/trogonatlas/eventmodel/v1alpha1/infrastructure.proto)
+is the wire contract. [Acceptance requirements and executable coverage](system-relationship-acceptance.md)
+distinguish service, client and component fixtures from deployment/runtime evidence.
 
 ## Scope and existing representations
 
@@ -23,7 +24,7 @@ and other implementation boundaries, with shared exact members remaining shared.
 It does not establish exclusive ownership, runtime hosting, arbitrary abstract
 system containment, a business hierarchy or transitive membership. A reference
 to an ExternalSystem does not mean the Component deploys that third party.
-This proposal does not change membership shape, admissible kinds, ordering,
+This layer does not change membership shape, admissible kinds, ordering,
 duplicate handling or existing validation. It adds no membership ConnectionRef.
 
 | Boundary | Disposition |
@@ -34,14 +35,13 @@ duplicate handling or existing validation. It adds no membership ConnectionRef.
 | System-level human interactions | Deferred. Existing slice occurrences can ground human behavior, but raw membership cannot identify which hosting assertion supports an interaction. A new aggregation/interaction selector and its lifecycle need a separate contract. |
 | General send/receive, conditional triggers and agent/tool communication | Deferred. A label may retain architectural intent but does not declare message flow, processor execution or event production. Existing typed API/observation paths retain their own meanings. |
 
-## Proposed wire shape
+## Wire shape
 
-The following names and tags are proposed implementation input, not current
-protobuf fields. Extend existing Component with `relationships` at field 8 and
-ExternalSystem with `relationships` at field 7. Both are repeated
+Component carries `relationships` at field 8 and ExternalSystem at field 7.
+Both are repeated
 `ArchitecturalRelationship` values. Existing fields retain their meanings.
 
-| Proposed message/field | Type and value contract |
+| Message/field | Type and value contract |
 | --- | --- |
 | `ArchitecturalRelationship.connection_id = 1` | Existing `ConnectionId`; required in persisted state, omitted for assignment as described below. |
 | `ArchitecturalRelationship.target = 2` | Required `ArchitecturalEndpoint`. |
@@ -129,7 +129,7 @@ reported independently, with ordinary edited-owner reference admission retained.
 
 | Surface | Required extension |
 | --- | --- |
-| Native authoring | Exact reads, guarded put/batch, validation, diff, branch operations, preview, native manifest/export and snapshot recovery preserve the proposed fields and returned identities. Advertise a new writer contract revision and mutation floor before admitting fields older writers could drop; no revision number is allocated here. |
+| Native authoring | Exact reads, guarded put/batch, validation, diff, branch operations, preview, native manifest/export and snapshot recovery preserve the fields and returned identities. Contract revision and mutation floors are 16; older writers are refused before they can drop relationships. |
 | Outgoing/incoming references | Add explicit extraction for `relationships[i].target.component` or `.external_system`, and return existing [Reference](../../proto/trogonatlas/api/eventmodel/v1alpha1/graph.proto) fields `from`, `from_uid`, `connection_id`, `from_field`, `to`. Preserve parallel occurrences and multiplicity. A path is diagnostic only. |
 | Subject discovery | ListSubjectAssignments, ListSubjectDecisions and ListSubjectDocuments match full ConnectionRef, preserving owner UID, occurrence ID and unchanged selector. Existing namespace visibility/budgets apply. New shapes must be explicitly included in scan/index provenance enrichment, not assumed indexed from protobuf reflection. |
 | Impact | Include declared target references with full occurrence provenance on returned paths. Existing owner-level reachability/one-path-per-owner behavior is not exhaustive parallel-path enumeration or a runtime dependency classifier. |
@@ -162,7 +162,7 @@ in the same store is not proof of portable migration.
 
 ## Admission, visibility and bounds
 
-All following rules are proposed requirements for this slice. Backend authority,
+The following rules govern this native slice. Backend authority,
 existing namespace access, write guards, metadata and entity size/RPC limits
 remain applicable. No catalog label or assignment grants security authority.
 
@@ -196,7 +196,7 @@ Repeated equal ReadModel edges must remain distinct; repeated storyboard moments
 must retain authored order and recurrence without invented moment IDs.
 
 Component membership alone cannot choose an interaction occurrence or prove
-hosting, a human's permissions or runtime execution. This proposal adds no
+hosting, a human's permissions or runtime execution. This layer adds no
 Persona-to-system link, interaction message, inferred actor or behavioral query.
 The absent aggregation/hosting occurrence contract is the reason for deferral;
 existing exact slice inspection remains available. UI navigation and Screen

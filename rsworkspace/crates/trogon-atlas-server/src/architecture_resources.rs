@@ -123,7 +123,9 @@ pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
         Some(
-            pb::entity::Kind::Channel(_)
+            pb::entity::Kind::Component(_)
+                | pb::entity::Kind::ExternalSystem(_)
+                | pb::entity::Kind::Channel(_)
                 | pb::entity::Kind::DataStore(_)
                 | pb::entity::Kind::Specification(_)
                 | pb::entity::Kind::DataProduct(_)
@@ -335,6 +337,32 @@ pub(super) fn validate_in_context(
         issues: Vec::new(),
     };
     match entity.kind.as_ref() {
+        Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_)) => {
+            checks.value(
+                trogon_atlas_core::architectural_relationships::validate_values(entity).is_ok(),
+                "relationships",
+            );
+            for (index, relationship) in
+                trogon_atlas_core::architectural_relationships::relationships(entity)
+                    .iter()
+                    .enumerate()
+            {
+                if let Some(target) = relationship
+                    .target
+                    .as_ref()
+                    .and_then(trogon_atlas_core::architectural_relationships::endpoint_ref)
+                {
+                    if let Ok(kind) = pb::EntityKind::try_from(target.kind) {
+                        checks.target(
+                            kind,
+                            target.id.as_ref(),
+                            context,
+                            &format!("relationships[{index}].target"),
+                        );
+                    }
+                }
+            }
+        }
         Some(pb::entity::Kind::Channel(channel)) => {
             checks.supersedes(
                 pb::EntityKind::Channel,

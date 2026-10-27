@@ -1947,3 +1947,98 @@ fn responsibility_query_budget_error_preserves_structured_public_classification(
     assert_eq!(data["next_action"], "fix_input");
     assert!(!error.message.contains("private backend detail"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn architectural_relationship_mcp_native_authoring_queries_and_export_preserve_occurrences() {
+    use serde_json::json;
+    let (client, service, _) = start_mcp_client().await;
+    let ns = "mcp-architecture";
+    let id = |slug: &str, version: &str| json!({"namespace":ns,"slug":slug,"version":version});
+    call_ok(
+        &client,
+        "put_entity_json",
+        put_entity_json_args(
+            &json!({"externalSystem":{"id":id("provider","9007199254740993"),"title":"Provider"}})
+                .to_string(),
+        ),
+    )
+    .await;
+    let relationship = json!({"target":{"externalSystem":{"id":id("provider","9007199254740993")}},"label":{"value":"submits orders"},"doc":{"value":"Architectural intent"}});
+    call_ok(&client, "put_entity_json", put_entity_json_args(&json!({"component":{"id":id("checkout","1"),"title":"Checkout","relationships":[relationship.clone(),relationship]}}).to_string())).await;
+    let args = args_obj(&[
+        ("kind", json!("component")),
+        ("namespace", json!(ns)),
+        ("slug", json!("checkout")),
+        ("version", json!(1)),
+    ]);
+    let before = call_tool_result_text(&call_ok(&client, "get_entity_json", args.clone()).await);
+    let body = &before["json"];
+    let relationships = body["component"]["relationships"].as_array().unwrap();
+    assert_eq!(relationships.len(), 2);
+    assert_ne!(
+        relationships[0]["connectionId"],
+        relationships[1]["connectionId"]
+    );
+    assert_eq!(
+        relationships[0]["target"]["externalSystem"]["id"]["version"],
+        "9007199254740993"
+    );
+    let subject = |index: usize| json!({"connection":{"owner":{"kind":"ENTITY_KIND_COMPONENT","id":id("checkout","1")},"ownerUid":body["system"]["uid"],"id":relationships[index]["connectionId"]}});
+    call_ok(&client, "put_entity_json", put_entity_json_args(&json!({"team":{"id":id("team","1"),"title":{"value":"Operators"},"responsibilities":[{"kind":"RESPONSIBILITY_KIND_CONTACT","subject":subject(0)}]}}).to_string())).await;
+    for index in 0..2 {
+        let result = call_tool_result_text(
+            &call_ok(
+                &client,
+                "list_subject_assignments",
+                args_obj(&[("request_json", json!({"subject":subject(index)}))]),
+            )
+            .await,
+        );
+        assert_eq!(
+            result["assignments"].as_array().map_or(0, Vec::len),
+            usize::from(index == 0),
+            "{result}"
+        );
+        assert!(result["scope"].is_object());
+    }
+    let exported = call_tool_result_text(
+        &call_ok(
+            &client,
+            "export_namespace",
+            args_obj(&[("namespace", json!(ns))]),
+        )
+        .await,
+    );
+    let yaml = exported["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    call_ok(
+        &client,
+        "apply_manifests",
+        args_obj(&[("manifests_yaml", json!(yaml))]),
+    )
+    .await;
+    assert_eq!(
+        before,
+        call_tool_result_text(&call_ok(&client, "get_entity_json", args).await)
+    );
+    let error = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("list_subject_assignments").with_arguments(
+                args_obj(&[(
+                    "request_json",
+                    json!({"subject":{"connection":{"ownerUid":false}}}),
+                )]),
+            ),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, rmcp::ServiceError::McpError(error) if error.code == ErrorCode::INVALID_PARAMS)
+    );
+    service.cancel().await.unwrap();
+}

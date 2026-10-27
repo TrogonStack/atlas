@@ -21,6 +21,17 @@ enum ArchitectureTargetAccess<'a> {
     ExactDiagnostic(&'a Lens),
 }
 
+fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::OutboundRef> {
+    let architectural = matches!(
+        entity.kind,
+        Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+    );
+    trogon_atlas_core::refs::outbound_refs(entity)
+        .into_iter()
+        .filter(|reference| !architectural || reference.from_field.starts_with("relationships["))
+        .collect()
+}
+
 fn is_catalog(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
@@ -91,7 +102,9 @@ impl EventModelServiceImpl {
                 meta.is_put
                     && matches!(
                         meta.kind,
-                        pb::EntityKind::Channel
+                        pb::EntityKind::Component
+                            | pb::EntityKind::ExternalSystem
+                            | pb::EntityKind::Channel
                             | pb::EntityKind::DataStore
                             | pb::EntityKind::Specification
                             | pb::EntityKind::DataProduct
@@ -129,7 +142,7 @@ impl EventModelServiceImpl {
                 continue;
             }
             required.extend(
-                trogon_atlas_core::refs::outbound_refs(entity)
+                admission_references(entity)
                     .into_iter()
                     .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
             );
@@ -230,6 +243,7 @@ impl EventModelServiceImpl {
             };
             let prepared =
                 prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
+            super::validate_entity_content(&prepared)?;
             let issues = validation::architecture_resources::validate(&prepared, &context);
             if !issues.is_empty() {
                 return Err(Status::invalid_argument(super::format_scenario_issues(
@@ -274,7 +288,9 @@ impl EventModelServiceImpl {
                 matches!(
                     entity.kind,
                     Some(
-                        pb::entity::Kind::Channel(_)
+                        pb::entity::Kind::Component(_)
+                            | pb::entity::Kind::ExternalSystem(_)
+                            | pb::entity::Kind::Channel(_)
                             | pb::entity::Kind::DataStore(_)
                             | pb::entity::Kind::Specification(_)
                             | pb::entity::Kind::DataProduct(_)
@@ -299,7 +315,7 @@ impl EventModelServiceImpl {
             .iter()
             .filter(|entity| !is_catalog(entity))
             .flat_map(|entity| {
-                trogon_atlas_core::refs::outbound_refs(entity)
+                admission_references(entity)
                     .into_iter()
                     .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
             })
@@ -466,6 +482,8 @@ impl EventModelServiceImpl {
             .list(
                 super::ListFilter {
                     kinds: &[
+                        pb::EntityKind::Component,
+                        pb::EntityKind::ExternalSystem,
                         pb::EntityKind::Channel,
                         pb::EntityKind::DataStore,
                         pb::EntityKind::Specification,
@@ -796,7 +814,9 @@ impl EventModelServiceImpl {
         if !matches!(
             entity.kind,
             Some(
-                pb::entity::Kind::Channel(_)
+                pb::entity::Kind::Component(_)
+                    | pb::entity::Kind::ExternalSystem(_)
+                    | pb::entity::Kind::Channel(_)
                     | pb::entity::Kind::DataStore(_)
                     | pb::entity::Kind::Specification(_)
                     | pb::entity::Kind::DataProduct(_)

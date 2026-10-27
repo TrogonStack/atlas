@@ -112,6 +112,13 @@ impl CatalogBudget {
             return Ok(());
         }
         let count = match kind {
+            1 if matches!(
+                owner.kind,
+                Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+            ) =>
+            {
+                0
+            }
             1 => trogon_atlas_core::connections::connection_occurrences(owner)
                 .map_err(|_| Status::internal("cannot inspect native connection inventory"))?
                 .len(),
