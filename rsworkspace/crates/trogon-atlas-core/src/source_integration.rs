@@ -70,6 +70,24 @@ fn unit_fields(
     unit: OwnershipUnit,
 ) -> Result<Vec<FieldDescriptor>, SourceError> {
     let descriptor = value.descriptor();
+    if matches!(
+        descriptor.full_name(),
+        "trogonatlas.eventmodel.v1alpha1.Component"
+            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
+    ) {
+        if unit == OwnershipUnit::Field(SourceOwnedField::Relationships) {
+            return Err(SourceError::UnsupportedUnit);
+        }
+        if unit == OwnershipUnit::WholeOwner
+            && value
+                .get_field_by_name("relationships")
+                .as_deref()
+                .and_then(Value::as_list)
+                .is_some_and(|values| !values.is_empty())
+        {
+            return Err(SourceError::UnsupportedUnit);
+        }
+    }
     match unit {
         OwnershipUnit::WholeOwner => Ok(descriptor.fields().filter(|f| f.name() != "id").collect()),
         OwnershipUnit::Field(field) => {
@@ -138,6 +156,17 @@ pub fn validate_selection_ownership(
     selection: &SourceSelection,
     ownership: &SourceFieldOwnership,
 ) -> Result<(), SourceError> {
+    if let Some(source_selection::Selection::Connection(reference)) = selection.selection.as_ref() {
+        if reference.owner.as_ref().is_some_and(|owner| {
+            matches!(
+                trogon_atlas_proto::EntityKind::try_from(owner.kind),
+                Ok(trogon_atlas_proto::EntityKind::Component
+                    | trogon_atlas_proto::EntityKind::ExternalSystem)
+            )
+        }) {
+            return Err(SourceError::UnsupportedUnit);
+        }
+    }
     match selection
         .selection
         .as_ref()

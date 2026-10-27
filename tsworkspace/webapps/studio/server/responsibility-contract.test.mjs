@@ -99,3 +99,35 @@ describe('strict responsibility requests before production encoding', () => {
     expect(() => validateResponsibilityRequest(type, input)).toThrow(/expected|unknown/);
   });
 });
+
+describe('architectural declaration connection subjects at the read-only gateway', () => {
+  const root = new protobuf.Root();
+  root.resolvePath = (_origin, target) => path.resolve(protoRoot, target);
+  root.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'));
+  for (const kind of ['ENTITY_KIND_COMPONENT', 'ENTITY_KIND_EXTERNAL_SYSTEM']) {
+    const subject = { connection: { owner: { kind, id }, ownerUid: 'opaque-owner-UID', id: { value: 'occurrence-b' } } };
+    it(`preserves ${kind} full selector through existing read codecs`, () => {
+      for (const rpc of ['ListSubjectAssignments', 'ListSubjectDecisions', 'ListSubjectDocuments']) {
+        const type = root.lookupType(`trogonatlas.api.eventmodel.v1alpha1.${rpc}Request`);
+        validateResponsibilityRequest(type, { subject });
+        expect(roundTrip(`${rpc}Request`, { subject })).toEqual({ subject });
+      }
+    });
+    it(`rejects coercion and extra fields before ${kind} encoding`, () => {
+      const type = root.lookupType('trogonatlas.api.eventmodel.v1alpha1.ListSubjectAssignmentsRequest');
+      for (const connection of [
+        { ...subject.connection, ownerUid: false },
+        { ...subject.connection, id: { value: 3 } },
+        { ...subject.connection, path: 'relationships[0]' },
+        { ...subject.connection, owner: { kind, id: { ...id, version: Number.MAX_SAFE_INTEGER + 1 } } },
+      ]) expect(() => validateResponsibilityRequest(type, { subject: { connection } })).toThrow(/expected|unknown/);
+    });
+  }
+  it('preserves parallel declarations in real Component and ExternalSystem codecs', () => {
+    const codec = definitions['trogonatlas.eventmodel.v1alpha1.Entity'];
+    for (const kind of ['component', 'externalSystem']) {
+      const entity = { [kind]: { id, title: 'Boundary', relationships: ['a', 'b'].map((value) => ({ connectionId: { value }, target: { externalSystem: { id } }, label: { value: 'submits orders' }, doc: { value: 'Cafe\u0301\r\n<script>inert()</script>' } })) }, system: { uid: 'owner-incarnation' } };
+      expect(codec.deserialize(codec.serialize(entity))).toEqual(entity);
+    }
+  });
+});

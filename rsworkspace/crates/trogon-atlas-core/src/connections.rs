@@ -222,7 +222,22 @@ fn visit(
         let occurrence = ConnectionOccurrence {
             id: read_id(message)?,
             path: path.to_owned(),
-            target: None,
+            target: if descriptor.full_name()
+                == "trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship"
+            {
+                message
+                    .get_field_by_name("target")
+                    .as_deref()
+                    .and_then(Value::as_message)
+                    .map(Message::encode_to_vec)
+                    .and_then(|bytes| {
+                        trogon_atlas_proto::ArchitecturalEndpoint::decode(bytes.as_slice()).ok()
+                    })
+                    .as_ref()
+                    .and_then(crate::architectural_relationships::endpoint_ref)
+            } else {
+                None
+            },
             signature,
         };
         callback(message, occurrence)?;
