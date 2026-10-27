@@ -33,7 +33,7 @@ duplicate handling or existing validation. It adds no membership ConnectionRef.
 | Abstract systems above deployables, independent system/service levels, authored strategic nesting | Deferred. Existing source establishes implementation and strategic meanings but no defensible shared taxonomy for these additional levels. No System, Service or Actor entity kind is introduced. |
 | External-system-owned membership | Deferred. ExternalSystem has no members field. A relationship labeled “contains” does not introduce membership; a Component proxy must not be invented for an external abstract group. |
 | System-level human interactions | Deferred. Existing slice occurrences can ground human behavior, but raw membership cannot identify which hosting assertion supports an interaction. A new aggregation/interaction selector and its lifecycle need a separate contract. |
-| General send/receive, conditional triggers and agent/tool communication | Deferred. A label may retain architectural intent but does not declare message flow, processor execution or event production. Existing typed API/observation paths retain their own meanings. |
+| General send/receive, conditional triggers and agent/tool communication | The separate [communication intent proposal](communication-intent-contracts.md) selects owner-local message declarations and condition prose, not executable triggers. It is not implemented by this layer. Agent/tool communication and behavioral binding remain deferred; existing typed API/observation paths retain their own meanings. |
 
 ## Wire shape
 
