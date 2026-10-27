@@ -123,7 +123,9 @@ pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
         Some(
-            pb::entity::Kind::Channel(_)
+            pb::entity::Kind::Component(_)
+                | pb::entity::Kind::ExternalSystem(_)
+                | pb::entity::Kind::Channel(_)
                 | pb::entity::Kind::DataStore(_)
                 | pb::entity::Kind::Specification(_)
                 | pb::entity::Kind::DataProduct(_)
@@ -335,6 +337,75 @@ pub(super) fn validate_in_context(
         issues: Vec::new(),
     };
     match entity.kind.as_ref() {
+        Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_)) => {
+            checks.value(
+                trogon_atlas_core::architectural_relationships::validate_values(entity).is_ok(),
+                "relationships",
+            );
+            checks.value(
+                trogon_atlas_core::communication_intent::validate_values(entity).is_ok(),
+                "communications",
+            );
+            for (index, declaration) in
+                trogon_atlas_core::communication_intent::declarations(entity)
+                    .iter()
+                    .enumerate()
+            {
+                if let Some(target) = declaration
+                    .peer
+                    .as_ref()
+                    .and_then(trogon_atlas_core::architectural_relationships::endpoint_ref)
+                {
+                    if let Ok(kind) = pb::EntityKind::try_from(target.kind) {
+                        checks.target(
+                            kind,
+                            target.id.as_ref(),
+                            context,
+                            &format!("communications[{index}].peer"),
+                        );
+                    }
+                }
+                checks.require(
+                    declaration.message.as_ref().is_some_and(|selection| {
+                        selection
+                            .specification
+                            .as_ref()
+                            .and_then(|reference| reference.id.as_ref())
+                            .and_then(|id| context.find(pb::EntityKind::Specification, id))
+                            .is_some_and(|specification| {
+                                trogon_atlas_core::specification::resolve_member(
+                                    specification,
+                                    selection,
+                                )
+                                .is_ok()
+                            })
+                    }),
+                    "ARCHITECTURE_REFERENCE_UNRESOLVED",
+                    &format!("communications[{index}].message"),
+                    "communication message selection is absent or invalid",
+                );
+            }
+            for (index, relationship) in
+                trogon_atlas_core::architectural_relationships::relationships(entity)
+                    .iter()
+                    .enumerate()
+            {
+                if let Some(target) = relationship
+                    .target
+                    .as_ref()
+                    .and_then(trogon_atlas_core::architectural_relationships::endpoint_ref)
+                {
+                    if let Ok(kind) = pb::EntityKind::try_from(target.kind) {
+                        checks.target(
+                            kind,
+                            target.id.as_ref(),
+                            context,
+                            &format!("relationships[{index}].target"),
+                        );
+                    }
+                }
+            }
+        }
         Some(pb::entity::Kind::Channel(channel)) => {
             checks.supersedes(
                 pb::EntityKind::Channel,

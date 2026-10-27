@@ -1,6 +1,0 @@
-[[PackageOverrides]]
-name = "webpki-roots"
-version = "0.26.11"
-ecosystem = "crates.io"
-vulnerability.ignore = true
-reason = "Compatibility shim only reexports webpki-roots 1.x; the locked 1.0.10 certificate data is scanned separately."
