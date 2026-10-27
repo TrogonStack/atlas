@@ -43,6 +43,8 @@ Resource contracts and acceptance:
 - [Domain-scoped listing](reference/domain-scoped-listing.md)
 - [System relationship contracts](reference/system-relationship-contracts.md)
 - [System relationship acceptance requirements](reference/system-relationship-acceptance.md)
+- [Proposed communication intent contracts](reference/communication-intent-contracts.md)
+- [Proposed communication intent acceptance requirements](reference/communication-intent-acceptance.md)
 - [Channel and DataStore contracts](reference/channel-and-datastore-contracts.md)
 - [Channel and DataStore acceptance fixture](reference/channel-and-datastore-acceptance.md)
 - [Specification and API contracts](reference/specification-and-api-contracts.md)
