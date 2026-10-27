@@ -3,8 +3,6 @@ targets = []
 
 [advisories]
 ignore = [
-  # Fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru.
-  "RUSTSEC-2026-0253",
   { id = "RUSTSEC-2026-0381", reason = "0.26.11 only reexports patched 1.x roots; bans below reject every affected version except this data-free shim" },
 ]
 

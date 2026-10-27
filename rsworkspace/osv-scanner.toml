@@ -1,6 +1,6 @@
 [[IgnoredVulns]]
-id = "RUSTSEC-2026-0253"
-reason = "fix needs lru 0.18, which tantivy 0.26 does not allow yet; blocked on a tantivy release that bumps lru."
+id = "GHSA-qwgh-2vcv-g2f7"
+reason = "fix needs block-buffer 0.12, but nkeys 0.4 (via async-nats) still signs with ed25519-dalek 2 on digest 0.10; blocked on an nkeys release that moves to ed25519-dalek 3."
 
 [[PackageOverrides]]
 name = "webpki-roots"
