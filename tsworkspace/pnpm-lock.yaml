@@ -39,8 +39,8 @@ importers:
         specifier: 0.8.1
         version: 0.8.1
       '@tanstack/react-hotkeys':
-        specifier: 0.14.4
-        version: 0.14.4(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: 0.17.0
+        version: 0.17.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@xyflow/react':
         specifier: 12.12.0
         version: 12.12.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
@@ -57,8 +57,8 @@ importers:
         specifier: 8.7.1
         version: 8.7.1(express@5.3.0)
       lucide-react:
-        specifier: 1.58.0
-        version: 1.58.0(@types/react@19.3.0)(react@19.3.1)
+        specifier: 1.61.0
+        version: 1.61.0(@types/react@19.3.0)(react@19.3.1)
       nats.ws:
         specifier: 1.30.3
         version: 1.30.3
@@ -921,12 +921,12 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/hotkeys@0.15.0':
-    resolution: {integrity: sha512-9eX5ADb8ZEtTwIqCdf7grXCf2dCK9oLmvnWcwkeUueX12+bD6ieOQCa8Tj3Fn2PywlW3h6wbimQgssLblMQm0A==}
+  '@tanstack/hotkeys@0.18.0':
+    resolution: {integrity: sha512-QQjRgnpz0xrTbhKiuia+ACGzO4PsxEsTVH2ls01fM2LJ8uISrWVq/9ILB3bd4eFdWzj9I6K7qZM6swoDDiKcRQ==}
     engines: {node: '>=20'}
 
-  '@tanstack/react-hotkeys@0.14.4':
-    resolution: {integrity: sha512-ufelhwMawCTiOb2Hyx0mnx1I1i9ze1O61h7BQ7WhDn91c/H63SL7Oe7qJ/P+0keQmPjuRKv2z5ofQPz9Vb5g+w==}
+  '@tanstack/react-hotkeys@0.17.0':
+    resolution: {integrity: sha512-uuWyA+2cNe4hGPFVbsP36pwguuW7eR1PfAaw+ClygOHxo9I2A3vRGGRB1PfxwH/FEtgsJC+hV3AHvgvEeiz0pg==}
     engines: {node: '>=20'}
     peerDependencies:
       react: '>=16.8'
@@ -1798,8 +1798,8 @@ packages:
     resolution: {integrity: sha512-U4N8FgzmWxc8k1VH8Kr6lQg18U7Fjvby6wXHVRX/ZZ7IwWbRMgrRbP0Wrb5q5NVinryp4SQampHKdvtecItxUg==}
     engines: {node: 20 || >=22}
 
-  lucide-react@1.58.0:
-    resolution: {integrity: sha512-hXaFNm6mk6QVtBnDGBn1YAs8j2tGUk0A4s/CpclIcczfxeXiW1rdOLVo6zCsoIih9XXsGvDODQerl749a2n7bA==}
+  lucide-react@1.61.0:
+    resolution: {integrity: sha512-v2SQPPPNjnr+BlhL9Spuzmo5yR+hLkftfuE4E3jaxdNPgSH0hJKPcLJBP7yAta87jQNPsSERS59PJjCJ/CorBA==}
     peerDependencies:
       '@types/react': '*'
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
@@ -2872,13 +2872,13 @@ snapshots:
       tailwindcss: 4.3.3
       vite: 8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)
 
-  '@tanstack/hotkeys@0.15.0':
+  '@tanstack/hotkeys@0.18.0':
     dependencies:
       '@tanstack/store': 0.11.2
 
-  '@tanstack/react-hotkeys@0.14.4(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@tanstack/react-hotkeys@0.17.0(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
-      '@tanstack/hotkeys': 0.15.0
+      '@tanstack/hotkeys': 0.18.0
       '@tanstack/react-store': 0.11.2(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
@@ -3697,7 +3697,7 @@ snapshots:
 
   lru-cache@11.5.3: {}
 
-  lucide-react@1.58.0(@types/react@19.3.0)(react@19.3.1):
+  lucide-react@1.61.0(@types/react@19.3.0)(react@19.3.1):
     dependencies:
       react: 19.3.1
     optionalDependencies:
