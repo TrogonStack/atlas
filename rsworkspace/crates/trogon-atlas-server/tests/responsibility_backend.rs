@@ -2366,3 +2366,222 @@ async fn architectural_relationship_hidden_and_missing_endpoints_share_unavailab
         Some(source)
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn communication_hidden_and_missing_message_share_unavailable_state_with_live_peer() {
+    let mut client = client().await;
+    let mut namespaces = Vec::new();
+    for (name, parent) in [
+        ("communication-visible", "visible"),
+        ("communication-private", "hidden"),
+    ] {
+        namespaces.push(
+            client
+                .register_namespace(request(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        parent: parent.into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let target_id = pb::Id {
+        namespace: namespaces[0].clone(),
+        slug: "public-provider".into(),
+        version: 1,
+    };
+    let target = entity(pb::entity::Kind::ExternalSystem(pb::ExternalSystem {
+        id: Some(target_id.clone()),
+        title: "Public provider".into(),
+        ..Default::default()
+    }));
+    put(&mut client, target.clone(), None).await;
+    let specification = entity(pb::entity::Kind::Specification(pb::Specification {
+        id: Some(pb::Id {
+            namespace: namespaces[1].clone(),
+            slug: "private-contract".into(),
+            version: 1,
+        }),
+        title: "Private contract title".into(),
+        messages: vec![pb::ContractMessage {
+            name: Some(pb::MemberName {
+                value: "Hint".into(),
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    let specification = put(&mut client, specification, None).await.entity.unwrap();
+    let Some(pb::entity::Kind::Specification(spec)) = &specification.kind else {
+        panic!("specification")
+    };
+    let message = pb::ContractMemberRef {
+        specification: Some(pb::SpecificationRef {
+            id: spec.id.clone(),
+        }),
+        owner_uid: specification.system.as_ref().unwrap().uid.clone(),
+        kind: pb::ContractMemberKind::Message as i32,
+        member_id: spec.messages[0].member_id.clone(),
+        ..Default::default()
+    };
+
+    let source_id = pb::Id {
+        namespace: namespaces[0].clone(),
+        slug: "public-owner".into(),
+        version: 1,
+    };
+    let source = entity(pb::entity::Kind::Component(pb::Component {
+        id: Some(source_id.clone()),
+        title: "Readable owner".into(),
+        communications: vec![pb::CommunicationDeclaration {
+            direction: pb::CommunicationDirection::Receive as i32,
+            message: Some(message),
+            peer: Some(pb::ArchitecturalEndpoint {
+                target: Some(pb::architectural_endpoint::Target::ExternalSystem(
+                    pb::ExternalSystemRef {
+                        id: Some(target_id.clone()),
+                    },
+                )),
+            }),
+            label: Some(pb::CatalogTitle {
+                value: "calls".into(),
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    assert_eq!(
+        client
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(source.clone()),
+                    ..Default::default()
+                },
+                READER,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::PermissionDenied
+    );
+    assert_eq!(
+        client
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(source.clone()),
+                    ..Default::default()
+                },
+                LIMITED,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    let source = put(&mut client, source, None).await.entity.unwrap();
+    let occurrence = trogon_atlas_core::communication_intent::declarations(&source)[0]
+        .connection_id
+        .clone();
+    let selection = pb::ResponsibilitySubject {
+        selection: Some(pb::responsibility_subject::Selection::Connection(
+            pb::ConnectionRef {
+                owner: Some(reference(&source)),
+                owner_uid: source.system.as_ref().unwrap().uid.clone(),
+                id: occurrence,
+            },
+        )),
+    };
+    let person_id = pb::Id {
+        namespace: namespaces[0].clone(),
+        slug: "contact".into(),
+        version: 1,
+    };
+    let contact = entity(pb::entity::Kind::Person(pb::Person {
+        id: Some(person_id.clone()),
+        title: Some(pb::DirectoryDisplayName {
+            value: "Contact".into(),
+        }),
+        responsibilities: vec![pb::Responsibility {
+            kind: pb::ResponsibilityKind::Contact as i32,
+            subject: Some(selection.clone()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+    put(&mut client, contact, None).await;
+    let query = pb::ListAssigneeResponsibilitiesRequest {
+        assignee: Some(pb::ResponsibilityAssignee {
+            selection: Some(pb::responsibility_assignee::Selection::Person(
+                pb::PersonRef {
+                    id: Some(person_id),
+                },
+            )),
+        }),
+        ..Default::default()
+    };
+    let hidden = client
+        .list_assignee_responsibilities(request(query.clone(), LIMITED, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(hidden.assignments.len(), 1);
+    assert_eq!(
+        hidden.assignments[0].assignment.as_ref().unwrap().subject,
+        Some(selection)
+    );
+    assert_eq!(
+        hidden.assignments[0].state,
+        pb::ResponsibilityResolutionState::Unresolved as i32
+    );
+    assert!(!format!("{hidden:?}").contains("Private contract title"));
+    assert_eq!(
+        client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::Specification as i32,
+                    id: spec.id.clone()
+                },
+                LIMITED,
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    delete(&mut client, reference(&specification), true, None)
+        .await
+        .unwrap();
+    let missing = client
+        .list_assignee_responsibilities(request(query, LIMITED, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(missing.assignments, hidden.assignments);
+    assert_eq!(
+        client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::Component as i32,
+                    id: Some(source_id)
+                },
+                LIMITED,
+                None
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .entity,
+        Some(source)
+    );
+}

@@ -116,3 +116,22 @@ it.each(['document', 'decision'])(
     expect(screen.queryByText('out-b')).toBeNull();
   },
 );
+
+it.each(['document', 'decision'])('keeps %s inspection available for a raw connection without its owner', (kind) => {
+  const model = fixture();
+  const subject = responsibilitySubjects(model.entities[0])[1].subject;
+  const catalog = buildModel([
+    {
+      [kind]: {
+        id: id('note'),
+        subjects: [
+          { subject: { connection: { ownerUid: 'checkout-incarnation', id: { value: 'out-a' } } } },
+          { subject },
+        ],
+      },
+    },
+  ]).entities[0];
+  render(<ArchitecturalRelationshipDetails entity={catalog} model={model} onSelect={vi.fn()} />);
+  expect(screen.getByText('out-a')).toBeDefined();
+  expect(screen.queryByText('out-b')).toBeNull();
+});

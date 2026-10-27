@@ -28,7 +28,11 @@ fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::Out
     );
     trogon_atlas_core::refs::outbound_refs(entity)
         .into_iter()
-        .filter(|reference| !architectural || reference.from_field.starts_with("relationships["))
+        .filter(|reference| {
+            !architectural
+                || reference.from_field.starts_with("relationships[")
+                || reference.from_field.starts_with("communications[")
+        })
         .collect()
 }
 

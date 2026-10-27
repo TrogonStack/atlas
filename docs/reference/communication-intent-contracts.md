@@ -1,10 +1,12 @@
 # Communication intent contracts
 
-Status: proposed native contract, not implemented. This document selects a
-bounded declaration layer for send/receive intent before behavioral mapping.
-It changes no schema, API, validation or runtime behavior. The
-[acceptance requirements](communication-intent-acceptance.md) are future
-implementation obligations, not executed coverage.
+Status: native support is implemented in the schema, core, backend, CLI/MCP
+authoring and Studio inspection. The
+[infrastructure schema](../../proto/trogonatlas/eventmodel/v1alpha1/infrastructure.proto)
+is the wire contract. This layer retains send/receive intent before behavioral
+mapping; it does not execute communication. The
+[acceptance requirements and executable coverage](communication-intent-acceptance.md)
+distinguish implemented fixtures from exhaustive and deployed evidence.
 
 ## Scope and existing representations
 
@@ -29,15 +31,13 @@ This first scope uses only MESSAGE member selectors; it does not add a union
 of EventRef, CommandRef, arbitrary names and transport strings. Unsupported
 payloads require an explicit Specification message definition before selection.
 
-## Proposed wire shape
+## Wire shape
 
-The proposed additions are `Component.communications` at field 9 and
-`ExternalSystem.communications` at field 8, both repeated
-`CommunicationDeclaration`. These tags follow the currently implemented
-infrastructure fields; implementation must recheck availability before schema
-generation. Existing `relationships` and `members` retain their meanings.
+Component carries `communications` at field 9 and ExternalSystem at field 8,
+both repeated `CommunicationDeclaration`. Existing `relationships` and
+`members` retain their meanings.
 
-| CommunicationDeclaration field | Proposed type and rule |
+| CommunicationDeclaration field | Type and rule |
 | --- | --- |
 | `connection_id = 1` | Existing ConnectionId, required in persisted state; omission requests assignment. Explicitly present empty or malformed values reject. |
 | `direction = 2` | New `CommunicationDirection`: UNSPECIFIED = 0, SEND = 1, RECEIVE = 2. Require SEND or RECEIVE; reject absence, zero and unknown values. |
@@ -48,10 +48,9 @@ generation. Existing `relationships` and `members` retain their meanings.
 | `doc = 7` | Optional CatalogText under the same existing presence and byte rules. |
 
 Reuse the named rich types and their validators; do not duplicate member IDs,
-endpoint refs, title/text values or timestamp semantics. The implementation
-must advance the contract revision and mutation floors beyond the currently
-implemented revision 16 before older writers could drop these fields. This
-proposal itself does not change those floors.
+endpoint refs, title/text values or timestamp semantics. Contract revision and
+mutation floors are 17; older writers are refused before they can drop these
+fields.
 
 ## Direction, conditions and evidence
 

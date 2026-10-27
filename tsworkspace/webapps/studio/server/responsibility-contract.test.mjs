@@ -130,4 +130,14 @@ describe('architectural declaration connection subjects at the read-only gateway
       expect(codec.deserialize(codec.serialize(entity))).toEqual(entity);
     }
   });
+  it('preserves communications, optional condition presence and exact message identities in native codecs', () => {
+    const codec = definitions['trogonatlas.eventmodel.v1alpha1.Entity'];
+    for (const kind of ['component', 'externalSystem']) {
+      const communication = (value, direction) => ({ connectionId: { value }, direction, peer: { externalSystem: { id } }, message: { specification: { id }, ownerUid: 'spec-incarnation', kind: 'CONTRACT_MEMBER_KIND_MESSAGE', memberId: { value: 'message-member' } }, label: { value: 'Order hint' } });
+      const send = { ...communication('send', 'COMMUNICATION_DIRECTION_SEND'), condition: { value: 'Cafe\u0301\r\n<script>inert()</script>' } };
+      const entity = { [kind]: { id, title: 'Boundary', communications: [send, communication('receive', 'COMMUNICATION_DIRECTION_RECEIVE')] }, system: { uid: 'owner-incarnation' } };
+      expect(codec.deserialize(codec.serialize(entity))).toEqual(entity);
+    }
+  });
+
 });

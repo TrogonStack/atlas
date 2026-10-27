@@ -392,6 +392,37 @@ impl EventModelServiceImpl {
                 return Ok(State::Unresolved);
             }
         }
+        if let Some(selection) =
+            crate::responsibility_resources::selected_message(subject, &row.entity)
+        {
+            let Some(id) = selection
+                .specification
+                .as_ref()
+                .and_then(|reference| reference.id.as_ref())
+            else {
+                return Ok(State::Unresolved);
+            };
+            if !query.lens.admits(&id.namespace) {
+                return Ok(State::Unresolved);
+            }
+            let Some(specification) = self
+                .responsibility_read(
+                    query,
+                    &pb::EntityRef {
+                        kind: pb::EntityKind::Specification as i32,
+                        id: Some(id.clone()),
+                    },
+                )
+                .await?
+            else {
+                return Ok(State::Unresolved);
+            };
+            if trogon_atlas_core::specification::resolve_member(&specification.entity, &selection)
+                .is_err()
+            {
+                return Ok(State::Unresolved);
+            }
+        }
         Ok(State::Resolved)
     }
 

@@ -184,6 +184,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::Persona(_) | EntityOneof::Screen(_) => {}
         EntityOneof::ExternalSystem(x) => {
             crate::architectural_relationships::outbound(&x.relationships, &mut out);
+            crate::communication_intent::outbound(&x.communications, &mut out);
         }
         EntityOneof::Domain(x) => {
             if let Some(id) = x.project.as_ref().and_then(|p| p.id.as_ref()) {
@@ -571,6 +572,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         }
         EntityOneof::Component(x) => {
             crate::architectural_relationships::outbound(&x.relationships, &mut out);
+            crate::communication_intent::outbound(&x.communications, &mut out);
             for (i, m) in x.members.iter().enumerate() {
                 if let Some(id) = &m.id {
                     match EntityKind::try_from(m.kind) {
@@ -1321,13 +1323,22 @@ pub fn retarget_refs(
             }
         }
         EntityOneof::Persona(_) | EntityOneof::Screen(_) => {}
-        EntityOneof::ExternalSystem(x) => crate::architectural_relationships::retarget(
-            &mut x.relationships,
-            from_kind,
-            from_id,
-            to_id,
-            &mut rewritten,
-        ),
+        EntityOneof::ExternalSystem(x) => {
+            crate::architectural_relationships::retarget(
+                &mut x.relationships,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+            crate::communication_intent::retarget(
+                &mut x.communications,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+        }
         EntityOneof::Domain(x) => {
             if from_kind == EntityKind::Project
                 && x.project.as_ref().and_then(|p| p.id.as_ref()) == Some(from_id)
@@ -1791,6 +1802,13 @@ pub fn retarget_refs(
             }
         }
         EntityOneof::Component(x) => {
+            crate::communication_intent::retarget(
+                &mut x.communications,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
             crate::architectural_relationships::retarget(
                 &mut x.relationships,
                 from_kind,

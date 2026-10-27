@@ -9,8 +9,14 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
         .len()
         .saturating_add(match &entity.kind {
             Some(pb::entity::Kind::Team(value)) => value.members.len(),
-            Some(pb::entity::Kind::Component(value)) => value.relationships.len(),
-            Some(pb::entity::Kind::ExternalSystem(value)) => value.relationships.len(),
+            Some(pb::entity::Kind::Component(value)) => value
+                .relationships
+                .len()
+                .saturating_add(value.communications.len()),
+            Some(pb::entity::Kind::ExternalSystem(value)) => value
+                .relationships
+                .len()
+                .saturating_add(value.communications.len()),
             _ => 0,
         })
 }
@@ -52,6 +58,20 @@ pub(crate) fn subject_resolves(
         })
         .is_some_and(|owner| {
             trogon_atlas_core::responsibility::resolve_subject(subject, owner).is_ok()
+                && selected_message(subject, owner).is_none_or(|selection| {
+                    selection
+                        .specification
+                        .as_ref()
+                        .and_then(|r| r.id.as_ref())
+                        .and_then(|id| context.find(pb::EntityKind::Specification, id))
+                        .is_some_and(|specification| {
+                            trogon_atlas_core::specification::resolve_member(
+                                specification,
+                                &selection,
+                            )
+                            .is_ok()
+                        })
+                })
         })
 }
 
@@ -193,5 +213,21 @@ pub(crate) fn selected_endpoints(
             targets.push((kind, id));
         }
     }
+    if let Some(selection) = selected_message(subject, owner) {
+        if let Some(id) = selection.specification.and_then(|reference| reference.id) {
+            targets.push((pb::EntityKind::Specification, id));
+        }
+    }
     targets
+}
+
+pub(crate) fn selected_message(
+    subject: &pb::ResponsibilitySubject,
+    owner: &pb::Entity,
+) -> Option<pb::ContractMemberRef> {
+    let Some(pb::responsibility_subject::Selection::Connection(reference)) = &subject.selection
+    else {
+        return None;
+    };
+    trogon_atlas_core::communication_intent::message_selection(owner, reference).ok()
 }

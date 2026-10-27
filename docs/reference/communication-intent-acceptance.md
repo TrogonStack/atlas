@@ -1,9 +1,11 @@
 # Communication intent acceptance requirements
 
-Status: proposed acceptance requirements for the
-[communication intent contract](communication-intent-contracts.md).
-No implementation or executed tests are claimed. Logical fixture names are
-not manifest syntax, submitted occurrence IDs or predicted owner UIDs.
+Status: native support for the
+[communication intent contract](communication-intent-contracts.md) is
+implemented. This reference defines acceptance requirements and links
+executable coverage below. Logical fixture names are not manifest syntax,
+submitted occurrence IDs or predicted owner UIDs. Fixture presence alone does
+not establish that every requirement has run or that deployment is verified.
 
 ## Fixture and evidence
 
@@ -33,7 +35,7 @@ Do not substitute fixture source or mocked HTTP tests for native persistence.
 
 | Case | Required public outcome |
 | --- | --- |
-| Native create/read | All proposed fields preserve presence, Unicode, order and exact selectors. Equal declarations receive distinct IDs; owner UID is server-owned. |
+| Native create/read | All fields preserve presence, Unicode, order and exact selectors. Equal declarations receive distinct IDs; owner UID is server-owned. |
 | Unmapped message | A resolvable MESSAGE member without ReadModel mapping is accepted. No native Event, Command, Channel, Processor or slice is created or required. |
 | SEND and RECEIVE | Each assertion belongs only to its authoring owner. A RECEIVE does not create/satisfy peer SEND, and matching independently authored declarations do not deduplicate or certify delivery. |
 | Reference direction | RECEIVE still reports stored outgoing references from its owner to peer and Specification, with full provenance. No inferred reverse persisted edge. |
@@ -111,12 +113,19 @@ siblings must not substitute for a selected ID, and any loaded-only incoming
 view declares its scope. Authenticated browser evidence must identify the real
 backend/fixture and is separate from component or mocked gateway results.
 
-## Evidence gate
+## Executable coverage and limits
 
-Implementation completion requires maintained executable fixtures for these
-selected boundaries, causal public regressions for discovered defects, and
-retained commands/results at the candidate SHA. No fixture, test result,
-deployed readiness, connector or conditional execution support is claimed by
-this proposal. Behavioral binding, predicate evaluation, native Event/Command
-equivalence and portable migration remain deferred even after native intent
-declarations are implemented.
+| Fixture | Verification boundary |
+| --- | --- |
+| [Core communication tests](../../rsworkspace/crates/trogon-atlas-core/tests/communication_intent.rs) | Typed values, exact selected identity, occurrence lifecycle, retargeting, subject resolution and native-only ownership helpers. |
+| [Backend communication tests](../../rsworkspace/crates/trogon-atlas-server/tests/communication_intent_backend.rs) | Native persistence, final-overlay admission, message availability, reference and subject handling, and bounds. |
+| [Responsibility backend tests](../../rsworkspace/crates/trogon-atlas-server/tests/responsibility_backend.rs) and [Source backend tests](../../rsworkspace/crates/trogon-atlas-server/tests/source_integration_backend.rs) | Authenticated hidden/missing message resolution and native-only Source isolation. |
+| [Authenticated gRPC acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/communication_intent_acceptance.rs) | Returned message identity, parallel reference multiplicity, exact subjects, wording/reorder/no-op preservation and unavailable message with a retained peer. |
+| [Native manifest tests](../../rsworkspace/crates/trogon-atlas-client/tests/communication_manifest.rs) | Typed message/peer selectors, exact numeric versions and malformed manifest rejection. |
+| [CLI integration](../../rsworkspace/crates/trogon-atlas-cli/tests/communication_cli_integration.rs) and [MCP integration](../../rsworkspace/crates/trogon-atlas-mcp/tests/mcp_integration.rs) | Native authoring, preview, inspection and same-store export/reapply. |
+| [Studio communication tests](../../tsworkspace/webapps/studio/src/components/CommunicationIntentDetails.test.tsx) | Read-only owner-relative display, loaded-owner scope, exact selectors and partial raw subject handling. Component evidence is distinct from native transport and deployed browser results. |
+
+Record commands/results at the candidate SHA separately from this source
+inventory. It does not establish every matrix case or production-scale and
+deployed-browser readiness. Behavioral binding, predicate evaluation, native
+Event/Command equivalence, connectors and portable migration remain deferred.

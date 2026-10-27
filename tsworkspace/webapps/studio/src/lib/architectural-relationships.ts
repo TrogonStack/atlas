@@ -45,14 +45,21 @@ export function resolveArchitecturalSubject(
   model: Model,
   subject: ResponsibilitySubject,
 ): ArchitecturalDeclaration | undefined {
-  if (!('connection' in subject)) return undefined;
-  const { owner, ownerUid, id } = subject.connection;
-  if (!ownerUid || !id?.value) return undefined;
+  const connection = record(record(subject).connection);
+  const owner = record(connection.owner);
+  const ownerUid = connection.ownerUid;
+  const id = text(connection.id);
+  if (typeof ownerUid !== 'string' || !ownerUid || !id || typeof owner.kind !== 'string') return undefined;
   const kind = wireKind(owner.kind);
-  const entity = kind ? model.byKey.get(entityKey(kind, owner.id)) : undefined;
+  const entity = kind ? model.byKey.get(entityKey(kind, asId(owner.id))) : undefined;
   if (!entity || entity.uid !== ownerUid) return undefined;
   const declarations = architecturalDeclarations(entity);
-  const ids = declarations.map((item) => item.connectionId);
+  const ids = [
+    ...declarations.map((item) => item.connectionId),
+    ...(Array.isArray(entity.raw.communications)
+      ? entity.raw.communications.map((item) => text(record(item).connectionId))
+      : []),
+  ];
   if (ids.some((value) => !value) || new Set(ids).size !== ids.length) return undefined;
-  return declarations.find((item) => item.connectionId === id.value);
+  return declarations.find((item) => item.connectionId === id);
 }

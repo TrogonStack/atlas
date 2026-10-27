@@ -4029,6 +4029,23 @@ pub struct ArchitecturalRelationship {
     #[prost(message, optional, tag="4")]
     pub doc: ::core::option::Option<CatalogText>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CommunicationDeclaration {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="CommunicationDirection", tag="2")]
+    pub direction: i32,
+    #[prost(message, optional, tag="3")]
+    pub peer: ::core::option::Option<ArchitecturalEndpoint>,
+    #[prost(message, optional, tag="4")]
+    pub message: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="5")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="6")]
+    pub condition: ::core::option::Option<CatalogText>,
+    #[prost(message, optional, tag="7")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
 /// A Component is a living implementation unit: the deployable thing that
 /// hosts processors, serves UIs, projects read models, exposes APIs, and owns
 /// its technology choices -- including the messaging it relies on (Kafka
@@ -4057,6 +4074,8 @@ pub struct Component {
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
     #[prost(message, repeated, tag="8")]
     pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
+    #[prost(message, repeated, tag="9")]
+    pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
 }
 /// An ExternalSystem is a living third-party boundary: the APIs and webhooks
 /// it exposes, the tech used to integrate with it. ReadModels with an
@@ -4080,6 +4099,8 @@ pub struct ExternalSystem {
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
     #[prost(message, repeated, tag="7")]
     pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
+    #[prost(message, repeated, tag="8")]
+    pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
 }
 /// A Tracker is a project-management overlay: a denormalized list of
 /// pointers into the model, each carrying delivery status. It integrates
@@ -4117,6 +4138,35 @@ pub mod tracker {
         pub doc: ::prost::alloc::string::String,
         #[prost(message, repeated, tag="4")]
         pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CommunicationDirection {
+    Unspecified = 0,
+    Send = 1,
+    Receive = 2,
+}
+impl CommunicationDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "COMMUNICATION_DIRECTION_UNSPECIFIED",
+            Self::Send => "COMMUNICATION_DIRECTION_SEND",
+            Self::Receive => "COMMUNICATION_DIRECTION_RECEIVE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "COMMUNICATION_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "COMMUNICATION_DIRECTION_SEND" => Some(Self::Send),
+            "COMMUNICATION_DIRECTION_RECEIVE" => Some(Self::Receive),
+            _ => None,
+        }
     }
 }
 /// Delivery status of a tracked item. Lives ONLY in Trackers -- design
