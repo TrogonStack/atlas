@@ -32,7 +32,7 @@ duplicate handling or existing validation. It adds no membership ConnectionRef.
 | Labeled directed declarations between implementation/external boundaries | Selected below, using existing owners and typed references. |
 | Abstract systems above deployables, independent system/service levels, authored strategic nesting | Deferred. Existing source establishes implementation and strategic meanings but no defensible shared taxonomy for these additional levels. No System, Service or Actor entity kind is introduced. |
 | External-system-owned membership | Deferred. ExternalSystem has no members field. A relationship labeled “contains” does not introduce membership; a Component proxy must not be invented for an external abstract group. |
-| System-level human interactions | Deferred. Existing slice occurrences can ground human behavior, but raw membership cannot identify which hosting assertion supports an interaction. A new aggregation/interaction selector and its lifecycle need a separate contract. |
+| System-level human interactions | The separate [human interaction proposal](human-interaction-contracts.md) selects identified Component UI-hosting assertions and checked caller-supplied slice paths. It is not implemented. Raw membership remains insufficient, and ExternalSystem hosting and broader aggregation remain deferred. |
 | General send/receive, conditional triggers and agent/tool communication | The separate native [communication intent contract](communication-intent-contracts.md) supports owner-local message declarations and condition prose, not executable triggers. Agent/tool communication and behavioral binding remain deferred; existing typed API/observation paths retain their own meanings. |
 
 ## Wire shape
@@ -187,6 +187,12 @@ checked behavioral paths and observed runtime behavior remain distinct layers.
 
 ## Deferred human interaction contract
 
+The [human interaction proposal](human-interaction-contracts.md) and its
+[acceptance requirements](human-interaction-acceptance.md) now specify a
+bounded Component UI-hosting and exact supplied-path design. They change no
+current schema or runtime behavior. The implementation boundary below remains
+in effect until that proposal is implemented.
+
 A future system-level Persona view must ground issuance in the exact
 CommandSlice persona/UI/command edges, and display in exact UiSlice persona/UI
 and selected source ReadModelEdge occurrences. These paths are present in
@@ -198,6 +204,8 @@ must retain authored order and recurrence without invented moment IDs.
 Component membership alone cannot choose an interaction occurrence or prove
 hosting, a human's permissions or runtime execution. This layer adds no
 Persona-to-system link, interaction message, inferred actor or behavioral query.
-The absent aggregation/hosting occurrence contract is the reason for deferral;
-existing exact slice inspection remains available. UI navigation and Screen
-slot composition do not supply a substitute Persona relation.
+Identified hosting and checked path inspection remain unimplemented; the
+separate proposal supplies their selected contract. Broader aggregation still
+needs its own scope. Existing exact slice inspection remains available. UI
+navigation and Screen slot composition do not supply a substitute Persona
+relation.
