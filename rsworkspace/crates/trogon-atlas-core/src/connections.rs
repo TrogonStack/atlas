@@ -210,7 +210,7 @@ fn visit(
         && wrapper_target(descriptor.full_name()).is_none()
     {
         let mut endpoint = message.clone();
-        for name in ["connection_id", "doc", "label"] {
+        for name in ["connection_id", "doc", "label", "condition"] {
             if let Some(field) = descriptor.get_field_by_name(name) {
                 endpoint.clear_field(&field);
             }
@@ -222,7 +222,35 @@ fn visit(
         let occurrence = ConnectionOccurrence {
             id: read_id(message)?,
             path: path.to_owned(),
-            target: None,
+            target: if descriptor.full_name()
+                == "trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship"
+            {
+                message
+                    .get_field_by_name("target")
+                    .as_deref()
+                    .and_then(Value::as_message)
+                    .map(Message::encode_to_vec)
+                    .and_then(|bytes| {
+                        trogon_atlas_proto::ArchitecturalEndpoint::decode(bytes.as_slice()).ok()
+                    })
+                    .as_ref()
+                    .and_then(crate::architectural_relationships::endpoint_ref)
+            } else if descriptor.full_name()
+                == "trogonatlas.eventmodel.v1alpha1.CommunicationDeclaration"
+            {
+                message
+                    .get_field_by_name("peer")
+                    .as_deref()
+                    .and_then(Value::as_message)
+                    .map(Message::encode_to_vec)
+                    .and_then(|bytes| {
+                        trogon_atlas_proto::ArchitecturalEndpoint::decode(bytes.as_slice()).ok()
+                    })
+                    .as_ref()
+                    .and_then(crate::architectural_relationships::endpoint_ref)
+            } else {
+                None
+            },
             signature,
         };
         callback(message, occurrence)?;
