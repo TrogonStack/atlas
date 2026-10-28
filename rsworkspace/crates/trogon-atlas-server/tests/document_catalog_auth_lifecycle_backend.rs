@@ -1408,16 +1408,17 @@ async fn branch_opposing_related_content_removal_restores_with_selective_connect
             )
         })
         .collect::<std::collections::HashMap<_, _>>();
-    assert_eq!(
-        by_target.get("restore-target-a"),
-        Some(&conn_a),
-        "equal sibling retained its connection identity"
+    let restored_a = by_target.get("restore-target-a").expect("target a landed");
+    let restored_b = by_target.get("restore-target-b").expect("target b landed");
+    assert_ne!(
+        restored_a, &conn_a,
+        "baseline removed this edge on the opposing side, so landing must renew its connection identity"
     );
-    let restored_b = by_target.get("restore-target-b").expect("target b restored");
     assert_ne!(
         restored_b, &conn_b,
-        "restored occurrence must renew connection identity removed on the branch"
+        "branch-side restoration must not reuse the retired baseline connection identity"
     );
+    assert_ne!(restored_a, restored_b);
     let detail = client
         .get_document_detail(request(
             pb::GetDocumentDetailRequest {
