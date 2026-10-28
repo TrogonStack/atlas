@@ -65,6 +65,18 @@ fn native(
     };
     Ok((wrapper, kind, value))
 }
+/// Collections that only native authoring may hold, so a source can neither supply nor clear them.
+fn native_collections(owner: &str) -> &'static [&'static str] {
+    match owner {
+        "trogonatlas.eventmodel.v1alpha1.Component"
+        | "trogonatlas.eventmodel.v1alpha1.ExternalSystem" => {
+            &["relationships", "communications", "storage_claims"]
+        }
+        "trogonatlas.eventmodel.v1alpha1.Channel" => &["links"],
+        "trogonatlas.eventmodel.v1alpha1.DataProduct" => &["storage_claims"],
+        _ => &[],
+    }
+}
 fn unit_fields(
     value: &DynamicMessage,
     unit: OwnershipUnit,
@@ -80,21 +92,22 @@ fn unit_fields(
         descriptor.full_name(),
         "trogonatlas.eventmodel.v1alpha1.Component"
             | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-    ) {
-        if unit == OwnershipUnit::Field(SourceOwnedField::Relationships) {
-            return Err(SourceError::UnsupportedUnit);
-        }
-        if unit == OwnershipUnit::WholeOwner
-            && ["relationships", "communications"].iter().any(|name| {
+    ) && unit == OwnershipUnit::Field(SourceOwnedField::Relationships)
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
+    if unit == OwnershipUnit::WholeOwner
+        && native_collections(descriptor.full_name())
+            .iter()
+            .any(|name| {
                 value
                     .get_field_by_name(name)
                     .as_deref()
                     .and_then(Value::as_list)
                     .is_some_and(|values| !values.is_empty())
             })
-        {
-            return Err(SourceError::UnsupportedUnit);
-        }
+    {
+        return Err(SourceError::UnsupportedUnit);
     }
     match unit {
         OwnershipUnit::WholeOwner => Ok(descriptor.fields().filter(|f| f.name() != "id").collect()),
