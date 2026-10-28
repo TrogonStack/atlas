@@ -528,6 +528,16 @@ fn owner_kind(
         _ => panic!("owner"),
     }
 }
+fn with_claims(value: &pb::Entity, claims: Vec<pb::StorageAccessClaim>) -> pb::entity::Kind {
+    let mut kind = kind_entity(value);
+    match &mut kind {
+        pb::entity::Kind::Component(v) => v.storage_claims = claims,
+        pb::entity::Kind::ExternalSystem(v) => v.storage_claims = claims,
+        pb::entity::Kind::DataProduct(v) => v.storage_claims = claims,
+        _ => panic!("owner"),
+    }
+    kind
+}
 fn claims_of(value: &pb::Entity) -> Vec<pb::StorageAccessClaim> {
     match value.kind.clone().unwrap() {
         pb::entity::Kind::Component(v) => v.storage_claims,
@@ -1540,7 +1550,7 @@ async fn unchanged_dangling_storage_claims_stay_editable_for_every_owner_kind() 
     }
     force_delete(&mut client, pb::EntityKind::DataStore, "doomed").await;
 
-    for (owner, slug, original) in saved {
+    for (owner, _, original) in saved {
         let edited = put(&mut client, retitled(&original, "renamed")).await;
         assert_eq!(
             claims_of(&edited),
@@ -1549,15 +1559,11 @@ async fn unchanged_dangling_storage_claims_stay_editable_for_every_owner_kind() 
         );
         let mut grown = claims_of(&edited);
         grown.push(claim(&kept, write, Some(0)));
-        let mut kind = owner_kind(owner, &slug, grown);
-        if let pb::entity::Kind::DataProduct(v) = &mut kind {
-            v.title = "renamed".into();
-        }
-        let grown = put(&mut client, kind).await;
+        let grown = put(&mut client, with_claims(&edited, grown)).await;
         assert_eq!(claims_of(&grown).len(), 4, "{owner:?}");
 
         let base = claims_of(&grown);
-        let rebuilt = |claims: Vec<pb::StorageAccessClaim>| owner_kind(owner, &slug, claims);
+        let rebuilt = |claims: Vec<pb::StorageAccessClaim>| with_claims(&grown, claims);
         let mut new_missing = base.clone();
         let mut absent = claim(&kept, read, None);
         absent.store = Some(pb::DataStoreRef {
