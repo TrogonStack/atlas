@@ -1,7 +1,8 @@
 # Catalog context contracts
 
-Status: proposed native extensions, not shipped. Existing support below is
-reconciled against checked-in schemas and contracts, not historical checklists.
+Status: native extensions are implemented in the current checkout; complete
+acceptance remains open. Support below is reconciled against checked-in schemas
+and contracts, not historical checklists.
 This reference does not close the master coverage checklist. No importer,
 migration, provider synchronization or federation is proposed.
 
@@ -10,18 +11,18 @@ migration, provider synchronization or federation is proposed.
 | Concept | Disposition | Evidence and remaining boundary |
 | --- | --- | --- |
 | ADR status, rationale, options and replacement | Supported | [Decision schema](../../proto/trogonatlas/eventmodel/v1alpha1/decision_document.proto) and [contract](decision-and-document-contracts.md). PROPOSED, ACCEPTED, REJECTED, WITHDRAWN, SUPERSEDED are native states. Version ancestry is distinct from substantive replacement. |
-| ADR dates, decision makers and amendments | Proposed | Decision has no authored date, signatory or AMENDS field. Responsibility records catalog assignments, not historical participation. RELATED cannot identify an amendment. |
+| ADR dates, decision makers and amendments | Implemented | Decision retains authored/decided dates, exact Person/Team makers and AMENDS occurrences. Responsibility remains a current catalog assignment rather than historical participation. |
 | Vocabulary entry identity and definition | Supported | [Term and Ambiguity](../../proto/trogonatlas/eventmodel/v1alpha1/strategic.proto): exact Term Id, title, doc definition, embodied_by and version ancestry; namespace denotes bounded context. Ambiguity records synonym/homonym rulings. |
-| Explicit vocabulary owning domain | Proposed | A bounded-context namespace is not an independently authored DomainRef. No separate dictionary-entry entity is needed; explicit domain ownership is missing. |
+| Explicit vocabulary owning domain | Implemented | Term has optional exact `owning_domain`; it remains independent of the bounded-context namespace. No separate dictionary-entry entity is needed. |
 | Resource docs, pages, anchors and navigation | Supported | Document subjects, retained text or inert HTTPS link, anchors and navigation in the Decision/Document contract. Page filesystem ancestry and sidebar presentation fidelity are excluded non-goals. Native navigation order already carries authored link order. |
-| Categories, attachments and authored changelog | Proposed | Navigation lacks category semantics; revision history is not authored changelog prose. Text/link bodies do not retain binary attachments. |
-| Diagram and example raw text | Partial, proposed extension | Document retains only text/plain or text/markdown; Specification artifacts retain declared contract-format UTF-8 source, path, media type and digest. Neither promises arbitrary diagram/example media or typed usage roles. |
-| Diagram/example associations | Proposed | Document subjects provide generic associations, including exact Specification members, but cannot distinguish EXAMPLE from DIAGRAM or attachment/changelog. |
+| Categories, attachments and authored changelog | Implemented, client acceptance incomplete | Document collection annotations, purpose, retained bytes and role-qualified related content preserve these declarations. Safe Studio presentation/download and remaining lifecycle/pagination acceptance are open. |
+| Diagram and example raw text | Implemented retention | Document retains exact bytes, media type, digest and optional filename. Specification artifacts keep their separate contract-source semantics. Retention does not validate a diagram format or execute an example. |
+| Diagram/example associations | Implemented | `related_content` distinguishes EXAMPLE, DIAGRAM, ATTACHMENT and CHANGELOG through exact Document selections. Subjects separately select exact native resources or Specification members. |
 | Metadata and ownership | Supported within existing semantics | [Registered annotations](../../proto/trogonatlas/eventmodel/v1alpha1/annotations.proto) and [responsibility](responsibility-contracts.md). Arbitrary metadata payloads are not references. Directory Person/Team records are not authenticated identities or approval permissions. |
 | Source layout and EventCatalog fidelity | Excluded | Original filesystem hierarchy, parser conversion, visual layout fidelity and provider/source synchronization are outside the requested native scope. Native raw content and associations remain in scope. |
 | Diagram topology | Separate dependency | Typed nodes/edges and flow topology remain genuine gaps in eventcatalog-coverage.md. Retaining content does not implement topology or execution. |
 
-## Proposed Decision additions
+## Decision additions
 
 Names here are design names, not allocated protobuf fields or RPCs.
 `AuthoredDate` is an ISO Gregorian calendar date YYYY-MM-DD with a valid day;
@@ -51,7 +52,7 @@ not imply execution; only each explicitly constrained graph must be acyclic.
 Unknown source status labels are not accepted native enums or guessed mappings.
 They may be quoted in explanatory text but cannot establish native disposition.
 
-## Proposed vocabulary ownership
+## Vocabulary ownership
 
 Add optional `Term.owning_domain: DomainRef`, an exact positive-version native
 reference. Absence means undeclared ownership; it does not derive from namespace.
@@ -63,7 +64,7 @@ ownership can coexist; this declaration does not change strategic realization
 rules or enforce a new namespace hierarchy. A Term without doc remains legal
 under existing admission; completeness of its definition is a separate finding.
 
-## Proposed Document classification and content
+## Document classification and content
 
 Add proto3 `optional purpose` enum GENERAL, EXAMPLE, DIAGRAM, ATTACHMENT, CHANGELOG. Preserve absent separately from present GENERAL.
 Absence retains current generic Document semantics. Purpose is descriptive,
@@ -129,7 +130,7 @@ impact, complete safe-delete protection and force-delete unresolved diagnostics.
 Unchanged dangling declarations remain inspectable; unrelated edits do not heal
 or globally reject them. Editing their owner requires valid complete state.
 
-## Proposed APIs, authorization and budgets
+## APIs, authorization and budgets
 
 Extend native authoring and GetDecisionDetail/GetDocumentDetail outputs with the
 new fields. Add `ListDecisionAmendments(exact DecisionRef, direction)` and

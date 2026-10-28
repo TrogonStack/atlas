@@ -1,14 +1,20 @@
 # Catalog context acceptance specification
 
-Status: proposed tests, not execution evidence. The associated
-[contract](catalog-context-contracts.md) is not implemented by this document.
-Existing Decision/Document support has executable coverage in
-[core tests](../../rsworkspace/crates/trogon-atlas-core/tests/decision_document.rs),
-[reference provenance tests](../../rsworkspace/crates/trogon-atlas-core/tests/decision_document_reference_provenance.rs),
-[backend tests](../../rsworkspace/crates/trogon-atlas-server/tests/decision_document_backend.rs)
-and [routing tests](../../rsworkspace/crates/trogon-atlas-store/tests/decision_document_routing.rs).
-These files were located, not executed for this research task. Existing coverage
-does not establish any proposed field's behavior.
+Status: acceptance requirements for the implemented native extensions. The
+[contract](catalog-context-contracts.md) and this matrix do not close the master
+coverage checklist.
+
+Executable coverage includes [core values](../../rsworkspace/crates/trogon-atlas-core/tests/decision_document.rs),
+[Document content](../../rsworkspace/crates/trogon-atlas-core/tests/document_catalog_context.rs),
+[Decision backend](../../rsworkspace/crates/trogon-atlas-server/tests/decision_document_backend.rs),
+[Document authorization/lifecycle](../../rsworkspace/crates/trogon-atlas-server/tests/document_catalog_auth_lifecycle_backend.rs)
+and [Term ownership](../../rsworkspace/crates/trogon-atlas-server/tests/term_domain_backend.rs).
+The [composed fixture](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_composed.rs)
+passes in the parent checkout. Decision transitive safety, exact provenance and
+branch-landing controls also have independent passing runs. These checks prove
+their explicit assertions, not every requirement below. Safe Studio retained-content
+presentation/download and remaining Document restoration/pagination cases remain
+open in the [coverage status](eventcatalog-coverage.md#delivery-status).
 
 ## Fixtures and executable acceptance targets
 
@@ -19,7 +25,7 @@ and anchor IDs; Specification S with returned MESSAGE and ARTIFACT member IDs.
 Create visible and hidden namespace variants and capture etags. Never identify
 fixtures by title, array position or latest-version lookup.
 
-| Proposed test | Setup/action | Required assertion |
+| Acceptance case | Setup/action | Required assertion |
 | --- | --- | --- |
 | Calendar dates | Write leap-day date, absent dates and invalid Gregorian dates; decided_on before authored_on | Valid values round trip exactly; invalid values reject atomically; no inferred audit time or status transition. |
 | Makers | Add P and T as makers, then edit responsibility and Team membership | Returned maker occurrences remain unchanged; no implied approvals or member expansion. Duplicate exact makers and wrong-kind refs reject. |
