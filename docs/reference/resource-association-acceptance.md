@@ -205,9 +205,18 @@ backend and fixture and is separate from component or mocked results.
 
 ## Executable coverage and limits
 
-No executable coverage exists. When implemented, link the following boundaries
-here and keep their evidence separate. Names are proposals for the parent's
-queue, not existing files.
+Isolated native implementations now have core, backend, manifest, CLI, MCP and
+Studio fixtures. Product and Specification correction tests pass independently,
+including exact message-member admission, unchanged dangling declarations,
+caller-bound pagination and scan exhaustion. MessageClaims has separate
+authenticated admission and connected-client fixtures. These results do not
+establish the combined Channel inverse query: Specification declarations, claim
+routes and operation bindings still need integrated authority and provenance
+verification. Channel composition and storage claims remain separate workstreams.
+
+The following inventory describes the required verification boundaries. Promote
+each fixture to linked parent coverage after its implementation is integrated
+and verified; isolated passing results alone do not close this acceptance matrix.
 
 | Proposed fixture | Verification boundary |
 | --- | --- |
