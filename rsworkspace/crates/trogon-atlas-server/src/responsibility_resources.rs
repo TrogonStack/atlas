@@ -61,6 +61,9 @@ pub(crate) fn subject_resolves(
             )
         })
         .is_some_and(|owner| {
+            if let Some(selected) = crate::message_claims_resources::selected(subject, owner) {
+                return crate::message_claims_resources::validate(&selected, context).is_ok();
+            }
             trogon_atlas_core::responsibility::resolve_subject(subject, owner).is_ok()
                 && selected_message(subject, owner).is_none_or(|selection| {
                     selection
@@ -155,6 +158,13 @@ pub(crate) fn selected_endpoints(
         .path
         .split_once('.')
         .map_or(occurrence.path.as_str(), |(_, path)| path);
+    if let Some(selected) = crate::message_claims_resources::selected(subject, owner) {
+        return trogon_atlas_core::outbound_refs(&selected)
+            .into_iter()
+            .filter(|r| r.from_field.starts_with("message_claims."))
+            .filter_map(|r| Some((r.to_kind?, r.to_id)))
+            .collect();
+    }
     let mut prefixes = vec![path.to_owned()];
     match &owner.kind {
         Some(pb::entity::Kind::CommandSlice(_)) => {

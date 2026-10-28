@@ -66,7 +66,7 @@ impl CatalogBudget {
         Ok(())
     }
 
-    pub(crate) fn owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+    pub(crate) fn row(&mut self, entity: &pb::Entity) -> Result<(), Status> {
         let key = pb::EntityKey::new(
             crate::conv::entity_kind(entity)?,
             crate::conv::entity_id(entity)?,
@@ -80,10 +80,23 @@ impl CatalogBudget {
                 "catalog resource budget exceeded",
             ));
         }
+        Ok(())
+    }
+
+    pub(crate) fn owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+        self.row(entity)?;
+        let key = pb::EntityKey::new(
+            crate::conv::entity_kind(entity)?,
+            crate::conv::entity_id(entity)?,
+        );
         if self.inventoried.insert(key) {
             self.examine(occurrence_count(entity))?;
         }
         Ok(())
+    }
+
+    pub(crate) fn examined(&self) -> usize {
+        self.examined
     }
 
     pub(crate) fn output(&mut self) -> Result<(), Status> {

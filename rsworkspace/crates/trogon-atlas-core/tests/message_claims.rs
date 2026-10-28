@@ -153,13 +153,17 @@ fn route_parameters_require_authored_defaults_or_explicit_values() {
         ..Default::default()
     };
     assert!(validate_route_target(&route, &channel).is_err());
-    route.parameter_values.insert("tenant".into(), "".into());
+    route
+        .parameter_values
+        .insert("tenant".into(), String::new());
     validate_route_target(&route, &channel).unwrap();
     let mut defaults = channel.clone();
     defaults.address.as_mut().unwrap().parameters[0].default = Some("default".into());
     route.parameter_values.clear();
     validate_route_target(&route, &defaults).unwrap();
-    route.parameter_values.insert("unknown".into(), "".into());
+    route
+        .parameter_values
+        .insert("unknown".into(), String::new());
     assert!(validate_route_target(&route, &defaults).is_err());
     defaults.address = None;
     assert!(validate_route_target(&route, &defaults).is_err());
@@ -250,8 +254,8 @@ fn field_fixture() -> (Entity, ClaimFieldSelection, Entity, Entity) {
     let mut e = owner();
     let v = claims::declarations_mut(&mut e).unwrap();
     let m = v.claims[0].message.as_mut().unwrap();
-    m.owner_uid = spec.system.as_ref().unwrap().uid.clone();
-    m.member_id = s.messages[0].member_id.clone();
+    m.owner_uid.clone_from(&spec.system.as_ref().unwrap().uid);
+    m.member_id.clone_from(&s.messages[0].member_id);
     let e = prepare_entity(None, &e).unwrap();
     let selection = ClaimFieldSelection {
         claim_id: claims::declarations(&e).unwrap().claims[0]
@@ -403,7 +407,7 @@ fn route_annotations_keep_identity_but_channel_keys_and_claim_direction_do_not()
     let v = claims::declarations_mut(&mut descriptive).unwrap();
     v.routes[0]
         .parameter_values
-        .insert("tenant".into(), "".into());
+        .insert("tenant".into(), String::new());
     v.routes[0].delivery_mode = Some(ClaimDeliveryMode::Pull as i32);
     v.claims[0].group = Some(CatalogTitle {
         value: "Group".into(),

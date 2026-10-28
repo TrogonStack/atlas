@@ -128,3 +128,89 @@ pub(crate) fn validate(
     }
     Ok(())
 }
+
+pub(crate) fn selected(
+    subject: &pb::ResponsibilitySubject,
+    owner: &pb::Entity,
+) -> Option<pb::Entity> {
+    let Some(pb::responsibility_subject::Selection::Connection(reference)) = &subject.selection
+    else {
+        return None;
+    };
+    let occurrence = trogon_atlas_core::connections::resolve_connection(owner, reference).ok()?;
+    if !occurrence.path.contains(".message_claims.") {
+        return None;
+    }
+    let mut view = owner.clone();
+    let v = claims::declarations_mut(&mut view)?;
+    v.routes.retain(|v| v.connection_id == reference.id);
+    v.triggers.retain(|v| v.connection_id == reference.id);
+    v.field_selections
+        .retain(|v| v.connection_id == reference.id);
+    let dependencies: HashSet<_> = v
+        .routes
+        .iter()
+        .filter_map(|v| v.claim_id.as_ref())
+        .chain(v.triggers.iter().filter_map(|v| v.claim_id.as_ref()))
+        .chain(
+            v.field_selections
+                .iter()
+                .filter_map(|v| v.claim_id.as_ref()),
+        )
+        .cloned()
+        .collect();
+    v.claims.retain(|c| {
+        c.connection_id == reference.id
+            || c.connection_id
+                .as_ref()
+                .is_some_and(|id| dependencies.contains(id))
+    });
+    Some(view)
+}
+pub(crate) fn charge_selections(
+    owner: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+    budget: &mut crate::decision_document_resources::CatalogBudget,
+) -> Result<(), Status> {
+    let Some(v) = claims::declarations(owner) else {
+        return Ok(());
+    };
+    for m in v
+        .claims
+        .iter()
+        .filter_map(|v| v.message.as_ref())
+        .chain(v.triggers.iter().filter_map(|v| v.message.as_ref()))
+    {
+        if let Some(spec) = m
+            .specification
+            .as_ref()
+            .and_then(|s| s.id.as_ref())
+            .and_then(|id| context.find(pb::EntityKind::Specification, id))
+        {
+            budget.selection(
+                &pb::CatalogSubject {
+                    selection: Some(pb::catalog_subject::Selection::Member(m.clone())),
+                },
+                spec,
+            )?;
+        }
+    }
+    for s in &v.field_selections {
+        if let Some(b) = &s.binding {
+            if let Some(spec) = b
+                .owner
+                .as_ref()
+                .and_then(|o| o.id.as_ref())
+                .and_then(|id| context.find(pb::EntityKind::Specification, id))
+            {
+                budget.selection(
+                    &pb::CatalogSubject {
+                        selection: Some(pb::catalog_subject::Selection::Connection(b.clone())),
+                    },
+                    spec,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}

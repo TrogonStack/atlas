@@ -180,7 +180,9 @@ impl EventModelServiceImpl {
             return Ok(());
         }
         let mut catalog_budget = crate::decision_document_resources::CatalogBudget::default();
-        if resources.iter().any(|entity| is_catalog(entity)) {
+        if resources.iter().any(|entity| {
+            is_catalog(entity) || trogon_atlas_core::message_claims::has_content(entity)
+        }) {
             for entity in &resources {
                 catalog_budget.owner(entity)?;
             }
@@ -603,6 +605,7 @@ impl EventModelServiceImpl {
                 super::ListFilter {
                     kinds: &[
                         pb::EntityKind::Component,
+                        pb::EntityKind::Domain,
                         pb::EntityKind::ExternalSystem,
                         pb::EntityKind::Channel,
                         pb::EntityKind::DataStore,

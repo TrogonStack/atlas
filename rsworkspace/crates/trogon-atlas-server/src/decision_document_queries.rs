@@ -157,7 +157,7 @@ impl EventModelServiceImpl {
         let mut world = HashMap::new();
         let mut budget = CatalogBudget::default();
         for row in &rows {
-            budget.owner(&row.entity)?;
+            budget.row(&row.entity)?;
             world.insert(
                 pb::EntityKey::new(entity_kind(&row.entity)?, entity_id(&row.entity)?),
                 Some(row.clone()),
@@ -185,6 +185,9 @@ impl EventModelServiceImpl {
         }
         let key = pb::EntityKey::new(kind, id);
         if let Some(row) = query.world.get(&key) {
+            if let Some(row) = row {
+                query.budget.owner(&row.entity)?;
+            }
             return Ok(row.clone());
         }
         let row = match self.store.get(kind, id, query.branch.as_deref()).await {
@@ -242,6 +245,50 @@ impl EventModelServiceImpl {
             {
                 return Ok(State::Unavailable);
             }
+        }
+        if let Some(selected) = crate::message_claims_resources::selected(&converted, &row.entity) {
+            let targets = match crate::message_claims_resources::native_targets(
+                &selected,
+                &crate::validation::architecture_resources::ArchitectureContext::new(
+                    query.world.values().filter_map(Option::as_ref),
+                ),
+            ) {
+                Ok(targets) => targets,
+                Err(_) => return Ok(State::Unavailable),
+            };
+            for (kind, id) in targets {
+                if !query.lens.admits(&id.namespace) {
+                    return Ok(State::Unavailable);
+                }
+                if self
+                    .catalog_read(
+                        query,
+                        &pb::EntityRef {
+                            kind: kind as i32,
+                            id: Some(id),
+                        },
+                    )
+                    .await?
+                    .is_none()
+                {
+                    return Ok(State::Unavailable);
+                }
+            }
+            let context = crate::validation::architecture_resources::ArchitectureContext::new(
+                query.world.values().filter_map(Option::as_ref),
+            );
+            crate::message_claims_resources::charge_selections(
+                &selected,
+                &context,
+                &mut query.budget,
+            )?;
+            return Ok(
+                if crate::message_claims_resources::validate(&selected, &context).is_ok() {
+                    State::Resolved
+                } else {
+                    State::Unavailable
+                },
+            );
         }
         if let Some(selection) =
             crate::responsibility_resources::selected_message(&converted, &row.entity)
