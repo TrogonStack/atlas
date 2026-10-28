@@ -1923,3 +1923,57 @@ async fn malformed_native_owner_inventory_cannot_authorize_safe_delete() {
         .await
         .is_ok());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opaque_selector_still_requires_its_exact_native_schema_target() {
+    use trogon_atlas_core::message_claims as claims;
+    let (mut client, namespace) = fixture().await;
+    let (spec, message, _) = targets(&mut client, &namespace).await;
+    let Some(pb::entity::Kind::Specification(definition)) = &spec.kind else {
+        panic!()
+    };
+    let first = put(
+        &mut client,
+        owner(&namespace, pb::EntityKind::Domain, message),
+        "",
+    )
+    .await
+    .unwrap();
+    client
+        .delete_entity(authed(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(&namespace, "payload")),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap();
+    let mut proposed = first.entity.unwrap();
+    let declarations = claims::declarations_mut(&mut proposed).unwrap();
+    declarations.field_selections.push(pb::ClaimFieldSelection {
+        claim_id: declarations.claims[0].connection_id.clone(),
+        binding: Some(pb::ConnectionRef {
+            owner: Some(reference(&spec)),
+            owner_uid: spec.system.as_ref().unwrap().uid.clone(),
+            id: definition.messages[0].schemas[0].connection_id.clone(),
+        }),
+        selectors: vec![pb::ClaimFieldSelector {
+            selector: Some(pb::claim_field_selector::Selector::Opaque(
+                pb::OpaqueTypeSelector {
+                    syntax: "json-pointer".into(),
+                    value: "/unverified".into(),
+                },
+            )),
+        }],
+        ..Default::default()
+    });
+    let error = put(&mut client, proposed, &first.etag).await.unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert_eq!(
+        error.message(),
+        "selected message claim target is unavailable or invalid"
+    );
+}
