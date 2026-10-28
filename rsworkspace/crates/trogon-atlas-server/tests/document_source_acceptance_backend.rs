@@ -9,8 +9,8 @@ use pb::{
     event_model_service_server::EventModelServiceServer,
 };
 use prost::Message;
-use tonic::{transport::Channel, Code, Request};
-use trogon_atlas_core::document_catalog_context::{bytes_content_digest, COLLECTION};
+use tonic::{Code, Request, transport::Channel};
+use trogon_atlas_core::document_catalog_context::{COLLECTION, bytes_content_digest};
 use trogon_atlas_proto as pb;
 
 const ADMIN: &str = "document-source-admin-token-aaaa";
@@ -340,13 +340,23 @@ impl Fixture {
     }
 
     async fn document_exists(&mut self, slug: &str) -> bool {
-        self.client
+        match self
+            .client
             .get_entity(req(pb::GetEntityRequest {
                 kind: pb::EntityKind::Document as i32,
                 id: Some(id(&self.namespace, slug)),
             }))
             .await
-            .is_ok_and(|r| r.into_inner().entity.is_some())
+        {
+            Ok(response) => {
+                assert!(response.into_inner().entity.is_some());
+                true
+            }
+            Err(status) => {
+                assert_eq!(status.code(), Code::NotFound, "{status:?}");
+                false
+            }
+        }
     }
 
     async fn create_mapping(
@@ -458,6 +468,7 @@ async fn assert_create_rejects(
     let snapshot = fixture.snapshot(key).await;
     let mapping = fixture.map_absent(key, policy).await;
     let existed_before = fixture.document_exists(key).await;
+    assert!(!existed_before);
     let err = fixture.preview(&snapshot, key, incoming).await.unwrap_err();
     assert!(
         document_catalog_guard(&err),
@@ -467,15 +478,58 @@ async fn assert_create_rejects(
         .client
         .get_source_mapping(req(pb::GetSourceMappingRequest {
             registration_id: fixture.registration.id.clone(),
-            mapping_id: mapping.id,
+            mapping_id: mapping.id.clone(),
         }))
         .await
         .unwrap()
         .into_inner()
         .mapping
         .unwrap();
-    assert!(mapping_after.base.is_none());
+    assert_eq!(mapping_after, mapping);
     assert_eq!(fixture.document_exists(key).await, existed_before);
+}
+
+#[tokio::test]
+async fn source_create_with_each_native_extension_rejects_under_other_supported_policies() {
+    let mut fixture = fixture().await;
+    fixture.put(fixture.base_document("related-target")).await;
+    let fields = [
+        pb::SourceOwnedField::Doc,
+        pb::SourceOwnedField::Metadata,
+        pb::SourceOwnedField::Body,
+        pb::SourceOwnedField::Subjects,
+        pb::SourceOwnedField::Navigation,
+        pb::SourceOwnedField::Anchors,
+        pb::SourceOwnedField::Supersedes,
+    ];
+    let mut policies = vec![pb::SourceFieldOwnership {
+        policy: Some(pb::source_field_ownership::Policy::None(
+            pb::SourceNoOwnership {},
+        )),
+    }];
+    policies.extend(fields.map(field_owner));
+    policies.push(pb::SourceFieldOwnership {
+        policy: Some(pb::source_field_ownership::Policy::Fields(
+            pb::SourceOwnedFields {
+                fields: fields.into_iter().map(|field| field as i32).collect(),
+            },
+        )),
+    });
+    for (policy_index, policy) in policies.into_iter().enumerate() {
+        for (extension_index, extension) in [
+            NativeExtension::BinaryOnly,
+            NativeExtension::CollectionOnly,
+            NativeExtension::Purpose,
+            NativeExtension::Filename,
+            NativeExtension::RelatedContent,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let key = format!("crt-other-{policy_index}-{extension_index}");
+            assert_create_rejects(&mut fixture, extension, policy.clone(), &key).await;
+        }
+    }
 }
 
 #[tokio::test]
