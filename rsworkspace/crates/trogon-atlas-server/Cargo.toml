@@ -71,7 +71,6 @@ async-trait = { workspace = true }
 tempfile = { workspace = true }
 rmcp = { version = "3", features = ["client", "transport-streamable-http-client-reqwest"] }
 opentelemetry_sdk = { version = "0.33", features = ["testing"] }
-async-nats = { workspace = true }
 
 [lints]
 workspace = true
