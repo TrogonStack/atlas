@@ -8,6 +8,7 @@ import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/connections.proto";
 import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
 
 message DataPortId { string value = 1; }
 message PortName { string value = 1; }
@@ -95,6 +96,34 @@ message DataOutputPort {
   repeated OutputAccess access = 6;
   DeclaredLineage derived_from = 7;
 }
+
+// Exact output-contract pin for a descriptive resource association.
+// It has no connection id of its own: the parent association is the
+// occurrence, and this pin is part of that occurrence's fingerprint.
+message ProductResourceContract {
+  oneof type {
+    SchemaRef schema = 1;
+    ContractTypeRef contract_type = 2;
+    TypeLibraryTypeRef library_type = 3;
+  }
+}
+
+message ProductResourceAssociation {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DataPortDirection direction = 2;
+  oneof target {
+    EventRef event = 3;
+    CommandRef command = 4;
+    ContractMemberRef message = 5;
+    ComponentRef component = 6;
+    ExternalSystemRef external_system = 7;
+    ChannelRef channel = 8;
+    DataStoreRef data_store = 9;
+  }
+  ProductResourceContract contract = 10;
+  optional string doc = 11;
+}
+
 message DataProduct {
   trogonatlas.type.v1alpha1.Id id = 1;
   string title = 2;
@@ -104,4 +133,8 @@ message DataProduct {
   optional string purpose = 6;
   repeated DataInputPort inputs = 7;
   repeated DataOutputPort outputs = 8;
+  // storage_claims belongs to a peer slice.
+  reserved 9;
+  reserved "storage_claims";
+  repeated ProductResourceAssociation resource_associations = 10;
 }

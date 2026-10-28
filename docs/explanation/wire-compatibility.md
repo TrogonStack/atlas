@@ -165,3 +165,11 @@ drift.
   field or an optional RPC already covered by a feature flag: no bump.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
+
+Revision 19 adds descriptive `DataProduct.resource_associations`, independent
+`Specification.message_channels`, and `SchemaBinding.environments` /
+`is_default`. `CONTRACT_REVISION`, `MIN_CLIENT_CONTRACT_REVISION`, and
+`MIN_SERVER_CONTRACT_REVISION` are all 19. Older writers are refused before a
+mutation because they would drop these stored fields. `DataProduct` field 9
+stays reserved for storage claims and is not part of this revision. Claim-route
+and operation-binding inverse discovery are not included.

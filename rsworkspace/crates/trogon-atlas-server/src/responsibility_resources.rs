@@ -17,6 +17,8 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
                 .relationships
                 .len()
                 .saturating_add(value.communications.len()),
+            Some(pb::entity::Kind::Specification(value)) => value.message_channels.len(),
+            Some(pb::entity::Kind::DataProduct(value)) => value.resource_associations.len(),
             _ => 0,
         })
 }

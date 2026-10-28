@@ -130,6 +130,104 @@ fn walk(
             }
         }
     }
+    for (i, association) in value.resource_associations.iter_mut().enumerate() {
+        let path = format!("resource_associations[{i}]");
+        match association.target.as_mut() {
+            Some(pb::product_resource_association::Target::Event(r)) => {
+                visit(EntityKind::Event, &mut r.id, format!("{path}.event"), false);
+            }
+            Some(pb::product_resource_association::Target::Command(r)) => {
+                visit(
+                    EntityKind::Command,
+                    &mut r.id,
+                    format!("{path}.command"),
+                    false,
+                );
+            }
+            Some(pb::product_resource_association::Target::Message(r)) => {
+                if let Some(specification) = r.specification.as_mut() {
+                    visit(
+                        EntityKind::Specification,
+                        &mut specification.id,
+                        format!("{path}.message.specification"),
+                        true,
+                    );
+                }
+            }
+            Some(pb::product_resource_association::Target::Component(r)) => {
+                visit(
+                    EntityKind::Component,
+                    &mut r.id,
+                    format!("{path}.component"),
+                    false,
+                );
+            }
+            Some(pb::product_resource_association::Target::ExternalSystem(r)) => {
+                visit(
+                    EntityKind::ExternalSystem,
+                    &mut r.id,
+                    format!("{path}.external_system"),
+                    false,
+                );
+            }
+            Some(pb::product_resource_association::Target::Channel(r)) => {
+                visit(
+                    EntityKind::Channel,
+                    &mut r.id,
+                    format!("{path}.channel"),
+                    false,
+                );
+            }
+            Some(pb::product_resource_association::Target::DataStore(r)) => {
+                visit(
+                    EntityKind::DataStore,
+                    &mut r.id,
+                    format!("{path}.data_store"),
+                    false,
+                );
+            }
+            None => {}
+        }
+        match association
+            .contract
+            .as_mut()
+            .and_then(|contract| contract.r#type.as_mut())
+        {
+            Some(pb::product_resource_contract::Type::Schema(r)) => {
+                visit(
+                    EntityKind::Schema,
+                    &mut r.id,
+                    format!("{path}.contract.schema"),
+                    false,
+                );
+            }
+            Some(pb::product_resource_contract::Type::LibraryType(r)) => {
+                if let Some(library) = r.library.as_mut() {
+                    visit(
+                        EntityKind::TypeLibrary,
+                        &mut library.id,
+                        format!("{path}.contract.library_type.library"),
+                        false,
+                    );
+                }
+            }
+            Some(pb::product_resource_contract::Type::ContractType(r)) => {
+                if let Some(specification) = r
+                    .schema
+                    .as_mut()
+                    .and_then(|schema| schema.specification.as_mut())
+                {
+                    visit(
+                        EntityKind::Specification,
+                        &mut specification.id,
+                        format!("{path}.contract.contract_type.schema.specification"),
+                        true,
+                    );
+                }
+            }
+            None => {}
+        }
+    }
 }
 pub(crate) fn outbound(value: &DataProduct, out: &mut Vec<OutboundRef>) {
     walk(&mut value.clone(), &mut |kind, id, path, _| {

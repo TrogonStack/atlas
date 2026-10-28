@@ -289,6 +289,56 @@ pub struct PreconditionFailure {
     #[prost(string, tag="3")]
     pub actual_etag: ::prost::alloc::string::String,
 }
+/// One independent message carried by a channel. Authority values other than
+/// SPECIFICATION_DECLARATION are reserved for a parent merge and are not
+/// emitted by this slice.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChannelMessageRecord {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="4")]
+    pub message: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ContractMemberRef>,
+    #[prost(message, optional, tag="5")]
+    pub channel: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ChannelRef>,
+    #[prost(map="string, string", tag="6")]
+    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::ClaimDeliveryMode", optional, tag="7")]
+    pub delivery_mode: ::core::option::Option<i32>,
+    #[prost(string, optional, tag="8")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::ChannelMessageAuthority", tag="9")]
+    pub authority: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListChannelMessagesRequest {
+    #[prost(message, optional, tag="1")]
+    pub channel: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ChannelRef>,
+    #[prost(uint32, tag="2")]
+    pub page_size: u32,
+    #[prost(string, tag="3")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListChannelMessagesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub records: ::prost::alloc::vec::Vec<ChannelMessageRecord>,
+    #[prost(string, tag="2")]
+    pub next_page_token: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(bool, tag="4")]
+    pub complete: bool,
+    #[prost(string, optional, tag="5")]
+    pub branch: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag="6")]
+    pub scope_digest: ::prost::alloc::string::String,
+    #[prost(uint32, tag="7")]
+    pub authorized_namespace_count: u32,
+}
 /// Branch selection uses the service's x-trogon-atlas-branch metadata.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InspectDataProductRequest {

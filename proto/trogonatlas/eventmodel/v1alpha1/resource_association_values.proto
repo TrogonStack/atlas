@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+// Shared delivery mode for independent message-to-channel declarations.
+// Absence of the optional field is distinct from UNSPECIFIED: writers must
+// not store 0, and readers must not invent PUSH when the field is missing.
+enum ClaimDeliveryMode {
+  CLAIM_DELIVERY_MODE_UNSPECIFIED = 0;
+  CLAIM_DELIVERY_MODE_PUSH = 1;
+  CLAIM_DELIVERY_MODE_PULL = 2;
+  CLAIM_DELIVERY_MODE_PUSH_PULL = 3;
+}
+
+// Discriminator for a channel's inverse message records. This slice emits
+// only SPECIFICATION_DECLARATION. CLAIM_ROUTE and OPERATION_BINDING are
+// allocated so a later merge can combine authorities without renumbering.
+enum ChannelMessageAuthority {
+  CHANNEL_MESSAGE_AUTHORITY_UNSPECIFIED = 0;
+  CHANNEL_MESSAGE_AUTHORITY_SPECIFICATION_DECLARATION = 1;
+  CHANNEL_MESSAGE_AUTHORITY_CLAIM_ROUTE = 2;
+  CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING = 3;
+}

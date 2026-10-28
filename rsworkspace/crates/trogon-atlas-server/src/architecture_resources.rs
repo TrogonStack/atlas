@@ -304,15 +304,31 @@ fn observation(reference: Option<&pb::ConnectionRef>, context: &ArchitectureCont
 
 #[must_use]
 pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    validate_with_previous(entity, all, None)
+}
+
+pub fn validate_with_previous(
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+    previous: Option<&pb::Entity>,
+) -> Vec<pb::ValidationIssue> {
     if !is_resource(entity) {
         return Vec::new();
     }
-    validate_in_context(entity, &ArchitectureContext::new(all))
+    validate_in_context_with_previous(entity, &ArchitectureContext::new(all), previous)
 }
 
 pub(super) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
+) -> Vec<pb::ValidationIssue> {
+    validate_in_context_with_previous(entity, context, None)
+}
+
+fn validate_in_context_with_previous(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+    previous: Option<&pb::Entity>,
 ) -> Vec<pb::ValidationIssue> {
     if matches!(
         entity.kind,
@@ -321,10 +337,14 @@ pub(super) fn validate_in_context(
         return crate::decision_document_resources::validate_in_context(entity, context);
     }
     if matches!(entity.kind, Some(pb::entity::Kind::DataProduct(_))) {
-        return crate::data_product_resources::validate_in_context(entity, context);
+        return crate::data_product_resources::validate_in_context_with_previous(
+            entity, context, previous,
+        );
     }
     if matches!(entity.kind, Some(pb::entity::Kind::Specification(_))) {
-        return crate::specification_resources::validate_in_context(entity, context);
+        return crate::specification_resources::validate_in_context_with_previous(
+            entity, context, previous,
+        );
     }
     if matches!(
         entity.kind,

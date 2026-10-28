@@ -65,6 +65,53 @@ fn native(
     };
     Ok((wrapper, kind, value))
 }
+fn list_nonempty(value: &DynamicMessage, name: &str) -> bool {
+    value
+        .get_field_by_name(name)
+        .as_deref()
+        .and_then(Value::as_list)
+        .is_some_and(|values| !values.is_empty())
+}
+
+fn native_authoring_content(value: &DynamicMessage) -> bool {
+    match value.descriptor().full_name() {
+        "trogonatlas.eventmodel.v1alpha1.DataProduct" => {
+            list_nonempty(value, "resource_associations")
+        }
+        "trogonatlas.eventmodel.v1alpha1.Specification" => {
+            list_nonempty(value, "message_channels")
+                || value
+                    .get_field_by_name("messages")
+                    .as_deref()
+                    .and_then(Value::as_list)
+                    .is_some_and(|messages| {
+                        messages.iter().any(|message| {
+                            let Value::Message(message) = message else {
+                                return false;
+                            };
+                            message
+                                .get_field_by_name("schemas")
+                                .as_deref()
+                                .and_then(Value::as_list)
+                                .is_some_and(|bindings| {
+                                    bindings.iter().any(|binding| {
+                                        let Value::Message(binding) = binding else {
+                                            return false;
+                                        };
+                                        list_nonempty(binding, "environments")
+                                            || binding
+                                                .descriptor()
+                                                .get_field_by_name("is_default")
+                                                .is_some_and(|field| binding.has_field(&field))
+                                    })
+                                })
+                        })
+                    })
+        }
+        _ => false,
+    }
+}
+
 fn unit_fields(
     value: &DynamicMessage,
     unit: OwnershipUnit,
@@ -95,6 +142,9 @@ fn unit_fields(
         {
             return Err(SourceError::UnsupportedUnit);
         }
+    }
+    if unit == OwnershipUnit::WholeOwner && native_authoring_content(value) {
+        return Err(SourceError::UnsupportedUnit);
     }
     match unit {
         OwnershipUnit::WholeOwner => Ok(descriptor.fields().filter(|f| f.name() != "id").collect()),
