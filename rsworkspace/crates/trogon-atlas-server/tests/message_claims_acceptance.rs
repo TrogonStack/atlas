@@ -287,16 +287,28 @@ async fn authenticated_native_claim_authoring_keeps_flat_identity_and_exact_fiel
     use trogon_atlas_core::message_claims as claims;
     let (mut client, namespace) = fixture().await;
     let (mut spec, message, channel) = targets(&mut client, &namespace).await;
-    let current = client.get_entity(authed(pb::GetEntityRequest {
-        kind: pb::EntityKind::Specification as i32, id: reference(&spec).id, ..Default::default()
-    }, ROOT_TOKEN)).await.unwrap().into_inner();
+    let current = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Specification as i32,
+                id: reference(&spec).id,
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
     if let Some(pb::entity::Kind::Specification(value)) = &mut spec.kind {
         let mut header = value.messages[0].schemas[0].clone();
         header.role = pb::schema_binding::Role::Headers as i32;
         header.connection_id = None;
         value.messages[0].schemas.push(header);
     }
-    spec = put(&mut client, spec, &current.etag).await.unwrap().entity.unwrap();
+    spec = put(&mut client, spec, &current.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
     let Some(pb::entity::Kind::Specification(definition)) = &spec.kind else {
         panic!()
     };
@@ -427,15 +439,29 @@ async fn authenticated_native_claim_authoring_keeps_flat_identity_and_exact_fiel
                 .code(),
             Code::InvalidArgument
         );
-        let mut sending = owner_entity.clone();
+        let mut sending = owner(&namespace, kind, message.clone());
+        match sending.kind.as_mut().unwrap() {
+            pb::entity::Kind::Component(value) => value.id.as_mut().unwrap().slug = "sender".into(),
+            pb::entity::Kind::ExternalSystem(value) => {
+                value.id.as_mut().unwrap().slug = "sender".into();
+            }
+            pb::entity::Kind::Domain(value) => value.id.as_mut().unwrap().slug = "sender".into(),
+            _ => unreachable!(),
+        }
         let declarations = claims::declarations_mut(&mut sending).unwrap();
         declarations.claims[0].direction = pb::CommunicationDirection::Send as i32;
-        declarations.claims[0].connection_id = None;
+        declarations.claims[0].connection_id = Some(pb::ConnectionId {
+            value: "01930000-0000-7000-8000-000000000777".into(),
+        });
+        let mut triggered = message.clone();
+        triggered.member_id = definition.messages[1].member_id.clone();
+        declarations.triggers.push(pb::ClaimTrigger {
+            claim_id: declarations.claims[0].connection_id.clone(),
+            message: Some(triggered),
+            ..Default::default()
+        });
         assert_eq!(
-            put(&mut client, sending, &valid.etag)
-                .await
-                .unwrap_err()
-                .code(),
+            put(&mut client, sending, "").await.unwrap_err().code(),
             Code::InvalidArgument
         );
         let mut opaque = owner_entity.clone();
@@ -463,7 +489,6 @@ async fn channel_default_supplies_an_omitted_claim_route_parameter() {
             pb::GetEntityRequest {
                 kind: pb::EntityKind::Channel as i32,
                 id: reference(&channel).id,
-                ..Default::default()
             },
             ROOT_TOKEN,
         ))
@@ -1653,4 +1678,248 @@ async fn reader_cannot_publish_claims_or_obtain_authority_from_a_claim() {
             .code(),
         Code::NotFound
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn independent_domain_routes_support_exact_references_impact_and_guarded_retarget() {
+    use trogon_atlas_core::message_claims as claims;
+    let (mut client, namespace) = fixture().await;
+    let (_, message, channel) = targets(&mut client, &namespace).await;
+    let first = put(
+        &mut client,
+        owner(&namespace, pb::EntityKind::Domain, message),
+        "",
+    )
+    .await
+    .unwrap();
+    let mut proposed = first.entity.unwrap();
+    let declarations = claims::declarations_mut(&mut proposed).unwrap();
+    declarations.routes.push(pb::ClaimRoute {
+        claim_id: declarations.claims[0].connection_id.clone(),
+        channel: Some(pb::ChannelRef {
+            id: reference(&channel).id,
+        }),
+        parameter_values: [("tenant".into(), "selected".into())].into_iter().collect(),
+        ..Default::default()
+    });
+    let before = put(&mut client, proposed, &first.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let listing = client
+        .list_entities_by_domain(authed(
+            pb::ListEntitiesByDomainRequest {
+                domain_id: reference(&before).id,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        listing.entities,
+        vec![before.clone()],
+        "authored claims must not become derived membership"
+    );
+    let incoming = client
+        .get_incoming_references(authed(
+            pb::GetReferencesRequest {
+                kind: pb::EntityKind::Channel as i32,
+                id: reference(&channel).id,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let route_ref = incoming
+        .references
+        .iter()
+        .find(|r| r.from == Some(reference(&before)))
+        .unwrap();
+    assert_eq!(
+        route_ref.connection_id,
+        claims::declarations(&before).unwrap().routes[0].connection_id
+    );
+    assert_eq!(route_ref.from_field, "message_claims.routes[0].channel");
+    let impact = client
+        .get_impact(authed(
+            pb::GetImpactRequest {
+                root: Some(reference(&channel)),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(impact
+        .nodes
+        .iter()
+        .any(|node| node.entity == Some(reference(&before))));
+    let mut replacement = channel.clone();
+    replacement.system = None;
+    if let Some(pb::entity::Kind::Channel(value)) = &mut replacement.kind {
+        value.id.as_mut().unwrap().slug = "replacement-channel".into();
+        value.bindings[0].connection_id = None;
+    }
+    let replacement = put(&mut client, replacement, "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let preview = client
+        .retarget_references(authed(
+            pb::RetargetReferencesRequest {
+                from: Some(reference(&channel)),
+                to: Some(reference(&replacement)),
+                dry_run: true,
+                filter_kinds: vec![pb::EntityKind::Domain as i32],
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(preview.rewritten, 1);
+    let unchanged = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: reference(&before).id,
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    assert_eq!(unchanged, before);
+    let applied = client
+        .retarget_references(authed(
+            pb::RetargetReferencesRequest {
+                from: Some(reference(&channel)),
+                to: Some(reference(&replacement)),
+                filter_kinds: vec![pb::EntityKind::Domain as i32],
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(applied.rewritten, 1);
+    let after = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: reference(&before).id,
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let old = claims::declarations(&before).unwrap();
+    let new = claims::declarations(&after).unwrap();
+    assert_eq!(old.claims, new.claims);
+    assert_eq!(old.routes[0].claim_id, new.routes[0].claim_id);
+    assert_ne!(old.routes[0].connection_id, new.routes[0].connection_id);
+    assert_eq!(
+        new.routes[0].channel.as_ref().unwrap().id,
+        reference(&replacement).id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_native_owner_inventory_cannot_authorize_safe_delete() {
+    use prost::Message;
+    let nats = trogon_atlas_testsupport::TestNats::start().await;
+    let config = trogon_atlas_store::NatsStoreConfig::new(
+        &nats.url,
+        trogon_atlas_store::StoreMetrics::default(),
+    );
+    let bucket = config.bucket.clone();
+    let store = Arc::new(
+        trogon_atlas_store::NatsStore::connect_with(config)
+            .await
+            .unwrap(),
+    );
+    let service = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
+    let mut client = serve_with_registry(service, make_registry()).await;
+    let namespace = client
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: "claims-inventory-fault".into(),
+                parent: "commerce".into(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let (_, message, channel) = targets(&mut client, &namespace).await;
+    let mut authored = put(
+        &mut client,
+        owner(&namespace, pb::EntityKind::Domain, message),
+        "",
+    )
+    .await
+    .unwrap()
+    .entity
+    .unwrap();
+    if let Some(pb::entity::Kind::Domain(value)) = &mut authored.kind {
+        value.metadata.push(prost_types::Any {
+            type_url:
+                "type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation"
+                    .into(),
+            value: vec![255, 255, 255],
+        });
+    }
+    let nats_client = async_nats::connect(&nats.url).await.unwrap();
+    let kv = async_nats::jetstream::new(nats_client)
+        .get_key_value(bucket)
+        .await
+        .unwrap();
+    kv.put(
+        trogon_atlas_store::key::entity_key(
+            pb::EntityKind::Domain,
+            reference(&authored).id.as_ref().unwrap(),
+        ),
+        authored.encode_to_vec().into(),
+    )
+    .await
+    .unwrap();
+    let error = client
+        .delete_entity(authed(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Channel as i32,
+                id: reference(&channel).id,
+                mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::Internal);
+    assert!(client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Channel as i32,
+                id: reference(&channel).id
+            },
+            ROOT_TOKEN
+        ))
+        .await
+        .is_ok());
 }
