@@ -61,7 +61,8 @@ impl EventModelServiceImpl {
             return Err(unavailable());
         }
         let (digest, namespace_count, namespaces) = scope(&lens, branch);
-        let cursor = parse_token(&request.page_token, &channel_id, branch, &digest)?;
+        let caller = caller_key(principal);
+        let cursor = parse_token(&request.page_token, &channel_id, branch, &digest, &caller)?;
         let page_size = match request.page_size {
             0 => DEFAULT_PAGE_SIZE,
             size if size as usize > MAX_PAGE_SIZE => MAX_PAGE_SIZE,
@@ -82,11 +83,7 @@ impl EventModelServiceImpl {
             .map_err(store_err)?;
         let mut rows = 1usize;
         let mut occurrences = 0usize;
-        let mut seen_matches = 0usize;
-        let mut records = Vec::new();
-        let mut last: Option<Cursor> = None;
-        let mut stopped_for_page = false;
-        let mut hit_emit_cap = false;
+        let mut selected = Vec::new();
         for stored in &specs {
             let Some(pb::entity::Kind::Specification(specification)) = &stored.entity.kind else {
                 continue;
@@ -122,65 +119,75 @@ impl EventModelServiceImpl {
                 .collect();
             matched.sort_by(|left, right| connection_value(left).cmp(&connection_value(right)));
             for declaration in matched {
-                let connection_id = connection_value(declaration);
-                seen_matches = seen_matches.saturating_add(1);
-                if seen_matches > MAX_EMITTED {
-                    hit_emit_cap = true;
-                    break;
-                }
-                if !after(spec_id, &connection_id, cursor.as_ref()) {
-                    continue;
-                }
-                if records.len() == page_size {
-                    stopped_for_page = true;
-                    break;
-                }
-                records.push(pb::ChannelMessageRecord {
-                    owner: Some(pb::EntityRef {
-                        kind: pb::EntityKind::Specification as i32,
-                        id: Some(spec_id.clone()),
-                    }),
-                    owner_uid: stored
-                        .entity
-                        .system
-                        .as_ref()
-                        .map(|system| system.uid.clone())
-                        .unwrap_or_default(),
-                    connection_id: declaration.connection_id.clone(),
-                    message: trogon_atlas_core::resource_associations::declared_message_ref(
-                        &stored.entity,
-                        declaration,
-                    ),
-                    channel: declaration.channel.clone(),
-                    parameter_values: declaration.parameter_values.clone(),
-                    delivery_mode: declaration.delivery_mode,
-                    doc: declaration.doc.clone(),
-                    authority: pb::ChannelMessageAuthority::SpecificationDeclaration as i32,
-                });
-                last = Some(Cursor {
-                    namespace: spec_id.namespace.clone(),
-                    slug: spec_id.slug.clone(),
-                    version: spec_id.version,
-                    connection_id,
+                selected.push(Selected {
+                    entity: &stored.entity,
+                    spec_id,
+                    declaration,
+                    connection_id: connection_value(declaration),
                 });
             }
-            if stopped_for_page || hit_emit_cap {
+        }
+        if specs.len() == SPEC_SCAN_LIMIT {
+            return Err(Status::resource_exhausted(
+                "channel message budget exhausted",
+            ));
+        }
+        let mut seen_matches = 0usize;
+        let mut records = Vec::new();
+        let mut last: Option<Cursor> = None;
+        let mut stopped_for_page = false;
+        let mut hit_emit_cap = false;
+        for item in &selected {
+            seen_matches = seen_matches.saturating_add(1);
+            if seen_matches > MAX_EMITTED {
+                hit_emit_cap = true;
                 break;
             }
+            if !after(item.spec_id, &item.connection_id, cursor.as_ref()) {
+                continue;
+            }
+            if records.len() == page_size {
+                stopped_for_page = true;
+                break;
+            }
+            records.push(pb::ChannelMessageRecord {
+                owner: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Specification as i32,
+                    id: Some(item.spec_id.clone()),
+                }),
+                owner_uid: item
+                    .entity
+                    .system
+                    .as_ref()
+                    .map(|system| system.uid.clone())
+                    .unwrap_or_default(),
+                connection_id: item.declaration.connection_id.clone(),
+                message: trogon_atlas_core::resource_associations::declared_message_ref(
+                    item.entity,
+                    item.declaration,
+                ),
+                channel: item.declaration.channel.clone(),
+                parameter_values: item.declaration.parameter_values.clone(),
+                delivery_mode: item.declaration.delivery_mode,
+                doc: item.declaration.doc.clone(),
+                authority: pb::ChannelMessageAuthority::SpecificationDeclaration as i32,
+            });
+            last = Some(Cursor {
+                namespace: item.spec_id.namespace.clone(),
+                slug: item.spec_id.slug.clone(),
+                version: item.spec_id.version,
+                connection_id: item.connection_id.clone(),
+            });
         }
         let (next_page_token, incomplete, complete) = if hit_emit_cap || seen_matches >= MAX_EMITTED
         {
             (String::new(), true, false)
         } else if stopped_for_page {
             (
-                encode_token(&channel_id, branch, &digest, last.as_ref()),
+                encode_token(&channel_id, branch, &digest, &caller, last.as_ref()),
                 false,
                 false,
             )
-        } else if specs.len() == SPEC_SCAN_LIMIT {
-            return Err(Status::resource_exhausted(
-                "channel message budget exhausted",
-            ));
         } else {
             (String::new(), false, true)
         };
@@ -221,6 +228,23 @@ fn scope(lens: &Lens, branch: Option<&str>) -> (String, u32, Vec<String>) {
     (digest, count, namespaces)
 }
 
+struct Selected<'a> {
+    entity: &'a pb::Entity,
+    spec_id: &'a pb::Id,
+    declaration: &'a pb::MessageChannelDeclaration,
+    connection_id: String,
+}
+
+fn caller_key(principal: Option<&crate::auth::Principal>) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(
+        principal
+            .map(|principal| principal.name.as_ref())
+            .unwrap_or(""),
+    );
+    hex(&hasher.finalize())
+}
+
 fn connection_value(declaration: &pb::MessageChannelDeclaration) -> String {
     declaration
         .connection_id
@@ -250,18 +274,20 @@ fn encode_token(
     channel: &pb::Id,
     branch: Option<&str>,
     digest: &str,
+    caller: &str,
     cursor: Option<&Cursor>,
 ) -> String {
     let Some(cursor) = cursor else {
         return String::new();
     };
     format!(
-        "v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "v1\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         channel.namespace,
         channel.slug,
         channel.version,
         branch.unwrap_or(""),
         digest,
+        caller,
         cursor.namespace,
         cursor.slug,
         cursor.version,
@@ -274,29 +300,31 @@ fn parse_token(
     channel: &pb::Id,
     branch: Option<&str>,
     digest: &str,
+    caller: &str,
 ) -> Result<Option<Cursor>, Status> {
     if token.is_empty() {
         return Ok(None);
     }
     let parts: Vec<&str> = token.split('\n').collect();
-    if parts.len() != 10 || parts[0] != "v1" {
+    if parts.len() != 11 || parts[0] != "v1" {
         return Err(rejected_token());
     }
     let version: u64 = parts[3].parse().map_err(|_| rejected_token())?;
-    let cursor_version: u64 = parts[8].parse().map_err(|_| rejected_token())?;
+    let cursor_version: u64 = parts[9].parse().map_err(|_| rejected_token())?;
     if parts[1] != channel.namespace
         || parts[2] != channel.slug
         || version != channel.version
         || parts[4] != branch.unwrap_or("")
         || parts[5] != digest
+        || parts[6] != caller
     {
         return Err(rejected_token());
     }
     Ok(Some(Cursor {
-        namespace: parts[6].to_string(),
-        slug: parts[7].to_string(),
+        namespace: parts[7].to_string(),
+        slug: parts[8].to_string(),
         version: cursor_version,
-        connection_id: parts[9].to_string(),
+        connection_id: parts[10].to_string(),
     }))
 }
 

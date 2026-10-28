@@ -118,7 +118,11 @@ fn stable_occurrence(previous: Option<&pb::Entity>, current: &pb::Entity, field:
 }
 
 fn covers(occurrence_path: &str, field: &str) -> bool {
-    field == occurrence_path || field.starts_with(&format!("{occurrence_path}."))
+    // Occurrence paths are entity-rooted. Outbound fields are body-relative.
+    let path = occurrence_path
+        .split_once('.')
+        .map_or(occurrence_path, |(_, rest)| rest);
+    field == path || field.starts_with(&format!("{path}."))
 }
 
 pub(crate) fn library_types(entity: &pb::Entity) -> Vec<&pb::TypeLibraryTypeRef> {
