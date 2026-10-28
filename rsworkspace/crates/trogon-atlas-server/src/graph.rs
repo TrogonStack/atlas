@@ -35,7 +35,7 @@ pub struct ReverseIndex {
 
 impl ReverseIndex {
     pub fn build(all: &[StoredEntity]) -> Result<Self, Status> {
-        Self::build_counted(all, responsibility_occurrence_count(all))
+        Self::build_counted(all, responsibility_occurrence_count(all)?)
     }
 
     pub(crate) fn build_discovery(all: &[StoredEntity]) -> Result<Self, Status> {

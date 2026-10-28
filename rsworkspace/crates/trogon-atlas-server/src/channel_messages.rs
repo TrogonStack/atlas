@@ -171,6 +171,7 @@ impl EventModelServiceImpl {
                 delivery_mode: item.declaration.delivery_mode,
                 doc: item.declaration.doc.clone(),
                 authority: pb::ChannelMessageAuthority::SpecificationDeclaration as i32,
+                ..Default::default()
             });
             last = Some(Cursor {
                 namespace: item.spec_id.namespace.clone(),

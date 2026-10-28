@@ -6,10 +6,10 @@ import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/specification.proto";
 import "trogonatlas/eventmodel/v1alpha1/resource_association_values.proto";
+import "trogonatlas/eventmodel/v1alpha1/message_claims.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
 
-// One independent message carried by a channel. Authority values other than
-// SPECIFICATION_DECLARATION are reserved for a parent merge and are not
-// emitted by this slice.
+// Each native authority retains its own exact occurrence and selectors.
 message ChannelMessageRecord {
   trogonatlas.eventmodel.v1alpha1.EntityRef owner = 1;
   string owner_uid = 2;
@@ -20,6 +20,11 @@ message ChannelMessageRecord {
   optional trogonatlas.eventmodel.v1alpha1.ClaimDeliveryMode delivery_mode = 7;
   optional string doc = 8;
   trogonatlas.eventmodel.v1alpha1.ChannelMessageAuthority authority = 9;
+  trogonatlas.eventmodel.v1alpha1.MessageClaim claim = 10;
+  trogonatlas.eventmodel.v1alpha1.ClaimRoute route = 11;
+  trogonatlas.eventmodel.v1alpha1.ContractMemberRef operation = 12;
+  trogonatlas.eventmodel.v1alpha1.OperationMessage operation_message = 13;
+  CatalogResolutionState state = 14;
 }
 
 message ListChannelMessagesRequest {
