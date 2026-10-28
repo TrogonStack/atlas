@@ -317,8 +317,12 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
                 assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
                 continue;
             }
-            if (name == "owning_domain"
-                && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Term")
+            if (name == "message_channels"
+                && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Specification")
+                || (name == "resource_associations"
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.DataProduct")
+                || (name == "owning_domain"
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Term")
                 || name == "communications"
                     && matches!(
                         owner.full_name(),
