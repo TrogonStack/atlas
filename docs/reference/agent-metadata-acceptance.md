@@ -22,8 +22,8 @@ and [MCP changed-update and schema-valid rejection](../../rsworkspace/crates/tro
 cover partial models, nested scope, singletons, drafts and dates, groups,
 responsibility, malformed and native-looking Any, budgets, atomic rejection,
 stale incarnation and post-preview revocation.
-These additional fixtures pass in their isolated implementation checkout;
-combined parent verification remains pending. The aggregate encoded-size
+These additional core, backend and MCP fixtures pass in the combined parent
+checkout. The aggregate encoded-size
 boundary has core coverage; public backend atomic rejection still requires
 verification.
 

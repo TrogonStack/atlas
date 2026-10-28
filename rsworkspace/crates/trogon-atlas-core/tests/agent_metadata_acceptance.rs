@@ -127,20 +127,16 @@ fn partial_models_roundtrip_exactly_through_wire_and_json() {
         let owner = component(vec![agent(&annotation)]);
         validate(&owner).unwrap();
         let json = transcode::entity_to_json(&owner).unwrap();
-        let back: Entity =
+        let decoded: Entity =
             transcode::message_from_json("trogonatlas.eventmodel.v1alpha1.Entity", &json).unwrap();
-        let Some(entity::Kind::Component(back)) = &back.kind else {
+        let Some(entity::Kind::Component(back)) = &decoded.kind else {
             panic!("component")
         };
         assert_eq!(
             AgentAnnotation::decode(back.metadata[0].value.as_slice()).unwrap(),
             annotation
         );
-        assert!(trogon_atlas_core::semantically_equal(&owner, &{
-            let mut copy = owner.clone();
-            copy.system = None;
-            copy
-        }));
+        assert!(trogon_atlas_core::semantically_equal(&owner, &decoded));
     }
 }
 
@@ -532,7 +528,10 @@ fn collection_value_and_display_ceilings_accept_the_bound_and_refuse_one_more() 
     };
     assert!(accepted(vec![group_list(32, 8)]));
     assert!(!accepted(vec![group_list(33, 0)]));
-    assert!(!accepted(vec![group_list(32, 9)]), "257 total items");
+    assert!(
+        !accepted(vec![group_list(32, 9)]),
+        "distributed group items exceed the owner limit"
+    );
     assert!(accepted(vec![group_list(1, 256)]));
     assert!(!accepted(vec![group_list(1, 257)]));
 
