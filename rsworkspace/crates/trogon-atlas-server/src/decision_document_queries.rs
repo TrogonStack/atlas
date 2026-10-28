@@ -1049,27 +1049,27 @@ impl EventModelServiceImpl {
     }
 }
 
+type CatalogDeclarationSortKey = (i32, String, String, u64, String, String);
+
 fn catalog_declaration_sort_key(
     row: &StoredEntity,
     field: &str,
     connection_id: Option<&pb::ConnectionId>,
-) -> Result<String, Status> {
+) -> Result<CatalogDeclarationSortKey, Status> {
     let owner = crate::conv::entity_to_ref(&row.entity)?;
     let id = owner
         .id
         .as_ref()
         .ok_or_else(|| Status::internal("catalog owner missing id"))?;
-    let connection = connection_id
-        .map(|value| value.value.as_str())
-        .unwrap_or_default();
-    Ok(format!(
-        "{kind:02}:{ns}/{slug}@{version}:{connection}:{field}",
-        kind = owner.kind,
-        ns = id.namespace,
-        slug = id.slug,
-        version = id.version,
-        connection = connection,
-        field = field,
+    Ok((
+        owner.kind,
+        id.namespace.clone(),
+        id.slug.clone(),
+        id.version,
+        connection_id
+            .map(|value| value.value.clone())
+            .unwrap_or_default(),
+        field.to_owned(),
     ))
 }
 
