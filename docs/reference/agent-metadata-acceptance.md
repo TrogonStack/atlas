@@ -6,9 +6,21 @@ Status: partially verified requirements for the
 [backend admission and lifecycle tests](../../rsworkspace/crates/trogon-atlas-server/tests/agent_metadata_backend.rs),
 [Studio protobuf decoding](../../tsworkspace/webapps/studio/server/decode-annotations.test.mjs)
 and [Inspector tests](../../tsworkspace/webapps/studio/src/components/AgentMetadataDetails.test.tsx).
-These fixtures do not establish every requirement below. Complete group-reference
-authorization/provenance, Source safety and combined native-client acceptance
-remain pending; component and codec checks are not deployed-browser evidence.
+[Core acceptance](../../rsworkspace/crates/trogon-atlas-core/tests/agent_metadata_acceptance.rs),
+[public-stack acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/agent_metadata_acceptance_backend.rs)
+and [MCP changed-update and schema-valid rejection](../../rsworkspace/crates/trogon-atlas-mcp/tests/agent_metadata_mcp_integration.rs)
+cover partial models, nested scope, singletons, drafts and dates, groups,
+responsibility, malformed and native-looking Any, budgets, atomic rejection,
+stale incarnation and post-preview revocation.
+These fixtures do not establish every requirement below. Source safety and
+combined native-client acceptance remain pending; component and codec checks are
+not deployed-browser evidence.
+
+Preview has no token. `validate_only` on put and batch binds no revision, owner
+UID or principal, so apply re-evaluates the etag (the store revision, new for a
+recreated owner), the target and authorization. `PutEntityRequest` has no
+owner-UID field, so a preview-bound UID pin is not reachable; the stale
+incarnation guarantee is delivered through the etag.
 
 ## Common fixture and observable results
 
