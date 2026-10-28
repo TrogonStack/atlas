@@ -411,6 +411,32 @@ async fn single_put_dry_run_and_apply_agree_on_malformed_if_match_actual_etag() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn single_put_dry_run_and_apply_agree_when_malformed_if_match_target_is_absent() {
+    // Baseline `update` rejects a non-numeric `if_match` before the existence
+    // check. Apply must still report the same NOT_FOUND wire shape dry-run
+    // uses when the key is gone — not STALE_PRECONDITION with empty actual.
+    let mut c = client().await;
+    let ns = "stale-put-malformed-absent";
+
+    for validate_only in [true, false] {
+        expect_put_status(
+            &mut c,
+            tonic::Request::new(put_with_validate_only(
+                event(ns, "e", "Mine"),
+                false,
+                "not-a-revision",
+                validate_only,
+            )),
+            Code::NotFound,
+            reason::NOT_FOUND,
+            "not-a-revision",
+            "",
+        )
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn single_put_dry_run_refuses_create_only_against_an_existing_entity() {
     let mut c = client().await;
     let ns = "stale-put-create";

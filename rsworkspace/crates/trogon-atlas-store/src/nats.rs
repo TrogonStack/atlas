@@ -2987,14 +2987,20 @@ impl Store for NatsStore {
             }
             let key = entity_key(kind, &id);
             // A non-numeric `if_match` can never match a baseline revision.
-            // Report the live etag (empty when absent) so callers do not treat
-            // a present entity as gone.
+            // When the key is gone, report NotFound (same as a numeric miss)
+            // so Put dry-run and apply share one wire shape. When it is still
+            // present, report the live etag so callers do not treat it as gone.
             let expected: u64 = match expected_etag.parse() {
                 Ok(revision) => revision,
                 Err(_) => {
-                    return Err(StoreError::EtagMismatch {
-                        expected: expected_etag.into(),
-                        found: live_found_etag(&self.kv, &key).await,
+                    let found = live_found_etag(&self.kv, &key).await;
+                    return Err(if found.is_empty() {
+                        StoreError::NotFound
+                    } else {
+                        StoreError::EtagMismatch {
+                            expected: expected_etag.into(),
+                            found,
+                        }
                     });
                 }
             };
