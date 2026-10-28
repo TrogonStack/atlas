@@ -321,13 +321,6 @@ pub fn validate_with_previous(
     validate_in_context_with_previous(entity, &ArchitectureContext::new(all), previous)
 }
 
-pub(crate) fn validate_admission(
-    entity: &pb::Entity,
-    all: &[StoredEntity],
-) -> Vec<pb::ValidationIssue> {
-    validate_admission_with_previous(entity, all, None)
-}
-
 pub(crate) fn validate_admission_with_previous(
     entity: &pb::Entity,
     all: &[StoredEntity],

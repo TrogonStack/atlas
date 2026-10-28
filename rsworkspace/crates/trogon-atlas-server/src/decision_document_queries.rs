@@ -60,6 +60,10 @@ fn decision_ref(reference: &pb::DecisionRef) -> Result<pb::EntityRef, Status> {
 }
 
 impl CatalogQuery {
+    pub(super) fn cached_rows(&self) -> impl Iterator<Item = &StoredEntity> {
+        self.world.values().filter_map(Option::as_ref)
+    }
+
     pub(super) fn scope(&mut self) -> Result<pb::CatalogCheckedScope, Status> {
         let scope = self.checked_scope(None)?;
         self.charge_scope(&scope)?;
@@ -77,7 +81,10 @@ impl CatalogQuery {
         Ok(())
     }
 
-    fn checked_scope(&self, caller: Option<&str>) -> Result<pb::CatalogCheckedScope, Status> {
+    pub(super) fn checked_scope(
+        &self,
+        caller: Option<&str>,
+    ) -> Result<pb::CatalogCheckedScope, Status> {
         let namespaces: BTreeSet<_> = match &self.lens {
             Lens::Everything => self.world.keys().map(|key| key.namespace.clone()).collect(),
             Lens::Only(namespaces) => namespaces

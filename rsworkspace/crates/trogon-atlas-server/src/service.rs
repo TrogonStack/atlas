@@ -3081,7 +3081,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         req: Request<pb::ListChannelMessagesRequest>,
     ) -> Result<Response<pb::ListChannelMessagesResponse>, Status> {
         let vis = Self::visibility_of(&req);
-        let branch = Self::branch_from_metadata(&req)?;
+        let branch = Self::branch_from_metadata(&req).map_err(|status| {
+            if status.code() == tonic::Code::NotFound {
+                Status::not_found("resource unavailable")
+            } else {
+                status
+            }
+        })?;
         let principal = Self::principal_from_metadata(&req);
         let request = req.into_inner();
         let response = self

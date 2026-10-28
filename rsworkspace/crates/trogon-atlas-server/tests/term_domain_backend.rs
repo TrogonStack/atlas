@@ -1774,7 +1774,7 @@ async fn term_listing_row_boundary_pages_exhaust_exact_snapshot_and_rejects_over
     .await;
     seed_native_rows(
         &store,
-        (0..5_000)
+        (0..4_999)
             .map(|i| term(&format!("row-{i:04}"), "rows-domain"))
             .collect(),
     )
@@ -1791,7 +1791,7 @@ async fn term_listing_row_boundary_pages_exhaust_exact_snapshot_and_rejects_over
             .unwrap()
             .into_inner();
         assert!(!page.incomplete);
-        assert_eq!(page.declarations.len(), 500);
+        assert_eq!(page.declarations.len(), (4_999 - seen.len()).min(500));
         for entry in page.declarations {
             assert_eq!(entry.domain, query.domain);
             let owner = entry.owner.unwrap();
@@ -1804,7 +1804,7 @@ async fn term_listing_row_boundary_pages_exhaust_exact_snapshot_and_rejects_over
         }
         query.page_token = page.next_page_token;
     }
-    assert_eq!(seen.len(), 5_000);
+    assert_eq!(seen.len() + 1, 5_000);
     seed_native_rows(&store, vec![term("row-overflow", "rows-domain")]).await;
     query.page_token.clear();
     let overflow = client

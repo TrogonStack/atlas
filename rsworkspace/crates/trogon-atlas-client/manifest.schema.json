@@ -828,6 +828,107 @@
       ],
       "type": "string"
     },
+    "trogonatlas.eventmodel.v1alpha1.ClaimFieldSelection": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
+        },
+        "claimId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "selectors": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ClaimFieldSelector"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ClaimFieldSelector": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "path",
+              "opaque"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "opaque": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.OpaqueTypeSelector"
+        },
+        "path": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.FieldPath"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ClaimRoute": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelRef"
+            },
+            "claimId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "deliveryMode": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ClaimDeliveryMode"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            },
+            "parameterValues": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.ClaimTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "claimId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "condition": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "message": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.Command": {
       "additionalProperties": false,
       "properties": {
@@ -1203,6 +1304,9 @@
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
           },
           "type": "array"
+        },
+        "messageClaims": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MessageClaims"
         },
         "metadata": {
           "items": {
@@ -2645,6 +2749,9 @@
         "doc": {
           "type": "string"
         },
+        "messageClaims": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MessageClaims"
+        },
         "metadata": {
           "items": {
             "properties": {
@@ -3070,6 +3177,9 @@
         "doc": {
           "type": "string"
         },
+        "messageClaims": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MessageClaims"
+        },
         "metadata": {
           "items": {
             "properties": {
@@ -3120,6 +3230,18 @@
           "type": "object"
         }
       ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.FieldPath": {
+      "additionalProperties": false,
+      "properties": {
+        "segments": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.FieldSpec": {
       "additionalProperties": false,
@@ -3814,6 +3936,57 @@
           "type": "object"
         }
       ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.MessageClaim": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "direction": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CommunicationDirection"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "group": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "message": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.MessageClaims": {
+      "additionalProperties": false,
+      "properties": {
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MessageClaim"
+          },
+          "type": "array"
+        },
+        "fieldSelections": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ClaimFieldSelection"
+          },
+          "type": "array"
+        },
+        "routes": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ClaimRoute"
+          },
+          "type": "array"
+        },
+        "triggers": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ClaimTrigger"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.MessageReadModelMapping": {
       "oneOf": [

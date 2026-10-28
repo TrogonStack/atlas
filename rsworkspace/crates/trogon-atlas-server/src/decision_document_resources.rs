@@ -189,6 +189,32 @@ impl CatalogBudget {
         Ok(())
     }
 
+    pub(crate) fn channel_specification(&mut self, owner: &pb::Entity) -> Result<(), Status> {
+        let Some(pb::entity::Kind::Specification(spec)) = &owner.kind else {
+            return Ok(());
+        };
+        let key = pb::EntityKey::new(
+            pb::EntityKind::Specification,
+            spec.id
+                .as_ref()
+                .ok_or_else(|| Status::data_loss("specification identity missing"))?,
+        );
+        if self.selections.insert((key, 4)) {
+            self.examine(
+                spec.artifacts.len()
+                    + spec.schemas.len()
+                    + spec.messages.len()
+                    + spec.operations.len()
+                    + spec
+                        .operations
+                        .iter()
+                        .map(|op| op.messages.len() + usize::from(op.binding.is_some()))
+                        .sum::<usize>(),
+            )?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn examined(&self) -> usize {
         self.examined
     }

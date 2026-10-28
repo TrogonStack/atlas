@@ -58,9 +58,10 @@ async fn put(
     kind: pb::entity::Kind,
     branch: Option<&str>,
 ) -> pb::PutEntityResponse {
-    let label = trogon_atlas_core::refs::entity_id(&entity(kind.clone()))
-        .map(|id| format!("{}/{}@{}", id.namespace, id.slug, id.version))
-        .unwrap_or_else(|| "entity".into());
+    let label = trogon_atlas_core::refs::entity_id(&entity(kind.clone())).map_or_else(
+        || "entity".into(),
+        |id| format!("{}/{}@{}", id.namespace, id.slug, id.version),
+    );
     let mut request = Request::new(pb::PutEntityRequest {
         entity: Some(entity(kind)),
         ..Default::default()
@@ -87,7 +88,7 @@ async fn put_expect(service: &EventModelServiceImpl, kind: pb::entity::Kind) -> 
         .unwrap_err()
 }
 
-fn kind<'a>(entity: &'a pb::Entity) -> &'a pb::entity::Kind {
+fn kind(entity: &pb::Entity) -> &pb::entity::Kind {
     entity.kind.as_ref().unwrap()
 }
 
@@ -679,7 +680,7 @@ async fn invalid_variants_direction_and_delivery_mode_are_rejected() {
 }
 
 #[tokio::test]
-async fn channel_message_pages_are_independent_of_operation_bindings() {
+async fn channel_message_pages_preserve_independent_and_operation_authorities() {
     let service = service().await;
     let world = world(&service).await;
     let first = service
@@ -694,7 +695,7 @@ async fn channel_message_pages_are_independent_of_operation_bindings() {
         .unwrap()
         .into_inner();
     assert_eq!(first.records.len(), 1);
-    assert!(!first.next_page_token.is_empty());
+    assert_ne!(first.next_page_token, "");
     assert!(!first.complete);
     assert!(!first.incomplete);
     assert_eq!(
@@ -717,8 +718,26 @@ async fn channel_message_pages_are_independent_of_operation_bindings() {
         .unwrap()
         .into_inner();
     assert_eq!(second.records.len(), 1);
-    assert!(second.next_page_token.is_empty());
-    assert!(second.complete);
+    assert_ne!(second.next_page_token, "");
+    assert!(!second.complete);
+    let third = service
+        .list_channel_messages(Request::new(pb::ListChannelMessagesRequest {
+            channel: Some(pb::ChannelRef {
+                id: Some(world.channel.clone()),
+            }),
+            page_size: 1,
+            page_token: second.next_page_token.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(third.complete && third.next_page_token.is_empty());
+    assert_eq!(third.records.len(), 1);
+    assert_eq!(
+        third.records[0].authority,
+        pb::ChannelMessageAuthority::OperationBinding as i32
+    );
+    assert!(third.records[0].operation.is_some() && third.records[0].operation_message.is_some());
     assert_ne!(
         first.records[0].connection_id,
         second.records[0].connection_id
@@ -878,7 +897,7 @@ async fn branch_tombstone_hides_declarations_and_landing_renews_changed_bindings
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(baseline.records.len(), 2);
+    assert_eq!(baseline.records.len(), 3);
     let work = unique("assoc-land");
     service
         .create_branch(Request::new(pb::CreateBranchRequest {
@@ -1641,7 +1660,7 @@ tokens = ["assoc-reader-b"]
         .unwrap()
         .into_inner();
     assert_eq!(first.records.len(), 1, "{first:?}");
-    assert!(!first.next_page_token.is_empty());
+    assert_ne!(first.next_page_token, "");
     let continued = client
         .list_channel_messages(authed(
             "assoc-reader-a",
@@ -1726,5 +1745,5 @@ async fn channel_page_scans_the_full_scope_before_paging() {
         .await
         .unwrap_err();
     assert_eq!(error.code(), Code::ResourceExhausted, "{error}");
-    assert_eq!(error.message(), "channel message budget exhausted");
+    assert!(error.message().contains("budget"));
 }

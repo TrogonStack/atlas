@@ -9,9 +9,9 @@ use trogon_atlas_proto as pb;
 /// Validate declared parameter values against a channel address.
 /// Omitted parameters keep the address default for this check and are not
 /// copied into the declaration. An empty string is a supplied value.
-pub fn bind_parameters(
+pub fn bind_parameters<S: std::hash::BuildHasher>(
     channel: &pb::Channel,
-    values: &HashMap<String, String>,
+    values: &HashMap<String, String, S>,
 ) -> Result<(), &'static str> {
     let Some(address) = channel.address.as_ref() else {
         return if values.is_empty() {
@@ -25,8 +25,7 @@ pub fn bind_parameters(
         let name = parameter
             .name
             .as_ref()
-            .map(|name| name.value.as_str())
-            .unwrap_or("");
+            .map_or("", |name| name.value.as_str());
         if name.is_empty() || parameters.insert(name, parameter).is_some() {
             return Err("channel address parameters are invalid");
         }

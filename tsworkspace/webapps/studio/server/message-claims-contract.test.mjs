@@ -63,3 +63,21 @@ describe('message claims actual protobuf codec feeding the Studio projection', (
     expect(displaySelector(decoded.domain.messageClaims.fieldSelections[0].selectors[0])).toEqual({ kind: 'unavailable' });
   });
 });
+
+it('round trips every Channel inverse authority and exact occurrence without collapsing pins', () => {
+  const codec = definitions['trogonatlas.api.eventmodel.v1alpha1.ListChannelMessagesResponse'];
+  const base = { owner: { kind: 'ENTITY_KIND_SPECIFICATION', id: id('events') }, ownerUid: 'spec-incarnation', message, channel: { id: id('orders') }, state: 'CATALOG_RESOLUTION_STATE_RESOLVED' };
+  const body = {
+    records: [
+      { ...base, connectionId: { value: 'independent' }, authority: 'CHANNEL_MESSAGE_AUTHORITY_SPECIFICATION_DECLARATION', parameterValues: { tenant: '' } },
+      { ...base, owner: { kind: 'ENTITY_KIND_COMPONENT', id: id('owner') }, ownerUid: 'owner-incarnation', connectionId: { value: 'route-a' }, authority: 'CHANNEL_MESSAGE_AUTHORITY_CLAIM_ROUTE', claim: { ...claims().claims[0], group: { value: 'Orders' } }, route: claims().routes[0], deliveryMode: 'CLAIM_DELIVERY_MODE_PULL' },
+      { ...base, connectionId: { value: 'binding' }, authority: 'CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING', operation: { ...message, kind: 'CONTRACT_MEMBER_KIND_OPERATION', memberId: { value: 'operation' } }, operationMessage: { connectionId: { value: 'operation-message' }, messageId: message.memberId, role: 'ROLE_REQUEST' } },
+    ], nextPageToken: 'opaque', complete: false, incomplete: false, scopeDigest: 'checked-content', authorizedNamespaceCount: 1,
+  };
+  const decoded = codec.deserialize(codec.serialize(body));
+  expect(decoded).toEqual(body);
+  expect(decoded.records.map((row) => row.message.specification.id.version)).toEqual(Array(3).fill('18446744073709551615'));
+  expect('deliveryMode' in decoded.records[0]).toBe(false);
+  expect(decoded.records[1].claim.group.value).toBe('Orders');
+  expect(decoded.records[2].operationMessage.connectionId.value).toBe('operation-message');
+});

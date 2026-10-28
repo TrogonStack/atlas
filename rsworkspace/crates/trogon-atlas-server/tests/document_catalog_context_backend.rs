@@ -900,7 +900,6 @@ async fn complete_native_owner_capacity_is_atomic_on_public_service_and_store() 
             pb::GetEntityRequest {
                 kind: kind as i32,
                 id: Some(reference.clone()),
-                ..Default::default()
             },
             None,
         ))
@@ -950,5 +949,150 @@ async fn complete_native_owner_capacity_is_atomic_on_public_service_and_store() 
     let unchanged = store.get(kind, &reference, None).await.unwrap();
     assert_eq!(unchanged.entity, before.entity);
     assert_eq!(unchanged.etag, before.etag);
+    assert_eq!(store.current_change_seq().await.unwrap(), sequence);
+}
+
+fn resize_graph_owner(entity: &mut pb::Entity, target: usize) {
+    loop {
+        let size = entity.encoded_len();
+        if size == target {
+            return;
+        }
+        let Some(pb::entity::Kind::DesignGraph(graph)) = &mut entity.kind else {
+            panic!("graph")
+        };
+        let doc = graph.doc.get_or_insert_default();
+        if size < target {
+            doc.push_str(&"x".repeat(target - size));
+        } else {
+            doc.truncate(doc.len() - (size - target));
+        }
+        assert!(doc.len() <= 16_384);
+    }
+}
+
+#[tokio::test]
+async fn complete_prepared_graph_capacity_persists_exact_boundary_and_refuses_one_byte_more() {
+    use trogon_atlas_store::{Store, WriteContext};
+    let (mut client, store) = client_with_store().await;
+    let mut subjects = Vec::new();
+    for index in 0..64 {
+        let selected = id(&format!("graph-capacity-subject-{index}"));
+        put(
+            &mut client,
+            pb::Entity {
+                kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                    id: Some(selected.clone()),
+                    title: "Subject".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+        )
+        .await;
+        subjects.push(pb::SubjectAssociation {
+            subject: Some(pb::CatalogSubject {
+                selection: Some(pb::catalog_subject::Selection::Entity(pb::EntityRef {
+                    kind: pb::EntityKind::ReadModel as i32,
+                    id: Some(selected),
+                })),
+            }),
+            doc: Some(pb::CatalogText {
+                value: "x".repeat(16_100),
+            }),
+            ..Default::default()
+        });
+    }
+    let mut owner = put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::DesignGraph(pb::DesignGraph {
+                id: Some(id("graph-capacity")),
+                title: Some(pb::CatalogTitle {
+                    value: "Capacity".into(),
+                }),
+                profile: pb::DesignGraphProfile::Diagram as i32,
+                steps: vec![pb::TopologyStep {
+                    title: Some(pb::CatalogTitle {
+                        value: "Actor".into(),
+                    }),
+                    target: Some(pb::TopologyStepTarget {
+                        selection: Some(pb::topology_step_target::Selection::Actor(
+                            pb::TopologyActor {
+                                name: Some(pb::CatalogTitle {
+                                    value: "Actor".into(),
+                                }),
+                                ..Default::default()
+                            },
+                        )),
+                    }),
+                    ..Default::default()
+                }],
+                subjects,
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    resize_graph_owner(&mut owner, 1_048_576);
+    trogon_atlas_core::design_topology::validate_values(&owner).unwrap();
+    let exact = put(&mut client, owner).await;
+    assert_eq!(exact.encoded_len(), 1_048_576);
+    let kind = pb::EntityKind::DesignGraph;
+    let key = id("graph-capacity");
+    let before = store.get(kind, &key, None).await.unwrap();
+    assert_eq!(before.entity, exact);
+    let fetched = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(key.clone()),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(fetched.entity.as_ref(), Some(&exact));
+    assert_eq!(fetched.etag, before.etag);
+    let sequence = store.current_change_seq().await.unwrap();
+    assert_eq!(put(&mut client, exact.clone()).await, exact);
+    assert_eq!(store.get(kind, &key, None).await.unwrap().etag, before.etag);
+    assert_eq!(store.current_change_seq().await.unwrap(), sequence);
+    let mut overflow = exact.clone();
+    resize_graph_owner(&mut overflow, 1_048_577);
+    overflow.system = None;
+    assert_eq!(
+        trogon_atlas_core::stamp_system(Some(&exact), &overflow).encoded_len(),
+        1_048_577
+    );
+    assert!(overflow.encoded_len() < 1_048_576);
+    let error = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(overflow.clone()),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert!(matches!(
+        store
+            .update(
+                kind,
+                &overflow,
+                &before.etag,
+                true,
+                WriteContext::baseline()
+            )
+            .await,
+        Err(trogon_atlas_store::StoreError::InvalidArgument(_))
+    ));
+    let after = store.get(kind, &key, None).await.unwrap();
+    assert_eq!(after.entity, before.entity);
+    assert_eq!(after.etag, before.etag);
     assert_eq!(store.current_change_seq().await.unwrap(), sequence);
 }

@@ -556,11 +556,12 @@ impl EventModelServiceImpl {
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
                 Err(error) => return Err(store_err(error)),
             };
-            let prepared = if let Some(prepared) = claim_prepared.remove(&pb::EntityKey::new(kind, id)) {
-                prepared
-            } else {
-                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
-            };
+            let prepared =
+                if let Some(prepared) = claim_prepared.remove(&pb::EntityKey::new(kind, id)) {
+                    prepared
+                } else {
+                    prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
+                };
             super::validate_entity_content(&prepared)?;
             let issues = validation::architecture_resources::validate_admission_with_previous(
                 &prepared,
@@ -931,8 +932,10 @@ impl EventModelServiceImpl {
         let mut pending = targets;
         while let Some((kind, id)) = pending.pop() {
             match access {
-                ArchitectureTargetAccess::Required(vis)
-                | ArchitectureTargetAccess::ExactRequired(vis) => {
+                ArchitectureTargetAccess::ExactRequired(vis) => {
+                    self.require_visible(vis, &id.namespace).await?;
+                }
+                ArchitectureTargetAccess::Required(vis) => {
                     match self.require_visible(vis, &id.namespace).await {
                         Ok(()) => {}
                         Err(status) if status.code() == Code::NotFound => continue,

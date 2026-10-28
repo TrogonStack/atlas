@@ -1058,24 +1058,68 @@ async fn exact_claim_subject_output_boundary_keeps_equal_siblings_separate() {
             ROOT_TOKEN,
         )
     };
+    assert_eq!(
+        client
+            .list_subject_documents(request(selected.clone()))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::ResourceExhausted
+    );
+    let sibling = pb::ConnectionRef {
+        id: declarations.claims[1].connection_id.clone(),
+        ..selected.clone()
+    };
+    let sibling_page = client
+        .list_subject_documents(request(sibling.clone()))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(sibling_page.declarations.is_empty() && !sibling_page.incomplete);
+    let scope = sibling_page.scope.unwrap();
+    let receipt_records =
+        scope.visited.len() + scope.visited_subjects.len() + scope.visited_documents.len();
+    assert!(receipt_records > 0 && receipt_records < 1024);
+    let current = store
+        .get(pb::EntityKind::Document, &id(&namespace, "note-0"), None)
+        .await
+        .unwrap();
+    let mut trimmed = current.entity;
+    let Some(pb::entity::Kind::Document(trimmed_note)) = &mut trimmed.kind else {
+        panic!()
+    };
+    trimmed_note.subjects.truncate(1024 - receipt_records);
+    store
+        .update(
+            pb::EntityKind::Document,
+            &trimmed,
+            &current.etag,
+            true,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
     let boundary = client
         .list_subject_documents(request(selected.clone()))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(boundary.declarations.len(), 4096);
+    let checked = boundary.scope.as_ref().unwrap();
+    assert_eq!(
+        boundary.declarations.len()
+            + checked.visited.len()
+            + checked.visited_subjects.len()
+            + checked.visited_documents.len(),
+        4096
+    );
+    assert_eq!(boundary.declarations.len(), 4096 - receipt_records);
     assert!(!boundary.incomplete);
-    let sibling = pb::ConnectionRef {
-        id: declarations.claims[1].connection_id.clone(),
-        ..selected.clone()
-    };
-    let sibling = client
+    let sibling_page = client
         .list_subject_documents(request(sibling))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(sibling.declarations, []);
-    assert!(!sibling.incomplete);
+    assert!(sibling_page.declarations.is_empty() && !sibling_page.incomplete);
     store
         .put(
             pb::EntityKind::Document,
@@ -1127,13 +1171,9 @@ async fn independent_domain_claim_rows_obey_exact_shared_discovery_row_boundary(
             ROOT_TOKEN,
         )
     };
-    let boundary = client
-        .list_subject_documents(request())
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(boundary.declarations, []);
-    assert!(!boundary.incomplete);
+    let boundary = client.list_subject_documents(request()).await.unwrap_err();
+    assert_eq!(boundary.code(), Code::ResourceExhausted);
+    assert!(boundary.message().contains("output budget"));
     let current = store
         .get(pb::EntityKind::Domain, &id(&namespace, "row-0"), None)
         .await
@@ -2842,42 +2882,354 @@ async fn standalone_document_diagnostics_hydrate_native_schema_outside_owner_sco
 async fn channel_inverse_keeps_claim_routes_operations_and_independent_declarations_distinct() {
     let (mut client, namespace) = fixture().await;
     let (mut spec, message, channel_entity) = targets(&mut client, &namespace).await;
-    let channel = pb::ChannelRef { id: reference(&channel_entity).id };
+    let channel = pb::ChannelRef {
+        id: reference(&channel_entity).id,
+    };
     if let Some(pb::entity::Kind::Specification(value)) = &mut spec.kind {
-        value.message_channels.push(pb::MessageChannelDeclaration { member_id: message.member_id.clone(), channel: Some(channel.clone()), parameter_values: [("tenant".into(), String::new())].into_iter().collect(), ..Default::default() });
-        value.operations.push(pb::ContractOperation { name: Some(pb::MemberName { value: "Consume".into() }), messages: vec![pb::OperationMessage { message_id: message.member_id.clone(), role: pb::operation_message::Role::Request as i32, ..Default::default() }], binding: Some(pb::OperationBinding { kind: Some(pb::operation_binding::Kind::Channel(pb::ChannelOperationBinding { channel: Some(channel.clone()), ..Default::default() })) }), ..Default::default() });
+        value.message_channels.push(pb::MessageChannelDeclaration {
+            member_id: message.member_id.clone(),
+            channel: Some(channel.clone()),
+            parameter_values: [("tenant".into(), String::new())].into_iter().collect(),
+            ..Default::default()
+        });
+        value.operations.push(pb::ContractOperation {
+            name: Some(pb::MemberName {
+                value: "Consume".into(),
+            }),
+            messages: vec![pb::OperationMessage {
+                message_id: message.member_id.clone(),
+                role: pb::operation_message::Role::Request as i32,
+                ..Default::default()
+            }],
+            binding: Some(pb::OperationBinding {
+                kind: Some(pb::operation_binding::Kind::Channel(
+                    pb::ChannelOperationBinding {
+                        channel: Some(channel.clone()),
+                        ..Default::default()
+                    },
+                )),
+            }),
+            ..Default::default()
+        });
     }
     put(&mut client, spec, "").await.unwrap();
     let mut proposal = owner(&namespace, pb::EntityKind::Component, message.clone());
     if let Some(pb::entity::Kind::Component(value)) = &mut proposal.kind {
-        value.message_claims.as_mut().unwrap().claims.push(pb::MessageClaim { direction: pb::CommunicationDirection::Send as i32, message: Some(message.clone()), group: Some(pb::CatalogTitle { value: "Orders".into() }), ..Default::default() });
+        value
+            .message_claims
+            .as_mut()
+            .unwrap()
+            .claims
+            .push(pb::MessageClaim {
+                direction: pb::CommunicationDirection::Send as i32,
+                message: Some(message.clone()),
+                group: Some(pb::CatalogTitle {
+                    value: "Orders".into(),
+                }),
+                ..Default::default()
+            });
     }
-    let mut stored = put(&mut client, proposal, "").await.unwrap().entity.unwrap();
+    let mut stored = put(&mut client, proposal, "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
     if let Some(pb::entity::Kind::Component(value)) = &mut stored.kind {
         let claims = value.message_claims.as_mut().unwrap();
-        claims.routes = claims.claims.iter().map(|claim| pb::ClaimRoute { claim_id: claim.connection_id.clone(), channel: Some(channel.clone()), parameter_values: [("tenant".into(), String::new())].into_iter().collect(), ..Default::default() }).collect();
+        claims.routes = claims
+            .claims
+            .iter()
+            .map(|claim| pb::ClaimRoute {
+                claim_id: claim.connection_id.clone(),
+                channel: Some(channel.clone()),
+                parameter_values: [("tenant".into(), String::new())].into_iter().collect(),
+                ..Default::default()
+            })
+            .collect();
     }
     put(&mut client, stored, "").await.unwrap();
-    let result = client.list_channel_messages(authed(pb::ListChannelMessagesRequest { channel: Some(channel), ..Default::default() }, ROOT_TOKEN)).await.unwrap().into_inner();
+    let result = client
+        .list_channel_messages(authed(
+            pb::ListChannelMessagesRequest {
+                channel: Some(channel),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
     assert_eq!(result.records.len(), 4);
     assert!(result.complete && !result.incomplete && result.next_page_token.is_empty());
     let mut ids = std::collections::HashSet::new();
     for row in &result.records {
-        assert!(!row.owner_uid.is_empty());
+        assert_ne!(row.owner_uid, "");
         assert!(ids.insert(row.connection_id.as_ref().unwrap().value.clone()));
         assert_eq!(row.message.as_ref(), Some(&message));
         assert_eq!(row.state, pb::CatalogResolutionState::Resolved as i32);
         match pb::ChannelMessageAuthority::try_from(row.authority).unwrap() {
             pb::ChannelMessageAuthority::ClaimRoute => {
-                assert_eq!(row.route.as_ref().unwrap().claim_id, row.claim.as_ref().unwrap().connection_id);
+                assert_eq!(
+                    row.route.as_ref().unwrap().claim_id,
+                    row.claim.as_ref().unwrap().connection_id
+                );
                 assert_eq!(row.route.as_ref().unwrap().connection_id, row.connection_id);
             }
             pb::ChannelMessageAuthority::OperationBinding => {
-                assert_eq!(row.operation.as_ref().unwrap().kind, pb::ContractMemberKind::Operation as i32);
-                assert!(row.operation_message.as_ref().unwrap().connection_id.is_some());
+                assert_eq!(
+                    row.operation.as_ref().unwrap().kind,
+                    pb::ContractMemberKind::Operation as i32
+                );
+                assert!(row
+                    .operation_message
+                    .as_ref()
+                    .unwrap()
+                    .connection_id
+                    .is_some());
             }
-            pb::ChannelMessageAuthority::SpecificationDeclaration => assert!(row.claim.is_none() && row.operation.is_none()),
-            _ => panic!("native authority required"),
+            pb::ChannelMessageAuthority::SpecificationDeclaration => {
+                assert!(row.claim.is_none() && row.operation.is_none());
+            }
+            pb::ChannelMessageAuthority::Unspecified => panic!("native authority required"),
         }
     }
+}
+
+#[tokio::test]
+async fn channel_inverse_pages_all_matches_and_rejects_revision_and_branch_replays() {
+    use trogon_atlas_store::{store::MutationOp, Store, WriteContext};
+    let (mut client, namespace, store) = fixture_with_store().await;
+    let (template, message, channel) = targets(&mut client, &namespace).await;
+    let channel_ref = pb::ChannelRef {
+        id: reference(&channel).id,
+    };
+    let mut ops = Vec::new();
+    for index in 0..4097 {
+        let mut entity = template.clone();
+        entity.system = None;
+        let Some(pb::entity::Kind::Specification(spec)) = &mut entity.kind else {
+            panic!()
+        };
+        spec.id = Some(id(&namespace, &format!("inverse-{index:04}")));
+        spec.messages.truncate(1);
+        spec.message_channels.push(pb::MessageChannelDeclaration {
+            member_id: message.member_id.clone(),
+            channel: Some(channel_ref.clone()),
+            parameter_values: [("tenant".into(), String::new())].into_iter().collect(),
+            ..Default::default()
+        });
+        ops.push(MutationOp::Put {
+            kind: pb::EntityKind::Specification,
+            entity,
+            if_match: None,
+            force: false,
+        });
+    }
+    for chunk in ops.chunks(500) {
+        store
+            .batch_apply(chunk, WriteContext::baseline())
+            .await
+            .unwrap();
+    }
+    let query = |token| pb::ListChannelMessagesRequest {
+        channel: Some(channel_ref.clone()),
+        page_size: 500,
+        page_token: token,
+    };
+    let first = client
+        .list_channel_messages(authed(query(String::new()), ROOT_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(first.records.len(), 500);
+    assert!(!first.incomplete && !first.complete);
+    let mut token = first.next_page_token.clone();
+    let mut seen: std::collections::HashSet<_> = first
+        .records
+        .iter()
+        .map(|r| r.connection_id.clone().unwrap().value)
+        .collect();
+    loop {
+        let page = client
+            .list_channel_messages(authed(query(token), ROOT_TOKEN))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!page.incomplete);
+        assert_eq!(page.scope_digest, first.scope_digest);
+        for row in &page.records {
+            assert!(seen.insert(row.connection_id.clone().unwrap().value));
+        }
+        token = page.next_page_token;
+        if token.is_empty() {
+            assert!(page.complete);
+            break;
+        }
+        assert!(!page.complete);
+    }
+    assert_eq!(seen.len(), 4097);
+    client
+        .create_branch(authed(
+            pb::CreateBranchRequest {
+                name: "inverse-page-work".into(),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap();
+    let mut branch_request = authed(query(first.next_page_token.clone()), ROOT_TOKEN);
+    branch_request.metadata_mut().insert(
+        "x-trogon-atlas-branch",
+        "inverse-page-work".parse().unwrap(),
+    );
+    assert_eq!(
+        client
+            .list_channel_messages(branch_request)
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+    put(
+        &mut client,
+        entity(pb::entity::Kind::Component(pb::Component {
+            id: Some(id(&namespace, "revision-filler")),
+            title: "Revision".into(),
+            ..Default::default()
+        })),
+        "",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        client
+            .list_channel_messages(authed(query(first.next_page_token), ROOT_TOKEN))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+    let fresh = client
+        .list_channel_messages(authed(query(String::new()), ROOT_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_ne!(fresh.scope_digest, first.scope_digest);
+    assert_eq!(fresh.records, first.records);
+}
+
+#[tokio::test]
+async fn channel_inverse_preserves_authored_routes_when_the_exact_message_is_hidden_or_missing() {
+    use support::two_tenants::{ACME_TOKEN, BETA_TOKEN};
+    let (mut client, _) = fixture().await;
+    let mut namespaces = Vec::new();
+    for (name, token) in [
+        ("inverse-visible", ACME_TOKEN),
+        ("inverse-hidden", BETA_TOKEN),
+    ] {
+        namespaces.push(
+            client
+                .register_namespace(authed(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        ..Default::default()
+                    },
+                    token,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let (visible, hidden) = (&namespaces[0], &namespaces[1]);
+    let (_, _, channel) = targets(&mut client, visible).await;
+    let (mut spec, message, _) = targets(&mut client, hidden).await;
+    if let Some(pb::entity::Kind::Specification(value)) = &mut spec.kind {
+        value.title = "Hidden native message canary".into();
+    }
+    put(&mut client, spec.clone(), "").await.unwrap();
+    let authored = put(
+        &mut client,
+        owner(visible, pb::EntityKind::Domain, message),
+        "",
+    )
+    .await
+    .unwrap();
+    let mut routed = authored.entity.unwrap();
+    let claims = trogon_atlas_core::message_claims::declarations_mut(&mut routed).unwrap();
+    claims.routes.push(pb::ClaimRoute {
+        claim_id: claims.claims[0].connection_id.clone(),
+        channel: Some(pb::ChannelRef {
+            id: reference(&channel).id,
+        }),
+        parameter_values: [("tenant".into(), String::new())].into_iter().collect(),
+        ..Default::default()
+    });
+    let routed = put(&mut client, routed, &authored.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let query = || pb::ListChannelMessagesRequest {
+        channel: Some(pb::ChannelRef {
+            id: reference(&channel).id,
+        }),
+        ..Default::default()
+    };
+    let full = client
+        .list_channel_messages(authed(query(), ROOT_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(full.records.len(), 1);
+    assert_eq!(
+        full.records[0].state,
+        pb::CatalogResolutionState::Resolved as i32
+    );
+    let limited = client
+        .list_channel_messages(authed(query(), ACME_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(limited.records.len(), 1);
+    assert!(limited.complete && !limited.incomplete);
+    assert_eq!(
+        limited.records[0].state,
+        pb::CatalogResolutionState::Unavailable as i32
+    );
+    assert_eq!(limited.records[0].claim, full.records[0].claim);
+    assert_eq!(limited.records[0].route, full.records[0].route);
+    assert_eq!(
+        limited.records[0].owner_uid,
+        routed.system.as_ref().unwrap().uid
+    );
+    assert!(!format!("{limited:?}").contains("Hidden native message canary"));
+    client
+        .delete_entity(authed(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Specification as i32,
+                id: reference(&spec).id,
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap();
+    let missing = client
+        .list_channel_messages(authed(query(), ROOT_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(missing.records.len(), 1);
+    assert_eq!(
+        missing.records[0].state,
+        pb::CatalogResolutionState::Unavailable as i32
+    );
+    assert_eq!(missing.records[0].claim, full.records[0].claim);
+    assert_eq!(missing.records[0].route, full.records[0].route);
 }
