@@ -517,6 +517,15 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
     assert!(plan
         .iter()
         .all(|change| change.action == trogon_atlas_client::apply::Action::Unchanged));
+    let revisions: std::collections::HashMap<_, _> = plan
+        .iter()
+        .map(|change| {
+            (
+                pb::EntityKey::new(change.manifest.kind, &change.manifest.id),
+                change.observed.clone().unwrap(),
+            )
+        })
+        .collect();
     trogon_atlas_client::apply::apply(&mut manifest_client, plan, false, None)
         .await
         .unwrap();
@@ -536,15 +545,17 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
             .get_entity(request(
                 pb::GetEntityRequest {
                     kind: desired.kind as i32,
-                    id: Some(desired.id),
+                    id: Some(desired.id.clone()),
                 },
                 None,
             ))
             .await
             .unwrap()
-            .into_inner()
-            .entity
-            .unwrap();
-        assert_eq!(&fetched, stored);
+            .into_inner();
+        assert_eq!(
+            trogon_atlas_client::precondition::Revision::from_wire(&fetched.etag).unwrap(),
+            revisions[&pb::EntityKey::new(desired.kind, &desired.id)]
+        );
+        assert_eq!(fetched.entity.as_ref().unwrap(), stored);
     }
 }
