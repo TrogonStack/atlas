@@ -551,17 +551,16 @@ impl EventModelServiceImpl {
         for resource in resources {
             let kind = entity_kind(resource)?;
             let id = entity_id(resource)?;
-            let prepared =
-                if let Some(prepared) = claim_prepared.remove(&pb::EntityKey::new(kind, id)) {
-                    prepared
-                } else {
-                    let previous = match self.store.get(kind, id, branch).await {
-                        Ok(stored) => Some(stored.entity),
-                        Err(trogon_atlas_store::error::StoreError::NotFound) => None,
-                        Err(error) => return Err(store_err(error)),
-                    };
-                    prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
-                };
+            let previous = match self.store.get(kind, id, branch).await {
+                Ok(stored) => Some(stored.entity),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let prepared = if let Some(prepared) = claim_prepared.remove(&pb::EntityKey::new(kind, id)) {
+                prepared
+            } else {
+                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
+            };
             super::validate_entity_content(&prepared)?;
             let issues = validation::architecture_resources::validate_admission_with_previous(
                 &prepared,

@@ -2841,11 +2841,10 @@ async fn standalone_document_diagnostics_hydrate_native_schema_outside_owner_sco
 #[tokio::test]
 async fn channel_inverse_keeps_claim_routes_operations_and_independent_declarations_distinct() {
     let (mut client, namespace) = fixture().await;
-    let (mut spec, message, _) = targets(&mut client, &namespace).await;
-    let channel = pb::ChannelRef { id: Some(id(&namespace, "joined-channel")) };
-    put(&mut client, entity(pb::entity::Kind::Channel(pb::Channel { id: channel.id.clone(), title: "Joined".into(), ..Default::default() })), "").await.unwrap();
+    let (mut spec, message, channel_entity) = targets(&mut client, &namespace).await;
+    let channel = pb::ChannelRef { id: reference(&channel_entity).id };
     if let Some(pb::entity::Kind::Specification(value)) = &mut spec.kind {
-        value.message_channels.push(pb::MessageChannelDeclaration { member_id: message.member_id.clone(), channel: Some(channel.clone()), ..Default::default() });
+        value.message_channels.push(pb::MessageChannelDeclaration { member_id: message.member_id.clone(), channel: Some(channel.clone()), parameter_values: [("tenant".into(), String::new())].into_iter().collect(), ..Default::default() });
         value.operations.push(pb::ContractOperation { name: Some(pb::MemberName { value: "Consume".into() }), messages: vec![pb::OperationMessage { message_id: message.member_id.clone(), role: pb::operation_message::Role::Request as i32, ..Default::default() }], binding: Some(pb::OperationBinding { kind: Some(pb::operation_binding::Kind::Channel(pb::ChannelOperationBinding { channel: Some(channel.clone()), ..Default::default() })) }), ..Default::default() });
     }
     put(&mut client, spec, "").await.unwrap();
@@ -2856,7 +2855,7 @@ async fn channel_inverse_keeps_claim_routes_operations_and_independent_declarati
     let mut stored = put(&mut client, proposal, "").await.unwrap().entity.unwrap();
     if let Some(pb::entity::Kind::Component(value)) = &mut stored.kind {
         let claims = value.message_claims.as_mut().unwrap();
-        claims.routes = claims.claims.iter().map(|claim| pb::ClaimRoute { claim_id: claim.connection_id.clone(), channel: Some(channel.clone()), ..Default::default() }).collect();
+        claims.routes = claims.claims.iter().map(|claim| pb::ClaimRoute { claim_id: claim.connection_id.clone(), channel: Some(channel.clone()), parameter_values: [("tenant".into(), String::new())].into_iter().collect(), ..Default::default() }).collect();
     }
     put(&mut client, stored, "").await.unwrap();
     let result = client.list_channel_messages(authed(pb::ListChannelMessagesRequest { channel: Some(channel), ..Default::default() }, ROOT_TOKEN)).await.unwrap().into_inner();
