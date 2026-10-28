@@ -48,11 +48,7 @@ tokens = ["{ADMIN}"]
     )
     .unwrap();
     let store = std::sync::Arc::new(trogon_atlas_testsupport::shared().await.store().await);
-    let service = EventModelServiceImpl::try_new(
-        store.clone(),
-        ServerMetrics::default(),
-    )
-    .unwrap();
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
     let grpc = InterceptedService::new(
         tower::ServiceBuilder::new()
             .layer(AuthzLayer)
@@ -66,7 +62,10 @@ tokens = ["{ADMIN}"]
             .await
             .unwrap();
     });
-    (Client::connect(format!("http://{addr}")).await.unwrap(), store)
+    (
+        Client::connect(format!("http://{addr}")).await.unwrap(),
+        store,
+    )
 }
 
 fn id(slug: &str) -> pb::Id {
@@ -677,7 +676,10 @@ async fn incoming_document_pages_order_versions_numerically() {
             &mut client,
             pb::Entity {
                 kind: Some(pb::entity::Kind::Decision(pb::Decision {
-                    id: Some(pb::Id { version, ..id(slug) }),
+                    id: Some(pb::Id {
+                        version,
+                        ..id(slug)
+                    }),
                     title: Some(pb::CatalogTitle { value: slug.into() }),
                     subjects: vec![pb::SubjectAssociation {
                         subject: Some(subject()),
@@ -723,7 +725,20 @@ async fn incoming_document_pages_order_versions_numerically() {
         .unwrap()
         .into_inner();
     assert_eq!(page1.declarations.len(), 1);
-    assert_eq!(page1.declarations[0].owner.as_ref().unwrap().owner.as_ref().unwrap().id.as_ref().unwrap().version, 2);
+    assert_eq!(
+        page1.declarations[0]
+            .owner
+            .as_ref()
+            .unwrap()
+            .owner
+            .as_ref()
+            .unwrap()
+            .id
+            .as_ref()
+            .unwrap()
+            .version,
+        2
+    );
     let continue_token = page1.next_page_token.clone();
     assert_ne!(continue_token, "");
     let page2 = client
@@ -805,15 +820,21 @@ async fn incoming_document_pages_order_versions_numerically() {
     assert_eq!(err.code(), Code::InvalidArgument);
 }
 
-
 fn resize_complete_owner(entity: &mut pb::Entity, target: usize) {
     loop {
         let size = entity.encoded_len();
-        if size == target { return; }
-        let Some(pb::entity::Kind::Document(document)) = entity.kind.as_mut() else { panic!("document") };
+        if size == target {
+            return;
+        }
+        let Some(pb::entity::Kind::Document(document)) = entity.kind.as_mut() else {
+            panic!("document")
+        };
         let doc = document.doc.get_or_insert_default();
-        if size < target { doc.push_str(&"x".repeat(target - size)); }
-        else { doc.truncate(doc.len() - (size - target)); }
+        if size < target {
+            doc.push_str(&"x".repeat(target - size));
+        } else {
+            doc.truncate(doc.len() - (size - target));
+        }
     }
 }
 
@@ -824,36 +845,68 @@ async fn complete_native_owner_capacity_is_atomic_on_public_service_and_store() 
     let mut subjects = Vec::new();
     for index in 0..64 {
         let subject_id = id(&format!("capacity-subject-{index}"));
-        put(&mut client, pb::Entity {
-            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
-                id: Some(subject_id.clone()), title: "Receipt".into(), ..Default::default()
-            })), ..Default::default()
-        }).await;
+        put(
+            &mut client,
+            pb::Entity {
+                kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                    id: Some(subject_id.clone()),
+                    title: "Receipt".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+        )
+        .await;
         subjects.push(pb::SubjectAssociation {
-            subject: Some(pb::CatalogSubject { selection: Some(pb::catalog_subject::Selection::Entity(pb::EntityRef {
-                kind: pb::EntityKind::ReadModel as i32, id: Some(subject_id),
-            })) }),
-            doc: Some(pb::CatalogText { value: "x".repeat(15_500) }),
+            subject: Some(pb::CatalogSubject {
+                selection: Some(pb::catalog_subject::Selection::Entity(pb::EntityRef {
+                    kind: pb::EntityKind::ReadModel as i32,
+                    id: Some(subject_id),
+                })),
+            }),
+            doc: Some(pb::CatalogText {
+                value: "x".repeat(15_500),
+            }),
             ..Default::default()
         });
     }
-    let mut owner = put(&mut client, pb::Entity {
-        kind: Some(pb::entity::Kind::Document(pb::Document {
-            id: Some(id("capacity")), title: Some(pb::CatalogTitle { value: "Capacity".into() }),
-            subjects,
-            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink { value: "https://example.com/doc".into() })),
+    let mut owner = put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Document(pb::Document {
+                id: Some(id("capacity")),
+                title: Some(pb::CatalogTitle {
+                    value: "Capacity".into(),
+                }),
+                subjects,
+                body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                    value: "https://example.com/doc".into(),
+                })),
+                ..Default::default()
+            })),
             ..Default::default()
-        })), ..Default::default()
-    }).await;
+        },
+    )
+    .await;
     resize_complete_owner(&mut owner, 1_048_576);
     trogon_atlas_core::decision_document::validate_values(&owner).unwrap();
     let exact = put(&mut client, owner.clone()).await;
     assert_eq!(exact.encoded_len(), 1_048_576);
+    trogon_atlas_core::decision_document::validate_values(&exact).unwrap();
     let reference = id("capacity");
     let kind = pb::EntityKind::Document;
-    let read = client.get_entity(request(pb::GetEntityRequest {
-        kind: kind as i32, id: Some(reference.clone()), ..Default::default()
-    }, None)).await.unwrap().into_inner();
+    let read = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(reference.clone()),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
     assert_eq!(read.entity.as_ref().unwrap(), &exact);
     assert_eq!(put(&mut client, exact.clone()).await, exact);
     let before = store.get(kind, &reference, None).await.unwrap();
@@ -861,15 +914,39 @@ async fn complete_native_owner_capacity_is_atomic_on_public_service_and_store() 
     let mut overflow = exact.clone();
     resize_complete_owner(&mut overflow, 1_048_577);
     overflow.system = None;
+    assert_eq!(
+        trogon_atlas_core::stamp_system(Some(&exact), &overflow).encoded_len(),
+        1_048_577
+    );
     assert!(overflow.encoded_len() < 1_048_576);
-    let error = client.put_entity(request(pb::PutEntityRequest {
-        entity: Some(overflow.clone()), ..Default::default()
-    }, None)).await.unwrap_err();
+    let error = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(overflow.clone()),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap_err();
     assert_eq!(error.code(), Code::InvalidArgument);
-    assert_eq!(store.get(kind, &reference, None).await.unwrap().entity, before.entity);
+    assert_eq!(
+        store.get(kind, &reference, None).await.unwrap().entity,
+        before.entity
+    );
     assert_eq!(store.current_change_seq().await.unwrap(), sequence);
-    assert!(matches!(store.update(kind, &overflow, &before.etag, true, WriteContext::baseline()).await,
-        Err(trogon_atlas_store::StoreError::InvalidArgument(_))));
+    assert!(matches!(
+        store
+            .update(
+                kind,
+                &overflow,
+                &before.etag,
+                true,
+                WriteContext::baseline()
+            )
+            .await,
+        Err(trogon_atlas_store::StoreError::InvalidArgument(_))
+    ));
     let unchanged = store.get(kind, &reference, None).await.unwrap();
     assert_eq!(unchanged.entity, before.entity);
     assert_eq!(unchanged.etag, before.etag);

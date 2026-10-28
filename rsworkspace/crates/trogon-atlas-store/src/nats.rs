@@ -77,21 +77,6 @@ use crate::{
 };
 
 fn prepare_entity(previous: Option<&Entity>, entity: &Entity) -> StoreResult<Entity> {
-    if matches!(
-        entity.kind,
-        Some(
-            trogon_atlas_proto::entity::Kind::Document(_)
-                | trogon_atlas_proto::entity::Kind::Decision(_)
-        )
-    ) {
-        let mut owner = entity.clone();
-        owner.system = None;
-        if owner.encoded_len() > trogon_atlas_core::decision_document::MAX_ENCODED_BYTES {
-            return Err(StoreError::InvalidArgument(
-                "catalog entity byte limit exceeded".into(),
-            ));
-        }
-    }
     trogon_atlas_core::connection_persistence::prepare_entity(previous, entity)
         .map_err(|error| StoreError::InvalidArgument(error.to_string()))
 }
@@ -1284,6 +1269,70 @@ impl NatsStore {
 
         out.truncate(effective_limit);
         Ok(out)
+    }
+
+    async fn preflight_catalog_batch(
+        &self,
+        ops: &[MutationOp],
+        ctx: WriteContext<'_>,
+    ) -> StoreResult<()> {
+        let mut projected: BTreeMap<String, Option<Entity>> = BTreeMap::new();
+        for (index, op) in ops.iter().enumerate() {
+            let kind = match op {
+                MutationOp::Create { kind, .. }
+                | MutationOp::Put { kind, .. }
+                | MutationOp::Delete { kind, .. } => *kind,
+            };
+            if !matches!(kind, EntityKind::Document | EntityKind::Decision) {
+                continue;
+            }
+            let (id, proposed) = match op {
+                MutationOp::Create { entity, .. } | MutationOp::Put { entity, .. } => {
+                    let id =
+                        Self::validate(kind, entity).map_err(|source| StoreError::BatchFailed {
+                            index,
+                            source: Box::new(source),
+                        })?;
+                    (id, Some(entity))
+                }
+                MutationOp::Delete { id, .. } => (id, None),
+            };
+            let key = entity_key(kind, id);
+            if !projected.contains_key(&key) {
+                let previous = match self.get(kind, id, ctx.branch_name()).await {
+                    Ok(stored) => Some(stored.entity),
+                    Err(StoreError::NotFound) => None,
+                    Err(error) => return Err(error),
+                };
+                projected.insert(key.clone(), previous);
+            }
+            let Some(entity) = proposed else {
+                projected.insert(key, None);
+                continue;
+            };
+            let previous = if matches!(op, MutationOp::Create { .. }) {
+                None
+            } else {
+                projected.get(&key).and_then(Option::as_ref)
+            };
+            let prepared = match ctx.connection_admission() {
+                crate::store::ConnectionAdmission::Active => prepare_entity(previous, entity),
+                crate::store::ConnectionAdmission::BranchMerge { base } => {
+                    trogon_atlas_core::connection_persistence::prepare_landing(
+                        Some(base),
+                        previous,
+                        entity,
+                    )
+                    .map_err(|error| StoreError::InvalidArgument(error.to_string()))
+                }
+            }
+            .map_err(|source| StoreError::BatchFailed {
+                index,
+                source: Box::new(source),
+            })?;
+            projected.insert(key, Some(prepared));
+        }
+        Ok(())
     }
 
     /// Branch-scoped `batch_apply`: applies each op sequentially against the
@@ -3889,6 +3938,7 @@ impl Store for NatsStore {
                 BATCH_APPLY_MAX_OPS,
             )));
         }
+        self.preflight_catalog_batch(ops, ctx).await?;
         if ctx.branch_name().is_some() {
             return self.batch_apply_branch(ops, ctx).await;
         }
@@ -5018,12 +5068,35 @@ impl Store for NatsStore {
                     .and_then(|prior| prior.as_ref().map(|(entity, _)| entity.clone()))
             };
 
+            let prepared_owners = ops
+                .iter()
+                .enumerate()
+                .map(|(index, op)| match op {
+                    BranchLandOp::Put {
+                        kind, ours, base, ..
+                    } => {
+                        let id = Self::validate(*kind, ours)?;
+                        trogon_atlas_core::connection_persistence::prepare_landing(
+                            base.as_deref(),
+                            baseline_before(*kind, id).as_ref(),
+                            ours,
+                        )
+                        .map(Some)
+                        .map_err(|error| StoreError::BatchFailed {
+                            index,
+                            source: Box::new(StoreError::InvalidArgument(error.to_string())),
+                        })
+                    }
+                    BranchLandOp::Delete { .. } => Ok(None),
+                })
+                .collect::<StoreResult<Vec<_>>>()?;
+
             for (i, op) in ops.iter().enumerate() {
                 let result: StoreResult<(MutationOutcome, Revision)> = match op {
                     BranchLandOp::Put {
                         kind,
                         ours,
-                        base,
+                        base: _,
                         expected_baseline_etag,
                     } => 'put: {
                         let id = match Self::validate(*kind, ours) {
@@ -5031,18 +5104,9 @@ impl Store for NatsStore {
                             Err(e) => break 'put Err(e),
                         };
                         let key = entity_key(*kind, &id);
-                        let before = baseline_before(*kind, &id);
-                        let prepared =
-                            match trogon_atlas_core::connection_persistence::prepare_landing(
-                                base.as_deref(),
-                                before.as_ref(),
-                                ours,
-                            ) {
-                                Ok(prepared) => prepared,
-                                Err(error) => {
-                                    break 'put Err(StoreError::InvalidArgument(error.to_string()));
-                                }
-                            };
+                        let prepared = prepared_owners[i].clone().ok_or_else(|| {
+                            StoreError::InvalidArgument("missing prepared landing owner".into())
+                        })?;
                         let bytes = encode_entity(&prepared);
                         let cas_result = match expected_baseline_etag {
                             Some(exp) => match exp.parse::<u64>() {
@@ -5281,7 +5345,7 @@ impl Store for NatsStore {
     ) -> StoreResult<u32> {
         self.source_guarded(async {
             self.require_writer()?;
-            let mut count = 0u32;
+            let mut pending = Vec::new();
             for (kind, id, new_base) in rebases {
                 let delta_key = branch_delta_key(branch, *kind, id);
                 let Some(entry) =
@@ -5292,16 +5356,7 @@ impl Store for NatsStore {
                 let delta = decode_branch_delta(&entry.value)?;
                 match new_base {
                     None => {
-                        // CONVERGED: the delta collapses to nothing since
-                        // `ours` already matches the new baseline.
-                        tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
-                            .await
-                            .map_err(|_| {
-                                StoreError::Backend(format!("branch kv.purge {delta_key}: timeout"))
-                            })?
-                            .map_err(|e| {
-                                StoreError::Backend(format!("branch kv.purge {delta_key}: {e}"))
-                            })?;
+                        pending.push((delta_key, entry.revision, None));
                     }
                     Some((base_entity, base_etag)) => {
                         let ours = delta
@@ -5323,20 +5378,36 @@ impl Store for NatsStore {
                             tombstone: delta.tombstone,
                         };
                         let bytes = encode_branch_delta(&updated);
+                        pending.push((delta_key, entry.revision, Some(bytes)));
+                    }
+                }
+            }
+            let count = u32::try_from(pending.len())
+                .map_err(|_| StoreError::InvalidArgument("too many branch rebases".into()))?;
+            for (key, revision, bytes) in pending {
+                match bytes {
+                    Some(bytes) => {
                         tokio::time::timeout(
                             KV_OP_TIMEOUT,
-                            self.branches_kv.update(&delta_key, bytes, entry.revision),
+                            self.branches_kv.update(&key, bytes, revision),
                         )
                         .await
                         .map_err(|_| {
-                            StoreError::Backend(format!("branch kv.update {delta_key}: timeout"))
+                            StoreError::Backend(format!("branch kv.update {key}: timeout"))
                         })?
-                        .map_err(|e| {
-                            StoreError::Backend(format!("branch kv.update {delta_key}: {e}"))
-                        })?;
+                        .map_err(|e| StoreError::Backend(format!("branch kv.update {key}: {e}")))?;
+                    }
+                    None => {
+                        tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&key))
+                            .await
+                            .map_err(|_| {
+                                StoreError::Backend(format!("branch kv.purge {key}: timeout"))
+                            })?
+                            .map_err(|e| {
+                                StoreError::Backend(format!("branch kv.purge {key}: {e}"))
+                            })?;
                     }
                 }
-                count += 1;
             }
             Ok(count)
         })

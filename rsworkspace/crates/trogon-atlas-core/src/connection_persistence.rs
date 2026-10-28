@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 
-use trogon_atlas_proto::Entity;
+use prost::Message;
+use trogon_atlas_proto::{entity, Entity};
 
 use crate::{
     connections::{
@@ -12,6 +13,19 @@ use crate::{
     },
     data_product, decision_document, specification, stamp_system,
 };
+
+fn checked_prepared_owner(entity: Entity) -> Result<Entity, ConnectionError> {
+    if matches!(
+        entity.kind,
+        Some(entity::Kind::Document(_) | entity::Kind::Decision(_))
+    ) && entity.encoded_len() > decision_document::MAX_ENCODED_BYTES
+    {
+        return Err(ConnectionError::Catalog(
+            "catalog entity byte limit exceeded".into(),
+        ));
+    }
+    Ok(entity)
+}
 
 /// Prepare an untrusted write against the value guarded by the store's CAS.
 pub fn prepare_entity(
@@ -24,7 +38,7 @@ pub fn prepare_entity(
             || specification::equivalent_manifest(previous, proposed)?
             || data_product::equivalent_manifest(previous, proposed)?
         {
-            return Ok(previous.clone());
+            return checked_prepared_owner(previous.clone());
         }
     }
     decision_document::prepare_values(previous, &mut prepared, false)?;
@@ -42,7 +56,7 @@ pub fn prepare_entity(
             assign_connection_ids(&mut prepared)?;
         }
     }
-    Ok(stamp_system(previous, &prepared))
+    checked_prepared_owner(stamp_system(previous, &prepared))
 }
 
 /// Land a trusted branch value after checking its baseline concurrency guard.
@@ -83,7 +97,7 @@ pub fn prepare_landing(
             prepared.system = Some(system.clone());
         }
     }
-    Ok(prepared)
+    checked_prepared_owner(prepared)
 }
 
 /// Resolve an explicit branch choice without reviving occurrences removed since its base.
