@@ -110,7 +110,7 @@ function Amendments({ entity, branch, incoming }: { entity: Entity; branch?: str
 function Authored({ entity }: { entity: Entity }) {
   const retained = record(entity.raw.retained);
   const rawContent = entity.raw.retainedContent;
-  const rawFilename = record(entity.raw.filename).value;
+  const rawFilename = entity.raw.filename;
   const link = record(entity.raw.link).value;
   // Derived from the current owner and declaration, so nothing survives an incarnation or content change.
   const content = useMemo(() => projectRetainedContent(rawContent, rawFilename), [rawContent, rawFilename]);

@@ -92,14 +92,15 @@ export function projectRetainedContent(
       text = undefined;
     }
   const filenameDeclared = rawFilename !== undefined && rawFilename !== null;
-  const valid = validLogicalFilename(rawFilename);
+  const filename = record(rawFilename).value;
+  const valid = validLogicalFilename(filename);
   return {
     ok: true,
     mediaType,
     digest,
     bytes,
     text,
-    downloadName: valid ? rawFilename : FALLBACK_DOWNLOAD_NAME,
+    downloadName: valid ? filename : FALLBACK_DOWNLOAD_NAME,
     filenameRejected: filenameDeclared && !valid,
   };
 }
