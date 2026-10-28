@@ -76,6 +76,12 @@ fn unit_fields(
     {
         return Err(SourceError::UnsupportedUnit);
     }
+    if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Document"
+        && crate::document_catalog_context::dynamic_has_native_extensions(value)
+            .map_err(|_| SourceError::NativeValue)?
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     if matches!(
         descriptor.full_name(),
         "trogonatlas.eventmodel.v1alpha1.Component"

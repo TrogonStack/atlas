@@ -733,7 +733,19 @@ impl EventModelServiceImpl {
             .map_err(|_| Status::invalid_argument("invalid Document selection"))?;
         self.require_visible(vis, &exact(&reference)?.1.namespace)
             .await?;
+        let role_filter = req.related_content_role.map(|role| {
+            pb::RelatedContentRole::try_from(role)
+                .map_err(|_| Status::invalid_argument("invalid related content role filter"))
+        });
+        let role_filter = match role_filter {
+            Some(Ok(value)) => Some(value),
+            Some(Err(error)) => return Err(error),
+            None => None,
+        };
+        let page_size = super::clamp_page_size(req.page_size, 100, 500);
         let mut query = self.catalog_query(branch, vis, true).await?;
+        let scope = query.scope()?;
+        let start = decode_catalog_page_token(&req.page_token, &scope, role_filter)?;
         let state = self.catalog_document_state(&mut query, &selection).await?;
         let mut declarations = Vec::new();
         for row in query.rows.clone() {
@@ -744,14 +756,24 @@ impl EventModelServiceImpl {
                             continue;
                         }
                         query.budget.output()?;
-                        declarations.push(pb::CatalogDeclaration {
-                            owner: Some(checked(&row)?),
-                            field: format!("documents[{index}].document"),
-                            state: state as i32,
-                            declaration: Some(pb::catalog_declaration::Declaration::Supporting(
-                                supporting.clone(),
-                            )),
-                        });
+                        let field = format!("documents[{index}].document");
+                        declarations.push((
+                            catalog_declaration_sort_key(
+                                &row,
+                                &field,
+                                supporting.connection_id.as_ref(),
+                            )?,
+                            pb::CatalogDeclaration {
+                                owner: Some(checked(&row)?),
+                                field,
+                                state: state as i32,
+                                declaration: Some(
+                                    pb::catalog_declaration::Declaration::Supporting(
+                                        supporting.clone(),
+                                    ),
+                                ),
+                            },
+                        ));
                     }
                 }
                 Some(pb::entity::Kind::Document(value)) => {
@@ -760,24 +782,154 @@ impl EventModelServiceImpl {
                             continue;
                         }
                         query.budget.output()?;
-                        declarations.push(pb::CatalogDeclaration {
-                            owner: Some(checked(&row)?),
-                            field: format!("navigation[{index}].document"),
-                            state: state as i32,
-                            declaration: Some(pb::catalog_declaration::Declaration::Navigation(
-                                navigation.clone(),
-                            )),
-                        });
+                        let field = format!("navigation[{index}].document");
+                        declarations.push((
+                            catalog_declaration_sort_key(
+                                &row,
+                                &field,
+                                navigation.connection_id.as_ref(),
+                            )?,
+                            pb::CatalogDeclaration {
+                                owner: Some(checked(&row)?),
+                                field,
+                                state: state as i32,
+                                declaration: Some(
+                                    pb::catalog_declaration::Declaration::Navigation(
+                                        navigation.clone(),
+                                    ),
+                                ),
+                            },
+                        ));
+                    }
+                    for (index, related) in value.related_content.iter().enumerate() {
+                        if related.document.as_ref() != Some(&selection) {
+                            continue;
+                        }
+                        let role = pb::RelatedContentRole::try_from(related.role)
+                            .map_err(|_| Status::internal("invalid stored related content role"))?;
+                        if role_filter.is_some_and(|filter| filter != role) {
+                            continue;
+                        }
+                        query.budget.output()?;
+                        let field = format!("related_content[{index}].document");
+                        declarations.push((
+                            catalog_declaration_sort_key(
+                                &row,
+                                &field,
+                                related.connection_id.as_ref(),
+                            )?,
+                            pb::CatalogDeclaration {
+                                owner: Some(checked(&row)?),
+                                field,
+                                state: state as i32,
+                                declaration: Some(
+                                    pb::catalog_declaration::Declaration::RelatedContent(
+                                        related.clone(),
+                                    ),
+                                ),
+                            },
+                        ));
                     }
                 }
                 _ => {}
             }
         }
+        declarations.sort_by(|left, right| left.0.cmp(&right.0));
+        let total = declarations.len();
+        let page: Vec<_> = declarations
+            .into_iter()
+            .skip(start)
+            .take(page_size)
+            .map(|(_, declaration)| declaration)
+            .collect();
+        let next = start + page.len();
+        let next_page_token = if next < total {
+            encode_catalog_page_token(&scope, role_filter, next)?
+        } else {
+            String::new()
+        };
         Ok(pb::ListIncomingDocumentDeclarationsResponse {
-            declarations,
-            scope: Some(query.scope()?),
+            declarations: page,
+            scope: Some(scope),
             incomplete: false,
             failures: Vec::new(),
+            next_page_token,
         })
     }
+}
+
+fn catalog_declaration_sort_key(
+    row: &StoredEntity,
+    field: &str,
+    connection_id: Option<&pb::ConnectionId>,
+) -> Result<String, Status> {
+    let owner = crate::conv::entity_to_ref(&row.entity)?;
+    let id = owner
+        .id
+        .as_ref()
+        .ok_or_else(|| Status::internal("catalog owner missing id"))?;
+    let connection = connection_id
+        .map(|value| value.value.as_str())
+        .unwrap_or_default();
+    Ok(format!(
+        "{kind:02}:{ns}/{slug}@{version}:{connection}:{field}",
+        kind = owner.kind,
+        ns = id.namespace,
+        slug = id.slug,
+        version = id.version,
+        connection = connection,
+        field = field,
+    ))
+}
+
+fn encode_catalog_page_token(
+    scope: &pb::CatalogCheckedScope,
+    role: Option<pb::RelatedContentRole>,
+    index: usize,
+) -> Result<String, Status> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let payload = serde_json::json!({
+        "revision": scope.revision,
+        "role": role.map(|value| value as i32),
+        "index": index,
+    });
+    Ok(URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&payload)
+            .map_err(|_| Status::internal("cannot encode catalog page token"))?,
+    ))
+}
+
+fn decode_catalog_page_token(
+    token: &str,
+    scope: &pb::CatalogCheckedScope,
+    role: Option<pb::RelatedContentRole>,
+) -> Result<usize, Status> {
+    if token.is_empty() {
+        return Ok(0);
+    }
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let bytes = URL_SAFE_NO_PAD
+        .decode(token)
+        .map_err(|_| Status::invalid_argument("invalid page token"))?;
+    let payload: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|_| Status::invalid_argument("invalid page token"))?;
+    let revision = payload
+        .get("revision")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| Status::invalid_argument("stale page token"))?;
+    if revision != scope.revision {
+        return Err(Status::invalid_argument("stale page token"));
+    }
+    let token_role = payload.get("role").and_then(|value| value.as_i64());
+    let expected = role.map(|value| i64::from(value as i32));
+    if token_role != expected {
+        return Err(Status::invalid_argument("page token filter mismatch"));
+    }
+    usize::try_from(
+        payload
+            .get("index")
+            .and_then(|value| value.as_u64())
+            .ok_or_else(|| Status::invalid_argument("invalid page token"))?,
+    )
+    .map_err(|_| Status::invalid_argument("invalid page token"))
 }

@@ -42,6 +42,7 @@ message CatalogDeclaration {
     trogonatlas.eventmodel.v1alpha1.RelatedDecision related = 6;
     trogonatlas.eventmodel.v1alpha1.SupportingDocument supporting = 7;
     trogonatlas.eventmodel.v1alpha1.DocumentNavigation navigation = 8;
+    trogonatlas.eventmodel.v1alpha1.RelatedContent related_content = 9;
   }
 }
 message ListSubjectDecisionsRequest {
@@ -102,10 +103,14 @@ message ListIncomingDecisionDeclarationsResponse {
 }
 message ListIncomingDocumentDeclarationsRequest {
   trogonatlas.eventmodel.v1alpha1.DocumentSelection document = 1;
+  optional trogonatlas.eventmodel.v1alpha1.RelatedContentRole related_content_role = 2;
+  int32 page_size = 3;
+  string page_token = 4;
 }
 message ListIncomingDocumentDeclarationsResponse {
   repeated CatalogDeclaration declarations = 1;
   CatalogCheckedScope scope = 2;
   bool incomplete = 3;
   repeated CatalogQueryFailure failures = 4;
+  string next_page_token = 5;
 }

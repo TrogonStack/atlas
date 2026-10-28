@@ -408,6 +408,7 @@ async fn decisions_and_documents_preserve_connected_subjects_and_byte_pins() {
             .list_incoming_document_declarations(Request::new(
                 pb::ListIncomingDocumentDeclarationsRequest {
                     document: Some(selection.clone()),
+                    ..Default::default()
                 },
             ))
             .await

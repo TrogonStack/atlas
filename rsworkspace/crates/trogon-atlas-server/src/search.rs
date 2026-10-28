@@ -638,6 +638,9 @@ fn body_of(entity: &pb::Entity) -> String {
             match &x.body {
                 Some(pb::document::Body::Retained(body)) => push(&mut s, &body.content),
                 Some(pb::document::Body::Link(link)) => push(&mut s, &link.value),
+                Some(pb::document::Body::RetainedContent(body)) => {
+                    push(&mut s, &String::from_utf8_lossy(&body.content))
+                }
                 None => {}
             }
             for anchor in &x.anchors {

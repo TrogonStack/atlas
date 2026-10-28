@@ -3986,6 +3986,31 @@ pub struct RetainedDocumentText {
     pub digest: ::core::option::Option<ContentDigest>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RetainedContent {
+    #[prost(message, optional, tag="1")]
+    pub media_type: ::core::option::Option<MediaType>,
+    #[prost(bytes="vec", tag="2")]
+    pub content: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag="3")]
+    pub digest: ::core::option::Option<ContentDigest>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LogicalFilename {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RelatedContent {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub document: ::core::option::Option<DocumentSelection>,
+    #[prost(enumeration="RelatedContentRole", tag="3")]
+    pub role: i32,
+    #[prost(message, optional, tag="4")]
+    pub label: ::core::option::Option<CatalogTitle>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DocumentAnchor {
     #[prost(message, optional, tag="1")]
     pub anchor_id: ::core::option::Option<LocalValueId>,
@@ -4021,7 +4046,13 @@ pub struct Document {
     pub anchors: ::prost::alloc::vec::Vec<DocumentAnchor>,
     #[prost(message, repeated, tag="10")]
     pub navigation: ::prost::alloc::vec::Vec<DocumentNavigation>,
-    #[prost(oneof="document::Body", tags="7, 8")]
+    #[prost(enumeration="DocumentPurpose", optional, tag="11")]
+    pub purpose: ::core::option::Option<i32>,
+    #[prost(message, optional, tag="12")]
+    pub filename: ::core::option::Option<LogicalFilename>,
+    #[prost(message, repeated, tag="14")]
+    pub related_content: ::prost::alloc::vec::Vec<RelatedContent>,
+    #[prost(oneof="document::Body", tags="7, 8, 13")]
     pub body: ::core::option::Option<document::Body>,
 }
 /// Nested message and enum types in `Document`.
@@ -4032,7 +4063,18 @@ pub mod document {
         Retained(super::RetainedDocumentText),
         #[prost(message, tag="8")]
         Link(super::ExternalDocumentLink),
+        #[prost(message, tag="13")]
+        RetainedContent(super::RetainedContent),
     }
+}
+/// Marks a navigation Document as a category container. At most one per
+/// Document; membership is declared only through explicit navigation edges.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DocumentCollectionAnnotation {
+    #[prost(message, optional, tag="1")]
+    pub category: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="2")]
+    pub description: ::core::option::Option<CatalogText>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -4068,6 +4110,79 @@ impl DecisionStatus {
             "DECISION_STATUS_REJECTED" => Some(Self::Rejected),
             "DECISION_STATUS_WITHDRAWN" => Some(Self::Withdrawn),
             "DECISION_STATUS_SUPERSEDED" => Some(Self::Superseded),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DocumentPurpose {
+    Unspecified = 0,
+    General = 1,
+    Example = 2,
+    Diagram = 3,
+    Attachment = 4,
+    Changelog = 5,
+}
+impl DocumentPurpose {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DOCUMENT_PURPOSE_UNSPECIFIED",
+            Self::General => "DOCUMENT_PURPOSE_GENERAL",
+            Self::Example => "DOCUMENT_PURPOSE_EXAMPLE",
+            Self::Diagram => "DOCUMENT_PURPOSE_DIAGRAM",
+            Self::Attachment => "DOCUMENT_PURPOSE_ATTACHMENT",
+            Self::Changelog => "DOCUMENT_PURPOSE_CHANGELOG",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DOCUMENT_PURPOSE_UNSPECIFIED" => Some(Self::Unspecified),
+            "DOCUMENT_PURPOSE_GENERAL" => Some(Self::General),
+            "DOCUMENT_PURPOSE_EXAMPLE" => Some(Self::Example),
+            "DOCUMENT_PURPOSE_DIAGRAM" => Some(Self::Diagram),
+            "DOCUMENT_PURPOSE_ATTACHMENT" => Some(Self::Attachment),
+            "DOCUMENT_PURPOSE_CHANGELOG" => Some(Self::Changelog),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum RelatedContentRole {
+    Unspecified = 0,
+    Example = 1,
+    Diagram = 2,
+    Attachment = 3,
+    Changelog = 4,
+}
+impl RelatedContentRole {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "RELATED_CONTENT_ROLE_UNSPECIFIED",
+            Self::Example => "RELATED_CONTENT_ROLE_EXAMPLE",
+            Self::Diagram => "RELATED_CONTENT_ROLE_DIAGRAM",
+            Self::Attachment => "RELATED_CONTENT_ROLE_ATTACHMENT",
+            Self::Changelog => "RELATED_CONTENT_ROLE_CHANGELOG",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "RELATED_CONTENT_ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+            "RELATED_CONTENT_ROLE_EXAMPLE" => Some(Self::Example),
+            "RELATED_CONTENT_ROLE_DIAGRAM" => Some(Self::Diagram),
+            "RELATED_CONTENT_ROLE_ATTACHMENT" => Some(Self::Attachment),
+            "RELATED_CONTENT_ROLE_CHANGELOG" => Some(Self::Changelog),
             _ => None,
         }
     }

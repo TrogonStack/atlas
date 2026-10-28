@@ -677,8 +677,12 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
                     ("subjects", "subjects"),
                     ("retained", "retained"),
                     ("link", "link"),
+                    ("retained_content", "retainedContent"),
                     ("anchors", "anchors"),
                     ("navigation", "navigation"),
+                    ("purpose", "purpose"),
+                    ("filename", "filename"),
+                    ("related_content", "relatedContent"),
                 ],
             );
             resource_metadata(ops, &x.metadata, &y.metadata);

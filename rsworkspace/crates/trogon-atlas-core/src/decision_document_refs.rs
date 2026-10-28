@@ -36,6 +36,11 @@ fn walk(entity: &mut Entity, visit: &mut impl FnMut(EntityKind, &mut Option<Id>,
                     document(r, &format!("navigation[{i}].document"), visit);
                 }
             }
+            for (i, r) in v.related_content.iter_mut().enumerate() {
+                if let Some(r) = &mut r.document {
+                    document(r, &format!("related_content[{i}].document"), visit);
+                }
+            }
             &mut v.subjects
         }
         _ => return,
@@ -170,6 +175,16 @@ pub(crate) fn decorate_reference(entity: &Entity, reference: &mut pb::Reference)
         Some(entity::Kind::Document(v)) => {
             for (i, declaration) in v.navigation.iter().enumerate() {
                 if field.starts_with(&format!("navigation[{i}].document.")) {
+                    reference
+                        .document_selection
+                        .clone_from(&declaration.document);
+                    reference
+                        .connection_id
+                        .clone_from(&declaration.connection_id);
+                }
+            }
+            for (i, declaration) in v.related_content.iter().enumerate() {
+                if field.starts_with(&format!("related_content[{i}].document.")) {
                     reference
                         .document_selection
                         .clone_from(&declaration.document);

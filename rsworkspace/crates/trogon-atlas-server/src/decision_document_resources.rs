@@ -24,6 +24,12 @@ pub(crate) fn documents(entity: &pb::Entity) -> Vec<&pb::DocumentSelection> {
             .navigation
             .iter()
             .filter_map(|v| v.document.as_ref())
+            .chain(
+                value
+                    .related_content
+                    .iter()
+                    .filter_map(|v| v.document.as_ref()),
+            )
             .collect(),
         _ => Vec::new(),
     }
@@ -42,7 +48,10 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
                 + usize::from(value.replaced_by.is_some())
         }
         Some(pb::entity::Kind::Document(value)) => {
-            value.subjects.len() + value.navigation.len() + value.anchors.len()
+            value.subjects.len()
+                + value.navigation.len()
+                + value.related_content.len()
+                + value.anchors.len()
         }
         _ => crate::responsibility_resources::occurrence_count(entity),
     }
@@ -184,7 +193,7 @@ fn replacement_resolves(decision: &pb::Decision, context: &ArchitectureContext<'
 
 fn has_dedicated_check(field: &str) -> bool {
     matches!(field, "replaced_by.decision" | "supersedes")
-        || ["subjects[", "documents[", "navigation["]
+        || ["subjects[", "documents[", "navigation[", "related_content["]
             .iter()
             .any(|prefix| field.starts_with(prefix))
 }
@@ -260,14 +269,42 @@ pub(crate) fn validate_in_context(
                 .map(|association| &association.document)
                 .collect(),
         ),
-        Some(pb::entity::Kind::Document(value)) => (
-            "navigation",
-            value
-                .navigation
-                .iter()
-                .map(|association| &association.document)
-                .collect(),
-        ),
+        Some(pb::entity::Kind::Document(value)) => {
+            for (index, association) in value.related_content.iter().enumerate() {
+                let Some(selection) = &association.document else {
+                    continue;
+                };
+                let role = pb::RelatedContentRole::try_from(association.role).ok();
+                let resolves = trogon_atlas_core::decision_document::document_owner(selection)
+                    .ok()
+                    .and_then(|reference| {
+                        context.find(pb::EntityKind::Document, reference.id.as_ref()?)
+                    })
+                    .is_some_and(|owner| {
+                        trogon_atlas_core::decision_document::resolve_document_selection(
+                            selection, owner,
+                        )
+                        .is_ok()
+                            && role.is_some_and(|role| {
+                                trogon_atlas_core::document_catalog_context::resolve_related_purpose_agreement(role, owner).is_ok()
+                            })
+                    });
+                if !resolves {
+                    issue(
+                        &format!("related_content[{index}].document"),
+                        "Related content selection is absent, stale, unavailable or conflicts with declared purpose",
+                    );
+                }
+            }
+            (
+                "navigation",
+                value
+                    .navigation
+                    .iter()
+                    .map(|association| &association.document)
+                    .collect(),
+            )
+        }
         _ => ("", Vec::new()),
     };
     for (index, selection) in selections.into_iter().enumerate() {
