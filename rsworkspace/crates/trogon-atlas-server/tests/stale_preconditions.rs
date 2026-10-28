@@ -128,7 +128,6 @@ async fn get_event(
     let req = pb::GetEntityRequest {
         kind: pb::EntityKind::Event as i32,
         id: Some(id(ns, slug)),
-        ..Default::default()
     };
     let resp = match branch {
         Some(name) => c.get_entity(with_branch(req, name)).await?.into_inner(),
@@ -481,7 +480,7 @@ async fn single_put_dry_run_with_a_current_etag_succeeds_without_writing() {
         .await
         .expect("current etag dry run must succeed")
         .into_inner();
-    assert!(preview.etag.is_empty(), "dry run must not mint an etag");
+    assert_eq!(preview.etag, "", "dry run must not mint an etag");
     assert!(
         preview.operation_receipt.is_none(),
         "dry run must not mint an operation receipt"
@@ -517,7 +516,7 @@ async fn single_put_dry_run_create_only_on_absent_target_succeeds_without_writin
         .await
         .expect("create_only dry run on an absent target must succeed")
         .into_inner();
-    assert!(preview.etag.is_empty());
+    assert_eq!(preview.etag, "");
     assert!(preview.operation_receipt.is_none());
 
     let err = get_event(&mut c, ns, "e", None).await.unwrap_err();
@@ -589,7 +588,7 @@ async fn single_put_dry_run_on_a_branch_refuses_stale_and_preserves_branch_state
         .await
         .expect("current branch etag dry run must succeed")
         .into_inner();
-    assert!(preview.etag.is_empty());
+    assert_eq!(preview.etag, "");
     assert!(preview.operation_receipt.is_none());
     let (etag, title) = get_event(&mut c, ns, "e", Some(branch)).await.unwrap();
     assert_eq!(etag, actual);
