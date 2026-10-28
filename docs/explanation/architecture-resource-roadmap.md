@@ -6,6 +6,11 @@ source reconciliation. The [coverage reference](../reference/architecture-resour
 links their field and connection contracts and separates implementation from
 acceptance evidence. The remaining design scope is described below.
 
+The [EventCatalog comparison](../reference/eventcatalog-coverage.md) tracks the
+pinned external resource inventory separately from Atlas-specific roadmap
+choices. It covers objects, fields and relationships; external project migration
+is outside its scope.
+
 ## Start with the behavioral model
 
 Architecture resources describe the same model's transport, persistence,
