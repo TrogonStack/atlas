@@ -32,6 +32,7 @@ fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::Out
             !architectural
                 || reference.from_field.starts_with("relationships[")
                 || reference.from_field.starts_with("communications[")
+                || reference.from_field.starts_with("storage_claims[")
         })
         .collect()
 }

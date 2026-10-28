@@ -249,6 +249,31 @@ fn address(channel: &pb::Channel, checks: &mut Checks) {
     }
 }
 
+fn link_parameters_valid(values: &HashMap<String, String>, target: &pb::Channel) -> bool {
+    let Some(address) = target.address.as_ref() else {
+        return values.is_empty();
+    };
+    let declared: HashMap<&str, &pb::AddressParameter> = address
+        .parameters
+        .iter()
+        .filter_map(|parameter| Some((parameter.name.as_ref()?.value.as_str(), parameter)))
+        .collect();
+    values
+        .keys()
+        .all(|name| declared.contains_key(name.as_str()))
+        && declared.iter().all(|(name, parameter)| {
+            values
+                .get(*name)
+                .or(parameter.default.as_ref())
+                .is_some_and(|value| {
+                    parameter
+                        .allowed_values
+                        .as_ref()
+                        .is_none_or(|allowed| allowed.values.contains(value))
+                })
+        })
+}
+
 fn observation(reference: Option<&pb::ConnectionRef>, context: &ArchitectureContext<'_>) -> bool {
     let Some(reference) = reference else {
         return false;
@@ -346,6 +371,29 @@ pub(super) fn validate_in_context(
                 trogon_atlas_core::communication_intent::validate_values(entity).is_ok(),
                 "communications",
             );
+            checks.value(
+                trogon_atlas_core::storage_claims::validate_values(entity).is_ok(),
+                "storage_claims",
+            );
+            for (index, claim) in trogon_atlas_core::storage_claims::claims(entity)
+                .iter()
+                .enumerate()
+            {
+                checks.target(
+                    pb::EntityKind::DataStore,
+                    claim.store.as_ref().and_then(|store| store.id.as_ref()),
+                    context,
+                    &format!("storage_claims[{index}].store"),
+                );
+                checks.require(
+                    crate::data_product_resources::storage_claim_attachment_resolves(
+                        claim, context,
+                    ),
+                    "ARCHITECTURE_REFERENCE_UNRESOLVED",
+                    &format!("storage_claims[{index}].attachment"),
+                    "architecture resource target is absent or invalid",
+                );
+            }
             for (index, declaration) in
                 trogon_atlas_core::communication_intent::declarations(entity)
                     .iter()
@@ -434,6 +482,28 @@ pub(super) fn validate_in_context(
                 "delivery_guarantee",
             );
             address(channel, &mut checks);
+            checks.value(
+                trogon_atlas_core::channel_links::validate_values(entity).is_ok(),
+                "links",
+            );
+            for (index, link) in channel.links.iter().enumerate() {
+                let target = link.target.as_ref().and_then(|target| target.id.as_ref());
+                checks.target(
+                    pb::EntityKind::Channel,
+                    target,
+                    context,
+                    &format!("links[{index}].target"),
+                );
+                if let Some(Some(pb::entity::Kind::Channel(target))) = target
+                    .and_then(|id| context.find(pb::EntityKind::Channel, id))
+                    .map(|entity| entity.kind.as_ref())
+                {
+                    checks.value(
+                        link_parameters_valid(&link.parameter_values, target),
+                        &format!("links[{index}].parameter_values"),
+                    );
+                }
+            }
             checks.value(!channel.bindings.is_empty(), "bindings");
             let mut seen = HashSet::new();
             for binding in &channel.bindings {
