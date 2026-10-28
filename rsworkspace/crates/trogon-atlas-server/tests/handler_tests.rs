@@ -3789,6 +3789,7 @@ fn make_domain(ns: &str, slug: &str, project_ns: Option<&str>) -> pb::Entity {
                     version: 1,
                 }),
             }),
+            members: Vec::new(),
         })),
     }
 }

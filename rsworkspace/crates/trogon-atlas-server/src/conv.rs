@@ -332,6 +332,7 @@ pub fn entity_kind(entity: &pb::Entity) -> Result<pb::EntityKind, Status> {
         Some(K::Person(_)) => Ok(pb::EntityKind::Person),
         Some(K::Decision(_)) => Ok(pb::EntityKind::Decision),
         Some(K::Document(_)) => Ok(pb::EntityKind::Document),
+        Some(K::SystemGroup(_)) => Ok(pb::EntityKind::SystemGroup),
         None => Err(Status::invalid_argument("entity.kind oneof is required")),
     }
 }
@@ -376,6 +377,7 @@ pub fn entity_id(entity: &pb::Entity) -> Result<&pb::Id, Status> {
         Some(K::Person(x)) => x.id.as_ref(),
         Some(K::Decision(x)) => x.id.as_ref(),
         Some(K::Document(x)) => x.id.as_ref(),
+        Some(K::SystemGroup(x)) => x.id.as_ref(),
         None => return Err(Status::invalid_argument("entity.kind oneof is required")),
     };
     let id = id.ok_or_else(|| Status::invalid_argument("entity.id is required"))?;
@@ -410,6 +412,8 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
     trogon_atlas_core::architectural_relationships::validate_values(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
     trogon_atlas_core::communication_intent::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::system_group::validate_values(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
     let (title, doc, fields_len, metadata_len) = match entity.kind.as_ref() {
         Some(K::Event(x)) => (
@@ -500,6 +504,7 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
             0,
             x.metadata.len(),
         ),
+        Some(K::SystemGroup(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
         None => return Ok(()),
     };
 

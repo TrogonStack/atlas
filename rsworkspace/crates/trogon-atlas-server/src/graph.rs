@@ -810,6 +810,7 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
         K::Person(x) => x.supersedes.as_ref(),
         K::Decision(x) => x.supersedes.as_ref(),
         K::Document(x) => x.supersedes.as_ref(),
+        K::SystemGroup(x) => x.supersedes.as_ref(),
     }
 }
 

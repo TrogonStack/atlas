@@ -428,6 +428,7 @@ fn kind_label(entity: &pb::Entity) -> String {
         Some(K::Person(_)) => "person",
         Some(K::Decision(_)) => "decision",
         Some(K::Document(_)) => "document",
+        Some(K::SystemGroup(_)) => "system_group",
         None => "",
     }
     .to_string()
@@ -473,6 +474,7 @@ pub fn kind_label_for(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::Person => "person",
         pb::EntityKind::Decision => "decision",
         pb::EntityKind::Document => "document",
+        pb::EntityKind::SystemGroup => "system_group",
         pb::EntityKind::Unspecified => "",
     }
 }
@@ -535,6 +537,7 @@ fn title_of(entity: &pb::Entity) -> String {
             .title
             .as_ref()
             .map_or_else(String::new, |v| v.value.clone()),
+        Some(K::SystemGroup(x)) => x.title.clone(),
         None => String::new(),
     }
 }
@@ -645,6 +648,9 @@ fn body_of(entity: &pb::Entity) -> String {
                     push(&mut s, &label.value);
                 }
             }
+        }
+        Some(K::SystemGroup(x)) => {
+            push(&mut s, &x.doc);
         }
         Some(K::Team(x)) => {
             push(&mut s, x.doc.as_deref().unwrap_or_default());

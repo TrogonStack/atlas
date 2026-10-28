@@ -176,6 +176,8 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "A catalog choice and its rationale against exact model subjects."),
         k(pb::EntityKind::Document, "ENTITY_KIND_DOCUMENT", "document", "Document", "Documents",
           "Retained authored text or an unverified external link with exact model associations."),
+        k(pb::EntityKind::SystemGroup, "ENTITY_KIND_SYSTEM_GROUP", "systemGroup", "System Group", "System Groups",
+          "An abstract curation of exact Components, External Systems, Data Stores, Schemas, Design Graphs and other groups, with optional group relationships and human or software actors. Membership grants no ownership, deployment or runtime meaning."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -787,6 +789,7 @@ mod catalog_drift_tests {
             pb::EntityKind::Person,
             pb::EntityKind::Decision,
             pb::EntityKind::Document,
+            pb::EntityKind::SystemGroup,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -1161,6 +1164,7 @@ pub(crate) fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::Person(x)) => &x.metadata,
         Some(pb::entity::Kind::Decision(x)) => &x.metadata,
         Some(pb::entity::Kind::Document(x)) => &x.metadata,
+        Some(pb::entity::Kind::SystemGroup(x)) => &x.metadata,
         None => &[],
     }
 }

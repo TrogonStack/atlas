@@ -91,6 +91,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::Person(x) => x.supersedes.as_ref(),
         EntityOneof::Decision(x) => x.supersedes.as_ref(),
         EntityOneof::Document(x) => x.supersedes.as_ref(),
+        EntityOneof::SystemGroup(x) => x.supersedes.as_ref(),
     };
     if let Some(s) = supersedes_of {
         if let Some(self_kind) = entity_kind(entity) {
@@ -194,7 +195,9 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
                     from_field: "project".into(),
                 });
             }
+            crate::system_group::outbound_domain(&x.members, &mut out);
         }
+        EntityOneof::SystemGroup(x) => crate::system_group::outbound_group(x, &mut out),
         EntityOneof::Schema(x) => {
             for (i, f) in x.fields.iter().enumerate() {
                 collect_field_refs(f, &format!("fields[{i}]"), &mut out, 0);
@@ -1105,6 +1108,7 @@ pub fn entity_kind(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::Person(_) => EntityKind::Person,
         EntityOneof::Decision(_) => EntityKind::Decision,
         EntityOneof::Document(_) => EntityKind::Document,
+        EntityOneof::SystemGroup(_) => EntityKind::SystemGroup,
     })
 }
 
@@ -1151,6 +1155,7 @@ pub fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::Person(x) => x.id.as_ref(),
         EntityOneof::Decision(x) => x.id.as_ref(),
         EntityOneof::Document(x) => x.id.as_ref(),
+        EntityOneof::SystemGroup(x) => x.id.as_ref(),
     }
 }
 
@@ -1218,6 +1223,7 @@ pub fn retarget_refs(
             EntityOneof::Person(x) => x.supersedes.as_mut(),
             EntityOneof::Decision(x) => x.supersedes.as_mut(),
             EntityOneof::Document(x) => x.supersedes.as_mut(),
+            EntityOneof::SystemGroup(x) => x.supersedes.as_mut(),
         };
         if self_kind_matches {
             if let Some(s) = supersedes_opt {
@@ -1350,6 +1356,16 @@ pub fn retarget_refs(
                     rewritten.push("project".into());
                 }
             }
+            crate::system_group::retarget_domain(
+                &mut x.members,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+        }
+        EntityOneof::SystemGroup(x) => {
+            crate::system_group::retarget_group(x, from_kind, from_id, to_id, &mut rewritten);
         }
         EntityOneof::Schema(x) => {
             for (i, f) in x.fields.iter_mut().enumerate() {
@@ -2232,6 +2248,7 @@ fn matches_kind(kind: &EntityOneof, ek: EntityKind) -> bool {
             | (EntityOneof::Person(_), EntityKind::Person)
             | (EntityOneof::Decision(_), EntityKind::Decision)
             | (EntityOneof::Document(_), EntityKind::Document)
+            | (EntityOneof::SystemGroup(_), EntityKind::SystemGroup)
     )
 }
 

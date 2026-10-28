@@ -36,6 +36,7 @@ pub mod source_bundle;
 pub mod source_integration;
 pub mod specification;
 mod specification_refs;
+pub mod system_group;
 pub mod system_meta;
 pub mod transcode;
 pub mod writer_lease;
