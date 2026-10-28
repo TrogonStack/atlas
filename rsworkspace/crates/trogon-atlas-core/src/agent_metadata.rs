@@ -130,11 +130,17 @@ fn url(value: &str) -> Result<(), MetadataError> {
     Ok(())
 }
 pub(crate) fn reject_unknown(message: &DynamicMessage) -> Result<(), MetadataError> {
-    if message.unknown_fields().next().is_some() { return Err(MetadataError("unknown wire field".into())); }
+    if message.unknown_fields().next().is_some() {
+        return Err(MetadataError("unknown wire field".into()));
+    }
     for field in message.descriptor().fields() {
         match message.get_field(&field).as_ref() {
             Value::Message(child) => reject_unknown(child)?,
-            Value::List(values) => for child in values.iter().filter_map(Value::as_message) { reject_unknown(child)?; },
+            Value::List(values) => {
+                for child in values.iter().filter_map(Value::as_message) {
+                    reject_unknown(child)?;
+                }
+            }
             _ => {}
         }
     }
@@ -378,4 +384,50 @@ pub(crate) fn retarget_groups(
         }
     })?;
     Ok(paths)
+}
+
+pub fn is_native_addition(any: &prost_types::Any) -> Result<bool, MetadataError> {
+    match known_type(&any.type_url) {
+        Some(LIFECYCLE) => {
+            let value = trogon_atlas_proto::LifecycleAnnotation::decode(any.value.as_slice())
+                .map_err(|_| MetadataError("lifecycle".into()))?;
+            Ok(value.draft.is_some() || value.deprecated_on.is_some())
+        }
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
+pub fn has_native_additions(entity: &Entity) -> Result<bool, MetadataError> {
+    let descriptor = crate::transcode::message_descriptor("trogonatlas.eventmodel.v1alpha1.Entity")
+        .map_err(|_| MetadataError("entity".into()))?;
+    let message = DynamicMessage::decode(descriptor, entity.encode_to_vec().as_slice())
+        .map_err(|_| MetadataError("entity".into()))?;
+    for field in message
+        .descriptor()
+        .fields()
+        .filter(|f| message.has_field(f))
+    {
+        if let Some(owner) = message.get_field(&field).as_message() {
+            if metadata_has_additions(owner)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+pub(crate) fn metadata_has_additions(owner: &DynamicMessage) -> Result<bool, MetadataError> {
+    if let Some(value) = owner.get_field_by_name("metadata") {
+        if let Some(values) = value.as_list() {
+            for message in values.iter().filter_map(Value::as_message) {
+                let any = prost_types::Any::decode(message.encode_to_vec().as_slice())
+                    .map_err(|_| MetadataError("metadata".into()))?;
+                if is_native_addition(&any)? {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }

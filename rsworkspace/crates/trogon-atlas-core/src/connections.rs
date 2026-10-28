@@ -226,7 +226,8 @@ fn visit(
                 .ok_or_else(|| ConnectionError::Encoding("annotation descriptor missing".into()))?;
             let mut payload = DynamicMessage::decode(descriptor, any.value.as_slice())
                 .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
-            crate::agent_metadata::reject_unknown(&payload).map_err(|e| ConnectionError::Encoding(e.to_string()))?;
+            crate::agent_metadata::reject_unknown(&payload)
+                .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
             if name == crate::agent_metadata::GROUPS {
                 visit(&mut payload, path, role, predecessor, callback)?;
                 any.value = payload.encode_to_vec();
@@ -502,28 +503,62 @@ pub fn equivalent_with_unassigned_ids(
 
 pub fn validate_connection_ids(entity: &Entity) -> Result<(), ConnectionError> {
     let mut ids = HashMap::new();
-    fn local_ids(message: &DynamicMessage, path: &str, ids: &mut HashMap<ConnectionId,String>) -> Result<(),ConnectionError> {
-        for field in message.descriptor().fields().filter(|f|message.has_field(f)) {
-            let value=message.get_field(&field);
-            let path=format!("{path}.{}",field.name());
-            if matches!(message.descriptor().name(), "ContractArtifact" | "ContractSchema" | "ContractMessage" | "ContractOperation" | "DataInputPort" | "DataOutputPort" | "DecisionOption" | "DocumentAnchor") && matches!(field.name(),"member_id"|"port_id"|"option_id"|"anchor_id") {
-                if let Some(id)=value.as_message().and_then(|m|m.get_field_by_name("value")) {
-                    if let Some(id)=id.as_str().filter(|s|!s.is_empty()) {
-                        let id=id.parse()?;
-                        if let Some(first)=ids.insert(id,path.clone()) { return Err(ConnectionError::DuplicateId{id,first,second:path}); }
+    fn local_ids(
+        message: &DynamicMessage,
+        path: &str,
+        ids: &mut HashMap<ConnectionId, String>,
+    ) -> Result<(), ConnectionError> {
+        for field in message
+            .descriptor()
+            .fields()
+            .filter(|f| message.has_field(f))
+        {
+            let value = message.get_field(&field);
+            let path = format!("{path}.{}", field.name());
+            if matches!(
+                message.descriptor().name(),
+                "ContractArtifact"
+                    | "ContractSchema"
+                    | "ContractMessage"
+                    | "ContractOperation"
+                    | "DataInputPort"
+                    | "DataOutputPort"
+                    | "DecisionOption"
+                    | "DocumentAnchor"
+            ) && matches!(
+                field.name(),
+                "member_id" | "port_id" | "option_id" | "anchor_id"
+            ) {
+                if let Some(id) = value
+                    .as_message()
+                    .and_then(|m| m.get_field_by_name("value"))
+                {
+                    if let Some(id) = id.as_str().filter(|s| !s.is_empty()) {
+                        let id = id.parse()?;
+                        if let Some(first) = ids.insert(id, path.clone()) {
+                            return Err(ConnectionError::DuplicateId {
+                                id,
+                                first,
+                                second: path,
+                            });
+                        }
                     }
                 }
             } else {
                 match value.as_ref() {
-                    Value::Message(child)=>local_ids(child,&path,ids)?,
-                    Value::List(values)=>for (i,child) in values.iter().filter_map(Value::as_message).enumerate(){local_ids(child,&format!("{path}[{i}]"),ids)?;},
-                    _=>{}
+                    Value::Message(child) => local_ids(child, &path, ids)?,
+                    Value::List(values) => {
+                        for (i, child) in values.iter().filter_map(Value::as_message).enumerate() {
+                            local_ids(child, &format!("{path}[{i}]"), ids)?;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
         Ok(())
     }
-    local_ids(&dynamic(entity)?,"",&mut ids)?;
+    local_ids(&dynamic(entity)?, "", &mut ids)?;
     for occurrence in connection_occurrences(entity)? {
         if let Some(id) = occurrence.id {
             if let Some(first) = ids.insert(id, occurrence.path.clone()) {

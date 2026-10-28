@@ -144,24 +144,68 @@ fn group_refs_retarget_and_malformed_payloads_are_accounted_for() {
 
 #[test]
 fn known_annotations_cannot_hide_behind_unknown_wire_fields() {
-    let owner = Entity { kind: Some(entity::Kind::Component(Component { metadata: vec![annotation("trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",vec![0xA0,0x06,0x01])], ..Default::default() })), ..Default::default() };
+    let owner = Entity {
+        kind: Some(entity::Kind::Component(Component {
+            metadata: vec![annotation(
+                "trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",
+                vec![0xA0, 0x06, 0x01],
+            )],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
     assert!(validate(&owner).is_err());
     assert!(trogon_atlas_core::refs::try_outbound_refs(&owner).is_err());
 }
 
 #[test]
 fn groups_share_identity_domain_with_native_members() {
-    use trogon_atlas_proto::{Specification, ContractArtifact, ContractMemberId, ResourceGroup, ResourceGroupsAnnotation};
-    let id=trogon_atlas_core::connections::ConnectionId::new().to_string();
-    let groups=ResourceGroupsAnnotation { groups: vec![ResourceGroup { group_id: Some(trogon_atlas_proto::ConnectionId {value:id.clone()}), ..Default::default() }] };
-    let owner=Entity { kind:Some(entity::Kind::Specification(Specification { artifacts:vec![ContractArtifact {member_id:Some(ContractMemberId{value:id}),..Default::default()}],metadata:vec![annotation("trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",groups.encode_to_vec())],..Default::default()})),..Default::default()};
+    use trogon_atlas_proto::{
+        ContractArtifact, ContractMemberId, ResourceGroup, ResourceGroupsAnnotation, Specification,
+    };
+    let id = trogon_atlas_core::connections::ConnectionId::new().to_string();
+    let groups = ResourceGroupsAnnotation {
+        groups: vec![ResourceGroup {
+            group_id: Some(trogon_atlas_proto::ConnectionId { value: id.clone() }),
+            ..Default::default()
+        }],
+    };
+    let owner = Entity {
+        kind: Some(entity::Kind::Specification(Specification {
+            artifacts: vec![ContractArtifact {
+                member_id: Some(ContractMemberId { value: id }),
+                ..Default::default()
+            }],
+            metadata: vec![annotation(
+                "trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",
+                groups.encode_to_vec(),
+            )],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
     assert!(validate(&owner).is_err());
 }
 
 #[test]
 fn source_metadata_ownership_cannot_claim_native_additions() {
-    use trogon_atlas_proto::{SourceFieldOwnership,SourceOwnedFields,SourceOwnedField,source_field_ownership::Policy};
-    let owner=Entity {kind:Some(entity::Kind::Component(Component{metadata:vec![annotation("trogonatlas.eventmodel.v1alpha1.AgentAnnotation",vec![])],..Default::default()})),..Default::default()};
-    let policy=SourceFieldOwnership{policy:Some(Policy::Fields(SourceOwnedFields{fields:vec![SourceOwnedField::Metadata as i32]}))};
-    assert!(trogon_atlas_core::source_integration::validate_ownership(&owner,&policy).is_err());
+    use trogon_atlas_proto::{
+        source_field_ownership::Policy, SourceFieldOwnership, SourceOwnedField, SourceOwnedFields,
+    };
+    let owner = Entity {
+        kind: Some(entity::Kind::Component(Component {
+            metadata: vec![annotation(
+                "trogonatlas.eventmodel.v1alpha1.AgentAnnotation",
+                vec![],
+            )],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let policy = SourceFieldOwnership {
+        policy: Some(Policy::Fields(SourceOwnedFields {
+            fields: vec![SourceOwnedField::Metadata as i32],
+        })),
+    };
+    assert!(trogon_atlas_core::source_integration::validate_ownership(&owner, &policy).is_err());
 }

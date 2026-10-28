@@ -70,6 +70,12 @@ fn unit_fields(
     unit: OwnershipUnit,
 ) -> Result<Vec<FieldDescriptor>, SourceError> {
     let descriptor = value.descriptor();
+    if unit == OwnershipUnit::Field(SourceOwnedField::Metadata)
+        && crate::agent_metadata::metadata_has_additions(value)
+            .map_err(|_| SourceError::NativeValue)?
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     if matches!(
         descriptor.full_name(),
         "trogonatlas.eventmodel.v1alpha1.Component"
