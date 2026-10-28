@@ -329,5 +329,20 @@ pub(crate) fn rewrite_local_selections(previous: &Entity, proposed: &mut Entity)
     }
 }
 
-pub fn validate_route_target(_route: &pb::ClaimRoute, _channel: &pb::Channel) -> Result<()> { Ok(()) }
-pub fn validate_source_write(_previous: Option<&Entity>, _proposed: &Entity, _unit: crate::source_integration::OwnershipUnit) -> Result<()> { Ok(()) }
+pub fn validate_route_target(route: &pb::ClaimRoute, channel: &pb::Channel) -> Result<()> {
+ exact(channel.id.as_ref())?;
+ check(route.channel.as_ref().and_then(|c|c.id.as_ref())==channel.id.as_ref(),"channel unavailable")?;
+ let Some(address)=&channel.address else {return check(route.parameter_values.is_empty(),"channel has no address parameters")};
+ for (name,value) in &route.parameter_values {
+  let parameter=address.parameters.iter().find(|p|p.name.as_ref().is_some_and(|n|n.value==*name)).ok_or_else(||ClaimError("unknown channel parameter".into()))?;
+  check(parameter.allowed_values.as_ref().is_none_or(|v|v.values.contains(value)),"disallowed channel parameter value")?;
+ }
+ for parameter in &address.parameters {
+  let name=parameter.name.as_ref().ok_or_else(||ClaimError("channel parameter name required".into()))?;
+  check(parameter.default.is_some() || route.parameter_values.contains_key(&name.value),"required channel parameter missing")?;
+ }
+ Ok(())
+}
+pub fn validate_source_write(previous: Option<&Entity>, proposed: &Entity, unit: crate::source_integration::OwnershipUnit) -> Result<()> {
+ check(!((previous.is_none() || unit==crate::source_integration::OwnershipUnit::WholeOwner) && has_content(proposed)) && !(unit==crate::source_integration::OwnershipUnit::WholeOwner && previous.is_some_and(has_content)),"message claims are native-only")
+}
