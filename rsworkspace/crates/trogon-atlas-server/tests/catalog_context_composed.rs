@@ -413,6 +413,99 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
             assert!(occurrence_ids.insert(returned));
         }
     }
+    let binary = graph
+        .iter()
+        .find_map(|entity| match &entity.kind {
+            Some(pb::entity::Kind::Document(document))
+                if document.id.as_ref().unwrap().slug == "binary" =>
+            {
+                Some(document)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(binary.purpose, None);
+    let Some(pb::document::Body::RetainedContent(content)) = &binary.body else {
+        panic!("binary body required")
+    };
+    assert_eq!(content.content, vec![0, 255, 128, 13, 10]);
+    assert_eq!(content.digest, Some(bytes_content_digest(&content.content)));
+    let hub = graph
+        .iter()
+        .find_map(|entity| match &entity.kind {
+            Some(pb::entity::Kind::Document(document))
+                if document.id.as_ref().unwrap().slug == "hub" =>
+            {
+                Some(document)
+            }
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(hub.purpose, Some(pb::DocumentPurpose::General as i32));
+    let component = graph
+        .iter()
+        .find_map(|entity| match &entity.kind {
+            Some(pb::entity::Kind::Component(component)) => Some(component),
+            _ => None,
+        })
+        .unwrap();
+    let lifecycle =
+        pb::LifecycleAnnotation::decode(component.metadata[0].value.as_slice()).unwrap();
+    assert_eq!(lifecycle.deprecated_on.unwrap().value, "2024-02-29");
+    let mut guarded = graph.iter().find(|entity| matches!(&entity.kind, Some(pb::entity::Kind::Decision(value)) if value.id.as_ref().unwrap().slug == "amendment")).unwrap().clone();
+    if let Some(pb::entity::Kind::Decision(value)) = &mut guarded.kind {
+        value.title.as_mut().unwrap().value = "Guarded change".into();
+    }
+    let innocent = wrap(pb::entity::Kind::Domain(pb::Domain {
+        id: Some(id("guard-unpublished")),
+        ..Default::default()
+    }));
+    let ops = vec![
+        pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                entity: Some(innocent),
+                create_only: true,
+                ..Default::default()
+            })),
+        },
+        pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                entity: Some(guarded),
+                if_match: "stale-etag".into(),
+                ..Default::default()
+            })),
+        },
+    ];
+    match client
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops,
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+    {
+        Ok(response) => assert_eq!(
+            response.into_inner().status,
+            pb::batch_mutate_response::Status::Failed as i32
+        ),
+        Err(error) => assert_eq!(error.code(), Code::Aborted),
+    }
+    assert_eq!(
+        client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::Domain as i32,
+                    id: Some(id("guard-unpublished"))
+                },
+                None
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
     let pool = trogon_atlas_core::transcode::TranscodePool::builtin().unwrap();
     let rendered = trogon_atlas_client::export::render_board(&graph, &[], &pool).unwrap();
     let loaded =
