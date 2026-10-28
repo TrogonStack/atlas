@@ -5658,14 +5658,48 @@ async fn message_claims_source_rpc_isolation_covers_every_owner_and_supported_po
         pb::EntityKind::ExternalSystem,
         pb::EntityKind::Domain,
     ] {
-        for policy in [
-            None,
-            Some(pb::SourceOwnedField::Title),
-            Some(pb::SourceOwnedField::Doc),
-            Some(pb::SourceOwnedField::Metadata),
-            Some(pb::SourceOwnedField::Supersedes),
-            Some(pb::SourceOwnedField::Unspecified),
-        ] {
+        let bare = pb::Entity {
+            kind: Some(match kind {
+                pb::EntityKind::Component => pb::entity::Kind::Component(pb::Component::default()),
+                pb::EntityKind::ExternalSystem => {
+                    pb::entity::Kind::ExternalSystem(pb::ExternalSystem::default())
+                }
+                _ => pb::entity::Kind::Domain(pb::Domain::default()),
+            }),
+            ..Default::default()
+        };
+        let descriptors =
+            <prost_types::FileDescriptorSet as prost::Message>::decode(pb::FILE_DESCRIPTOR_SET)
+                .unwrap();
+        let values = descriptors
+            .file
+            .into_iter()
+            .flat_map(|f| f.enum_type)
+            .find(|e| e.name.as_deref() == Some("SourceOwnedField"))
+            .unwrap()
+            .value;
+        let mut policies = vec![None, Some(pb::SourceOwnedField::Unspecified)];
+        policies.extend(
+            values
+                .into_iter()
+                .filter_map(|v| pb::SourceOwnedField::try_from(v.number?).ok())
+                .filter(|v| *v != pb::SourceOwnedField::Unspecified)
+                .filter(|field| {
+                    trogon_atlas_core::source_integration::validate_ownership(
+                        &bare,
+                        &pb::SourceFieldOwnership {
+                            policy: Some(pb::source_field_ownership::Policy::Fields(
+                                pb::SourceOwnedFields {
+                                    fields: vec![*field as i32],
+                                },
+                            )),
+                        },
+                    )
+                    .is_ok()
+                })
+                .map(Some),
+        );
+        for policy in policies {
             let nats = trogon_atlas_testsupport::shared().await;
             let mut server = server(nats.store().await).await;
             let namespace =
