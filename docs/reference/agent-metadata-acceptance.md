@@ -1,6 +1,6 @@
 # Agent and shared metadata acceptance
 
-Status: partially verified requirements for the
+Status: verified automated acceptance for the
 [contract](agent-metadata-contracts.md). Implemented coverage includes
 [core metadata tests](../../rsworkspace/crates/trogon-atlas-core/tests/agent_metadata.rs),
 [backend admission and lifecycle tests](../../rsworkspace/crates/trogon-atlas-server/tests/agent_metadata_backend.rs),
@@ -12,9 +12,9 @@ Additional implemented coverage includes
 and combined manifest, CLI and MCP acceptance. The authorized lifecycle and digest
 targets pass in the combined parent checkout, including Reader refusal, hidden
 target parity, hidden-referrer deletion guards, branch identity and same-batch
-tenant descriptors. These fixtures do not establish every requirement below;
-requirement-by-requirement closure remains open. Component and codec checks are
-not deployed-browser evidence.
+tenant descriptors. Requirement-by-requirement review supports closure of the
+Agent and shared-metadata coverage items. Component and codec checks are not
+deployed-browser evidence.
 
 [Core acceptance](../../rsworkspace/crates/trogon-atlas-core/tests/agent_metadata_acceptance.rs),
 [public-stack acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/agent_metadata_acceptance_backend.rs)
@@ -108,22 +108,23 @@ Record namespace, branch, backend revision and descriptor context with results.
 | Studio | Backend response decoding and inspector projection retain model, tool order, draft notice, date, badges and all group items. Render escaped text and inert links safely. Review surface does not mutate the model to repair it. |
 | Shared JSON | Expanded `{ "@type": "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.AgentAnnotation", "model": { "provider": { "value": "example" } } }` decodes to protobuf and back without loss. Shared annotations use their annotation package names. |
 | Raw protobuf Any | Decode real packed bytes through shared descriptors, then CLI/MCP JSON and Studio decodeAnnotations. Corrupt payloads cannot be silently dropped or converted into a valid empty annotation. |
-| Nested Any | Extend the existing Studio nested-schema annotation regression: top-level annotations decode, but these proposed annotations placed on nested fields/scenarios are rejected by backend scope admission. Existing unrelated nested annotations still decode. |
+| Nested Any | Top-level annotations decode, but these native annotations placed on nested fields/scenarios are rejected by backend scope admission. Existing unrelated nested annotations still decode. |
 | Schema | manifest_schema well_known_schema currently validates discriminator only. Demonstrate schema-valid malformed AgentAnnotation still rejects at backend; if registry-aware payload schemas are added, verify they match semantic validation without claiming schema alone enforces references. |
 | Tenant context | Registered tenant Any alongside built-ins roundtrips with authorized branch type context; missing/incompatible descriptors fail explicitly, with no raw-byte or field-loss success report. |
 
-## Evidence and implementation gates
+## Evidence and maintenance gates
 
-Suggested suites: core transcode/refs/semantic equality tests; server admission,
-authorization, reverse index, deletion and branch tests; client manifest/schema
-and CLI transport integration; MCP tool transport; Studio
-`server/decode-annotations.test.mjs` and inspector projection tests. Names here
-are implementation targets, not claims that new tests exist.
+The linked core, backend, client and Studio fixtures establish the automated
+boundaries above. Additional reference, authorization and lifecycle coverage is
+maintained in `native_metadata_refs_backend.rs`,
+`native_metadata_malformed_backend.rs` and `native_metadata_authz_backend.rs`.
+CLI and MCP fixtures preserve exact selectors, ordered metadata, tenant
+descriptors and same-store reapply. Retain these gates when changing annotation
+values, nested traversal, occurrence handling or mutation revision floors.
 
-Parent must resolve the ResourceGroups-in-Any occurrence-admission objection,
-ordered semantic diff behavior, lifecycle kind coverage and proposed limits
-before schema implementation. Generate descriptors/bindings and coordinate
-mutation revision floors together. Record exact commands, failures and passing
-results before promoting status to implemented. Browser evidence, if required,
-is separate from decoder unit tests. Do not close the consolidated coverage
-items based solely on this proposal or a single accepted fixture.
+The aggregate boundary is measured after stored group IDs exist. Scope tests
+include decoded nested Schema Any and an unrelated Note control. Raw malformed
+Schema payload handling is an existing separate boundary; it is not a claim
+about malformed Agent annotation acceptance. Preview semantics remain limited
+to `validate_only` and apply-time checks. No deployed-browser proof or portable
+incarnation rebinding is claimed.

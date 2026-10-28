@@ -1,12 +1,12 @@
 # Agent and shared metadata contracts
 
-Status: partial native implementation. Annotation schema, generated bindings,
-core validation and occurrence handling exist, alongside basic mutation admission
-and lifecycle filtering. Studio inspection includes real protobuf decoding tests.
-Complete reference authorization, Source integration and connected client
-acceptance remain pending in the
-[acceptance specification](agent-metadata-acceptance.md). The consolidated
-[coverage inventory](eventcatalog-coverage.md) remains unchecked.
+Status: implemented and verified against the
+[acceptance specification](agent-metadata-acceptance.md). Native admission,
+reference authorization, occurrence lifecycle, Source isolation and connected
+clients are covered by automated acceptance. Studio evidence covers real
+protobuf decoding and component inspection. This closes the Agent and shared
+metadata items in the [coverage inventory](eventcatalog-coverage.md), without
+claiming deployed-browser verification or completion of its other workstreams.
 
 ## Existing behavior and field dispositions
 
@@ -14,12 +14,12 @@ The comparison uses EventCatalog commit
 [`2736a2272207cf1b1ee09e6a440401d2215c6380`](https://github.com/event-catalog/eventcatalog/tree/2736a2272207cf1b1ee09e6a440401d2215c6380).
 Source anchors below describe field shapes, not a migration contract.
 
-| Source anchor and field | Existing Atlas equivalent | Proposed disposition |
+| Source anchor and field | Earlier native representation | Native extension |
 | --- | --- | --- |
-| [agentModel and agentTool](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config.ts#L430): model provider/name/version, tool name/type/icon/url/description | Component `tech`, `doc` and `metadata` retain descriptive equivalents, without typed model/tool semantics. | Add Component-only AgentAnnotation. |
-| [baseSchema](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config.ts#L120): draft and deprecated | LifecycleAnnotation already retains free status and explanatory doc. | Add draft title/message and optional deprecation calendar date to that annotation; no duplicate lifecycle entity. |
-| Same baseSchema: resourceGroups | Component.members curates hosted entities; TagAnnotation groups textually. Neither represents named ordered presentation groups. | Add ResourceGroupsAnnotation with exact native entity references. |
-| [badge](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config-shared-collections.ts#L4): content, colors, icon, URL | TagAnnotation and LinkAnnotation retain labels and links, without badge styling. | Add BadgesAnnotation for inert presentation. |
+| [agentModel and agentTool](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config.ts#L430): model provider/name/version, tool name/type/icon/url/description | Component `tech`, `doc` and `metadata` retain descriptive equivalents, without typed model/tool semantics. | Component-only AgentAnnotation. |
+| [baseSchema](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config.ts#L120): draft and deprecated | LifecycleAnnotation already retains free status and explanatory doc. | LifecycleAnnotation draft title/message and optional deprecation calendar date; no duplicate lifecycle entity. |
+| Same baseSchema: resourceGroups | Component.members curates hosted entities; TagAnnotation groups textually. Neither represents named ordered presentation groups. | ResourceGroupsAnnotation with exact native entity references. |
+| [badge](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config-shared-collections.ts#L4): content, colors, icon, URL | TagAnnotation and LinkAnnotation retain labels and links, without badge styling. | BadgesAnnotation for inert presentation. |
 | NoteAnnotation.created_at and system creation/update metadata | Annotation attribution text and backend timestamps already exist. | Preserve existing semantics. No generic authored created/updated dates here; authored changelog and ADR dates belong to their owning contracts. |
 
 These are native adaptations, with stricter values than the comparison source.
@@ -86,7 +86,7 @@ not system/domain membership or hosting.
 
 ## Values and budgets
 
-All limits below are proposed backend ceilings, measured in encoded UTF-8 bytes.
+These backend ceilings use encoded UTF-8 bytes for text values.
 Nonblank values must contain a non-whitespace character; preserve accepted text
 exactly and reject control characters except newline/tab in MetadataText.
 
@@ -157,14 +157,15 @@ group/item selections remain unsupported in the closed Source inventory.
 Require current revision/incarnation, branch and authorization guards at apply,
 not merely successful preview. Final-overlay validation is atomic across batches.
 
-## Implementation dependencies and objections
+## Implementation and verification boundaries
 
-Implementation requires coordinated descriptor/binding generation and advertised
-mutation contract revision updates; no wire numbers are reserved here. Parent
-owns generation and compilation scheduling. Add shared value validators and
-singleton/scope admission to every create/update/batch/land/restore path. Align
-lifecycle extraction across entity kinds before promising Component lifecycle
-filtering: `service.rs` currently uses a narrower explicit kind match.
+The [core implementation](../../rsworkspace/crates/trogon-atlas-core/src/agent_metadata.rs)
+validates values and annotation scope, including fields inside decoded Schema
+Any payloads. Generic occurrence persistence applies retirement and renewal
+rules to identified group items. Shared metadata extraction supplies lifecycle
+filtering across native kinds. Use the
+[advertised protocol revisions](../../rsworkspace/crates/trogon-atlas-proto/src/lib.rs)
+for writer admission and coordinate descriptor generation with schema changes.
 
 Trace anchors for implementation review:
 
@@ -174,15 +175,12 @@ Trace anchors for implementation review:
 - `rsworkspace/crates/trogon-atlas-server/src/validation.rs`: entity_metadata and annotation findings; diagnostics are not sufficient mutation admission.
 - `rsworkspace/crates/trogon-atlas-core/src/transcode.rs`: shared built-in and tenant descriptor JSON Any handling.
 - `rsworkspace/crates/trogon-atlas-client/src/manifest_schema.rs`: well_known_schema currently requires @type but leaves Any payload permissive; schema success is not semantic validity.
-- `tsworkspace/webapps/studio/server/index.mjs`: decodeAnnotations; its nested Any test is an existing baseline, not acceptance of this proposal.
+- `tsworkspace/webapps/studio/server/index.mjs`: decodeAnnotations; real-codec and Inspector fixtures verify retained annotation content.
 - `proto/trogonatlas/eventmodel/v1alpha1/responsibility.proto` and `rsworkspace/crates/trogon-atlas-core/src/responsibility_refs.rs`: existing closed typed subject inventory.
 
-Open objections: confirm occurrence-ID admission can cover IDs nested in Any
-without weakening existing retirement checks; otherwise put ResourceGroups in
-an explicit native owner field before shipping. Confirm semantic equality and
-diff retain ordered occurrences inside Any. Confirm shared annotations on all
-native kinds fit lifecycle filtering and reference indexing. The bounds and
-restricted badge/icon/date vocabulary are proposed product choices requiring
-parent review, not source parity. A typed registry-aware JSON schema improves
-client validation but backend semantic validation remains mandatory. No broad
-historical metadata rewrite or source date coercion is authorized.
+Acceptance verifies occurrence admission inside Any, ordered semantic equality
+and diff, lifecycle extraction, reference indexing and the stated bounds.
+These remain native product choices rather than identical source semantics.
+JSON schema accepts some semantically invalid annotations; backend validation
+rejects them without publication. Registry-aware payload schemas are optional.
+No historical metadata rewrite or source date coercion is implied.
