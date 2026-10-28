@@ -185,6 +185,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::ExternalSystem(x) => {
             crate::architectural_relationships::outbound(&x.relationships, &mut out);
             crate::communication_intent::outbound(&x.communications, &mut out);
+            crate::storage_claims::outbound(&x.storage_claims, &mut out);
         }
         EntityOneof::Domain(x) => {
             if let Some(id) = x.project.as_ref().and_then(|p| p.id.as_ref()) {
@@ -573,6 +574,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::Component(x) => {
             crate::architectural_relationships::outbound(&x.relationships, &mut out);
             crate::communication_intent::outbound(&x.communications, &mut out);
+            crate::storage_claims::outbound(&x.storage_claims, &mut out);
             for (i, m) in x.members.iter().enumerate() {
                 if let Some(id) = &m.id {
                     match EntityKind::try_from(m.kind) {
@@ -1341,6 +1343,13 @@ pub fn retarget_refs(
                 to_id,
                 &mut rewritten,
             );
+            crate::storage_claims::retarget(
+                &mut x.storage_claims,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
         }
         EntityOneof::Domain(x) => {
             if from_kind == EntityKind::Project
@@ -1807,6 +1816,13 @@ pub fn retarget_refs(
         EntityOneof::Component(x) => {
             crate::communication_intent::retarget(
                 &mut x.communications,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+            crate::storage_claims::retarget(
+                &mut x.storage_claims,
                 from_kind,
                 from_id,
                 to_id,
