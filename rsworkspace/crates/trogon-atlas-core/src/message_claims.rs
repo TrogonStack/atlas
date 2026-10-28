@@ -349,4 +349,59 @@ pub fn validate_source_write(previous: Option<&Entity>, proposed: &Entity, unit:
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldSelectorVerification { NativePath, OpaqueUnverified }
-pub fn validate_field_selection(_owner:&Entity,_selection:&pb::ClaimFieldSelection,_specification:&Entity,_schema:Option<&Entity>) -> Result<Vec<FieldSelectorVerification>> { Ok(Vec::new()) }
+fn selected_binding<'a>(owner: &Entity, selection: &pb::ClaimFieldSelection, specification: &'a Entity) -> Result<&'a pb::SchemaBinding> {
+ validate_values(owner)?;
+ let mut checked=owner.clone();
+ declarations_mut(&mut checked).ok_or_else(||ClaimError("claim owner required".into()))?.field_selections=vec![selection.clone()];
+ validate_values(&checked)?;
+ let claim=declarations(owner).into_iter().flat_map(|v|&v.claims).find(|c|c.connection_id==selection.claim_id).ok_or_else(||ClaimError("local claim unavailable".into()))?;
+ let reference=message(claim.message.as_ref())?;
+ let crate::specification::ContractMember::Message(m)=crate::specification::resolve_member(specification,reference).map_err(|e|ClaimError(e.to_string()))? else{return Err(ClaimError("MESSAGE required".into()))};
+ let binding=selection.binding.as_ref().ok_or_else(||ClaimError("binding required".into()))?;
+ connections::resolve_connection(specification,binding).map_err(|e|ClaimError(e.to_string()))?;
+ let selected=m.schemas.iter().find(|b|b.connection_id==binding.id).ok_or_else(||ClaimError("binding unavailable on selected message".into()))?;
+ check(selected.role==pb::schema_binding::Role::Payload as i32,"PAYLOAD binding required")?;
+ Ok(selected)
+}
+/// Supplies the single native Schema row needed by path validation, without expanding references.
+pub fn native_schema_target(owner: &Entity, selection: &pb::ClaimFieldSelection, specification: &Entity) -> Result<Option<pb::SchemaRef>> {
+ let b=selected_binding(owner,selection,specification)?;
+ match &b.r#type {
+  Some(pb::schema_binding::Type::Schema(r))=>{exact(r.id.as_ref())?;Ok(Some(r.clone()))},
+  Some(pb::schema_binding::Type::LocalSchema(id))=>{
+   let Some(entity::Kind::Specification(s))=&specification.kind else{return Err(ClaimError("Specification required".into()))};
+   let d=s.schemas.iter().find(|s|s.member_id.as_ref()==Some(id)).and_then(|s|s.definition.as_ref()).ok_or_else(||ClaimError("local schema unavailable".into()))?;
+   if d.selector.is_some(){return Ok(None)}
+   match &d.target {Some(pb::schema_definition::Target::Schema(r))=>{exact(r.id.as_ref())?;Ok(Some(r.clone()))},_=>Ok(None)}
+  },
+  Some(pb::schema_binding::Type::ContractType(_) | pb::schema_binding::Type::LibraryType(_))=>Ok(None),
+  None=>Err(ClaimError("binding type required".into()))
+ }
+}
+pub fn validate_field_selection(owner:&Entity,selection:&pb::ClaimFieldSelection,specification:&Entity,schema:Option<&Entity>) -> Result<Vec<FieldSelectorVerification>> {
+ let target=native_schema_target(owner,selection,specification)?;
+ let mut output=Vec::with_capacity(selection.selectors.len());
+ for selector in &selection.selectors {
+  match &selector.selector {
+   Some(pb::claim_field_selector::Selector::Opaque(_))=>output.push(FieldSelectorVerification::OpaqueUnverified),
+   Some(pb::claim_field_selector::Selector::Path(path))=>{
+    let expected=target.as_ref().ok_or_else(||ClaimError("native paths require a native Schema binding".into()))?;
+    let Some(Entity{kind:Some(entity::Kind::Schema(native)),..})=schema else{return Err(ClaimError("native schema unavailable".into()))};
+    check(native.id==expected.id,"native schema unavailable")?;
+    let mut fields=&native.fields;
+    for (index,segment) in path.segments.iter().enumerate(){
+     let mut matches=fields.iter().filter(|f|f.name==*segment);
+     let field=matches.next().ok_or_else(||ClaimError("native field path unavailable".into()))?;
+     check(matches.next().is_none(),"ambiguous native field path")?;
+     if index+1<path.segments.len(){
+      let Some(pb::field_type::Kind::Object(object))=field.r#type.as_ref().and_then(|t|t.kind.as_ref()) else{return Err(ClaimError("native path must traverse inline objects".into()))};
+      fields=&object.fields;
+     }
+    }
+    output.push(FieldSelectorVerification::NativePath);
+   },
+   None=>return Err(ClaimError("field selector required".into()))
+  }
+ }
+ Ok(output)
+}
