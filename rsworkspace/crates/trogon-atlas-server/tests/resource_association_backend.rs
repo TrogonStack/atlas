@@ -646,23 +646,37 @@ async fn storage_claims_admit_exact_stores_attachments_and_ports_for_every_owner
         .await;
     }
 
-    let saved = put(
-        &mut client,
-        owner_kind(pb::EntityKind::DataProduct, "ported", vec![]),
-    )
-    .await;
-    let pb::entity::Kind::DataProduct(ported) = saved.kind.clone().unwrap() else {
+    let mut seeded = product("ported");
+    seeded.inputs.push(pb::DataInputPort {
+        name: Some(pb::PortName {
+            value: "Fact".into(),
+        }),
+        data: Some(pb::InputDataSelection {
+            target: Some(pb::input_data_selection::Target::Event(pb::EventRef {
+                id: Some(id("fact")),
+            })),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let saved = put(&mut client, pb::entity::Kind::DataProduct(seeded)).await;
+    let pb::entity::Kind::DataProduct(mut ported) = saved.kind.clone().unwrap() else {
         panic!()
     };
-    let port = ported.outputs[0].port_id.clone().unwrap();
-    let mut on_port = claim(&storage, write, Some(0));
-    on_port.port_id = Some(port.clone());
-    let saved = put(
-        &mut client,
-        owner_kind(pb::EntityKind::DataProduct, "ported", vec![on_port.clone()]),
-    )
-    .await;
-    assert_eq!(claims_of(&saved)[0].port_id, Some(port));
+    let output_port = ported.outputs[0].port_id.clone().unwrap();
+    let input_port = ported.inputs[0].port_id.clone().unwrap();
+    ported.storage_claims = [(write, &output_port), (read, &input_port)]
+        .into_iter()
+        .map(|(direction, port)| {
+            let mut on_port = claim(&storage, direction, Some(0));
+            on_port.port_id = Some(port.clone());
+            on_port
+        })
+        .collect();
+    let saved = put(&mut client, pb::entity::Kind::DataProduct(ported)).await;
+    let claims = claims_of(&saved);
+    assert_eq!(claims[0].port_id, Some(output_port));
+    assert_eq!(claims[1].port_id, Some(input_port));
 }
 
 #[tokio::test(flavor = "multi_thread")]
