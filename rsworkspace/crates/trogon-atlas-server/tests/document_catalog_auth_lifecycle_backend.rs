@@ -1018,3 +1018,427 @@ async fn branch_related_content_survives_target_removal_on_branch_without_baseli
         .unwrap_err();
     assert_eq!(foreign.code(), Code::NotFound);
 }
+
+fn link_document(namespace: &str, slug: &str, visible_ns: &str, title: &str) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::Document(pb::Document {
+            id: Some(id(namespace, slug)),
+            title: Some(pb::CatalogTitle {
+                value: title.into(),
+            }),
+            subjects: vec![pb::SubjectAssociation {
+                subject: Some(subject(visible_ns)),
+                ..Default::default()
+            }],
+            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                value: format!("https://example.com/{slug}"),
+            })),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+fn related_content_entry(
+    namespace: &str,
+    slug: &str,
+    role: pb::RelatedContentRole,
+    connection_id: Option<pb::ConnectionId>,
+) -> pb::RelatedContent {
+    pb::RelatedContent {
+        role: role as i32,
+        document: Some(whole_selection(namespace, slug)),
+        connection_id,
+        ..Default::default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn incoming_document_declarations_drop_after_referrer_force_delete() {
+    let mut client = client().await;
+    let (visible_ns, _) = register_pair(&mut client).await;
+    put_receipt(&mut client, &visible_ns).await;
+    client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(link_document(
+                    &visible_ns,
+                    "referrer-target",
+                    &visible_ns,
+                    "Referrer target",
+                )),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let referrer = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some({
+                    let mut entity = link_document(
+                        &visible_ns,
+                        "referrer-owner",
+                        &visible_ns,
+                        "Referrer owner",
+                    );
+                    if let Some(pb::entity::Kind::Document(doc)) = &mut entity.kind {
+                        doc.related_content = vec![related_content_entry(
+                            &visible_ns,
+                            "referrer-target",
+                            pb::RelatedContentRole::Diagram,
+                            None,
+                        )];
+                    }
+                    entity
+                }),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let selection = whole_selection(&visible_ns, "referrer-target");
+    let incoming_before = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(selection.clone()),
+                ..Default::default()
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(incoming_before.declarations.len(), 1);
+    assert_eq!(
+        incoming_before.declarations[0].owner.as_ref().unwrap().uid,
+        referrer.system.as_ref().unwrap().uid
+    );
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id(&visible_ns, "referrer-owner")),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let incoming_after = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(selection),
+                ..Default::default()
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(incoming_after.declarations.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn branch_opposing_related_content_removal_restores_with_selective_connection_renewal(
+) {
+    let mut client = client().await;
+    let (visible_ns, _) = register_pair(&mut client).await;
+    put_receipt(&mut client, &visible_ns).await;
+    for slug in ["restore-target-a", "restore-target-b"] {
+        client
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(link_document(&visible_ns, slug, &visible_ns, slug)),
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap();
+    }
+    let stored = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some({
+                    let mut entity = link_document(
+                        &visible_ns,
+                        "restore-owner",
+                        &visible_ns,
+                        "Restore owner",
+                    );
+                    if let Some(pb::entity::Kind::Document(doc)) = &mut entity.kind {
+                        doc.related_content = vec![
+                            related_content_entry(
+                                &visible_ns,
+                                "restore-target-a",
+                                pb::RelatedContentRole::Diagram,
+                                None,
+                            ),
+                            related_content_entry(
+                                &visible_ns,
+                                "restore-target-b",
+                                pb::RelatedContentRole::Example,
+                                None,
+                            ),
+                        ];
+                    }
+                    entity
+                }),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let baseline_etag = stored.etag.clone();
+    let baseline_entity = stored.entity.clone().unwrap();
+    let Some(pb::entity::Kind::Document(baseline_doc)) = &baseline_entity.kind else {
+        panic!("document owner");
+    };
+    let conn_a = baseline_doc.related_content[0]
+        .connection_id
+        .clone()
+        .expect("connection a");
+    let conn_b = baseline_doc.related_content[1]
+        .connection_id
+        .clone()
+        .expect("connection b");
+    client
+        .create_branch(request(
+            pb::CreateBranchRequest {
+                name: "related-restore-branch".into(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let mut branch_entity = baseline_entity.clone();
+    if let Some(pb::entity::Kind::Document(doc)) = &mut branch_entity.kind {
+        doc.related_content = vec![related_content_entry(
+            &visible_ns,
+            "restore-target-a",
+            pb::RelatedContentRole::Diagram,
+            Some(conn_a.clone()),
+        )];
+    }
+    client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(branch_entity),
+                if_match: baseline_etag.clone(),
+                ..Default::default()
+            },
+            ADMIN,
+            Some("related-restore-branch"),
+        ))
+        .await
+        .unwrap();
+    let mut baseline_trimmed = baseline_entity.clone();
+    if let Some(pb::entity::Kind::Document(doc)) = &mut baseline_trimmed.kind {
+        doc.related_content = vec![related_content_entry(
+            &visible_ns,
+            "restore-target-b",
+            pb::RelatedContentRole::Example,
+            Some(conn_b.clone()),
+        )];
+    }
+    client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(baseline_trimmed),
+                if_match: baseline_etag,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let conflicts = client
+        .merge_branch(request(
+            pb::MergeBranchRequest {
+                name: "related-restore-branch".into(),
+                dry_run: true,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        conflicts.status,
+        pb::merge_branch_response::Status::Conflicts as i32
+    );
+    assert_eq!(conflicts.conflicts.len(), 1);
+    assert!(
+        conflicts.conflicts[0]
+            .conflict_field_paths
+            .iter()
+            .any(|path| path.contains("relatedContent")),
+        "{:?}",
+        conflicts.conflicts[0].conflict_field_paths
+    );
+    let branch_row = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id(&visible_ns, "restore-owner")),
+            },
+            ADMIN,
+            Some("related-restore-branch"),
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut restored = branch_row.entity.unwrap();
+    if let Some(pb::entity::Kind::Document(doc)) = &mut restored.kind {
+        doc.related_content = vec![
+            related_content_entry(
+                &visible_ns,
+                "restore-target-a",
+                pb::RelatedContentRole::Diagram,
+                Some(conn_a.clone()),
+            ),
+            related_content_entry(
+                &visible_ns,
+                "restore-target-b",
+                pb::RelatedContentRole::Example,
+                None,
+            ),
+        ];
+    }
+    client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(restored),
+                if_match: branch_row.etag,
+                ..Default::default()
+            },
+            ADMIN,
+            Some("related-restore-branch"),
+        ))
+        .await
+        .unwrap();
+    client
+        .resolve_branch_entry(request(
+            pb::ResolveBranchEntryRequest {
+                name: "related-restore-branch".into(),
+                r#ref: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Document as i32,
+                    id: Some(id(&visible_ns, "restore-owner")),
+                }),
+                resolution: pb::resolve_branch_entry_request::Resolution::KeepOurs as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let merged = client
+        .merge_branch(request(
+            pb::MergeBranchRequest {
+                name: "related-restore-branch".into(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        merged.status,
+        pb::merge_branch_response::Status::Applied as i32
+    );
+    let landed = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id(&visible_ns, "restore-owner")),
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let Some(pb::entity::Kind::Document(landed_doc)) = &landed.kind else {
+        panic!("landed document");
+    };
+    assert_eq!(landed_doc.related_content.len(), 2);
+    let by_target = landed_doc
+        .related_content
+        .iter()
+        .map(|entry| {
+            (
+                entry
+                    .document
+                    .as_ref()
+                    .and_then(|sel| sel.selection.as_ref())
+                    .map(|sel| match sel {
+                        pb::document_selection::Selection::Document(r) => {
+                            r.id.as_ref().unwrap().slug.clone()
+                        }
+                        _ => String::new(),
+                    })
+                    .unwrap_or_default(),
+                entry.connection_id.clone().expect("connection"),
+            )
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let restored_a = by_target.get("restore-target-a").expect("target a landed");
+    let restored_b = by_target.get("restore-target-b").expect("target b landed");
+    assert_ne!(
+        restored_a, &conn_a,
+        "baseline removed this edge on the opposing side, so landing must renew its connection identity"
+    );
+    assert_ne!(
+        restored_b, &conn_b,
+        "branch-side restoration must not reuse the retired baseline connection identity"
+    );
+    assert_ne!(restored_a, restored_b);
+    let detail = client
+        .get_document_detail(request(
+            pb::GetDocumentDetailRequest {
+                document: Some(whole_selection(&visible_ns, "restore-owner")),
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let related_declarations: Vec<_> = detail
+        .declarations
+        .iter()
+        .filter(|d| d.field.starts_with("related_content["))
+        .collect();
+    assert_eq!(related_declarations.len(), 2);
+    assert!(
+        related_declarations
+            .iter()
+            .all(|d| d.state == pb::CatalogResolutionState::Resolved as i32)
+    );
+}
