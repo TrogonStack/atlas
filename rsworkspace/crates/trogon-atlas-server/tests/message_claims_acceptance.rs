@@ -2069,3 +2069,210 @@ async fn opaque_selector_still_requires_its_exact_native_schema_target() {
         "selected message claim target is unavailable or invalid"
     );
 }
+
+async fn native_field_leaf(client: &mut Client, namespace: &str) -> pb::ConnectionRef {
+    use trogon_atlas_core::message_claims as claims;
+    let (spec, message, _) = targets(client, namespace).await;
+    let Some(pb::entity::Kind::Specification(definition)) = &spec.kind else {
+        panic!()
+    };
+    let first = put(
+        client,
+        owner(namespace, pb::EntityKind::Domain, message),
+        "",
+    )
+    .await
+    .unwrap();
+    let mut authored = first.entity.unwrap();
+    let declarations = claims::declarations_mut(&mut authored).unwrap();
+    declarations.field_selections.push(pb::ClaimFieldSelection {
+        claim_id: declarations.claims[0].connection_id.clone(),
+        binding: Some(pb::ConnectionRef {
+            owner: Some(reference(&spec)),
+            owner_uid: spec.system.as_ref().unwrap().uid.clone(),
+            id: definition.messages[0].schemas[0].connection_id.clone(),
+        }),
+        selectors: vec![pb::ClaimFieldSelector {
+            selector: Some(pb::claim_field_selector::Selector::Path(pb::FieldPath {
+                segments: vec!["name".into()],
+            })),
+        }],
+        ..Default::default()
+    });
+    let authored = put(client, authored, &first.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    pb::ConnectionRef {
+        owner: Some(reference(&authored)),
+        owner_uid: authored.system.as_ref().unwrap().uid.clone(),
+        id: claims::declarations(&authored).unwrap().field_selections[0]
+            .connection_id
+            .clone(),
+    }
+}
+
+fn standalone_field_association(
+    namespace: &str,
+    slug: &str,
+    kind: pb::EntityKind,
+    leaf: pb::ConnectionRef,
+) -> pb::Entity {
+    let catalog_subject = pb::CatalogSubject {
+        selection: Some(pb::catalog_subject::Selection::Connection(leaf.clone())),
+    };
+    let subjects = vec![pb::SubjectAssociation {
+        subject: Some(catalog_subject),
+        ..Default::default()
+    }];
+    let responsibilities = vec![pb::Responsibility {
+        kind: pb::ResponsibilityKind::Owner as i32,
+        subject: Some(pb::ResponsibilitySubject {
+            selection: Some(pb::responsibility_subject::Selection::Connection(leaf)),
+        }),
+        ..Default::default()
+    }];
+    match kind {
+        pb::EntityKind::Document => note(
+            namespace,
+            slug,
+            match subjects[0]
+                .subject
+                .as_ref()
+                .unwrap()
+                .selection
+                .as_ref()
+                .unwrap()
+            {
+                pb::catalog_subject::Selection::Connection(value) => value.clone(),
+                _ => unreachable!(),
+            },
+            1,
+        ),
+        pb::EntityKind::Decision => entity(pb::entity::Kind::Decision(pb::Decision {
+            id: Some(id(namespace, slug)),
+            title: Some(pb::CatalogTitle {
+                value: "Decision".into(),
+            }),
+            status: pb::DecisionStatus::Proposed as i32,
+            subjects,
+            context: Some(pb::CatalogText {
+                value: "Native field selection".into(),
+            }),
+            rationale: Some(pb::CatalogText {
+                value: "Retain exact selected context".into(),
+            }),
+            options: vec![pb::DecisionOption {
+                title: Some(pb::CatalogTitle {
+                    value: "Option".into(),
+                }),
+                description: Some(pb::CatalogText {
+                    value: "Use the selected field".into(),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })),
+        pb::EntityKind::Team => entity(pb::entity::Kind::Team(pb::Team {
+            id: Some(id(namespace, slug)),
+            title: Some(pb::DirectoryDisplayName {
+                value: "Team".into(),
+            }),
+            responsibilities,
+            ..Default::default()
+        })),
+        pb::EntityKind::Person => entity(pb::entity::Kind::Person(pb::Person {
+            id: Some(id(namespace, slug)),
+            title: Some(pb::DirectoryDisplayName {
+                value: "Person".into(),
+            }),
+            responsibilities,
+            ..Default::default()
+        })),
+        _ => unreachable!(),
+    }
+}
+
+async fn standalone_native_field_admission(kind: pb::EntityKind) {
+    let (mut client, namespace) = fixture().await;
+    let leaf = native_field_leaf(&mut client, &namespace).await;
+    let proposed = standalone_field_association(&namespace, "standalone", kind, leaf.clone());
+    let saved = put(&mut client, proposed.clone(), "")
+        .await
+        .expect("valid standalone native field association must hydrate its Schema");
+    let references = client
+        .get_outgoing_references(authed(
+            pb::GetReferencesRequest {
+                kind: kind as i32,
+                id: Some(id(&namespace, "standalone")),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(references
+        .references
+        .iter()
+        .any(|reference| reference.to == leaf.owner));
+    assert!(saved.entity.is_some());
+    let mut stale = leaf.clone();
+    stale.owner_uid = "01930000-0000-7000-8000-000000009999".into();
+    assert_eq!(
+        put(
+            &mut client,
+            standalone_field_association(&namespace, "stale", kind, stale),
+            ""
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::InvalidArgument
+    );
+    let schema = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(&namespace, "payload")),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut changed = schema.entity.unwrap();
+    if let Some(pb::entity::Kind::Schema(value)) = &mut changed.kind {
+        value.fields.clear();
+    }
+    put(&mut client, changed, &schema.etag).await.unwrap();
+    assert_eq!(
+        put(
+            &mut client,
+            standalone_field_association(&namespace, "invalid-path", kind, leaf),
+            ""
+        )
+        .await
+        .unwrap_err()
+        .code(),
+        Code::InvalidArgument
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_document_native_field_admission() {
+    standalone_native_field_admission(pb::EntityKind::Document).await;
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_decision_native_field_admission() {
+    standalone_native_field_admission(pb::EntityKind::Decision).await;
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_team_native_field_admission() {
+    standalone_native_field_admission(pb::EntityKind::Team).await;
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_person_native_field_admission() {
+    standalone_native_field_admission(pb::EntityKind::Person).await;
+}
