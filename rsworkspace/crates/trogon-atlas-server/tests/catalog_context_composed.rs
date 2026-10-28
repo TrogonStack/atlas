@@ -362,7 +362,7 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
     let groups: Vec<_> = incoming
         .references
         .iter()
-        .filter(|reference| reference.from_field.starts_with("metadata["))
+        .filter(|reference| reference.from_field.contains(".metadata["))
         .collect();
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].from.as_ref().unwrap().id, Some(id("agent")));
