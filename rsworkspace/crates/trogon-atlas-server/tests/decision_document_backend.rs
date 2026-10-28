@@ -40,6 +40,12 @@ async fn client_with_cap(cap: usize) -> Client {
     .await
 }
 async fn client_with_store(store: Arc<dyn trogon_atlas_store::Store>, cap: usize) -> Client {
+    let service = EventModelServiceImpl::try_new(store, ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(cap);
+    client_with_service(service).await
+}
+async fn client_with_service(service: EventModelServiceImpl) -> Client {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let registry = TokenRegistry::from_file_contents(
@@ -60,9 +66,6 @@ tokens = ["{LIMITED}"]
         .unwrap(),
     )
     .unwrap();
-    let service = EventModelServiceImpl::try_new(store, ServerMetrics::default())
-        .unwrap()
-        .with_snapshot_cap(cap);
     let grpc = InterceptedService::new(
         tower::ServiceBuilder::new()
             .layer(AuthzLayer)
@@ -1985,10 +1988,11 @@ async fn decision_amendments_reject_cycles_and_replacement_conflict_in_both_orde
         }
         let (first, conflicting) = if reverse { (b, a) } else { (a, b) };
         put(&mut client, first, None).await;
+        let before = stored_decision(&mut client, &conflicting, None).await;
         let error = client
             .put_entity(request(
                 pb::PutEntityRequest {
-                    entity: Some(conflicting),
+                    entity: Some(conflicting.clone()),
                     ..Default::default()
                 },
                 ADMIN,
@@ -1997,6 +2001,14 @@ async fn decision_amendments_reject_cycles_and_replacement_conflict_in_both_orde
             .await
             .unwrap_err();
         assert_eq!(error.code(), Code::InvalidArgument);
+        assert_eq!(
+            error.message(),
+            "Decision cannot amend and replace the same target"
+        );
+        assert_eq!(
+            stored_decision(&mut client, &conflicting, None).await,
+            before
+        );
     }
     let mut a = put(
         &mut client,
@@ -2027,21 +2039,21 @@ async fn decision_amendments_reject_cycles_and_replacement_conflict_in_both_orde
             ..Default::default()
         }];
     }
-    assert_eq!(
-        client
-            .put_entity(request(
-                pb::PutEntityRequest {
-                    entity: Some(b),
-                    ..Default::default()
-                },
-                ADMIN,
-                None
-            ))
-            .await
-            .unwrap_err()
-            .code(),
-        Code::InvalidArgument
-    );
+    let before = stored_decision(&mut client, &b, None).await;
+    let error = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(b.clone()),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
+    assert_eq!(error.message(), "Decision amendment cycle");
+    assert_eq!(stored_decision(&mut client, &b, None).await, before);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2206,7 +2218,7 @@ async fn decision_makers_paging_and_lifecycle_use_real_store_and_reader_authoriz
             .slug,
         "amend-owner-a"
     );
-    assert!(!first.next_page_token.is_empty());
+    assert_ne!(first.next_page_token, "");
     let mut next = query.clone();
     next.page_token = first.next_page_token.clone();
     assert_eq!(
@@ -2283,7 +2295,7 @@ async fn decision_makers_paging_and_lifecycle_use_real_store_and_reader_authoriz
         .unwrap()
         .into_inner();
     assert_eq!(third.declarations.len(), 1);
-    assert!(third.next_page_token.is_empty());
+    assert_eq!(third.next_page_token, "");
     let mut changed = owners[0].clone();
     if let Some(pb::entity::Kind::Decision(value)) = &mut changed.kind {
         value.amends[0].doc = Some(text("Revised clarification"));
@@ -2374,6 +2386,8 @@ async fn decision_amendment_final_batches_refuse_without_partial_writes() {
         .await
         .entity
         .unwrap();
+    let a_before = stored_decision(&mut client, &a, None).await;
+    let b_before = stored_decision(&mut client, &b, None).await;
     for cycle in [false, true] {
         let mut changed_a = a.clone();
         let mut changed_b = b.clone();
@@ -2426,13 +2440,18 @@ async fn decision_amendment_final_batches_refuse_without_partial_writes() {
                     None,
                 ))
                 .await;
-            match result {
-                Err(error) => assert_eq!(error.code(), Code::InvalidArgument),
-                Ok(result) => assert_eq!(
-                    result.into_inner().status,
-                    pb::batch_mutate_response::Status::Failed as i32
-                ),
-            }
+            let error = result.expect_err("final overlay must reject conflicting decision graph");
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(
+                error.message(),
+                if cycle {
+                    "Decision amendment cycle"
+                } else {
+                    "Decision cannot amend and replace the same target"
+                }
+            );
+            assert_eq!(stored_decision(&mut client, &a, None).await, a_before);
+            assert_eq!(stored_decision(&mut client, &b, None).await, b_before);
             assert_eq!(
                 detail(&mut client, &a, READER).await.entity,
                 Some(a.clone())
@@ -2821,6 +2840,11 @@ async fn transitive_amendment_unavailable_case(hidden: bool) {
         "unchanged transitive declaration must remain inspectable: {updated:?}"
     );
     let after = stored_decision(&mut client, &a, None).await;
+    let mut expected = a_before.entity.clone().unwrap();
+    if let Some(pb::entity::Kind::Decision(value)) = &mut expected.kind {
+        value.title = Some(title("Unrelated title revision"));
+    }
+    assert_eq!(after.entity.as_ref(), Some(&expected));
     assert_eq!(
         after.entity.as_ref().unwrap().system,
         a_before.entity.as_ref().unwrap().system
@@ -2846,16 +2870,624 @@ async fn transitive_amendment_unavailable_case(hidden: bool) {
         matches!(error.code(), Code::NotFound | Code::InvalidArgument),
         "{error}"
     );
+    assert_eq!(
+        error.code(),
+        if hidden {
+            Code::NotFound
+        } else {
+            Code::InvalidArgument
+        }
+    );
+    assert_eq!(
+        error.message(),
+        if hidden {
+            "entity not found"
+        } else {
+            "Amended decision is absent, stale or unavailable"
+        }
+    );
     assert!(!error.message().contains("transitive-c"));
+    assert_eq!(stored_decision(&mut client, &a, None).await, after);
     assert_eq!(stored_decision(&mut client, &b, None).await, b_before);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn decision_transitive_missing_amendment_does_not_block_unrelated_title_edit() {
-    transitive_amendment_unavailable_case(false).await;
+    Box::pin(transitive_amendment_unavailable_case(false)).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn decision_transitive_hidden_amendment_does_not_block_unrelated_title_edit() {
-    transitive_amendment_unavailable_case(true).await;
+    Box::pin(transitive_amendment_unavailable_case(true)).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn decision_reference_provenance_is_exact_in_outgoing_reverse_and_impact() {
+    let mut client = client().await;
+    let subject_owner = put(&mut client, read_model("provenance-subject"), None)
+        .await
+        .entity
+        .unwrap();
+    let selected = subject(reference(&subject_owner));
+    let person = put(
+        &mut client,
+        entity(pb::entity::Kind::Person(pb::Person {
+            id: Some(id("provenance-person")),
+            title: Some(pb::DirectoryDisplayName {
+                value: "Maker".into(),
+            }),
+            ..Default::default()
+        })),
+        None,
+    )
+    .await
+    .entity
+    .unwrap();
+    let team = put(
+        &mut client,
+        entity(pb::entity::Kind::Team(pb::Team {
+            id: Some(id("provenance-team")),
+            title: Some(pb::DirectoryDisplayName {
+                value: "Makers".into(),
+            }),
+            ..Default::default()
+        })),
+        None,
+    )
+    .await
+    .entity
+    .unwrap();
+    let amended = put(
+        &mut client,
+        decision("provenance-original", selected.clone(), false),
+        None,
+    )
+    .await
+    .entity
+    .unwrap();
+    let mut proposed = decision("provenance-amendment", selected, false);
+    if let Some(pb::entity::Kind::Decision(value)) = &mut proposed.kind {
+        value.decision_makers = vec![
+            pb::DecisionMaker {
+                assignee: Some(pb::decision_maker::Assignee::Person(pb::PersonRef {
+                    id: reference(&person).id,
+                })),
+                ..Default::default()
+            },
+            pb::DecisionMaker {
+                assignee: Some(pb::decision_maker::Assignee::Team(pb::TeamRef {
+                    id: reference(&team).id,
+                })),
+                ..Default::default()
+            },
+        ];
+        value.amends = vec![pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: reference(&amended).id,
+            }),
+            ..Default::default()
+        }];
+    }
+    let owner = put(&mut client, proposed, None).await.entity.unwrap();
+    let Some(pb::entity::Kind::Decision(value)) = &owner.kind else {
+        panic!("decision")
+    };
+    let expected: Vec<_> = [
+        (
+            &person,
+            "decision_makers[0].person",
+            &value.decision_makers[0].connection_id,
+        ),
+        (
+            &team,
+            "decision_makers[1].team",
+            &value.decision_makers[1].connection_id,
+        ),
+        (
+            &amended,
+            "amends[0].decision",
+            &value.amends[0].connection_id,
+        ),
+    ]
+    .into_iter()
+    .map(|(target, field, connection_id)| pb::Reference {
+        from: Some(reference(&owner)),
+        from_uid: owner.system.as_ref().unwrap().uid.clone(),
+        from_field: field.into(),
+        to: Some(reference(target)),
+        connection_id: connection_id.clone(),
+        ..Default::default()
+    })
+    .collect();
+    let outgoing = client
+        .get_outgoing_references(request(
+            pb::GetReferencesRequest {
+                kind: pb::EntityKind::Decision as i32,
+                id: reference(&owner).id,
+                ..Default::default()
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual: Vec<_> = outgoing
+        .references
+        .into_iter()
+        .filter(|r| {
+            r.from_field.starts_with("decision_makers[") || r.from_field.starts_with("amends[")
+        })
+        .collect();
+    actual.sort_by(|a, b| a.from_field.cmp(&b.from_field));
+    let mut sorted = expected.clone();
+    sorted.sort_by(|a, b| a.from_field.cmp(&b.from_field));
+    assert_eq!(actual, sorted);
+    for expected in expected {
+        let target = expected.to.clone().unwrap();
+        for _ in 0..2 {
+            let reverse = client
+                .get_incoming_references(request(
+                    pb::GetReferencesRequest {
+                        kind: target.kind,
+                        id: target.id.clone(),
+                        ..Default::default()
+                    },
+                    READER,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(reverse.references, vec![expected.clone()]);
+            assert_eq!(reverse.next_page_token, "");
+        }
+        let impact = client
+            .get_impact(request(
+                pb::GetImpactRequest {
+                    root: Some(target),
+                    max_depth: 1,
+                    ..Default::default()
+                },
+                READER,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        let dependent = impact
+            .nodes
+            .iter()
+            .find(|node| node.entity.as_ref() == Some(&reference(&owner)))
+            .expect("declaring decision must be impacted");
+        assert_eq!(dependent.depth, 1);
+        assert_eq!(dependent.path, vec![expected]);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn decision_cross_branch_landing_checks_final_graph_without_partial_publication() {
+    for cycle in [true, false] {
+        let mut client = client().await;
+        let subject_owner = put(&mut client, read_model("landing-subject"), None)
+            .await
+            .entity
+            .unwrap();
+        let selected = subject(reference(&subject_owner));
+        let a = put(
+            &mut client,
+            decision("landing-a", selected.clone(), true),
+            None,
+        )
+        .await
+        .entity
+        .unwrap();
+        let b = put(&mut client, decision("landing-b", selected, true), None)
+            .await
+            .entity
+            .unwrap();
+        let a_base = stored_decision(&mut client, &a, None).await;
+        let b_base = stored_decision(&mut client, &b, None).await;
+        for name in ["amend-left", "amend-right"] {
+            client
+                .create_branch(request(
+                    pb::CreateBranchRequest {
+                        name: name.into(),
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap();
+        }
+        let mut left = a.clone();
+        if let Some(pb::entity::Kind::Decision(value)) = &mut left.kind {
+            value.amends = vec![pb::DecisionAmendment {
+                decision: Some(pb::DecisionRef {
+                    id: reference(&b).id,
+                }),
+                ..Default::default()
+            }];
+        }
+        put(&mut client, left, Some("amend-left")).await;
+        let mut right = b.clone();
+        if let Some(pb::entity::Kind::Decision(value)) = &mut right.kind {
+            if cycle {
+                value.amends = vec![pb::DecisionAmendment {
+                    decision: Some(pb::DecisionRef {
+                        id: reference(&a).id,
+                    }),
+                    ..Default::default()
+                }];
+            } else {
+                value.status = pb::DecisionStatus::Superseded as i32;
+                value.replaced_by = Some(pb::DecisionReplacement {
+                    decision: Some(pb::DecisionRef {
+                        id: reference(&a).id,
+                    }),
+                    ..Default::default()
+                });
+            }
+        }
+        put(&mut client, right, Some("amend-right")).await;
+        for (branch, base) in [("amend-left", &a_base), ("amend-right", &b_base)] {
+            let diff = client
+                .diff_branch(request(
+                    pb::DiffBranchRequest {
+                        name: branch.into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(diff.entries.len(), 1);
+            assert_eq!(
+                diff.entries[0].status,
+                pb::branch_diff_entry::Status::Changed as i32
+            );
+            assert_eq!(diff.entries[0].base, base.entity);
+            assert_eq!(diff.entries[0].base_etag, base.etag);
+        }
+        let landed = client
+            .merge_branch(request(
+                pb::MergeBranchRequest {
+                    name: "amend-right".into(),
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            landed.status,
+            pb::merge_branch_response::Status::Applied as i32
+        );
+        let a_before = stored_decision(&mut client, &a, None).await;
+        let b_before = stored_decision(&mut client, &b, None).await;
+        let left_before = stored_decision(&mut client, &a, Some("amend-left")).await;
+        let diff_before = client
+            .diff_branch(request(
+                pb::DiffBranchRequest {
+                    name: "amend-left".into(),
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        for dry_run in [true, false] {
+            let error = client
+                .merge_branch(request(
+                    pb::MergeBranchRequest {
+                        name: "amend-left".into(),
+                        dry_run,
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(
+                error.message(),
+                if cycle {
+                    "Decision amendment cycle"
+                } else {
+                    "Decision cannot amend and replace the same target"
+                }
+            );
+            assert_eq!(stored_decision(&mut client, &a, None).await, a_before);
+            assert_eq!(stored_decision(&mut client, &b, None).await, b_before);
+            assert_eq!(
+                stored_decision(&mut client, &a, Some("amend-left")).await,
+                left_before
+            );
+            assert_eq!(
+                client
+                    .diff_branch(request(
+                        pb::DiffBranchRequest {
+                            name: "amend-left".into()
+                        },
+                        ADMIN,
+                        None
+                    ))
+                    .await
+                    .unwrap()
+                    .into_inner(),
+                diff_before
+            );
+        }
+    }
+}
+
+#[derive(Debug)]
+struct AmendmentFaultAuthorizer {
+    inner: trogon_atlas_server::ownership::RegistryAuthorizer,
+    target: std::sync::Mutex<Option<trogon_atlas_core::NamespaceId>>,
+    fail_lens: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl trogon_atlas_server::ownership::NamespaceAuthorizer for AmendmentFaultAuthorizer {
+    async fn admits(
+        &self,
+        visibility: &trogon_atlas_server::ownership::Visibility,
+        namespace: &trogon_atlas_core::NamespaceId,
+    ) -> Result<bool, tonic::Status> {
+        if self.target.lock().unwrap().as_ref() == Some(namespace) {
+            return Err(tonic::Status::unavailable(
+                "transitive authorization outage",
+            ));
+        }
+        self.inner.admits(visibility, namespace).await
+    }
+    async fn lens(
+        &self,
+        visibility: &trogon_atlas_server::ownership::Visibility,
+    ) -> Result<trogon_atlas_server::ownership::Lens, tonic::Status> {
+        if self.fail_lens.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(tonic::Status::unavailable("authorized scope outage"));
+        }
+        self.inner.lens(visibility).await
+    }
+    async fn may_write(
+        &self,
+        visibility: &trogon_atlas_server::ownership::Visibility,
+        namespace: &trogon_atlas_core::NamespaceId,
+    ) -> Result<trogon_atlas_server::ownership::WriteVerdict, tonic::Status> {
+        self.inner.may_write(visibility, namespace).await
+    }
+    async fn on_registered(
+        &self,
+        record: &trogon_atlas_store::NamespaceRecord,
+    ) -> Result<(), tonic::Status> {
+        self.inner.on_registered(record).await
+    }
+    async fn on_moved(
+        &self,
+        record: &trogon_atlas_store::NamespaceRecord,
+        from: &trogon_atlas_core::OwnerId,
+    ) -> Result<(), tonic::Status> {
+        self.inner.on_moved(record, from).await
+    }
+    async fn on_released(
+        &self,
+        record: &trogon_atlas_store::NamespaceRecord,
+    ) -> Result<(), tonic::Status> {
+        self.inner.on_released(record).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn decision_transitive_authorization_faults_are_errors_and_never_leaves() {
+    let store: Arc<dyn trogon_atlas_store::Store> =
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let authorizer = Arc::new(AmendmentFaultAuthorizer {
+        inner: trogon_atlas_server::ownership::RegistryAuthorizer::new(service.directory(), store),
+        target: std::sync::Mutex::new(None),
+        fail_lens: std::sync::atomic::AtomicBool::new(false),
+    });
+    let mut client = client_with_service(service.with_authorizer(authorizer.clone())).await;
+    let mut namespaces = Vec::new();
+    for name in ["fault-owners", "fault-transitive"] {
+        namespaces.push(
+            client
+                .register_namespace(request(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        parent: "visible".into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let mut target = read_model("auth-fault-subject");
+    if let Some(pb::entity::Kind::ReadModel(value)) = &mut target.kind {
+        value
+            .id
+            .as_mut()
+            .unwrap()
+            .namespace
+            .clone_from(&namespaces[0]);
+    }
+    let target = put(&mut client, target, None).await.entity.unwrap();
+    let scoped = |slug: &str, namespace: &str| {
+        let mut owner = decision(slug, subject(reference(&target)), false);
+        if let Some(pb::entity::Kind::Decision(value)) = &mut owner.kind {
+            value.id.as_mut().unwrap().namespace = namespace.into();
+        }
+        owner
+    };
+    let c = put(&mut client, scoped("fault-c", &namespaces[1]), None)
+        .await
+        .entity
+        .unwrap();
+    let mut b = scoped("fault-b", &namespaces[0]);
+    if let Some(pb::entity::Kind::Decision(value)) = &mut b.kind {
+        value.amends = vec![pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: reference(&c).id,
+            }),
+            ..Default::default()
+        }];
+    }
+    let b = put(&mut client, b, None).await.entity.unwrap();
+    let mut a = scoped("fault-a", &namespaces[0]);
+    if let Some(pb::entity::Kind::Decision(value)) = &mut a.kind {
+        value.amends = vec![pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: reference(&b).id,
+            }),
+            ..Default::default()
+        }];
+    }
+    let a = put(&mut client, a, None).await.entity.unwrap();
+    let a_before = stored_decision(&mut client, &a, None).await;
+    let b_before = stored_decision(&mut client, &b, None).await;
+    let mut proposed = a.clone();
+    if let Some(pb::entity::Kind::Decision(value)) = &mut proposed.kind {
+        value.title = Some(title("Must not publish during outage"));
+    }
+    for lens_fault in [false, true] {
+        *authorizer.target.lock().unwrap() = if lens_fault {
+            None
+        } else {
+            Some(trogon_atlas_core::NamespaceId::parse(&namespaces[1]).unwrap())
+        };
+        authorizer
+            .fail_lens
+            .store(lens_fault, std::sync::atomic::Ordering::SeqCst);
+        let error = client
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(proposed.clone()),
+                    ..Default::default()
+                },
+                LIMITED,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::Unavailable);
+        assert_eq!(
+            error.message(),
+            if lens_fault {
+                "authorized scope outage"
+            } else {
+                "transitive authorization outage"
+            }
+        );
+        authorizer
+            .fail_lens
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        *authorizer.target.lock().unwrap() = None;
+        assert_eq!(stored_decision(&mut client, &a, None).await, a_before);
+        assert_eq!(stored_decision(&mut client, &b, None).await, b_before);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn decision_transitive_store_decode_fault_is_not_a_missing_leaf() {
+    use trogon_atlas_store::Store as _;
+    let nats = trogon_atlas_testsupport::TestNats::start().await;
+    let config = trogon_atlas_store::NatsStoreConfig::new(
+        &nats.url,
+        trogon_atlas_store::StoreMetrics::default(),
+    );
+    let bucket = config.bucket.clone();
+    let store = Arc::new(
+        trogon_atlas_store::NatsStore::connect_with(config)
+            .await
+            .unwrap(),
+    );
+    let mut client = client_with_store(store.clone(), 0).await;
+    let subject_owner = put(&mut client, read_model("decode-subject"), None)
+        .await
+        .entity
+        .unwrap();
+    let selected = subject(reference(&subject_owner));
+    let c = put(
+        &mut client,
+        decision("decode-c", selected.clone(), false),
+        None,
+    )
+    .await
+    .entity
+    .unwrap();
+    let mut b = decision("decode-b", selected.clone(), false);
+    if let Some(pb::entity::Kind::Decision(value)) = &mut b.kind {
+        value.amends = vec![pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: reference(&c).id,
+            }),
+            ..Default::default()
+        }];
+    }
+    let b = put(&mut client, b, None).await.entity.unwrap();
+    let mut a = decision("decode-a", selected, false);
+    if let Some(pb::entity::Kind::Decision(value)) = &mut a.kind {
+        value.amends = vec![pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: reference(&b).id,
+            }),
+            ..Default::default()
+        }];
+    }
+    let a = put(&mut client, a, None).await.entity.unwrap();
+    let a_before = stored_decision(&mut client, &a, None).await;
+    let b_before = stored_decision(&mut client, &b, None).await;
+    let raw = async_nats::jetstream::new(async_nats::connect(&nats.url).await.unwrap());
+    let kv = raw.get_key_value(bucket).await.unwrap();
+    let key = trogon_atlas_store::key::entity_key(
+        pb::EntityKind::Decision,
+        reference(&c).id.as_ref().unwrap(),
+    );
+    kv.put(&key, b"not a valid protobuf Entity".to_vec().into())
+        .await
+        .unwrap();
+    let decode_failure = store
+        .get(
+            pb::EntityKind::Decision,
+            reference(&c).id.as_ref().unwrap(),
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(decode_failure, trogon_atlas_store::StoreError::Backend(message) if message.starts_with("entity decode:"))
+    );
+    let mut proposed = a.clone();
+    if let Some(pb::entity::Kind::Decision(value)) = &mut proposed.kind {
+        value.title = Some(title("Must not publish on decode failure"));
+    }
+    let error = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(proposed),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::Internal);
+    assert_eq!(error.message(), "storage error");
+    assert_eq!(stored_decision(&mut client, &a, None).await, a_before);
+    assert_eq!(stored_decision(&mut client, &b, None).await, b_before);
 }
