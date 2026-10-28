@@ -1059,6 +1059,60 @@ pub struct DomainTagAnnotation {
     #[prost(string, tag="1")]
     pub tag: ::prost::alloc::string::String,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ModelProvider {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ModelName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ModelVersion {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ToolName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ToolKindText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentModel {
+    #[prost(message, optional, tag="1")]
+    pub provider: ::core::option::Option<ModelProvider>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<ModelName>,
+    #[prost(message, optional, tag="3")]
+    pub version: ::core::option::Option<ModelVersion>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentTool {
+    #[prost(message, optional, tag="1")]
+    pub name: ::core::option::Option<ToolName>,
+    #[prost(message, optional, tag="2")]
+    pub r#type: ::core::option::Option<ToolKindText>,
+    #[prost(message, optional, tag="3")]
+    pub description: ::core::option::Option<super::super::annotation::v1alpha1::MetadataText>,
+    #[prost(message, optional, tag="4")]
+    pub icon: ::core::option::Option<super::super::annotation::v1alpha1::IconToken>,
+    #[prost(message, optional, tag="5")]
+    pub url: ::core::option::Option<super::super::annotation::v1alpha1::MetadataUrl>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AgentAnnotation {
+    #[prost(message, optional, tag="1")]
+    pub model: ::core::option::Option<AgentModel>,
+    #[prost(message, repeated, tag="2")]
+    pub tools: ::prost::alloc::vec::Vec<AgentTool>,
+}
 /// Command slice: Command -> Event(s)
 ///
 /// When persona and UI are present, the command is human-issued from that

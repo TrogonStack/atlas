@@ -13,6 +13,7 @@
 //! `trogon_atlas_store::refs` so existing imports keep working with a
 //! single `use` swap.
 
+pub mod agent_metadata;
 pub mod architectural_relationships;
 pub mod authored_date;
 pub mod communication_intent;
