@@ -749,20 +749,30 @@ async fn outgoing(client: &mut Client, kind: pb::EntityKind, slug: &str) -> Vec<
         .references
 }
 async fn incoming(client: &mut Client, kind: pb::EntityKind, slug: &str) -> Vec<pb::Reference> {
-    client
-        .get_incoming_references(request(
-            pb::GetReferencesRequest {
-                kind: kind as i32,
-                id: Some(id(slug)),
-                ..Default::default()
-            },
-            ADMIN,
-            None,
-        ))
-        .await
-        .unwrap()
-        .into_inner()
-        .references
+    let mut all = Vec::new();
+    let mut token = String::new();
+    loop {
+        let page = client
+            .get_incoming_references(request(
+                pb::GetReferencesRequest {
+                    kind: kind as i32,
+                    id: Some(id(slug)),
+                    page_size: i32::MAX,
+                    page_token: token,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        all.extend(page.references);
+        if page.next_page_token.is_empty() {
+            return all;
+        }
+        token = page.next_page_token;
+    }
 }
 async fn delete_if_unreferenced(
     client: &mut Client,

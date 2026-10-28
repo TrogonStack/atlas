@@ -12,11 +12,15 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
             Some(pb::entity::Kind::Component(value)) => value
                 .relationships
                 .len()
-                .saturating_add(value.communications.len()),
+                .saturating_add(value.communications.len())
+                .saturating_add(value.storage_claims.len()),
             Some(pb::entity::Kind::ExternalSystem(value)) => value
                 .relationships
                 .len()
-                .saturating_add(value.communications.len()),
+                .saturating_add(value.communications.len())
+                .saturating_add(value.storage_claims.len()),
+            Some(pb::entity::Kind::Channel(value)) => value.links.len(),
+            Some(pb::entity::Kind::DataProduct(value)) => value.storage_claims.len(),
             _ => 0,
         })
 }
