@@ -410,7 +410,7 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
     for entity in &graph {
         for occurrence in trogon_atlas_core::connections::connection_occurrences(entity).unwrap() {
             let returned = occurrence.id.unwrap();
-            assert!(occurrence_ids.insert(returned.value));
+            assert!(occurrence_ids.insert(returned));
         }
     }
     let pool = trogon_atlas_core::transcode::TranscodePool::builtin().unwrap();
