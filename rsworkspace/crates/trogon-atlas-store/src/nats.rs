@@ -2990,19 +2990,18 @@ impl Store for NatsStore {
             // When the key is gone, report NotFound (same as a numeric miss)
             // so Put dry-run and apply share one wire shape. When it is still
             // present, report the live etag so callers do not treat it as gone.
-            let expected: u64 = match expected_etag.parse() {
-                Ok(revision) => revision,
-                Err(_) => {
-                    let found = live_found_etag(&self.kv, &key).await;
-                    return Err(if found.is_empty() {
-                        StoreError::NotFound
-                    } else {
-                        StoreError::EtagMismatch {
-                            expected: expected_etag.into(),
-                            found,
-                        }
-                    });
-                }
+            let expected: u64 = if let Ok(revision) = expected_etag.parse() {
+                revision
+            } else {
+                let found = live_found_etag(&self.kv, &key).await;
+                return Err(if found.is_empty() {
+                    StoreError::NotFound
+                } else {
+                    StoreError::EtagMismatch {
+                        expected: expected_etag.into(),
+                        found,
+                    }
+                });
             };
             // Capture the revision we saw at decode time for no-op detection and
             // system stamping. CAS failures re-read via `live_found_etag` so
