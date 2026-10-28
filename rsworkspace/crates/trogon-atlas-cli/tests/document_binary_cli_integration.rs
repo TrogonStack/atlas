@@ -152,14 +152,53 @@ async fn authenticated_document_binary_cli_roundtrip() {
     run(&["apply", "-f", path.to_str().unwrap()]);
     let key = format!("document/{namespace}/binary@9007199254740993");
     let before = run(&["get", &key]);
+    let exported = directory.path().join("export");
+    run(&[
+        "export",
+        "--namespace",
+        &namespace,
+        "-o",
+        exported.to_str().unwrap(),
+    ]);
+    let mut paths = std::fs::read_dir(&exported)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    paths.sort();
+    for export in paths {
+        run(&["diff", "-f", export.to_str().unwrap()]);
+        run(&["apply", "-f", export.to_str().unwrap()]);
+    }
+    assert_eq!(before, run(&["get", &key]));
+    let envelope: Value = serde_json::from_str(&before).unwrap();
+    let parsed = trogon_atlas_client::manifest::parse_str(
+        &envelope["data"]["manifest"].to_string(),
+        "get.yaml",
+    )
+    .unwrap();
+    let Some(pb::entity::Kind::Document(document)) = &parsed[0].entity.kind else {
+        panic!("missing Document")
+    };
+    let Some(pb::document::Body::RetainedContent(content)) = &document.body else {
+        panic!("missing binary body")
+    };
+    assert_eq!(content.content, b"\0exact\xff\n");
+    assert!(document.purpose.is_none());
+    assert_eq!(document.related_content.len(), 2);
     assert!(before.contains("9007199254740993"));
     assert!(before.contains("AGV4YWN0/wo="));
     assert!(before.contains("application/octet-stream"));
     assert!(before.contains("sample.bin"));
     let description = run(&["describe", &key]);
-    assert!(description.contains("application/octet-stream"), "{description}");
+    assert!(
+        description.contains("application/octet-stream"),
+        "{description}"
+    );
     assert!(description.contains("sample.bin"), "{description}");
-    assert!(description.contains("ea545ad36a9c4c5bfc95d99937328130e5834502247a772fd585d943c97e6831"), "{description}");
+    assert!(
+        description.contains("ea545ad36a9c4c5bfc95d99937328130e5834502247a772fd585d943c97e6831"),
+        "{description}"
+    );
     run(&["apply", "-f", path.to_str().unwrap()]);
     assert_eq!(before, run(&["get", &key]));
     let detail = cli(

@@ -157,8 +157,17 @@ pub struct Description {
     /// distinguishable from "this kind has no fields".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<FieldLine>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_content: Option<DocumentContentDescription>,
     pub outgoing: Vec<RefLine>,
     pub incoming: Vec<RefLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DocumentContentDescription {
+    pub media_type: String,
+    pub sha256: String,
+    pub filename: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -236,6 +245,27 @@ pub fn describe(
         title: text_field(entity, "title"),
         doc: text_field(entity, "doc"),
         fields,
+        document_content: match &entity.kind {
+            Some(pb::entity::Kind::Document(document)) => match &document.body {
+                Some(pb::document::Body::RetainedContent(content)) => {
+                    Some(DocumentContentDescription {
+                        media_type: content
+                            .media_type
+                            .as_ref()
+                            .map(|v| v.value.clone())
+                            .unwrap_or_default(),
+                        sha256: content
+                            .digest
+                            .as_ref()
+                            .map(|v| v.sha256.clone())
+                            .unwrap_or_default(),
+                        filename: document.filename.as_ref().map(|v| v.value.clone()),
+                    })
+                }
+                _ => None,
+            },
+            _ => None,
+        },
         outgoing: outgoing
             .iter()
             .map(|r| line(r, r.to.as_ref()))
@@ -249,6 +279,13 @@ pub fn render_description(d: &Description) -> String {
     let _ = writeln!(out, "Id:     {}", d.id);
     let _ = writeln!(out, "Title:  {}", d.title);
     let _ = writeln!(out, "Doc:    {}", d.doc.replace('\n', "\n        "));
+    if let Some(content) = &d.document_content {
+        let _ = writeln!(out, "Media type: {}", content.media_type);
+        let _ = writeln!(out, "SHA256: {}", content.sha256);
+        if let Some(filename) = &content.filename {
+            let _ = writeln!(out, "Filename: {filename}");
+        }
+    }
     if let Some(fields) = &d.fields {
         let rows = fields
             .iter()
