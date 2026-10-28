@@ -71,9 +71,7 @@ fn actor(target: system_actor_target::Target, direction: SystemActorDirection) -
     }
 }
 fn persona(slug: &str) -> system_actor_target::Target {
-    system_actor_target::Target::Persona(PersonaRef {
-        id: Some(id(slug)),
-    })
+    system_actor_target::Target::Persona(PersonaRef { id: Some(id(slug)) })
 }
 
 fn platform() -> Entity {
@@ -277,11 +275,15 @@ fn typed_values_reject_without_coercion() {
     for invalid in invalid_ids {
         let mut bad = platform();
         group_mut(&mut bad).members[0].member = Some(member(
-            system_group_member::Target::Component(ComponentRef { id: invalid.clone() }),
+            system_group_member::Target::Component(ComponentRef {
+                id: invalid.clone(),
+            }),
         ));
         assert!(validate_values(&bad).is_err());
         let mut bad = platform();
-        group_mut(&mut bad).relationships[0].target = Some(SystemGroupRef { id: invalid.clone() });
+        group_mut(&mut bad).relationships[0].target = Some(SystemGroupRef {
+            id: invalid.clone(),
+        });
         assert!(validate_values(&bad).is_err());
         let mut bad = platform();
         group_mut(&mut bad).actors[0].target = Some(SystemActorTarget {
@@ -449,7 +451,11 @@ fn collection_and_entity_ceilings_reject_without_truncation() {
     assert!(validate_values(&over).is_err());
     let mut domain = retail();
     domain_mut(&mut domain).members = (0..1_024)
-        .map(|_| domain_member(domain_member::Target::Domain(DomainRef { id: Some(id("x")) })))
+        .map(|_| {
+            domain_member(domain_member::Target::Domain(DomainRef {
+                id: Some(id("x")),
+            }))
+        })
         .collect();
     validate_values(&domain).unwrap();
     domain_mut(&mut domain)
@@ -501,16 +507,36 @@ fn extraction_reports_every_typed_occurrence_with_its_diagnostic_path() {
             "missing {field}"
         );
     };
-    expect("members[0].component", EntityKind::Component, id("checkout"));
-    expect("members[1].component", EntityKind::Component, id("checkout"));
+    expect(
+        "members[0].component",
+        EntityKind::Component,
+        id("checkout"),
+    );
+    expect(
+        "members[1].component",
+        EntityKind::Component,
+        id("checkout"),
+    );
     expect(
         "members[2].component",
         EntityKind::Component,
         versioned("checkout", 2),
     );
-    expect("members[3].data_store", EntityKind::DataStore, id("orders-db"));
-    expect("members[4].system_group", EntityKind::SystemGroup, id("storefront"));
-    expect("members[5].external_system", EntityKind::ExternalSystem, id("provider"));
+    expect(
+        "members[3].data_store",
+        EntityKind::DataStore,
+        id("orders-db"),
+    );
+    expect(
+        "members[4].system_group",
+        EntityKind::SystemGroup,
+        id("storefront"),
+    );
+    expect(
+        "members[5].external_system",
+        EntityKind::ExternalSystem,
+        id("provider"),
+    );
     expect("members[6].schema", EntityKind::Schema, id("order"));
     expect(
         "relationships[0].target",
@@ -522,9 +548,21 @@ fn extraction_reports_every_typed_occurrence_with_its_diagnostic_path() {
         EntityKind::SystemGroup,
         id("payments-vendor"),
     );
-    expect("actors[0].target.persona", EntityKind::Persona, id("shopper"));
-    expect("actors[1].target.persona", EntityKind::Persona, id("shopper"));
-    expect("actors[2].target.component", EntityKind::Component, id("worker"));
+    expect(
+        "actors[0].target.persona",
+        EntityKind::Persona,
+        id("shopper"),
+    );
+    expect(
+        "actors[1].target.persona",
+        EntityKind::Persona,
+        id("shopper"),
+    );
+    expect(
+        "actors[2].target.component",
+        EntityKind::Component,
+        id("worker"),
+    );
     expect(
         "actors[3].target.external_system",
         EntityKind::ExternalSystem,
@@ -544,12 +582,24 @@ fn extraction_reports_every_typed_occurrence_with_its_diagnostic_path() {
     assert_eq!(
         paths,
         vec![
-            ("members[0].system_group".to_owned(), Some(EntityKind::SystemGroup)),
-            ("members[1].component".to_owned(), Some(EntityKind::Component)),
+            (
+                "members[0].system_group".to_owned(),
+                Some(EntityKind::SystemGroup)
+            ),
+            (
+                "members[1].component".to_owned(),
+                Some(EntityKind::Component)
+            ),
             ("members[2].domain".to_owned(), Some(EntityKind::Domain)),
-            ("members[3].data_product".to_owned(), Some(EntityKind::DataProduct)),
+            (
+                "members[3].data_product".to_owned(),
+                Some(EntityKind::DataProduct)
+            ),
             ("members[4].schema".to_owned(), Some(EntityKind::Schema)),
-            ("members[5].external_system".to_owned(), Some(EntityKind::ExternalSystem)),
+            (
+                "members[5].external_system".to_owned(),
+                Some(EntityKind::ExternalSystem)
+            ),
         ]
     );
 }
@@ -574,11 +624,11 @@ fn design_graph_members_are_typed_but_wait_for_the_kind_to_land() {
     assert_eq!(flow.to_kind, system_group::design_graph_kind());
     assert_eq!(flow.to_id, id("checkout-flow"));
     let mut bad = owner;
-    group_mut(&mut bad).members[7].member = Some(member(
-        system_group_member::Target::DesignGraph(DesignGraphRef {
+    group_mut(&mut bad).members[7].member = Some(member(system_group_member::Target::DesignGraph(
+        DesignGraphRef {
             id: Some(versioned("checkout-flow", 0)),
-        }),
-    ));
+        },
+    )));
     assert!(validate_values(&bad).is_err());
     let mut domain = retail();
     domain_mut(&mut domain)
@@ -605,7 +655,10 @@ fn component_raw_members_stay_raw_and_accept_known_system_groups() {
         ..Default::default()
     };
     let stored = prepare_entity(None, &component).unwrap();
-    assert!(connection_occurrences(&stored).unwrap().is_empty());
+    assert_eq!(
+        connection_occurrences(&stored).unwrap(),
+        [] as [trogon_atlas_core::connections::ConnectionOccurrence; 0]
+    );
     let refs = outbound_refs(&stored);
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0].from_field, "members[0]");
@@ -668,10 +721,16 @@ fn resolver_checks_complete_inventory_and_role_before_selecting() {
 
 #[test]
 fn both_owner_kinds_are_admitted_as_connection_subject_owners() {
-    assert!(responsibility::connection_subject_owner(EntityKind::SystemGroup));
+    assert!(responsibility::connection_subject_owner(
+        EntityKind::SystemGroup
+    ));
     assert!(responsibility::connection_subject_owner(EntityKind::Domain));
-    assert!(!responsibility::connection_subject_owner(EntityKind::Subdomain));
-    assert!(!responsibility::connection_subject_owner(EntityKind::BoundedContext));
+    assert!(!responsibility::connection_subject_owner(
+        EntityKind::Subdomain
+    ));
+    assert!(!responsibility::connection_subject_owner(
+        EntityKind::BoundedContext
+    ));
 }
 
 #[test]
@@ -821,17 +880,24 @@ fn retarget_renews_only_matching_occurrences_and_leaves_siblings_and_other_kinds
 
     let mut actors = stored.clone();
     assert_eq!(
-        retarget_refs(&mut actors, EntityKind::Persona, &id("shopper"), &id("buyer")),
+        retarget_refs(
+            &mut actors,
+            EntityKind::Persona,
+            &id("shopper"),
+            &id("buyer")
+        ),
         vec!["actors[0].target.persona", "actors[1].target.persona"]
     );
     let mut wrong_kind = stored.clone();
-    assert!(retarget_refs(
-        &mut wrong_kind,
-        EntityKind::DataStore,
-        &id("checkout"),
-        &id("replacement")
-    )
-    .is_empty());
+    assert_eq!(
+        retarget_refs(
+            &mut wrong_kind,
+            EntityKind::DataStore,
+            &id("checkout"),
+            &id("replacement")
+        ),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(wrong_kind, stored);
 
     let mut relationships = stored.clone();
@@ -857,7 +923,12 @@ fn retarget_renews_only_matching_occurrences_and_leaves_siblings_and_other_kinds
 
     let mut domain = prepare_entity(None, &retail()).unwrap();
     assert_eq!(
-        retarget_refs(&mut domain, EntityKind::Domain, &id("fulfilment"), &id("ops")),
+        retarget_refs(
+            &mut domain,
+            EntityKind::Domain,
+            &id("fulfilment"),
+            &id("ops")
+        ),
         vec!["members[2].domain"]
     );
     assert!(domain_mut(&mut domain).members[2].connection_id.is_none());
@@ -908,7 +979,12 @@ fn advisories_report_cycles_and_exact_repeats_without_blocking_anything() {
         fulfilment.clone(),
     ];
     let findings = system_group::advisories(&owners);
-    let by_rule = |rule: &str| findings.iter().filter(|f| f.rule == rule).collect::<Vec<_>>();
+    let by_rule = |rule: &str| {
+        findings
+            .iter()
+            .filter(|f| f.rule == rule)
+            .collect::<Vec<_>>()
+    };
     let group_cycles = by_rule(system_group::SYSTEM_GROUP_MEMBERSHIP_CYCLE);
     assert_eq!(group_cycles.len(), 1);
     assert_eq!(group_cycles[0].path.len(), 2);
@@ -917,12 +993,12 @@ fn advisories_report_cycles_and_exact_repeats_without_blocking_anything() {
         .iter()
         .map(|hop| (hop.owner.id.clone().unwrap().slug, hop.connection_id))
         .collect();
-    assert!(hop_ids.contains(&(
-        "platform".into(),
-        platform_id(&platform, 2)
-    )));
+    assert!(hop_ids.contains(&("platform".into(), platform_id(&platform, 2))));
     assert!(hop_ids.contains(&("storefront".into(), platform_id(&storefront, 1))));
-    assert_eq!(group_cycles[0].path[0].owner_uid, owner_uid(&group_cycles[0].path[0].owner, &owners));
+    assert_eq!(
+        group_cycles[0].path[0].owner_uid,
+        owner_uid(&group_cycles[0].path[0].owner, &owners)
+    );
     let domain_cycles = by_rule(system_group::DOMAIN_MEMBERSHIP_CYCLE);
     assert_eq!(domain_cycles.len(), 1);
     assert_eq!(domain_cycles[0].path.len(), 2);
@@ -934,10 +1010,13 @@ fn advisories_report_cycles_and_exact_repeats_without_blocking_anything() {
         repeats[0].path[0].connection_id,
         repeats[0].path[1].connection_id
     );
-    assert!(by_rule(system_group::DOMAIN_MEMBERSHIP_REPEAT).is_empty());
+    assert_eq!(
+        by_rule(system_group::DOMAIN_MEMBERSHIP_REPEAT),
+        [] as [&trogon_atlas_core::system_group::Advisory; 0]
+    );
     // The advisory run changes nothing and a hidden participant produces no cycle.
     assert_eq!(system_group::advisories(&owners), findings);
-    let visible = system_group::advisories(&[platform.clone()]);
+    let visible = system_group::advisories(std::slice::from_ref(&platform));
     assert!(visible
         .iter()
         .all(|f| f.rule != system_group::SYSTEM_GROUP_MEMBERSHIP_CYCLE));
