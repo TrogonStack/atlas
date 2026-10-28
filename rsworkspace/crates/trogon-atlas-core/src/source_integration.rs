@@ -122,8 +122,9 @@ fn unit_fields(
         && ["authored_on", "decided_on", "decision_makers", "amends"]
             .iter()
             .any(|name| value.has_field_by_name(name))
-
-    { return Err(SourceError::UnsupportedUnit); }
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     if unit == OwnershipUnit::WholeOwner
         && value
             .get_field_by_name("message_claims")

@@ -40,9 +40,10 @@ fn admission_references(
             if matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
                 return reference.from_field == "owning_domain";
             }
-            !reference.from_field.starts_with("message_claims.") && (!architectural
-                || reference.from_field.starts_with("relationships[")
-                || reference.from_field.starts_with("communications["))
+            !reference.from_field.starts_with("message_claims.")
+                && (!architectural
+                    || reference.from_field.starts_with("relationships[")
+                    || reference.from_field.starts_with("communications["))
         })
         .collect())
 }

@@ -328,7 +328,11 @@ pub(crate) fn validate_admission(
     validate_admission_with_previous(entity, all, None)
 }
 
-pub(crate) fn validate_admission_with_previous(entity: &pb::Entity, all: &[StoredEntity], previous: Option<&pb::Entity>) -> Vec<pb::ValidationIssue> {
+pub(crate) fn validate_admission_with_previous(
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+    previous: Option<&pb::Entity>,
+) -> Vec<pb::ValidationIssue> {
     validate_shipped_in_context(entity, &ArchitectureContext::new(all), previous)
 }
 
@@ -339,15 +343,29 @@ pub(super) fn validate_in_context(
     validate_in_context_with_previous(entity, context, None)
 }
 
-fn validate_in_context_with_previous(entity: &pb::Entity, context: &ArchitectureContext<'_>, previous: Option<&pb::Entity>) -> Vec<pb::ValidationIssue> {
+fn validate_in_context_with_previous(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+    previous: Option<&pb::Entity>,
+) -> Vec<pb::ValidationIssue> {
     let mut issues = validate_shipped_in_context(entity, context, previous);
-    if trogon_atlas_core::message_claims::has_content(entity) && crate::message_claims_resources::validate(entity, context).is_err() {
-        issues.push(super::issue_error("MESSAGE_CLAIMS_REFERENCE_UNRESOLVED", "Message claim selection is absent, invalid or unavailable".into(), super::slice_ref(entity), "message_claims"));
+    if trogon_atlas_core::message_claims::has_content(entity)
+        && crate::message_claims_resources::validate(entity, context).is_err()
+    {
+        issues.push(super::issue_error(
+            "MESSAGE_CLAIMS_REFERENCE_UNRESOLVED",
+            "Message claim selection is absent, invalid or unavailable".into(),
+            super::slice_ref(entity),
+            "message_claims",
+        ));
     }
     issues
 }
 
-fn validate_shipped_in_context(entity: &pb::Entity, context: &ArchitectureContext<'_>, previous: Option<&pb::Entity>,
+fn validate_shipped_in_context(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+    previous: Option<&pb::Entity>,
 ) -> Vec<pb::ValidationIssue> {
     if matches!(
         entity.kind,

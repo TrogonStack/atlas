@@ -543,7 +543,7 @@ async fn incoming_document_page_token_rejects_malformed_stale_and_out_of_range_o
     let err = client
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
-                document: Some(whole),
+                document: Some(whole.clone()),
                 page_size: 1,
                 page_token: bad,
                 ..Default::default()
@@ -555,6 +555,56 @@ async fn incoming_document_page_token_rejects_malformed_stale_and_out_of_range_o
         .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
     assert!(err.message().contains("invalid page token"));
+
+    assert!(!page1.next_page_token.is_empty());
+    assert_eq!(page1.declarations.len(), 1);
+    let continued = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(whole.clone()),
+                page_size: 1,
+                page_token: page1.next_page_token.clone(),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(continued.declarations.len(), 1);
+    assert_eq!(continued.scope.unwrap().revision, scope.revision);
+    assert_ne!(continued.declarations, page1.declarations);
+
+    batch_put_filler_documents(&mut client, 0, 1).await;
+    let stale = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(whole.clone()),
+                page_size: 1,
+                page_token: page1.next_page_token,
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(stale.code(), Code::InvalidArgument);
+    assert!(stale.message().contains("stale page token"));
+
+    let refreshed = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(whole),
+                page_size: 1,
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_ne!(refreshed.scope.unwrap().revision, scope.revision);
+    assert_eq!(refreshed.declarations, page1.declarations);
 }
 
 async fn seed(store: &trogon_atlas_store::NatsStore, entities: Vec<pb::Entity>) {
