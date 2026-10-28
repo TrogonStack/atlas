@@ -71,3 +71,31 @@ fn explicitly_empty_claim_identity_is_invalid() {
     }
     assert!(connections::assign_connection_ids(&mut e).is_err());
 }
+
+fn with_route() -> Entity {
+    let first = trogon_atlas_core::connection_persistence::prepare_entity(None, &owner()).unwrap();
+    let mut next = first.clone();
+    let v = trogon_atlas_core::message_claims::declarations_mut(&mut next).unwrap();
+    v.routes.push(ClaimRoute { claim_id:v.claims[0].connection_id.clone(), channel:Some(ChannelRef{id:Some(id("channel"))}), ..Default::default() });
+    trogon_atlas_core::connection_persistence::prepare_entity(Some(&first), &next).unwrap()
+}
+#[test]
+fn explicit_branch_restoration_rewrites_only_selected_local_claim_dependencies() {
+    use trogon_atlas_core::{connection_persistence as persistence, message_claims as claims};
+    let base=with_route(); let mut opposing=base.clone();
+    *claims::declarations_mut(&mut opposing).unwrap()=MessageClaims::default();
+    let opposing=persistence::prepare_entity(Some(&base),&opposing).unwrap();
+    assert!(persistence::prepare_landing(Some(&base),Some(&opposing),&base).is_err());
+    let restored=persistence::prepare_resolution(Some(&base),Some(&opposing),&base).unwrap();
+    let v=claims::declarations(&restored).unwrap();
+    assert_ne!(v.claims[0].connection_id,claims::declarations(&base).unwrap().claims[0].connection_id);
+    assert_eq!(v.routes[0].claim_id,v.claims[0].connection_id);
+    assert_ne!(v.routes[0].connection_id,claims::declarations(&base).unwrap().routes[0].connection_id);
+}
+#[test]
+fn partial_selected_claim_does_not_resolve_context() {
+    let mut v=with_route();
+    let r=ConnectionRef { owner:Some(EntityRef{kind:EntityKind::Domain as i32,id:Some(id("owner"))}), owner_uid:v.system.as_ref().unwrap().uid.clone(),id:trogon_atlas_core::message_claims::declarations(&v).unwrap().claims[0].connection_id.clone() };
+    trogon_atlas_core::message_claims::declarations_mut(&mut v).unwrap().claims[0].message.as_mut().unwrap().member_id=None;
+    assert!(trogon_atlas_core::message_claims::resolve_connection_context(&v,&r).is_err());
+}
