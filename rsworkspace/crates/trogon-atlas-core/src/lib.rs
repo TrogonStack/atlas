@@ -29,6 +29,7 @@ pub mod id_component;
 pub mod namespace;
 pub mod operation_id;
 pub mod refs;
+pub mod resource_associations;
 pub mod responsibility;
 mod responsibility_refs;
 pub mod schema;

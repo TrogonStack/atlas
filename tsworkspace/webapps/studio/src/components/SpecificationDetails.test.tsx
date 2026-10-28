@@ -15,6 +15,8 @@ function fixture() {
     { component: { id: id('public'), title: 'Public gateway' } },
     { component: { id: id('partner'), title: 'Partner gateway' } },
     { component: { id: id('checkout'), title: 'Checkout' } },
+    { channel: { id: id('bus', '1'), title: 'Bus' } },
+    { channel: { id: id('bus', '2'), title: 'Bus' } },
     {
       system: { uid: 'contract-owner' },
       specification: {
@@ -47,7 +49,19 @@ function fixture() {
             memberId: memberId('request'),
             name: memberId('Order request'),
             schemas: [
-              { connectionId: memberId('request-shape'), role: 'ROLE_PAYLOAD', localSchema: memberId('shape') },
+              {
+                connectionId: memberId('request-shape'),
+                role: 'ROLE_PAYLOAD',
+                localSchema: memberId('shape'),
+                environments: [{ value: 'prod' }],
+                isDefault: false,
+              },
+              {
+                connectionId: memberId('request-headers'),
+                role: 'ROLE_HEADERS',
+                localSchema: memberId('shape'),
+                environments: [{ value: 'prod' }],
+              },
             ],
             mapping: { connectionId: memberId('request-map'), readModel: { id: id('request') } },
           },
@@ -57,6 +71,21 @@ function fixture() {
             mapping: { connectionId: memberId('response-map'), readModel: { id: id('receipt', '2') } },
           },
           { memberId: memberId('unmapped'), name: memberId('Unmapped message') },
+        ],
+        messageChannels: [
+          {
+            connectionId: memberId('carry-a'),
+            memberId: memberId('request'),
+            channel: { id: id('bus', '2') },
+            parameterValues: { topic: 'orders', empty: '' },
+          },
+          {
+            connectionId: memberId('carry-b'),
+            memberId: memberId('request'),
+            channel: { id: id('bus', '2') },
+            parameterValues: { topic: 'orders' },
+            deliveryMode: 'CLAIM_DELIVERY_MODE_PUSH',
+          },
         ],
         operations: [
           {
@@ -164,6 +193,26 @@ describe('Specification review', () => {
     expect(onSelect).toHaveBeenCalledWith('readModel:orders/receipt@2');
     expect(screen.queryByRole('button', { name: 'orders/receipt@3' })).toBeNull();
     expect(container.querySelectorAll('input, textarea, select, [contenteditable="true"]')).toHaveLength(0);
+    expect(screen.getAllByText('prod')).toHaveLength(2);
+    expect(screen.getByText('Explicitly not the default')).toBeDefined();
+    expect(screen.getAllByText('Default unknown').length).toBeGreaterThan(0);
+    expect(screen.getByText('carry-a')).toBeDefined();
+    expect(screen.getByText('carry-b')).toBeDefined();
+    expect(screen.getByText('Delivery mode undeclared')).toBeDefined();
+    expect(screen.getByText('Push')).toBeDefined();
+    expect(screen.getByText('topic=orders, empty=')).toBeDefined();
+    const declaredChannels = screen.getAllByRole('button', { name: 'orders/bus@2' });
+    expect(declaredChannels).toHaveLength(2);
+    fireEvent.click(declaredChannels[0]);
+    fireEvent.click(declaredChannels[1]);
+    expect(onSelect).toHaveBeenCalledWith('channel:orders/bus@2');
+    expect(screen.queryByRole('button', { name: 'orders/bus@1' })).toBeNull();
+  });
+  it('does not crash on a partial specification record', () => {
+    const model = fixture();
+    const entity = { ...specification(model), raw: {} };
+    render(<SpecificationDetails entity={entity} model={model} onSelect={vi.fn()} />);
+    expect(screen.getByText('No message channels declared')).toBeDefined();
   });
   it('shows only the selected provider per usage and keeps provider absence explicit', () => {
     const model = fixture();

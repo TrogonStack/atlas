@@ -23,6 +23,8 @@ import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
 
+import "trogonatlas/api/eventmodel/v1alpha1/channel_messages.proto";
+
 
 // =============================================================================
 // Service surface: requests, responses, supporting messages
@@ -1320,4 +1322,9 @@ service EventModelService {
   rpc CompileTypeLibrary(CompileTypeLibraryRequest) returns (CompileTypeLibraryResponse);
   rpc ResolveType(ResolveTypeRequest) returns (ResolveTypeResponse);
   rpc GetTypeLibraryDescriptorSet(GetTypeLibraryDescriptorSetRequest) returns (GetTypeLibraryDescriptorSetResponse);
+
+  // Inverse discovery of independent specification message-to-channel
+  // declarations for one exact channel. Claim routes and operation bindings
+  // are not included. Branch context uses x-trogon-atlas-branch.
+  rpc ListChannelMessages(ListChannelMessagesRequest) returns (ListChannelMessagesResponse);
 }

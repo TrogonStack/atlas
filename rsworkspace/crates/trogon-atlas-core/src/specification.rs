@@ -507,6 +507,97 @@ fn provider(target: Option<&pb::ProviderTarget>) -> Result<()> {
         None => Err(SpecificationError("missing provider target".into())),
     }
 }
+fn environment_name_ok(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && !name.chars().any(char::is_control)
+        && !name.trim().is_empty()
+}
+
+fn validate_schema_variants(value: &Specification) -> Result<()> {
+    let mut groups: HashMap<(String, i32), (HashSet<String>, u32)> = HashMap::new();
+    for message in &value.messages {
+        let member = message
+            .member_id
+            .as_ref()
+            .map(|id| id.value.clone())
+            .unwrap_or_default();
+        for binding in &message.schemas {
+            require(
+                binding.environments.len() <= 32,
+                "schema binding environment limit exceeded",
+            )?;
+            let mut seen = HashSet::new();
+            for environment in &binding.environments {
+                require(
+                    environment_name_ok(&environment.value),
+                    "environment name must be 1..=64 UTF-8 bytes, nonblank, and free of Unicode controls",
+                )?;
+                require(
+                    seen.insert(environment.value.clone()),
+                    "environment names must be unique within a schema binding",
+                )?;
+            }
+            if binding.is_default == Some(true) {
+                require(
+                    binding.environments.is_empty(),
+                    "default schema binding cannot name environments",
+                )?;
+            }
+            let group = groups.entry((member.clone(), binding.role)).or_default();
+            for environment in &binding.environments {
+                require(
+                    group.0.insert(environment.value.clone()),
+                    "environment names must be unique per message and role",
+                )?;
+            }
+            if binding.is_default == Some(true) {
+                group.1 += 1;
+                require(
+                    group.1 == 1,
+                    "at most one default schema binding per message and role",
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_message_channels(
+    value: &Specification,
+    ids: &HashMap<MemberId, Kind>,
+) -> Result<()> {
+    for declaration in &value.message_channels {
+        let id = member_id(declaration.member_id.as_ref())?;
+        require(
+            ids.get(&id) == Some(&Kind::Message),
+            format!("missing or wrong-kind local member {id}"),
+        )?;
+        exact(declaration.channel.as_ref().and_then(|channel| channel.id.as_ref()))?;
+        if let Some(mode) = declaration.delivery_mode {
+            require(
+                matches!(
+                    pb::ClaimDeliveryMode::try_from(mode),
+                    Ok(pb::ClaimDeliveryMode::Push
+                        | pb::ClaimDeliveryMode::Pull
+                        | pb::ClaimDeliveryMode::PushPull)
+                ),
+                "delivery mode must be push, pull, or push_pull when supplied",
+            )?;
+        }
+        if let Some(doc) = &declaration.doc {
+            require(
+                !doc.trim().is_empty(),
+                "message channel doc must be nonblank when supplied",
+            )?;
+        }
+        require(
+            declaration.parameter_values.keys().all(|name| !name.is_empty()),
+            "message channel parameter names must be nonblank",
+        )?;
+    }
+    Ok(())
+}
+
 fn selector(value: Option<&pb::OpaqueTypeSelector>) -> Result<()> {
     if let Some(value) = value {
         require(
@@ -709,6 +800,8 @@ pub fn validate_specification(value: &Specification) -> Result<()> {
             }
         }
     }
+    validate_schema_variants(value)?;
+    validate_message_channels(value, &ids)?;
     for operation in &value.operations {
         require(
             !operation.messages.is_empty(),

@@ -347,7 +347,11 @@ impl EventModelServiceImpl {
             let prepared =
                 prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
             super::validate_entity_content(&prepared)?;
-            let issues = validation::architecture_resources::validate(&prepared, &context);
+            let issues = validation::architecture_resources::validate_with_previous(
+                &prepared,
+                &context,
+                previous.as_ref(),
+            );
             if !issues.is_empty() {
                 return Err(Status::invalid_argument(super::format_scenario_issues(
                     &issues,
@@ -640,7 +644,11 @@ impl EventModelServiceImpl {
             match access {
                 ArchitectureTargetAccess::Required(vis)
                 | ArchitectureTargetAccess::ExactRequired(vis) => {
-                    self.require_visible(vis, &id.namespace).await?;
+                    match self.require_visible(vis, &id.namespace).await {
+                        Ok(()) => {}
+                        Err(status) if status.code() == Code::NotFound => continue,
+                        Err(status) => return Err(status),
+                    }
                 }
                 ArchitectureTargetAccess::Diagnostic(lens)
                 | ArchitectureTargetAccess::ExactDiagnostic(lens) => {

@@ -297,6 +297,58 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
         ..Default::default()
     };
     graph.push(put(&mut client, wrap(pb::entity::Kind::Document(hub))).await);
+    let product = pb::DataProduct {
+        id: Some(id("offering")),
+        title: "Offering".into(),
+        outputs: vec![pb::DataOutputPort {
+            name: Some(pb::PortName {
+                value: "Receipt".into(),
+            }),
+            data: Some(pb::OutputDataSelection {
+                read_model: Some(pb::ReadModelRef {
+                    id: Some(id("receipt")),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }],
+        resource_associations: [pb::DataPortDirection::Input, pb::DataPortDirection::Output]
+            .into_iter()
+            .map(|direction| pb::ProductResourceAssociation {
+                direction: direction as i32,
+                target: Some(pb::product_resource_association::Target::Component(
+                    pb::ComponentRef {
+                        id: Some(id("agent")),
+                    },
+                )),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    graph.push(put(&mut client, wrap(pb::entity::Kind::DataProduct(product))).await);
+    let associated = client
+        .get_incoming_references(request(
+            pb::GetReferencesRequest {
+                kind: pb::EntityKind::Component as i32,
+                id: Some(id("agent")),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let associations: Vec<_> = associated
+        .references
+        .iter()
+        .filter(|reference| reference.from_field.starts_with("resource_associations["))
+        .collect();
+    assert_eq!(associations.len(), 2);
+    assert_ne!(associations[0].connection_id, associations[1].connection_id);
+    assert!(associations
+        .iter()
+        .all(|reference| !reference.from_uid.is_empty() && reference.connection_id.is_some()));
     let component_index = graph
         .iter()
         .position(|entity| matches!(entity.kind, Some(pb::entity::Kind::Component(_))))

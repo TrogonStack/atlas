@@ -175,6 +175,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         // Direct lookup
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntity" => Role::Reader,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/InspectDataProduct"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListChannelMessages"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSubjectAssignments"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListAssigneeResponsibilities"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTeamMembers"
@@ -1229,6 +1230,7 @@ namespaces = ["orders/*"]
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetTypeLibraryDescriptorSet",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntity",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/InspectDataProduct",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListChannelMessages",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BatchGetEntities",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntities",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/SearchEntities",

@@ -873,6 +873,62 @@ fn selection_owner(selection: &pb::SourceSelection) -> Result<pb::EntityRef, Sta
         }
     }
 }
+fn carries_slice_authoring(entity: &pb::Entity) -> bool {
+    match &entity.kind {
+        Some(pb::entity::Kind::DataProduct(product)) => !product.resource_associations.is_empty(),
+        Some(pb::entity::Kind::Specification(specification)) => {
+            !specification.message_channels.is_empty()
+                || specification.messages.iter().any(|message| {
+                    message.schemas.iter().any(|binding| {
+                        !binding.environments.is_empty() || binding.is_default.is_some()
+                    })
+                })
+        }
+        _ => false,
+    }
+}
+
+fn forbidden_native_selection(entity: &pb::Entity, path: &str) -> bool {
+    // Connection occurrence paths are rooted at the entity oneof field
+    // (`data_product.resource_associations[0]`), while the native guards
+    // name the field on the kind body.
+    let path = path.split_once('.').map_or(path, |(_, rest)| rest);
+    match &entity.kind {
+        Some(pb::entity::Kind::DataProduct(_)) => path.starts_with("resource_associations["),
+        Some(pb::entity::Kind::Specification(specification)) => {
+            if path.starts_with("message_channels[") {
+                return true;
+            }
+            let Some(rest) = path.strip_prefix("messages[") else {
+                return false;
+            };
+            let Some((message, rest)) = rest.split_once("].schemas[") else {
+                return false;
+            };
+            let Some((binding, suffix)) = rest.split_once(']') else {
+                return false;
+            };
+            if !(suffix.is_empty() || suffix.starts_with('.')) {
+                return false;
+            }
+            let Ok(message) = message.parse::<usize>() else {
+                return false;
+            };
+            let Ok(binding) = binding.parse::<usize>() else {
+                return false;
+            };
+            specification
+                .messages
+                .get(message)
+                .and_then(|message| message.schemas.get(binding))
+                .is_some_and(|binding| {
+                    !binding.environments.is_empty() || binding.is_default.is_some()
+                })
+        }
+        _ => false,
+    }
+}
+
 fn native_document_context_only(
     current: Option<&pb::Entity>,
     incoming: Option<&pb::Entity>,
@@ -932,6 +988,15 @@ fn native_relationships_only(
             "selected extensions support native authoring only",
         ));
     }
+    if (current.is_none() && incoming.is_some_and(carries_slice_authoring))
+        || (whole_owner
+            && (current.is_some_and(carries_slice_authoring)
+                || incoming.is_some_and(carries_slice_authoring)))
+    {
+        return Err(Status::invalid_argument(
+            "resource associations, message channels, and schema variants support native authoring only",
+        ));
+    }
     Ok(())
 }
 
@@ -950,6 +1015,11 @@ fn resolve_selection(selection: &pb::SourceSelection, entity: &pb::Entity) -> Re
             {
                 return Err(Status::invalid_argument(
                     "decision makers and amendments support native authoring only",
+                ));
+            }
+            if forbidden_native_selection(entity, &occurrence.path) {
+                return Err(Status::invalid_argument(
+                    "resource associations, message channels, and schema variants support native authoring only",
                 ));
             }
         }

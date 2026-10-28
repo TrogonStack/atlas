@@ -6,6 +6,14 @@ pub(crate) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
 ) -> Vec<pb::ValidationIssue> {
+    validate_in_context_with_previous(entity, context, None)
+}
+
+pub(crate) fn validate_in_context_with_previous(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+    previous: Option<&pb::Entity>,
+) -> Vec<pb::ValidationIssue> {
     let Some(pb::entity::Kind::DataProduct(product)) = &entity.kind else {
         return Vec::new();
     };
@@ -36,8 +44,21 @@ pub(crate) fn validate_in_context(
     for reference in references {
         if !reference.to_kind.is_some_and(|kind| {
             reference.to_id.version > 0 && context.find(kind, &reference.to_id).is_some()
-        }) {
+        }) && !stable_occurrence(previous, entity, &reference.from_field)
+        {
             issue("DATA_PRODUCT_REFERENCE_UNRESOLVED", &reference.from_field);
+        }
+    }
+    for (index, association) in product.resource_associations.iter().enumerate() {
+        if let Some(contract) = &association.contract {
+            if !resource_contract_resolves(contract, context)
+                && !stable_occurrence(previous, entity, &format!("resource_associations[{index}]"))
+            {
+                issue(
+                    "DATA_PRODUCT_REFERENCE_UNRESOLVED",
+                    &format!("resource_associations[{index}].contract"),
+                );
+            }
         }
     }
     for (index, output) in product.outputs.iter().enumerate() {
@@ -237,15 +258,72 @@ fn provider_exists(
     }
 }
 
+fn stable_occurrence(previous: Option<&pb::Entity>, current: &pb::Entity, field: &str) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    let Ok(prior) = trogon_atlas_core::connections::connection_occurrences(previous) else {
+        return false;
+    };
+    let Ok(now) = trogon_atlas_core::connections::connection_occurrences(current) else {
+        return false;
+    };
+    now.iter().any(|occurrence| {
+        (field == occurrence.path || field.starts_with(&format!("{}.", occurrence.path)))
+            && prior.iter().any(|old| old == occurrence)
+    })
+}
+
+fn resource_contract_resolves(
+    contract: &pb::ProductResourceContract,
+    context: &ArchitectureContext<'_>,
+) -> bool {
+    match contract.r#type.as_ref() {
+        Some(pb::product_resource_contract::Type::Schema(reference)) => reference
+            .id
+            .as_ref()
+            .is_some_and(|id| context.find(pb::EntityKind::Schema, id).is_some()),
+        Some(pb::product_resource_contract::Type::LibraryType(reference)) => reference
+            .library
+            .as_ref()
+            .and_then(|r| r.id.as_ref())
+            .is_some_and(|id| context.find(pb::EntityKind::TypeLibrary, id).is_some()),
+        Some(pb::product_resource_contract::Type::ContractType(reference)) => reference
+            .schema
+            .as_ref()
+            .and_then(|r| r.specification.as_ref())
+            .and_then(|r| r.id.as_ref())
+            .and_then(|id| context.find(pb::EntityKind::Specification, id))
+            .is_some_and(|owner| {
+                trogon_atlas_core::specification::resolve_type(owner, reference).is_ok()
+            }),
+        None => false,
+    }
+}
+
 pub(crate) fn library_types(
     product: &pb::DataProduct,
 ) -> impl Iterator<Item = &pb::TypeLibraryTypeRef> {
-    product.outputs.iter().filter_map(|output| {
+    let outputs = product.outputs.iter().filter_map(|output| {
         match output.contract.as_ref().and_then(|c| c.r#type.as_ref()) {
             Some(pb::output_contract::Type::LibraryType(value)) => Some(value),
             _ => None,
         }
-    })
+    });
+    let associations = product
+        .resource_associations
+        .iter()
+        .filter_map(|association| {
+            match association
+                .contract
+                .as_ref()
+                .and_then(|contract| contract.r#type.as_ref())
+            {
+                Some(pb::product_resource_contract::Type::LibraryType(value)) => Some(value),
+                _ => None,
+            }
+        });
+    outputs.chain(associations)
 }
 
 pub(crate) fn selected_endpoints(

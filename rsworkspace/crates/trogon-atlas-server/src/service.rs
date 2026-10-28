@@ -1,3 +1,5 @@
+#[path = "channel_messages.rs"]
+mod channel_messages;
 #[path = "source_integration.rs"]
 mod source_integration;
 #[path = "term_domains.rs"]
@@ -3053,6 +3055,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let response = self
             .type_libraries
             .descriptor_set(&*self.store, &req.namespace, branch.as_deref())
+            .await?;
+        Ok(Response::new(response))
+    }
+
+    async fn list_channel_messages(
+        &self,
+        req: Request<pb::ListChannelMessagesRequest>,
+    ) -> Result<Response<pb::ListChannelMessagesResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        let request = req.into_inner();
+        let response = self
+            .query_channel_messages(principal.as_ref(), branch.as_deref(), &vis, request)
             .await?;
         Ok(Response::new(response))
     }

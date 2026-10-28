@@ -172,3 +172,11 @@ amendments, Term domain ownership, and Document content and classifications.
 CalendarDate uses the shared type package with descriptor break acknowledgments.
 Upgrade clients and server together before authoring these fields to prevent
 lossy writes.
+
+Revision 19 adds descriptive `DataProduct.resource_associations`, independent
+`Specification.message_channels`, and `SchemaBinding.environments` /
+`is_default`. `CONTRACT_REVISION`, `MIN_CLIENT_CONTRACT_REVISION`, and
+`MIN_SERVER_CONTRACT_REVISION` are all 19. Older writers are refused before a
+mutation because they would drop these stored fields. `DataProduct` field 9
+stays reserved for storage claims and is not part of this revision. Claim-route
+and operation-binding inverse discovery are not included.

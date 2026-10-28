@@ -819,6 +819,15 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.ClaimDeliveryMode": {
+      "enum": [
+        "CLAIM_DELIVERY_MODE_PULL",
+        "CLAIM_DELIVERY_MODE_PUSH",
+        "CLAIM_DELIVERY_MODE_PUSH_PULL",
+        "CLAIM_DELIVERY_MODE_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
     "trogonatlas.eventmodel.v1alpha1.Command": {
       "additionalProperties": false,
       "properties": {
@@ -1963,6 +1972,12 @@
         "purpose": {
           "type": "string"
         },
+        "resourceAssociations": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ProductResourceAssociation"
+          },
+          "type": "array"
+        },
         "supersedes": {
           "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
         },
@@ -2772,6 +2787,15 @@
           "type": "object"
         }
       ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.EnvironmentName": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.Event": {
       "additionalProperties": false,
@@ -3690,6 +3714,40 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.MessageChannelDeclaration": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "channel": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelRef"
+            },
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "deliveryMode": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ClaimDeliveryMode"
+            },
+            "doc": {
+              "type": "string"
+            },
+            "memberId": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberId"
+            },
+            "parameterValues": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "trogonatlas.eventmodel.v1alpha1.MessageReadModelMapping": {
       "oneOf": [
         {
@@ -4280,6 +4338,270 @@
           "properties": {
             "id": {
               "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.ProductResourceAssociation": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "event",
+                  "command"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "event",
+                  "message"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "event",
+                  "component"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "event",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "event",
+                  "channel"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "event",
+                  "dataStore"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "command",
+                  "message"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "command",
+                  "component"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "command",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "command",
+                  "channel"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "command",
+                  "dataStore"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "message",
+                  "component"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "message",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "message",
+                  "channel"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "message",
+                  "dataStore"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "channel"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "dataStore"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "externalSystem",
+                  "channel"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "externalSystem",
+                  "dataStore"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "channel",
+                  "dataStore"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "channel": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelRef"
+            },
+            "command": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CommandRef"
+            },
+            "component": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ComponentRef"
+            },
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "contract": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ProductResourceContract"
+            },
+            "dataStore": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataStoreRef"
+            },
+            "direction": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataPortDirection"
+            },
+            "doc": {
+              "type": "string"
+            },
+            "event": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EventRef"
+            },
+            "externalSystem": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalSystemRef"
+            },
+            "message": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.ProductResourceContract": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "schema",
+                  "contractType"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "schema",
+                  "libraryType"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "contractType",
+                  "libraryType"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "contractType": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContractTypeRef"
+            },
+            "libraryType": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TypeLibraryTypeRef"
+            },
+            "schema": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaRef"
             }
           },
           "type": "object"
@@ -5036,6 +5358,15 @@
             "doc": {
               "type": "string"
             },
+            "environments": {
+              "items": {
+                "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EnvironmentName"
+              },
+              "type": "array"
+            },
+            "isDefault": {
+              "type": "boolean"
+            },
             "libraryType": {
               "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TypeLibraryTypeRef"
             },
@@ -5489,6 +5820,12 @@
         "exposures": {
           "items": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ProviderExposure"
+          },
+          "type": "array"
+        },
+        "messageChannels": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MessageChannelDeclaration"
           },
           "type": "array"
         },

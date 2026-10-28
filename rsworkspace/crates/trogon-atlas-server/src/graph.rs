@@ -965,6 +965,24 @@ fn group_connection_ids(
     }
 }
 
+fn indexed_prefix(field: &str, prefix: &str) -> Option<usize> {
+    field
+        .strip_prefix(prefix)?
+        .split_once(']')
+        .and_then(|(index, _)| index.parse().ok())
+}
+
+fn schema_binding_index(field: &str) -> Option<(usize, usize)> {
+    let rest = field.strip_prefix("messages[")?;
+    let (message, rest) = rest.split_once("].schemas[")?;
+    let (binding, suffix) = rest.split_once(']')?;
+    if suffix.is_empty() || suffix.starts_with('.') {
+        Some((message.parse().ok()?, binding.parse().ok()?))
+    } else {
+        None
+    }
+}
+
 fn catalog_provenance(
     entity: &pb::Entity,
     field: &str,
@@ -1004,6 +1022,31 @@ fn catalog_provenance(
     }
     if let Some(id) = group_ids.get(field) {
         reference.connection_id = Some(id.clone());
+    }
+    if let Some(index) = indexed_prefix(field, "resource_associations[") {
+        if let Some(pb::entity::Kind::DataProduct(product)) = &entity.kind {
+            reference.connection_id = product
+                .resource_associations
+                .get(index)
+                .and_then(|association| association.connection_id.clone());
+        }
+    }
+    if let Some(index) = indexed_prefix(field, "message_channels[") {
+        if let Some(pb::entity::Kind::Specification(specification)) = &entity.kind {
+            reference.connection_id = specification
+                .message_channels
+                .get(index)
+                .and_then(|declaration| declaration.connection_id.clone());
+        }
+    }
+    if let Some((message, binding)) = schema_binding_index(field) {
+        if let Some(pb::entity::Kind::Specification(specification)) = &entity.kind {
+            reference.connection_id = specification
+                .messages
+                .get(message)
+                .and_then(|message| message.schemas.get(binding))
+                .and_then(|binding| binding.connection_id.clone());
+        }
     }
     (
         reference.catalog_subject,
