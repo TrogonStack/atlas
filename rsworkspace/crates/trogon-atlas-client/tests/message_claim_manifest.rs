@@ -177,3 +177,74 @@ fn malformed_claim_manifests_are_rejected_without_guessing_targets_or_alternativ
     }
     assert!(accepted.is_empty(), "accepted malformed manifests: {accepted:#?}");
 }
+
+#[test]
+fn describe_keeps_every_claim_occurrence_and_exact_provenance_without_merging_equals() {
+    use trogon_atlas_core::refs::outbound_refs;
+    let types = TranscodePool::builtin().unwrap();
+    let message = reference();
+    let claim = |id: &str| {
+        json!({"connectionId":{"value":id},"direction":"COMMUNICATION_DIRECTION_SEND","message":message})
+    };
+    let input = claim_manifest(
+        "Domain",
+        json!({
+            "claims":[claim("claim-a"), claim("claim-b")],
+            "routes":[
+                {"connectionId":{"value":"route-a"},"claimId":{"value":"claim-a"},"channel":"orders@1"},
+                {"connectionId":{"value":"route-b"},"claimId":{"value":"claim-a"},"channel":"orders@1"}
+            ],
+            "triggers":[{"connectionId":{"value":"trigger-a"},"claimId":{"value":"claim-b"},"message":message,"condition":{"value":"when approved"}}],
+            "fieldSelections":[{"connectionId":{"value":"selection-a"},"claimId":{"value":"claim-a"},"binding":exact_binding(),"selectors":[{"path":{"segments":["a"]}}]}]
+        }),
+    );
+    let entity = manifest::parse_str(&input, "claims.yaml")
+        .unwrap()
+        .remove(0)
+        .entity;
+    let owner = trogon_atlas_proto::EntityRef {
+        kind: trogon_atlas_proto::EntityKind::Domain as i32,
+        id: Some(trogon_atlas_proto::Id {
+            namespace: "claims".into(),
+            slug: "owner".into(),
+            version: 1,
+        }),
+    };
+    let outgoing: Vec<_> = outbound_refs(&entity)
+        .into_iter()
+        .map(|found| trogon_atlas_proto::Reference {
+            from: Some(owner.clone()),
+            from_field: found.from_field.clone(),
+            to: found.to_entity_ref(),
+            from_uid: "owner-uid".into(),
+            connection_id: found.from_field.contains("routes[1]").then(|| {
+                trogon_atlas_proto::ConnectionId {
+                    value: "route-b".into(),
+                }
+            }),
+            ..Default::default()
+        })
+        .collect();
+    let described =
+        trogon_atlas_client::view::describe(&entity, &types, &outgoing, &[]).unwrap();
+    let text = trogon_atlas_client::view::render_description(&described);
+    for field in [
+        "message_claims.claims[0].message.specification",
+        "message_claims.claims[1].message.specification",
+        "message_claims.triggers[0].message.specification",
+        "message_claims.routes[0].channel",
+        "message_claims.routes[1].channel",
+        "message_claims.field_selections[0].binding.owner",
+    ] {
+        let lines = text
+            .lines()
+            .filter(|line| line.trim_start().starts_with(field))
+            .count();
+        assert_eq!(lines, 1, "{field}\n{text}");
+    }
+    assert_eq!(text.matches("Exact reference provenance").count(), 6);
+    assert_eq!(
+        text.matches(r#""connectionId":{"value":"route-b"}"#).count(),
+        1
+    );
+}
