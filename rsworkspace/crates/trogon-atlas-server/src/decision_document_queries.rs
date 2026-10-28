@@ -138,6 +138,7 @@ impl CatalogQuery {
             visited,
             visited_subjects: subjects,
             visited_documents: documents,
+            page_receipt: None,
         })
     }
 }
