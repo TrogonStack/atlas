@@ -321,98 +321,241 @@ pub(crate) fn retarget(
 }
 
 pub(crate) fn rewrite_local_selections(previous: &Entity, proposed: &mut Entity) {
-    let Some(old) = declarations(previous) else { return };
-    let Some(new) = declarations_mut(proposed) else { return };
-    let changed: std::collections::HashMap<_, _> = old.claims.iter().zip(&new.claims).filter_map(|(a,b)| Some((a.connection_id.as_ref()?.value.clone(), b.connection_id.clone()?))).collect();
-    for id in new.routes.iter_mut().map(|v|&mut v.claim_id).chain(new.triggers.iter_mut().map(|v|&mut v.claim_id)).chain(new.field_selections.iter_mut().map(|v|&mut v.claim_id)) {
-        if let Some(replacement)=id.as_ref().and_then(|v|changed.get(&v.value)) { *id=Some(replacement.clone()); }
+    let Some(old) = declarations(previous) else {
+        return;
+    };
+    let Some(new) = declarations_mut(proposed) else {
+        return;
+    };
+    let changed: std::collections::HashMap<_, _> = old
+        .claims
+        .iter()
+        .zip(&new.claims)
+        .filter_map(|(a, b)| {
+            Some((
+                a.connection_id.as_ref()?.value.clone(),
+                b.connection_id.clone()?,
+            ))
+        })
+        .collect();
+    for id in new
+        .routes
+        .iter_mut()
+        .map(|v| &mut v.claim_id)
+        .chain(new.triggers.iter_mut().map(|v| &mut v.claim_id))
+        .chain(new.field_selections.iter_mut().map(|v| &mut v.claim_id))
+    {
+        if let Some(replacement) = id.as_ref().and_then(|v| changed.get(&v.value)) {
+            *id = Some(replacement.clone());
+        }
     }
 }
 
 pub fn validate_route_target(route: &pb::ClaimRoute, channel: &pb::Channel) -> Result<()> {
- exact(channel.id.as_ref())?;
- check(route.channel.as_ref().and_then(|c|c.id.as_ref())==channel.id.as_ref(),"channel unavailable")?;
- let Some(address)=&channel.address else {return check(route.parameter_values.is_empty(),"channel has no address parameters")};
- for (name,value) in &route.parameter_values {
-  let parameter=address.parameters.iter().find(|p|p.name.as_ref().is_some_and(|n|n.value==*name)).ok_or_else(||ClaimError("unknown channel parameter".into()))?;
-  check(parameter.allowed_values.as_ref().is_none_or(|v|v.values.contains(value)),"disallowed channel parameter value")?;
- }
- for parameter in &address.parameters {
-  let name=parameter.name.as_ref().ok_or_else(||ClaimError("channel parameter name required".into()))?;
-  check(parameter.default.is_some() || route.parameter_values.contains_key(&name.value),"required channel parameter missing")?;
- }
- Ok(())
+    exact(channel.id.as_ref())?;
+    check(
+        route.channel.as_ref().and_then(|c| c.id.as_ref()) == channel.id.as_ref(),
+        "channel unavailable",
+    )?;
+    let Some(address) = &channel.address else {
+        return check(
+            route.parameter_values.is_empty(),
+            "channel has no address parameters",
+        );
+    };
+    for (name, value) in &route.parameter_values {
+        let parameter = address
+            .parameters
+            .iter()
+            .find(|p| p.name.as_ref().is_some_and(|n| n.value == *name))
+            .ok_or_else(|| ClaimError("unknown channel parameter".into()))?;
+        check(
+            parameter
+                .allowed_values
+                .as_ref()
+                .is_none_or(|v| v.values.contains(value)),
+            "disallowed channel parameter value",
+        )?;
+    }
+    for parameter in &address.parameters {
+        let name = parameter
+            .name
+            .as_ref()
+            .ok_or_else(|| ClaimError("channel parameter name required".into()))?;
+        check(
+            parameter.default.is_some() || route.parameter_values.contains_key(&name.value),
+            "required channel parameter missing",
+        )?;
+    }
+    Ok(())
 }
-pub fn validate_source_write(previous: Option<&Entity>, proposed: &Entity, unit: crate::source_integration::OwnershipUnit) -> Result<()> {
- check(!((previous.is_none() || unit==crate::source_integration::OwnershipUnit::WholeOwner) && has_content(proposed)) && !(unit==crate::source_integration::OwnershipUnit::WholeOwner && previous.is_some_and(has_content)),"message claims are native-only")
+pub fn validate_source_write(
+    previous: Option<&Entity>,
+    proposed: &Entity,
+    unit: crate::source_integration::OwnershipUnit,
+) -> Result<()> {
+    check(
+        !((previous.is_none() || unit == crate::source_integration::OwnershipUnit::WholeOwner)
+            && has_content(proposed))
+            && !(unit == crate::source_integration::OwnershipUnit::WholeOwner
+                && previous.is_some_and(has_content)),
+        "message claims are native-only",
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FieldSelectorVerification { NativePath, OpaqueUnverified }
-fn selected_binding<'a>(owner: &Entity, selection: &pb::ClaimFieldSelection, specification: &'a Entity) -> Result<&'a pb::SchemaBinding> {
- validate_values(owner)?;
- let mut checked=owner.clone();
- declarations_mut(&mut checked).ok_or_else(||ClaimError("claim owner required".into()))?.field_selections=vec![selection.clone()];
- validate_values(&checked)?;
- let claim=declarations(owner).into_iter().flat_map(|v|&v.claims).find(|c|c.connection_id==selection.claim_id).ok_or_else(||ClaimError("local claim unavailable".into()))?;
- let reference=message(claim.message.as_ref())?;
- let crate::specification::ContractMember::Message(m)=crate::specification::resolve_member(specification,reference).map_err(|e|ClaimError(e.to_string()))? else{return Err(ClaimError("MESSAGE required".into()))};
- let binding=selection.binding.as_ref().ok_or_else(||ClaimError("binding required".into()))?;
- connections::resolve_connection(specification,binding).map_err(|e|ClaimError(e.to_string()))?;
- let selected=m.schemas.iter().find(|b|b.connection_id==binding.id).ok_or_else(||ClaimError("binding unavailable on selected message".into()))?;
- check(selected.role==pb::schema_binding::Role::Payload as i32,"PAYLOAD binding required")?;
- Ok(selected)
+pub enum FieldSelectorVerification {
+    NativePath,
+    OpaqueUnverified,
+}
+fn selected_binding<'a>(
+    owner: &Entity,
+    selection: &pb::ClaimFieldSelection,
+    specification: &'a Entity,
+) -> Result<&'a pb::SchemaBinding> {
+    validate_values(owner)?;
+    let mut checked = owner.clone();
+    declarations_mut(&mut checked)
+        .ok_or_else(|| ClaimError("claim owner required".into()))?
+        .field_selections = vec![selection.clone()];
+    validate_values(&checked)?;
+    let claim = declarations(owner)
+        .into_iter()
+        .flat_map(|v| &v.claims)
+        .find(|c| c.connection_id == selection.claim_id)
+        .ok_or_else(|| ClaimError("local claim unavailable".into()))?;
+    let reference = message(claim.message.as_ref())?;
+    let crate::specification::ContractMember::Message(m) =
+        crate::specification::resolve_member(specification, reference)
+            .map_err(|e| ClaimError(e.to_string()))?
+    else {
+        return Err(ClaimError("MESSAGE required".into()));
+    };
+    let binding = selection
+        .binding
+        .as_ref()
+        .ok_or_else(|| ClaimError("binding required".into()))?;
+    connections::resolve_connection(specification, binding)
+        .map_err(|e| ClaimError(e.to_string()))?;
+    let selected = m
+        .schemas
+        .iter()
+        .find(|b| b.connection_id == binding.id)
+        .ok_or_else(|| ClaimError("binding unavailable on selected message".into()))?;
+    check(
+        selected.role == pb::schema_binding::Role::Payload as i32,
+        "PAYLOAD binding required",
+    )?;
+    Ok(selected)
 }
 /// Supplies the single native Schema row needed by path validation, without expanding references.
-pub fn native_schema_target(owner: &Entity, selection: &pb::ClaimFieldSelection, specification: &Entity) -> Result<Option<pb::SchemaRef>> {
- let b=selected_binding(owner,selection,specification)?;
- match &b.r#type {
-  Some(pb::schema_binding::Type::Schema(r))=>{exact(r.id.as_ref())?;Ok(Some(r.clone()))},
-  Some(pb::schema_binding::Type::LocalSchema(id))=>{
-   let Some(entity::Kind::Specification(s))=&specification.kind else{return Err(ClaimError("Specification required".into()))};
-   let d=s.schemas.iter().find(|s|s.member_id.as_ref()==Some(id)).and_then(|s|s.definition.as_ref()).ok_or_else(||ClaimError("local schema unavailable".into()))?;
-   if d.selector.is_some(){return Ok(None)}
-   match &d.target {Some(pb::schema_definition::Target::Schema(r))=>{exact(r.id.as_ref())?;Ok(Some(r.clone()))},_=>Ok(None)}
-  },
-  Some(pb::schema_binding::Type::ContractType(_) | pb::schema_binding::Type::LibraryType(_))=>Ok(None),
-  None=>Err(ClaimError("binding type required".into()))
- }
-}
-pub fn validate_field_selection(owner:&Entity,selection:&pb::ClaimFieldSelection,specification:&Entity,schema:Option<&Entity>) -> Result<Vec<FieldSelectorVerification>> {
- let target=native_schema_target(owner,selection,specification)?;
- let mut output=Vec::with_capacity(selection.selectors.len());
- for selector in &selection.selectors {
-  match &selector.selector {
-   Some(pb::claim_field_selector::Selector::Opaque(_))=>output.push(FieldSelectorVerification::OpaqueUnverified),
-   Some(pb::claim_field_selector::Selector::Path(path))=>{
-    let expected=target.as_ref().ok_or_else(||ClaimError("native paths require a native Schema binding".into()))?;
-    let Some(Entity{kind:Some(entity::Kind::Schema(native)),..})=schema else{return Err(ClaimError("native schema unavailable".into()))};
-    check(native.id==expected.id,"native schema unavailable")?;
-    let mut fields=&native.fields;
-    for (index,segment) in path.segments.iter().enumerate(){
-     let mut matches=fields.iter().filter(|f|f.name==*segment);
-     let field=matches.next().ok_or_else(||ClaimError("native field path unavailable".into()))?;
-     check(matches.next().is_none(),"ambiguous native field path")?;
-     if index+1<path.segments.len(){
-      let Some(pb::field_type::Kind::Object(object))=field.r#type.as_ref().and_then(|t|t.kind.as_ref()) else{return Err(ClaimError("native path must traverse inline objects".into()))};
-      fields=&object.fields;
-     }
+pub fn native_schema_target(
+    owner: &Entity,
+    selection: &pb::ClaimFieldSelection,
+    specification: &Entity,
+) -> Result<Option<pb::SchemaRef>> {
+    let b = selected_binding(owner, selection, specification)?;
+    match &b.r#type {
+        Some(pb::schema_binding::Type::Schema(r)) => {
+            exact(r.id.as_ref())?;
+            Ok(Some(r.clone()))
+        }
+        Some(pb::schema_binding::Type::LocalSchema(id)) => {
+            let Some(entity::Kind::Specification(s)) = &specification.kind else {
+                return Err(ClaimError("Specification required".into()));
+            };
+            let d = s
+                .schemas
+                .iter()
+                .find(|s| s.member_id.as_ref() == Some(id))
+                .and_then(|s| s.definition.as_ref())
+                .ok_or_else(|| ClaimError("local schema unavailable".into()))?;
+            if d.selector.is_some() {
+                return Ok(None);
+            }
+            match &d.target {
+                Some(pb::schema_definition::Target::Schema(r)) => {
+                    exact(r.id.as_ref())?;
+                    Ok(Some(r.clone()))
+                }
+                _ => Ok(None),
+            }
+        }
+        Some(
+            pb::schema_binding::Type::ContractType(_) | pb::schema_binding::Type::LibraryType(_),
+        ) => Ok(None),
+        None => Err(ClaimError("binding type required".into())),
     }
-    output.push(FieldSelectorVerification::NativePath);
-   },
-   None=>return Err(ClaimError("field selector required".into()))
-  }
- }
- Ok(output)
+}
+pub fn validate_field_selection(
+    owner: &Entity,
+    selection: &pb::ClaimFieldSelection,
+    specification: &Entity,
+    schema: Option<&Entity>,
+) -> Result<Vec<FieldSelectorVerification>> {
+    let target = native_schema_target(owner, selection, specification)?;
+    let mut output = Vec::with_capacity(selection.selectors.len());
+    for selector in &selection.selectors {
+        match &selector.selector {
+            Some(pb::claim_field_selector::Selector::Opaque(_)) => {
+                output.push(FieldSelectorVerification::OpaqueUnverified)
+            }
+            Some(pb::claim_field_selector::Selector::Path(path)) => {
+                let expected = target.as_ref().ok_or_else(|| {
+                    ClaimError("native paths require a native Schema binding".into())
+                })?;
+                let Some(Entity {
+                    kind: Some(entity::Kind::Schema(native)),
+                    ..
+                }) = schema
+                else {
+                    return Err(ClaimError("native schema unavailable".into()));
+                };
+                check(native.id == expected.id, "native schema unavailable")?;
+                let mut fields = &native.fields;
+                for (index, segment) in path.segments.iter().enumerate() {
+                    let mut matches = fields.iter().filter(|f| f.name == *segment);
+                    let field = matches
+                        .next()
+                        .ok_or_else(|| ClaimError("native field path unavailable".into()))?;
+                    check(matches.next().is_none(), "ambiguous native field path")?;
+                    if index + 1 < path.segments.len() {
+                        let Some(pb::field_type::Kind::Object(object)) =
+                            field.r#type.as_ref().and_then(|t| t.kind.as_ref())
+                        else {
+                            return Err(ClaimError(
+                                "native path must traverse inline objects".into(),
+                            ));
+                        };
+                        fields = &object.fields;
+                    }
+                }
+                output.push(FieldSelectorVerification::NativePath);
+            }
+            None => return Err(ClaimError("field selector required".into())),
+        }
+    }
+    Ok(output)
 }
 
 /// Connects an extracted reference to its own identified leaf, without following local claims.
-pub fn reference_occurrence(owner: &Entity, from_field: &str) -> std::result::Result<Option<connections::ConnectionOccurrence>, connections::ConnectionError> {
-    if !from_field.starts_with("message_claims.") { return Ok(None) }
+pub fn reference_occurrence(
+    owner: &Entity,
+    from_field: &str,
+) -> std::result::Result<Option<connections::ConnectionOccurrence>, connections::ConnectionError> {
+    if !from_field.starts_with("message_claims.") {
+        return Ok(None);
+    }
     connections::validate_stored_connection_ids(owner)?;
-    Ok(connections::connection_occurrences(owner)?.into_iter().find(|v| {
-        v.path.split_once('.').is_some_and(|(_,relative)| from_field.strip_prefix(relative).is_some_and(|suffix|suffix.starts_with('.')))
-    }))
+    Ok(connections::connection_occurrences(owner)?
+        .into_iter()
+        .find(|v| {
+            v.path.split_once('.').is_some_and(|(_, relative)| {
+                from_field
+                    .strip_prefix(relative)
+                    .is_some_and(|suffix| suffix.starts_with('.'))
+            })
+        }))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -422,12 +565,25 @@ pub struct ClaimRouteAuthority<'a> {
 }
 /// Independent claim-route authority for an inverse Channel message query.
 /// The caller owns authorization and request-wide scan and output budgets.
-pub fn routes_for_channel<'a>(owner: &'a Entity, channel: &pb::ChannelRef) -> Result<Vec<ClaimRouteAuthority<'a>>> {
+pub fn routes_for_channel<'a>(
+    owner: &'a Entity,
+    channel: &pb::ChannelRef,
+) -> Result<Vec<ClaimRouteAuthority<'a>>> {
     exact(channel.id.as_ref())?;
     validate_values(owner)?;
-    let Some(v)=declarations(owner) else {return Ok(Vec::new())};
-    v.routes.iter().filter(|r|r.channel.as_ref()==Some(channel)).map(|route| {
-        let claim=v.claims.iter().find(|c|c.connection_id==route.claim_id).ok_or_else(||ClaimError("local claim unavailable".into()))?;
-        Ok(ClaimRouteAuthority{claim,route})
-    }).collect()
+    let Some(v) = declarations(owner) else {
+        return Ok(Vec::new());
+    };
+    v.routes
+        .iter()
+        .filter(|r| r.channel.as_ref() == Some(channel))
+        .map(|route| {
+            let claim = v
+                .claims
+                .iter()
+                .find(|c| c.connection_id == route.claim_id)
+                .ok_or_else(|| ClaimError("local claim unavailable".into()))?;
+            Ok(ClaimRouteAuthority { claim, route })
+        })
+        .collect()
 }

@@ -42,9 +42,10 @@ pub fn prepare_entity(
             assign_connection_ids(&mut prepared)?;
         }
     }
+    prepared = stamp_system(previous, &prepared);
     crate::message_claims::validate_local_selections(previous, &prepared)
         .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
-    Ok(stamp_system(previous, &prepared))
+    Ok(prepared)
 }
 
 /// Land a trusted branch value after checking its baseline concurrency guard.
@@ -87,6 +88,8 @@ pub fn prepare_landing(
             prepared.system = Some(system.clone());
         }
     }
+    crate::message_claims::validate_values(&prepared)
+        .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
     Ok(prepared)
 }
 
