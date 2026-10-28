@@ -890,3 +890,155 @@ async fn lifecycle_metadata_is_supported_on_the_design_graph_kind() {
         Code::InvalidArgument
     );
 }
+
+fn padded_graph(slug: &str, filler: usize, last: usize) -> pb::Entity {
+    let text = |length: usize| pb::CatalogText {
+        value: "x".repeat(length),
+    };
+    let mut steps: Vec<_> = (0..filler)
+        .map(|index| pb::TopologyStep {
+            title: Some(title(&format!("Filler {index}"))),
+            summary: Some(text(16_000)),
+            ..Default::default()
+        })
+        .collect();
+    steps.push(pb::TopologyStep {
+        title: Some(title("Tail")),
+        summary: Some(text(last)),
+        ..Default::default()
+    });
+    graph(slug, steps)
+}
+
+async fn validate_only(
+    client: &mut Client,
+    value: pb::Entity,
+) -> Result<pb::PutEntityResponse, tonic::Status> {
+    client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(value),
+                validate_only: true,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .map(tonic::Response::into_inner)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prepared_owner_accepts_exactly_one_mebibyte_and_rejects_one_byte_more() {
+    use prost::Message;
+    const CEILING: usize = 1_048_576;
+    let mut client = client().await;
+    let probe = put(&mut client, padded_graph("bound-a", 65, 300)).await;
+    let probe_size = probe.entity.as_ref().unwrap().encoded_len();
+    assert!(probe_size < CEILING);
+    let tail = 300 + (CEILING - probe_size);
+    assert!(tail < 16_384, "tail {tail}");
+
+    validate_only(&mut client, padded_graph("bound-b", 65, tail))
+        .await
+        .unwrap();
+    let over = validate_only(&mut client, padded_graph("bound-b", 65, tail + 1))
+        .await
+        .unwrap_err();
+    assert_eq!(over.code(), Code::InvalidArgument, "{over}");
+    assert!(over.message().contains("byte limit"), "{over}");
+
+    let refused = try_put(
+        &mut client,
+        padded_graph("bound-c", 65, tail + 1),
+        String::new(),
+        ADMIN,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.code(), Code::InvalidArgument, "{refused}");
+    for slug in ["bound-b", "bound-c"] {
+        let missing = client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::DesignGraph as i32,
+                    id: Some(id(slug)),
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(missing.code(), Code::NotFound, "{slug}");
+    }
+
+    let mut grown = probe.entity.clone().unwrap();
+    graph_mut(&mut grown).steps[65].summary = Some(pb::CatalogText {
+        value: "x".repeat(300 + (CEILING - probe_size) + 1),
+    });
+    let rejected = try_put(&mut client, grown, probe.etag.clone(), ADMIN)
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.code(), Code::InvalidArgument, "{rejected}");
+    let stored = detail(&mut client, "bound-a", READER).await.unwrap();
+    assert_eq!(
+        steps_of(stored.entity.as_ref().unwrap())[65]
+            .summary
+            .as_ref()
+            .unwrap()
+            .value
+            .len(),
+        300,
+        "rejected growth must not change the stored owner"
+    );
+}
+
+async fn list_incoming(
+    client: &mut Client,
+) -> Result<tonic::Response<pb::ListIncomingDesignGraphSubflowsResponse>, tonic::Status> {
+    client
+        .list_incoming_design_graph_subflows(request(
+            pb::ListIncomingDesignGraphSubflowsRequest {
+                graph: Some(graph_ref("emit-target")),
+            },
+            READER,
+            None,
+        ))
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn incoming_subflow_output_stops_at_the_emitted_record_ceiling() {
+    let mut client = client().await;
+    put(
+        &mut client,
+        graph("emit-target", vec![step("Target", None)]),
+    )
+    .await;
+    let subflows = |count: usize| -> Vec<pb::TopologyStep> {
+        (0..count)
+            .map(|index| {
+                step(
+                    &format!("Subflow {index}"),
+                    Some(pb::topology_step_target::Selection::Subflow(graph_ref(
+                        "emit-target",
+                    ))),
+                )
+            })
+            .collect()
+    };
+    for owner in 0..8 {
+        put(
+            &mut client,
+            graph(&format!("emit-owner-{owner}"), subflows(512)),
+        )
+        .await;
+    }
+    let at_ceiling = list_incoming(&mut client).await.unwrap().into_inner();
+    assert_eq!(at_ceiling.references.len(), 4_096);
+
+    put(&mut client, graph("emit-owner-8", subflows(1))).await;
+    let exhausted = list_incoming(&mut client).await.unwrap_err();
+    assert_eq!(exhausted.code(), Code::ResourceExhausted);
+    assert_eq!(exhausted.message(), "catalog output budget exceeded");
+}
