@@ -1302,6 +1302,10 @@ impl EventModelServiceImpl {
             Status::invalid_argument("x-trogon-atlas-branch header is not valid UTF-8")
         })?;
         validate_branch_name(name)?;
+        let principal = Self::principal_from_metadata(req);
+        if !Self::branch_visible(principal.as_ref(), name) {
+            return Err(Status::not_found("branch not found"));
+        }
         Ok(Some(name.to_string()))
     }
 

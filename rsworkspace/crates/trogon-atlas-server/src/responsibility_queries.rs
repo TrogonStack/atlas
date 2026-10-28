@@ -400,14 +400,13 @@ impl EventModelServiceImpl {
             }
         }
         if let Some(selected) = crate::message_claims_resources::selected(subject, &row.entity) {
-            let targets = match crate::message_claims_resources::native_targets(
+            let Ok(targets) = crate::message_claims_resources::native_targets(
                 &selected,
                 &crate::validation::architecture_resources::ArchitectureContext::new(
                     query.world.values().filter_map(Option::as_ref),
                 ),
-            ) {
-                Ok(targets) => targets,
-                Err(_) => return Ok(State::Unresolved),
+            ) else {
+                return Ok(State::Unresolved);
             };
             for (kind, id) in targets {
                 if !query.lens.admits(&id.namespace) {

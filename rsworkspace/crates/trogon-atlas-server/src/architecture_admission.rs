@@ -365,7 +365,8 @@ impl EventModelServiceImpl {
                     prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
                 };
             super::validate_entity_content(&prepared)?;
-            let issues = validation::architecture_resources::validate(&prepared, &context);
+            let issues =
+                validation::architecture_resources::validate_admission(&prepared, &context);
             if !issues.is_empty() {
                 return Err(Status::invalid_argument(super::format_scenario_issues(
                     &issues,
@@ -535,6 +536,45 @@ impl EventModelServiceImpl {
                     .and_then(|replacement| replacement.decision.as_ref())
                     .and_then(|reference| reference.id.clone());
             }
+        }
+        let mut claim_budget = crate::decision_document_resources::CatalogBudget::default();
+        for resource in &resources {
+            if !trogon_atlas_core::message_claims::has_content(resource) {
+                continue;
+            }
+            claim_budget.owner(resource)?;
+            let references = trogon_atlas_core::outbound_refs(resource)
+                .into_iter()
+                .filter(|r| r.from_field.starts_with("message_claims."))
+                .filter_map(|r| Some((r.to_kind?, r.to_id)))
+                .collect();
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                access,
+                references,
+                &mut loaded,
+                &mut world,
+            )
+            .await?;
+            if let Ok(targets) = crate::message_claims_resources::native_targets(
+                resource,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            ) {
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    access,
+                    targets,
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+            }
+            charge_claim_selections(resource, &world, &mut claim_budget)?;
+        }
+        for row in world.values() {
+            claim_budget.row(&row.entity)?;
         }
         Ok(world.into_values().collect())
     }

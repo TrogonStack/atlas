@@ -311,7 +311,32 @@ pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::Validation
     validate_in_context(entity, &ArchitectureContext::new(all))
 }
 
+pub(crate) fn validate_admission(
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    validate_shipped_in_context(entity, &ArchitectureContext::new(all))
+}
+
 pub(super) fn validate_in_context(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate_shipped_in_context(entity, context);
+    if trogon_atlas_core::message_claims::has_content(entity)
+        && crate::message_claims_resources::validate(entity, context).is_err()
+    {
+        issues.push(super::issue_error(
+            "MESSAGE_CLAIMS_REFERENCE_UNRESOLVED",
+            "Message claim selection is absent, invalid or unavailable".into(),
+            super::slice_ref(entity),
+            "message_claims",
+        ));
+    }
+    issues
+}
+
+fn validate_shipped_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
 ) -> Vec<pb::ValidationIssue> {

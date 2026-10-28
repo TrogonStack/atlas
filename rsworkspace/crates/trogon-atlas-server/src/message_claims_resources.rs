@@ -100,17 +100,8 @@ pub(crate) fn validate(
             .ok_or_else(unavailable)?;
         trogon_atlas_core::specification::resolve_member(spec, m).map_err(|_| unavailable())?;
     }
-    for r in &v.routes {
-        let target = r
-            .channel
-            .as_ref()
-            .and_then(|v| v.id.as_ref())
-            .and_then(|id| context.find(pb::EntityKind::Channel, id))
-            .ok_or_else(unavailable)?;
-        let Some(pb::entity::Kind::Channel(channel)) = &target.kind else {
-            return Err(unavailable());
-        };
-        claims::validate_route_target(r, channel).map_err(|_| unavailable())?;
+    for route in &v.routes {
+        authorized_route_authority(owner, route, context)?;
     }
     for s in &v.field_selections {
         let spec = s
@@ -213,4 +204,41 @@ pub(crate) fn charge_selections(
         }
     }
     Ok(())
+}
+
+/// The Channel query joins this authority using its authorized, request-cached context.
+pub(crate) fn authorized_route_authority(
+    owner: &pb::Entity,
+    route: &pb::ClaimRoute,
+    context: &ArchitectureContext<'_>,
+) -> Result<(pb::MessageClaim, pb::ClaimRoute), Status> {
+    let claim = claims::declarations(owner)
+        .into_iter()
+        .flat_map(|v| &v.claims)
+        .find(|c| route.claim_id.is_some() && c.connection_id == route.claim_id)
+        .ok_or_else(unavailable)?;
+    let message = claim.message.as_ref().ok_or_else(unavailable)?;
+    let specification = message
+        .specification
+        .as_ref()
+        .and_then(|r| r.id.as_ref())
+        .and_then(|id| context.find(pb::EntityKind::Specification, id))
+        .ok_or_else(unavailable)?;
+    if !matches!(
+        trogon_atlas_core::specification::resolve_member(specification, message),
+        Ok(trogon_atlas_core::specification::ContractMember::Message(_))
+    ) {
+        return Err(unavailable());
+    }
+    let channel = route
+        .channel
+        .as_ref()
+        .and_then(|r| r.id.as_ref())
+        .and_then(|id| context.find(pb::EntityKind::Channel, id))
+        .ok_or_else(unavailable)?;
+    let Some(pb::entity::Kind::Channel(channel)) = &channel.kind else {
+        return Err(unavailable());
+    };
+    claims::validate_route_target(route, channel).map_err(|_| unavailable())?;
+    Ok((claim.clone(), route.clone()))
 }
