@@ -400,25 +400,24 @@ impl Failure {
         // Single-entity stale refusals carry the same revision pair BatchMutate
         // puts on precondition_failure. Prefer those keys when present so Put
         // and Delete dry-run/apply refusals surface them to MCP/CLI.
-        let details = if metadata.contains_key("expected_etag")
-            || metadata.contains_key("actual_etag")
-        {
-            let expected = metadata.get("expected_etag").map_or("", String::as_str);
-            let actual = metadata.get("actual_etag").map_or("", String::as_str);
-            FailureDetails::from_json(json!({
-                "expected_etag": revision_detail(expected),
-                "actual_etag": revision_detail(actual),
-            }))
-        } else if let Some(journal) = metadata.get("journal") {
-            FailureDetails::from_json(json!({ "journal": journal }))
-        } else if let Some(slugs) = metadata.get("did_you_mean") {
-            // ErrorInfo metadata is string-to-string, so the server joins the
-            // slugs with a comma, which a valid slug can never contain.
-            let slugs: Vec<&str> = slugs.split(',').filter(|s| !s.is_empty()).collect();
-            FailureDetails::from_json(json!({ "did_you_mean": slugs }))
-        } else {
-            FailureDetails::empty()
-        };
+        let details =
+            if metadata.contains_key("expected_etag") || metadata.contains_key("actual_etag") {
+                let expected = metadata.get("expected_etag").map_or("", String::as_str);
+                let actual = metadata.get("actual_etag").map_or("", String::as_str);
+                FailureDetails::from_json(json!({
+                    "expected_etag": revision_detail(expected),
+                    "actual_etag": revision_detail(actual),
+                }))
+            } else if let Some(journal) = metadata.get("journal") {
+                FailureDetails::from_json(json!({ "journal": journal }))
+            } else if let Some(slugs) = metadata.get("did_you_mean") {
+                // ErrorInfo metadata is string-to-string, so the server joins the
+                // slugs with a comma, which a valid slug can never contain.
+                let slugs: Vec<&str> = slugs.split(',').filter(|s| !s.is_empty()).collect();
+                FailureDetails::from_json(json!({ "did_you_mean": slugs }))
+            } else {
+                FailureDetails::empty()
+            };
         let failure = Self::new(category, status.message().to_string())
             .with_code(FailureCode::known(code))
             .with_details(details);
@@ -740,7 +739,8 @@ mod tests {
                 ("actual_etag".to_string(), "9".to_string()),
             ]),
         );
-        let status = Status::with_error_details(Code::AlreadyExists, "entity already exists", details);
+        let status =
+            Status::with_error_details(Code::AlreadyExists, "entity already exists", details);
         let failure = Failure::from_status(&status);
         assert_eq!(failure.category, FailureCategory::Precondition);
         assert_eq!(failure.details.0["expected_etag"], Value::Null);

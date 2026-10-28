@@ -8,9 +8,7 @@ use tonic::Request;
 use tonic_types::StatusExt;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::{
-    conv::reason, metrics::ServerMetrics, service::EventModelServiceImpl,
-};
+use trogon_atlas_server::{conv::reason, metrics::ServerMetrics, service::EventModelServiceImpl};
 use trogon_atlas_store::{
     store::{
         BranchInfo, ChangeRecord, ChangeStreamStats, ListFilter, MutationOp, MutationOutcome,

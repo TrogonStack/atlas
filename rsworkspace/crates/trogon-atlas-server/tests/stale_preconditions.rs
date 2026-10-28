@@ -8,18 +8,14 @@
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
-use tonic::Code;
-use tonic::metadata::MetadataValue;
-use tonic::transport::Channel;
+use tonic::{metadata::MetadataValue, transport::Channel, Code};
 use tonic_types::StatusExt;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::{
     event_model_service_client::EventModelServiceClient,
     event_model_service_server::EventModelServiceServer,
 };
-use trogon_atlas_server::{
-    conv::reason, metrics::ServerMetrics, service::EventModelServiceImpl,
-};
+use trogon_atlas_server::{conv::reason, metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn client() -> EventModelServiceClient<Channel> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -4955,11 +4955,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             }
             let previous = stored.as_ref().map(|s| &s.entity);
-            let prepared = trogon_atlas_core::connection_persistence::prepare_entity(
-                previous,
-                &entity,
-            )
-            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            let prepared =
+                trogon_atlas_core::connection_persistence::prepare_entity(previous, &entity)
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
             return Ok(Response::new(pb::PutEntityResponse {
                 entity: Some(prepared),
                 etag: String::new(),
