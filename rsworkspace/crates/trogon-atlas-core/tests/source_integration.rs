@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use trogon_atlas_core::{source_integration::*, transcode};
 use trogon_atlas_proto::{
-    Entity, SourceFieldOwnership, SourceOwnedField, SourceOwnedFields, SourceSelection,
-    SourceWholeOwnerOwnership, source_field_ownership::Policy, source_selection,
+    source_field_ownership::Policy, source_selection, Entity, SourceFieldOwnership,
+    SourceOwnedField, SourceOwnedFields, SourceSelection, SourceWholeOwnerOwnership,
 };
 
 fn decode(value: &serde_json::Value) -> Result<Entity, transcode::TranscodeError> {
@@ -306,22 +306,25 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
             );
         for name in names {
             let enum_name = format!("SOURCE_OWNED_FIELD_{}", name.to_ascii_uppercase());
-(owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Decision"
+            if (owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Decision"
                 && matches!(
                     name.as_str(),
                     "authored_on" | "decided_on" | "decision_makers" | "amends"
-                )) || (owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Document"
-                && matches!(name.as_str(), "filename" | "related_content"))
+                ))
+                || (owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Document"
+                    && matches!(name.as_str(), "filename" | "related_content"))
             {
                 assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
                 continue;
             }
-            if (name == "owning_domain" && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Term") || name == "communications"
-                && matches!(
-                    owner.full_name(),
-                    "trogonatlas.eventmodel.v1alpha1.Component"
-                        | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-                )
+            if (name == "owning_domain"
+                && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Term")
+                || name == "communications"
+                    && matches!(
+                        owner.full_name(),
+                        "trogonatlas.eventmodel.v1alpha1.Component"
+                            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
+                    )
             {
                 assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
                 continue;

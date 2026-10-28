@@ -339,3 +339,179 @@ async fn incoming_document_page_token_binds_selection_and_paginates() {
         .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
 }
+
+#[tokio::test]
+async fn incoming_document_pages_order_versions_numerically() {
+    let mut client = client().await;
+    let _ = put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id("receipt")),
+                title: "Receipt".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let hub = put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Document(pb::Document {
+                id: Some(id("hub")),
+                title: Some(pb::CatalogTitle {
+                    value: "Hub".into(),
+                }),
+                subjects: vec![pb::SubjectAssociation {
+                    subject: Some(subject()),
+                    ..Default::default()
+                }],
+                body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                    value: "https://example.com/hub".into(),
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let hub_id = trogon_atlas_core::entity_id(&hub).unwrap().clone();
+    let whole = pb::DocumentSelection {
+        selection: Some(pb::document_selection::Selection::Document(
+            pb::DocumentRef { id: Some(hub_id) },
+        )),
+    };
+    for version in [10, 2] {
+        let slug = "same-owner";
+        let _ = put(
+            &mut client,
+            pb::Entity {
+                kind: Some(pb::entity::Kind::Decision(pb::Decision {
+                    id: Some(pb::Id { version, ..id(slug) }),
+                    title: Some(pb::CatalogTitle { value: slug.into() }),
+                    subjects: vec![pb::SubjectAssociation {
+                        subject: Some(subject()),
+                        ..Default::default()
+                    }],
+                    status: pb::DecisionStatus::Proposed as i32,
+                    context: Some(pb::CatalogText {
+                        value: "ctx".into(),
+                    }),
+                    rationale: Some(pb::CatalogText {
+                        value: "rat".into(),
+                    }),
+                    options: vec![pb::DecisionOption {
+                        title: Some(pb::CatalogTitle {
+                            value: "opt".into(),
+                        }),
+                        description: Some(pb::CatalogText {
+                            value: "desc".into(),
+                        }),
+                        ..Default::default()
+                    }],
+                    documents: vec![pb::SupportingDocument {
+                        document: Some(whole.clone()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+        )
+        .await;
+    }
+    let page1 = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(whole.clone()),
+                page_size: 1,
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(page1.declarations.len(), 1);
+    assert_eq!(page1.declarations[0].owner.as_ref().unwrap().owner.as_ref().unwrap().id.as_ref().unwrap().version, 2);
+    let continue_token = page1.next_page_token.clone();
+    assert_ne!(continue_token, "");
+    let page2 = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(whole.clone()),
+                page_size: 1,
+                page_token: continue_token,
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(page2.declarations.len(), 1);
+    assert_eq!(page2.next_page_token, "");
+    let mismatched = pb::DocumentSelection {
+        selection: Some(pb::document_selection::Selection::Document(
+            pb::DocumentRef {
+                id: Some(id("missing")),
+            },
+        )),
+    };
+    let err = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(mismatched),
+                page_size: 1,
+                page_token: page1.next_page_token.clone(),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+    let mut bad_token = page1.next_page_token;
+    bad_token.push('!');
+    let err = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(whole.clone()),
+                page_size: 1,
+                page_token: bad_token,
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+    let scope = page1.scope.expect("checked scope");
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let forged = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({
+            "revision": scope.revision,
+            "role": serde_json::Value::Null,
+            "selection": URL_SAFE_NO_PAD.encode(whole.encode_to_vec()),
+            "index": 99,
+        }))
+        .unwrap(),
+    );
+    let err = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(whole),
+                page_size: 1,
+                page_token: forged,
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(err.code(), Code::InvalidArgument);
+}
