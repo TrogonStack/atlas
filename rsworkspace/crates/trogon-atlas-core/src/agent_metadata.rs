@@ -362,6 +362,22 @@ pub fn group_refs(entity: &Entity) -> Result<Vec<crate::refs::OutboundRef>, Meta
     Ok(refs)
 }
 
+pub fn group_item_connection_ids(
+    entity: &Entity,
+) -> Result<std::collections::HashMap<String, trogon_atlas_proto::ConnectionId>, MetadataError> {
+    let mut ids = std::collections::HashMap::new();
+    map_groups(&mut entity.clone(), &mut |groups, path| {
+        for (g, group) in groups.groups.iter().enumerate() {
+            for (i, item) in group.items.iter().enumerate() {
+                if let Some(id) = &item.connection_id {
+                    ids.insert(format!("{path}.groups[{g}].items[{i}].target"), id.clone());
+                }
+            }
+        }
+    })?;
+    Ok(ids)
+}
+
 pub(crate) fn retarget_groups(
     entity: &mut Entity,
     kind: trogon_atlas_proto::EntityKind,
@@ -376,7 +392,7 @@ pub(crate) fn retarget_groups(
                     if target.kind == kind as i32 && target.id.as_ref() == Some(from) && from != to
                     {
                         target.id = Some(to.clone());
-                        item.connection_id = Some(crate::connections::ConnectionId::new().into());
+                        item.connection_id = None;
                         paths.push(format!("{path}.groups[{g}].items[{i}].target"));
                     }
                 }
