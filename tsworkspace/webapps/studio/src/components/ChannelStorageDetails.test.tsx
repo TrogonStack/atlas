@@ -1,6 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { buildModel, entityKey } from '@/lib/model';
+import { buildModel, entityKey, type Entity } from '@/lib/model';
 import {
   channelLinks,
   incomingChannelLinks,
@@ -8,7 +8,9 @@ import {
   resolveAssociationSubject,
   storageClaims,
 } from '@/lib/channel-storage';
-import { responsibilitySubjects } from '@/lib/responsibility';
+import { nativeEntityRef, responsibilitySubjects, type ResponsibilitySubject } from '@/lib/responsibility';
+import { resolveArchitecturalSubject } from '@/lib/architectural-relationships';
+import { resolveCommunicationSubject } from '@/lib/communication-intent';
 import { ChannelStorageDetails } from './ChannelStorageDetails';
 import { Inspector } from './Inspector';
 
@@ -80,6 +82,65 @@ function fixture() {
   ]);
 }
 afterEach(cleanup);
+
+function selection(owner: Entity, value: string): ResponsibilitySubject {
+  return { connection: { owner: nativeEntityRef(owner), ownerUid: owner.uid ?? '', id: { value } } };
+}
+
+it.each([
+  ['binding collision', { connectionId: { value: 'link-a' } }],
+  ['missing binding identity', {}],
+])('rejects a Channel link subject with %s elsewhere in its owner', (_name, binding) => {
+  const model = fixture();
+  const owner = model.entities[0];
+  const subject = selection(owner, 'link-a');
+  expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('link-a');
+  owner.raw.bindings = [binding];
+  expect(resolveAssociationSubject(model, subject)).toBeUndefined();
+});
+
+it.each([
+  ['input selection', { inputs: [{ portId: { value: 'input' }, data: { connectionId: { value: 'product-claim' } } }] }],
+  ['output selection', { outputs: [{ portId: { value: 'output' }, data: { connectionId: { value: 'product-claim' } } }] }],
+  ['output contract', { outputs: [{ portId: { value: 'output' }, contract: { connectionId: { value: 'product-claim' } } }] }],
+  ['output access', { outputs: [{ portId: { value: 'output' }, access: [{ connectionId: { value: 'product-claim' } }] }] }],
+  ['output lineage', { outputs: [{ portId: { value: 'output' }, derivedFrom: { inputs: [{ connectionId: { value: 'product-claim' } }] } }] }],
+  ['input port', { inputs: [{ portId: { value: 'product-claim' } }] }],
+  ['output port', { outputs: [{ portId: { value: 'product-claim' } }] }],
+  ['missing selection identity', { inputs: [{ portId: { value: 'input' }, data: {} }] }],
+])('rejects a storage subject with a conflicting or incomplete %s', (_name, raw) => {
+  const model = fixture();
+  const owner = model.entities[4];
+  owner.uid = 'product-uid';
+  const subject = selection(owner, 'product-claim');
+  expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('product-claim');
+  Object.assign(owner.raw, raw);
+  expect(resolveAssociationSubject(model, subject)).toBeUndefined();
+});
+
+it('uses the shared storage inventory when resolving architecture and communication subjects', () => {
+  const model = fixture();
+  const owner = model.entities[3];
+  owner.raw.relationships = [{ connectionId: { value: 'relationship' }, target: { externalSystem: { id: id('peer') } } }];
+  owner.raw.communications = [{ connectionId: { value: 'communication' }, direction: 'COMMUNICATION_DIRECTION_SEND' }];
+  expect(resolveArchitecturalSubject(model, selection(owner, 'relationship'))?.connectionId).toBe('relationship');
+  expect(resolveCommunicationSubject(model, selection(owner, 'communication'))?.connectionId).toBe('communication');
+  owner.raw.storageClaims = [claim('relationship'), claim('communication')];
+  expect(resolveArchitecturalSubject(model, selection(owner, 'relationship'))).toBeUndefined();
+  expect(resolveCommunicationSubject(model, selection(owner, 'communication'))).toBeUndefined();
+});
+
+it('includes ResourceGroups occurrence identities without counting target selectors as owned IDs', () => {
+  const model = fixture();
+  const owner = model.entities[3];
+  const subject = selection(owner, 'claim-a');
+  expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('claim-a');
+  owner.raw.metadata = [{
+    '@type': 'type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation',
+    groups: [{ groupId: { value: 'claim-a' }, items: [] }],
+  }];
+  expect(resolveAssociationSubject(model, subject)).toBeUndefined();
+});
 
 it('keeps exact link kinds, equal siblings, parameter values and inert docs without inferring behavior', () => {
   const model = fixture();
