@@ -198,7 +198,7 @@ impl EventModelServiceImpl {
         records.sort_by_key(record_key);
         let caller = caller_key(principal);
         let scope = query.checked_scope(Some(&caller))?;
-        let digest = scope.revision;
+        let digest = fingerprint(scope.revision.as_bytes());
         let start = parse_token(&request.page_token, &channel_id, branch, &digest, &caller)?;
         if start > records.len() || (!request.page_token.is_empty() && start == records.len()) {
             return Err(rejected_token());
@@ -272,7 +272,10 @@ fn rejected_token() -> Status {
     Status::invalid_argument("page token does not match this query")
 }
 fn caller_key(principal: Option<&crate::auth::Principal>) -> String {
-    Sha256::digest(format!("{principal:?}").as_bytes())
+    fingerprint(format!("{principal:?}").as_bytes())
+}
+fn fingerprint(value: &[u8]) -> String {
+    Sha256::digest(value)
         .iter()
         .fold(String::new(), |mut value, byte| {
             const HEX: &[u8; 16] = b"0123456789abcdef";

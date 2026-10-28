@@ -26,7 +26,7 @@ const ADMIN: &str = "native-authz-admin";
 const READER: &str = "native-authz-reader";
 const WRITER: &str = "native-authz-writer";
 const GROUPS: &str = "type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation";
-const BRANCH: &str = "native-identity";
+const BRANCH: &str = "@visible:native-identity";
 
 type Client = EventModelServiceClient<Channel>;
 
@@ -58,10 +58,12 @@ role = "admin"
 tokens = ["{ADMIN}"]
 [principals.reader]
 role = "reader"
+kind = "agent"
 parent = "visible"
 tokens = ["{READER}"]
 [principals.writer]
 role = "writer"
+kind = "agent"
 parent = "visible"
 tokens = ["{WRITER}"]
 "#

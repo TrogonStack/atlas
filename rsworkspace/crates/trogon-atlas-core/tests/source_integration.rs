@@ -324,6 +324,11 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
                 ))
                 || (owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Document"
                     && matches!(name.as_str(), "filename" | "related_content"))
+                || (owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Schema"
+                    && matches!(
+                        name.as_str(),
+                        "aggregate_root" | "identifiers" | "property_relationships"
+                    ))
             {
                 assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
                 continue;

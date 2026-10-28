@@ -371,6 +371,44 @@ fn assert_channel_id(record: &Value, namespace: &str) {
     assert_eq!(id["version"], CHANNEL_VERSION.to_string(), "{record}");
 }
 
+fn assert_operation_record(record: &Value, independent: &Value, namespace: &str, owner_uid: &str) {
+    assert_eq!(
+        record["authority"],
+        "CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING"
+    );
+    assert_channel_id(record, namespace);
+    assert_eq!(record["owner"], independent["owner"]);
+    assert_eq!(record["ownerUid"], owner_uid);
+    assert_eq!(record["message"], independent["message"]);
+    assert_eq!(
+        record["operation"]["kind"],
+        "CONTRACT_MEMBER_KIND_OPERATION"
+    );
+    assert_eq!(
+        record["operation"]["specification"],
+        record["message"]["specification"]
+    );
+    assert_eq!(record["operation"]["ownerUid"], owner_uid);
+    assert_eq!(
+        record["operation"]["memberId"]["value"],
+        "55555555-5555-4555-8555-555555555555"
+    );
+    assert_eq!(
+        record["operationMessage"]["messageId"],
+        record["message"]["memberId"]
+    );
+    assert_eq!(record["operationMessage"]["role"], "ROLE_REQUEST");
+    let binding_id = record["connectionId"]["value"].as_str().unwrap();
+    let message_id = record["operationMessage"]["connectionId"]["value"]
+        .as_str()
+        .unwrap();
+    assert_ne!(binding_id, "");
+    assert_ne!(message_id, "");
+    assert_ne!(binding_id, message_id);
+    assert_eq!(record["state"], "CATALOG_RESOLUTION_STATE_RESOLVED");
+    assert!(record.get("deliveryMode").is_none());
+}
+
 fn assert_preserved_records(records: &[&Value], namespace: &str, owner_uid: &str) {
     assert_eq!(records.len(), 2, "{records:?}");
     for record in records {
@@ -449,7 +487,19 @@ async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
     assert!(full.get("incomplete").is_none(), "{full}");
     assert!(full.get("nextPageToken").is_none(), "{full}");
     let records = full["records"].as_array().unwrap();
-    assert_preserved_records(&records.iter().collect::<Vec<_>>(), &namespace, &owner_uid);
+    assert_eq!(records.len(), 3, "{full}");
+    let independent: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record["authority"] == "CHANNEL_MESSAGE_AUTHORITY_SPECIFICATION_DECLARATION"
+        })
+        .collect();
+    assert_preserved_records(&independent, &namespace, &owner_uid);
+    let operation = records
+        .iter()
+        .find(|record| record["authority"] == "CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING")
+        .unwrap();
+    assert_operation_record(operation, &records[0], &namespace, &owner_uid);
 
     let first = listed(
         &reader,
@@ -471,15 +521,33 @@ async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
     )
     .await;
     assert_scope(&second);
-    assert_eq!(second["complete"], true, "{second}");
+    assert_ne!(second["complete"].as_bool(), Some(true), "{second}");
     assert!(second.get("incomplete").is_none(), "{second}");
-    assert!(second.get("nextPageToken").is_none(), "{second}");
+    let next = second["nextPageToken"].as_str().unwrap();
+    assert!(!next.is_empty(), "{second}");
     assert_ne!(
         first["records"][0]["connectionId"]["value"],
         second["records"][0]["connectionId"]["value"]
     );
     assert_preserved_records(
         &[&first["records"][0], &second["records"][0]],
+        &namespace,
+        &owner_uid,
+    );
+
+    let third = listed(
+        &reader,
+        channel_request(&namespace, "orders", Some(1), Some(next)),
+    )
+    .await;
+    assert_scope(&third);
+    assert_eq!(third["complete"], true, "{third}");
+    assert!(third.get("incomplete").is_none(), "{third}");
+    assert!(third.get("nextPageToken").is_none(), "{third}");
+    assert_eq!(third["records"].as_array().unwrap().len(), 1, "{third}");
+    assert_operation_record(
+        &third["records"][0],
+        &first["records"][0],
         &namespace,
         &owner_uid,
     );
