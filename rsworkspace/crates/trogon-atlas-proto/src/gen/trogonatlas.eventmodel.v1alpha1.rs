@@ -3476,6 +3476,162 @@ impl DataPortDirection {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogTitle {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ClaimDeliveryMode {
+    Unspecified = 0,
+    Push = 1,
+    Pull = 2,
+    PushPull = 3,
+}
+impl ClaimDeliveryMode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CLAIM_DELIVERY_MODE_UNSPECIFIED",
+            Self::Push => "CLAIM_DELIVERY_MODE_PUSH",
+            Self::Pull => "CLAIM_DELIVERY_MODE_PULL",
+            Self::PushPull => "CLAIM_DELIVERY_MODE_PUSH_PULL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CLAIM_DELIVERY_MODE_UNSPECIFIED" => Some(Self::Unspecified),
+            "CLAIM_DELIVERY_MODE_PUSH" => Some(Self::Push),
+            "CLAIM_DELIVERY_MODE_PULL" => Some(Self::Pull),
+            "CLAIM_DELIVERY_MODE_PUSH_PULL" => Some(Self::PushPull),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MessageClaims {
+    #[prost(message, repeated, tag="1")]
+    pub claims: ::prost::alloc::vec::Vec<MessageClaim>,
+    #[prost(message, repeated, tag="2")]
+    pub routes: ::prost::alloc::vec::Vec<ClaimRoute>,
+    #[prost(message, repeated, tag="3")]
+    pub triggers: ::prost::alloc::vec::Vec<ClaimTrigger>,
+    #[prost(message, repeated, tag="4")]
+    pub field_selections: ::prost::alloc::vec::Vec<ClaimFieldSelection>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MessageClaim {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="CommunicationDirection", tag="2")]
+    pub direction: i32,
+    #[prost(message, optional, tag="3")]
+    pub message: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="4")]
+    pub group: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClaimRoute {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub claim_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="3")]
+    pub channel: ::core::option::Option<ChannelRef>,
+    #[prost(map="string, string", tag="4")]
+    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(enumeration="ClaimDeliveryMode", optional, tag="5")]
+    pub delivery_mode: ::core::option::Option<i32>,
+    #[prost(message, optional, tag="6")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClaimTrigger {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub claim_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="3")]
+    pub message: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="4")]
+    pub condition: ::core::option::Option<CatalogText>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FieldPath {
+    #[prost(string, repeated, tag="1")]
+    pub segments: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClaimFieldSelector {
+    #[prost(oneof="claim_field_selector::Selector", tags="1, 2")]
+    pub selector: ::core::option::Option<claim_field_selector::Selector>,
+}
+/// Nested message and enum types in `ClaimFieldSelector`.
+pub mod claim_field_selector {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Selector {
+        #[prost(message, tag="1")]
+        Path(super::FieldPath),
+        #[prost(message, tag="2")]
+        Opaque(super::OpaqueTypeSelector),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClaimFieldSelection {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub claim_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="3")]
+    pub binding: ::core::option::Option<ConnectionRef>,
+    #[prost(message, repeated, tag="4")]
+    pub selectors: ::prost::alloc::vec::Vec<ClaimFieldSelector>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CommunicationDirection {
+    Unspecified = 0,
+    Send = 1,
+    Receive = 2,
+}
+impl CommunicationDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "COMMUNICATION_DIRECTION_UNSPECIFIED",
+            Self::Send => "COMMUNICATION_DIRECTION_SEND",
+            Self::Receive => "COMMUNICATION_DIRECTION_RECEIVE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "COMMUNICATION_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "COMMUNICATION_DIRECTION_SEND" => Some(Self::Send),
+            "COMMUNICATION_DIRECTION_RECEIVE" => Some(Self::Receive),
+            _ => None,
+        }
+    }
+}
 /// The bounded context itself, as data (Decision #27): one per namespace,
 /// identified BY the namespace (id.slug == id.namespace). Carries the
 /// context charter -- what this boundary owns, its links and metadata.
@@ -3586,6 +3742,8 @@ pub struct Domain {
     /// identity). Surfaced via validator rules -- see DOMAIN_MISSING_PROJECT.
     #[prost(message, optional, tag="6")]
     pub project: ::core::option::Option<ProjectRef>,
+    #[prost(message, optional, tag="7")]
+    pub message_claims: ::core::option::Option<MessageClaims>,
 }
 /// The codebase / repository / customer the model is being mapped FROM.
 /// In a multi-project store (e.g. one server holding several unrelated
@@ -3787,16 +3945,6 @@ pub mod subdomain {
             }
         }
     }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CatalogTitle {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CatalogText {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LocalValueId {
@@ -4145,6 +4293,8 @@ pub struct Component {
     pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
     #[prost(message, repeated, tag="9")]
     pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
+    #[prost(message, optional, tag="11")]
+    pub message_claims: ::core::option::Option<MessageClaims>,
 }
 /// An ExternalSystem is a living third-party boundary: the APIs and webhooks
 /// it exposes, the tech used to integrate with it. ReadModels with an
@@ -4170,6 +4320,8 @@ pub struct ExternalSystem {
     pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
     #[prost(message, repeated, tag="8")]
     pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
+    #[prost(message, optional, tag="9")]
+    pub message_claims: ::core::option::Option<MessageClaims>,
 }
 /// A Tracker is a project-management overlay: a denormalized list of
 /// pointers into the model, each carrying delivery status. It integrates
@@ -4207,35 +4359,6 @@ pub mod tracker {
         pub doc: ::prost::alloc::string::String,
         #[prost(message, repeated, tag="4")]
         pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum CommunicationDirection {
-    Unspecified = 0,
-    Send = 1,
-    Receive = 2,
-}
-impl CommunicationDirection {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "COMMUNICATION_DIRECTION_UNSPECIFIED",
-            Self::Send => "COMMUNICATION_DIRECTION_SEND",
-            Self::Receive => "COMMUNICATION_DIRECTION_RECEIVE",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "COMMUNICATION_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
-            "COMMUNICATION_DIRECTION_SEND" => Some(Self::Send),
-            "COMMUNICATION_DIRECTION_RECEIVE" => Some(Self::Receive),
-            _ => None,
-        }
     }
 }
 /// Delivery status of a tracked item. Lives ONLY in Trackers -- design

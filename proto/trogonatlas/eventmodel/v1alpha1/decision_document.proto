@@ -10,8 +10,7 @@ import "trogonatlas/eventmodel/v1alpha1/connections.proto";
 import "trogonatlas/eventmodel/v1alpha1/specification.proto";
 import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
 
-message CatalogTitle { string value = 1; }
-message CatalogText { string value = 1; }
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
 message LocalValueId { string value = 1; }
 message ExternalDocumentLink { string value = 1; }
 message AnchorFragment { string value = 1; }

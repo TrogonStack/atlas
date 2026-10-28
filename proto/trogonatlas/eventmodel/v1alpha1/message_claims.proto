@@ -1,0 +1,55 @@
+syntax = "proto3";
+package trogonatlas.eventmodel.v1alpha1;
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
+import "trogonatlas/eventmodel/v1alpha1/resource_association_values.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/connections.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+enum CommunicationDirection {
+  COMMUNICATION_DIRECTION_UNSPECIFIED = 0;
+  COMMUNICATION_DIRECTION_SEND = 1;
+  COMMUNICATION_DIRECTION_RECEIVE = 2;
+}
+message MessageClaims {
+  repeated MessageClaim claims = 1;
+  repeated ClaimRoute routes = 2;
+  repeated ClaimTrigger triggers = 3;
+  repeated ClaimFieldSelection field_selections = 4;
+}
+message MessageClaim {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  CommunicationDirection direction = 2;
+  ContractMemberRef message = 3;
+  optional CatalogTitle group = 4;
+  optional CatalogText doc = 5;
+}
+message ClaimRoute {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  trogonatlas.type.v1alpha1.ConnectionId claim_id = 2;
+  ChannelRef channel = 3;
+  map<string, string> parameter_values = 4;
+  optional ClaimDeliveryMode delivery_mode = 5;
+  optional CatalogText doc = 6;
+}
+message ClaimTrigger {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  trogonatlas.type.v1alpha1.ConnectionId claim_id = 2;
+  ContractMemberRef message = 3;
+  CatalogText condition = 4;
+  optional CatalogText doc = 5;
+}
+message FieldPath { repeated string segments = 1; }
+message ClaimFieldSelector {
+  oneof selector {
+    FieldPath path = 1;
+    OpaqueTypeSelector opaque = 2;
+  }
+}
+message ClaimFieldSelection {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  trogonatlas.type.v1alpha1.ConnectionId claim_id = 2;
+  ConnectionRef binding = 3;
+  repeated ClaimFieldSelector selectors = 4;
+  optional CatalogText doc = 5;
+}

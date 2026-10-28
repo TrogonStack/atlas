@@ -1,0 +1,8 @@
+syntax = "proto3";
+package trogonatlas.eventmodel.v1alpha1;
+enum ClaimDeliveryMode {
+  CLAIM_DELIVERY_MODE_UNSPECIFIED = 0;
+  CLAIM_DELIVERY_MODE_PUSH = 1;
+  CLAIM_DELIVERY_MODE_PULL = 2;
+  CLAIM_DELIVERY_MODE_PUSH_PULL = 3;
+}

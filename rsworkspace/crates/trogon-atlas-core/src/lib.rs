@@ -17,6 +17,7 @@ pub mod agent_metadata;
 pub mod architectural_relationships;
 pub mod authored_date;
 pub mod communication_intent;
+pub mod message_claims;
 pub mod connection_persistence;
 pub mod connections;
 pub mod content_hash;

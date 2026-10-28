@@ -1,0 +1,4 @@
+syntax = "proto3";
+package trogonatlas.eventmodel.v1alpha1;
+message CatalogTitle { string value = 1; }
+message CatalogText { string value = 1; }

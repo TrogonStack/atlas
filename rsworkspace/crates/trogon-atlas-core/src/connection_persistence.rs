@@ -42,6 +42,8 @@ pub fn prepare_entity(
             assign_connection_ids(&mut prepared)?;
         }
     }
+    crate::message_claims::validate_local_selections(previous, &prepared)
+        .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
     Ok(stamp_system(previous, &prepared))
 }
 
@@ -73,6 +75,8 @@ pub fn prepare_landing(
     if let Some(previous) = previous {
         reconcile_branch_connection_ids(previous, &mut prepared)?;
     }
+    crate::message_claims::validate_values(&prepared)
+        .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
     prepared = stamp_system(previous, &prepared);
     if previous.is_none() {
         if let Some(system) = branch
