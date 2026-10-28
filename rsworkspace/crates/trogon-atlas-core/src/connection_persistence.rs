@@ -32,6 +32,8 @@ pub fn prepare_entity(
     previous: Option<&Entity>,
     proposed: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    crate::business_data::reject_unassigned(proposed)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
     let mut prepared = proposed.clone();
     if let Some(previous) = previous {
         if decision_document::equivalent_manifest(previous, proposed)?
@@ -61,6 +63,8 @@ pub fn prepare_entity(
     prepared = stamp_system(previous, &prepared);
     crate::message_claims::validate_local_selections(previous, &prepared)
         .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
+    crate::business_data::reject_encoded_size(&prepared)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
     checked_prepared_owner(prepared)
 }
 
@@ -70,6 +74,8 @@ pub fn prepare_landing(
     previous: Option<&Entity>,
     branch: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    crate::business_data::reject_unassigned(branch)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
     let removed_values = decision_document::removed_values(base, previous, branch)?;
     decision_document::reject_removed(branch, &removed_values)?;
     let removed_ports = data_product::removed_ports(base, previous, branch)?;
@@ -109,6 +115,8 @@ pub fn prepare_landing(
     }
     crate::message_claims::validate_values(&prepared)
         .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
+    crate::business_data::reject_encoded_size(&prepared)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
     checked_prepared_owner(prepared)
 }
 
@@ -118,6 +126,8 @@ pub fn prepare_resolution(
     discarded: Option<&Entity>,
     selected: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    crate::business_data::reject_unassigned(selected)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
     let removed = removed_base_ids(base, discarded, selected)?;
     let mut resolved = selected.clone();
     renew_connection_ids(&mut resolved, &removed)?;

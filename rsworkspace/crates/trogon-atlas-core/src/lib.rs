@@ -15,6 +15,7 @@
 
 pub mod agent_metadata;
 pub mod architectural_relationships;
+pub mod business_data;
 pub mod authored_date;
 pub mod communication_intent;
 pub mod message_claims;

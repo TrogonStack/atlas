@@ -280,6 +280,51 @@ mod tests {
     }
 
     #[test]
+    fn revision_19_refuses_an_older_writer_before_mutation() {
+        assert_eq!(pb::CONTRACT_REVISION, 19);
+        assert_eq!(pb::MIN_SERVER_CONTRACT_REVISION, 19);
+        assert_eq!(pb::MIN_CLIENT_CONTRACT_REVISION, 19);
+        let server_requires_newer_writer = pb::GetServerInfoResponse {
+            contract_revision: 19,
+            min_client_contract_revision: 20,
+            ..current_server()
+        };
+        let writer = check(&server_requires_newer_writer, MutationIntent::default()).unwrap_err();
+        assert!(matches!(
+            writer,
+            CompatibilityError::ClientTooOld {
+                client: 19,
+                minimum: 20
+            }
+        ));
+        assert!(
+            writer
+                .to_string()
+                .contains("upgrade this client before mutating"),
+            "{writer}"
+        );
+        let older_server = pb::GetServerInfoResponse {
+            contract_revision: 18,
+            min_client_contract_revision: 18,
+            ..current_server()
+        };
+        let server = check(&older_server, MutationIntent::default()).unwrap_err();
+        assert!(matches!(
+            server,
+            CompatibilityError::ServerTooOld {
+                server: 18,
+                minimum: 19
+            }
+        ));
+        assert!(
+            server
+                .to_string()
+                .contains("upgrade the server before mutating"),
+            "{server}"
+        );
+    }
+
+    #[test]
     fn server_requiring_newer_client_is_refused() {
         let info = pb::GetServerInfoResponse {
             contract_revision: pb::CONTRACT_REVISION + 1,

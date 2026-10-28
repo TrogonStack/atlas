@@ -1329,8 +1329,8 @@ service EventModelService {
   rpc ResolveType(ResolveTypeRequest) returns (ResolveTypeResponse);
   rpc GetTypeLibraryDescriptorSet(GetTypeLibraryDescriptorSetRequest) returns (GetTypeLibraryDescriptorSetResponse);
 
-  // Inverse discovery of independent specification message-to-channel
-  // declarations for one exact channel. Claim routes and operation bindings
-  // are not included. Branch context uses x-trogon-atlas-branch.
+  // Inverse discovery preserves independent specification declarations,
+  // claim routes and operation-message occurrences for one exact channel.
+  // Branch context uses x-trogon-atlas-branch.
   rpc ListChannelMessages(ListChannelMessagesRequest) returns (ListChannelMessagesResponse);
 }

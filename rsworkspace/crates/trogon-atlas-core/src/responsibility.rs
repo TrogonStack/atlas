@@ -145,6 +145,7 @@ pub fn connection_subject_owner(kind: EntityKind) -> bool {
             | EntityKind::Component
             | EntityKind::ExternalSystem
             | EntityKind::Domain
+            | EntityKind::Schema
     )
 }
 

@@ -100,6 +100,7 @@ impl ReverseIndex {
                         connection_id,
                         step_id,
                         target_step_id: None,
+                        business_property_status: None,
                     });
                 }
             }
@@ -387,6 +388,7 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
                 connection_id,
                 step_id,
                 target_step_id: None,
+                business_property_status: None,
             });
         }
     }
@@ -914,8 +916,13 @@ pub fn impact(
         path: Vec::new(),
     }];
 
-    let mut visited: HashSet<pb::EntityKey> = HashSet::new();
-    visited.insert(pb::EntityKey::new(root_kind, root_id));
+    // Emission and expansion are separate. A business edge names its target
+    // and stops, but that target can still be expanded by a parallel type walk.
+    let mut emitted: HashSet<pb::EntityKey> = HashSet::new();
+    let mut expanded: HashSet<pb::EntityKey> = HashSet::new();
+    let root_key = pb::EntityKey::new(root_kind, root_id);
+    emitted.insert(root_key.clone());
+    expanded.insert(root_key);
 
     let mut queue: VecDeque<(pb::EntityKind, pb::Id, u32, Vec<pb::Reference>)> = VecDeque::new();
     queue.push_back((root_kind, root_id.clone(), 0, Vec::new()));
@@ -960,20 +967,35 @@ pub fn impact(
                 }
             };
             let okey = pb::EntityKey::new(ok, oid);
-            if !visited.insert(okey.clone()) {
-                continue;
-            }
+            let business_edge = !is_incoming && r.from_field.contains("property_relationships[");
             let mut new_path = path.clone();
             new_path.push(r);
-            out.push(pb::ImpactNode {
-                entity: Some(pb::EntityRef {
-                    kind: ok as i32,
-                    id: Some(oid.clone()),
-                }),
-                depth: depth + 1,
-                path: new_path.clone(),
-            });
-            queue.push_back((ok, oid.clone(), depth + 1, new_path));
+            if business_edge {
+                if emitted.insert(okey) {
+                    out.push(pb::ImpactNode {
+                        entity: Some(pb::EntityRef {
+                            kind: ok as i32,
+                            id: Some(oid.clone()),
+                        }),
+                        depth: depth + 1,
+                        path: new_path,
+                    });
+                }
+                continue;
+            }
+            if emitted.insert(okey.clone()) {
+                out.push(pb::ImpactNode {
+                    entity: Some(pb::EntityRef {
+                        kind: ok as i32,
+                        id: Some(oid.clone()),
+                    }),
+                    depth: depth + 1,
+                    path: new_path.clone(),
+                });
+            }
+            if expanded.insert(okey) {
+                queue.push_back((ok, oid.clone(), depth + 1, new_path));
+            }
         }
     }
     Ok(out)
@@ -1114,6 +1136,19 @@ fn catalog_provenance(
         trogon_atlas_core::message_claims::reference_occurrence(entity, field)
     {
         reference.connection_id = occurrence.id.map(Into::into);
+    }
+    if let Some(index) = field
+        .strip_prefix("property_relationships[")
+        .and_then(|rest| rest.split_once(']'))
+        .and_then(|(index, suffix)| (suffix == ".target_entity").then_some(index))
+        .and_then(|index| index.parse::<usize>().ok())
+    {
+        if let Some(pb::entity::Kind::Schema(schema)) = &entity.kind {
+            reference.connection_id = schema
+                .property_relationships
+                .get(index)
+                .and_then(|relationship| relationship.connection_id.clone());
+        }
     }
     (
         reference.catalog_subject,

@@ -7,6 +7,11 @@ mod term_domains;
 
 #[path = "architecture_admission.rs"]
 mod architecture_admission;
+#[path = "business_admission.rs"]
+mod business_admission;
+#[cfg(test)]
+#[path = "business_reference_identity_test.rs"]
+mod business_reference_identity_test;
 #[path = "data_product_events.rs"]
 mod data_product_events;
 #[path = "data_product_inspection.rs"]
@@ -17,6 +22,9 @@ mod decision_document_queries;
 mod design_topology_queries;
 #[path = "responsibility_queries.rs"]
 mod responsibility_queries;
+#[cfg(test)]
+#[path = "source_business_bypass_test.rs"]
+mod source_business_bypass_test;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -781,6 +789,10 @@ impl EventModelServiceImpl {
         let Some(branch) = branch else {
             return self.snapshot(vis).await;
         };
+        // A branch that was never created has no delta rows, and the merged
+        // load then returns baseline. Existence is checked here so every
+        // snapshot read shares that refusal.
+        self.require_branch(branch).await?;
         use tracing::Instrument as _;
         let result = graph::load_all(&self.store, Some(branch))
             .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
@@ -1110,19 +1122,6 @@ impl EventModelServiceImpl {
             *guard = Some(idx.clone());
         }
         Ok(idx)
-    }
-
-    /// Branch-aware variant of `reverse_index()`. When `branch` is `None`,
-    /// delegates to the cached baseline index. When `branch` is `Some`,
-    /// builds a fresh index from `snapshot_for` and never touches
-    /// `reverse_index_cache` (same rationale as `snapshot_for`).
-    async fn reverse_index_for(
-        &self,
-        branch: Option<&str>,
-        vis: &Visibility,
-    ) -> Result<Arc<graph::ReverseIndex>, Status> {
-        self.reference_index_for(branch, vis, ReferenceIndexPurpose::Discovery)
-            .await
     }
 
     async fn reference_index_for(
@@ -2679,6 +2678,7 @@ fn build_op_results(
         .collect()
 }
 
+#[derive(Clone)]
 struct OpMetaLike {
     kind: pb::EntityKind,
     id: pb::Id,
@@ -3651,6 +3651,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Direct-by-key reads never touch the snapshot, so the visibility
         // filter that covers every other read path does not reach them.
         self.require_visible(&vis, &id.namespace).await?;
+        // `store.get` falls through to baseline when the branch has no delta
+        // for this key. That is right for a real branch and wrong for a name
+        // that was never created.
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let stored = match self.store.get(kind, id, branch.as_deref()).await {
             Ok(stored) => stored,
             Err(err) => return Err(self.read_err(err, &vis, branch.as_deref(), kind, id).await),
@@ -3668,6 +3674,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         if req.keys.len() > ADVERTISED_MAX_BATCH_GET_KEYS {
             return Err(Status::invalid_argument("keys exceeds max_batch_get_keys"));
         }
@@ -4095,6 +4104,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
     ) -> Result<Response<pb::GetLatestVersionResponse>, Status> {
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let req = req.into_inner();
         let kind = kind_from_i32(req.kind, "kind")?;
         if req.slug.is_empty() {
@@ -4202,17 +4214,60 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             ADVERTISED_MAX_PAGE_SIZE,
         );
         let offset = parse_page_token(&req.page_token)?;
-        let index = self.reverse_index_for(branch.as_deref(), &vis).await?;
+        // One snapshot stamps the reference and checks its occurrence. Row and
+        // occurrence accounting covers every schema that snapshot examined.
+        // Status and the output charge apply only to the page returned here,
+        // and a later read must not supply the path.
+        if let Some(branch_name) = branch.as_deref() {
+            self.require_branch(branch_name).await?;
+        }
+        let (snapshot, truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
+        let discovered = self
+            .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
+            .await?;
+        self.refuse_omitted_schema_referrers(
+            &snapshot,
+            branch.as_deref(),
+            &vis,
+            &filter_kinds,
+            truncated,
+        )
+        .await?;
+        let mut budget = trogon_atlas_core::business_data::ReferenceBudget::default();
+        Self::account_examined_schemas(
+            &mut budget,
+            discovered.iter().map(|stored| &stored.entity),
+        )?;
+        let index = ReferenceIndexPurpose::Discovery.build(&discovered)?;
+        let owners: HashMap<pb::EntityKey, pb::Entity> = discovered
+            .iter()
+            .filter_map(|stored| {
+                let kind = trogon_atlas_store::refs::entity_kind(&stored.entity)?;
+                let id = trogon_atlas_store::refs::entity_id(&stored.entity)?;
+                Some((pb::EntityKey::new(kind, id), stored.entity.clone()))
+            })
+            .collect();
         let refs = index.incoming(kind, &id).to_vec();
         // Incoming refs have the queried entity in `to`; the referrer kind
         // lives in `from`.
         let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::From);
         let total = all_references.len();
-        let references: Vec<pb::Reference> = all_references
+        let mut references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
             .take(page_size)
             .collect();
+        self.decorate_business_property_status(
+            &mut references,
+            None,
+            branch.as_deref(),
+            &vis,
+            Some(&owners),
+            &mut budget,
+        )
+        .await?;
         let next_offset = offset + references.len();
         let next_page_token = if next_offset >= total {
             String::new()
@@ -4265,14 +4320,26 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let mut refs = graph::outgoing_of_resolved(&stored.entity, &known)?;
         refs.extend(graph::TypeOwners::build(&snap).schema_ref(&stored.entity));
         // Outgoing refs have the queried entity in `from`; the target kind
-        // lives in `to`.
+        // lives in `to`. The owner's inventory is scan work. Status and the
+        // output charge stay on the page.
+        let mut budget = trogon_atlas_core::business_data::ReferenceBudget::default();
+        Self::account_examined_schemas(&mut budget, std::slice::from_ref(&stored.entity))?;
         let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::To);
         let total = all_references.len();
-        let references: Vec<pb::Reference> = all_references
+        let mut references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
             .take(page_size)
             .collect();
+        self.decorate_business_property_status(
+            &mut references,
+            Some(&stored.entity),
+            branch.as_deref(),
+            &vis,
+            None,
+            &mut budget,
+        )
+        .await?;
         let next_offset = offset + references.len();
         let next_page_token = if next_offset >= total {
             String::new()
@@ -4585,6 +4652,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .collect();
 
         self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
+            .await?;
+        self.validate_business_writes(&metas, branch.as_deref(), &vis)
             .await?;
 
         let staged_count = u32::try_from(staged.len()).unwrap_or(u32::MAX);
@@ -5005,6 +5074,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
     ) -> Result<Response<pb::DiffEntitiesResponse>, Status> {
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let req = req.into_inner();
         let a = req
             .a
@@ -5108,6 +5180,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if req.validate_only {
             self.validate_architecture_write(&entity, branch.as_deref(), &vis)
                 .await?;
+            self.validate_business_writes(
+                &[OpMetaLike {
+                    kind,
+                    id: id.clone(),
+                    is_put: true,
+                    entity: Some(entity.clone()),
+                }],
+                branch.as_deref(),
+                &vis,
+            )
+            .await?;
             let previous = match self.store.get(kind, &id, branch.as_deref()).await {
                 Ok(stored) => Some(stored.entity),
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
@@ -5206,6 +5289,24 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         if let Err(status) = self
             .validate_architecture_write(&entity, branch.as_deref(), &vis)
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
+        if let Err(status) = self
+            .validate_business_writes(
+                &[OpMetaLike {
+                    kind,
+                    id: id.clone(),
+                    is_put: true,
+                    entity: Some(entity.clone()),
+                }],
+                branch.as_deref(),
+                &vis,
+            )
             .await
         {
             if let Some(key) = &claim_key {
@@ -5617,6 +5718,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .extensions()
             .get::<source_integration::SourceExecution>()
             .cloned();
+        // `preview_source_run_attempt` and `apply_source_run_attempt` insert
+        // `SourceBusinessBypass`. Shape and local-path checks still run below.
+        // Target admission skips only declarations that already match storage.
+        let source_business_bypass = source_execution.is_some()
+            || req
+                .extensions()
+                .get::<source_integration::SourceBusinessBypass>()
+                .is_some();
         let vis = Self::visibility_of(&req);
         let author = Self::author_from_metadata(&req);
         let branch = Self::branch_from_metadata(&req)?;
@@ -5801,6 +5910,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
+            self.validate_batch_business_writes(
+                &metas,
+                branch.as_deref(),
+                &vis,
+                source_business_bypass,
+            )
+            .await?;
         }
         for admission in &type_library_admissions {
             self.type_libraries
@@ -6244,6 +6360,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
             if let Err(status) = self
                 .validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+            if let Err(status) = self
+                .validate_batch_business_writes(
+                    &metas,
+                    branch.as_deref(),
+                    &vis,
+                    source_business_bypass,
+                )
                 .await
             {
                 if let Some(key) = &claim_key {
@@ -6698,6 +6828,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
         // One entity's log, so the entity's own namespace settles it.
         self.require_visible(&vis, &id.namespace).await?;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let limit = clamp_page_size(
             req.page_size,
             CHANGESETS_DEFAULT_PAGE_SIZE,
@@ -6874,6 +7007,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if req.dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
+            self.validate_business_writes(&metas, branch.as_deref(), &vis)
+                .await?;
         }
 
         let attempt = if req.operation_id.is_empty() {
@@ -6948,6 +7083,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let _guard = self.lock_mutations().await;
         if let Err(status) = self
             .validate_architecture_writes(&metas, branch.as_deref(), &vis)
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
+        if let Err(status) = self
+            .validate_business_writes(&metas, branch.as_deref(), &vis)
             .await
         {
             if let Some(key) = &claim_key {
@@ -8174,6 +8318,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Accepted anchor edits may leave unchanged resource declarations unresolved.
         self.validate_architecture_landing(&op_metas, &ops, &vis)
             .await?;
+        self.validate_business_writes(&op_metas, None, &vis).await?;
 
         if req.dry_run {
             // Full detection already ran above; validate the post-merge
@@ -8458,6 +8603,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         &self,
         req: Request<pb::UpdateBranchRequest>,
     ) -> Result<Response<pb::UpdateBranchResponse>, Status> {
+        let vis = Self::visibility_of(&req);
         let principal = Self::principal_from_metadata(&req);
         let req = req.into_inner();
         validate_branch_name(&req.name)?;
@@ -8524,6 +8670,32 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             }
         }
+
+        let business_metas: Vec<OpMetaLike> = classified
+            .iter()
+            .filter(|(entry, _)| {
+                // An added schema has no baseline row to rebase, but its target
+                // may have lost the property before this call.
+                matches!(
+                    branch_diff_entry_status(entry.status),
+                    pb::branch_diff_entry::Status::Changed | pb::branch_diff_entry::Status::Added
+                )
+            })
+            .filter_map(|(entry, _)| {
+                let ours = entry.ours.clone()?;
+                let entity_ref = entry.r#ref.as_ref()?;
+                let kind = pb::EntityKind::try_from(entity_ref.kind).ok()?;
+                let id = entity_ref.id.clone()?;
+                Some(OpMetaLike {
+                    kind,
+                    id,
+                    is_put: true,
+                    entity: Some(ours),
+                })
+            })
+            .collect();
+        self.validate_business_writes(&business_metas, Some(req.name.as_str()), &vis)
+            .await?;
 
         let rebased_count = if rebases.is_empty() {
             0
@@ -8733,6 +8905,24 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
                 return Err(status);
             }
+            if let Err(status) = self
+                .validate_business_writes(
+                    &[OpMetaLike {
+                        kind,
+                        id: id.clone(),
+                        is_put: true,
+                        entity: Some(merged.clone()),
+                    }],
+                    Some(req.name.as_str()),
+                    &vis,
+                )
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
             let changeset =
                 PendingChangeset::mint("ResolveBranchEntry", &author, Some(req.name.as_str()))
                     .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
@@ -8753,6 +8943,38 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     operation_receipts::settle_for_status(&*self.store, key, &status).await;
                 }
                 return Err(status);
+            }
+        } else if !take_theirs {
+            let delta = self
+                .store
+                .list_branch_deltas(&req.name)
+                .await
+                .map_err(store_err)?
+                .into_iter()
+                .find(|d| d.kind == kind && d.id == id)
+                .ok_or_else(|| {
+                    Status::not_found(format!("branch {:?} has no delta for this key", req.name))
+                })?;
+            let (entry, _) = self.classify_branch_delta(delta).await?;
+            if let Some(ours) = entry.ours {
+                if let Err(status) = self
+                    .validate_business_writes(
+                        &[OpMetaLike {
+                            kind,
+                            id: id.clone(),
+                            is_put: true,
+                            entity: Some(ours),
+                        }],
+                        Some(req.name.as_str()),
+                        &vis,
+                    )
+                    .await
+                {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
+                }
             }
         }
 

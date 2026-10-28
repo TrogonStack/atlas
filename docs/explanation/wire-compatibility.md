@@ -130,10 +130,19 @@ and server before authoring these resources; an exact entity version alone
 does not pin a mutable contract's content or member incarnation.
 
 Contract revision 12 raised both mutation compatibility floors to 12.
-DataProduct writers preserve independent port IDs, nested
-association IDs and exact selected access and contract pins. Upgrade clients
-and server together before authoring DataProducts; older writers cannot
-preserve the complete resource contract.
+DataProduct writers preserve independent port IDs, nested association IDs
+and exact selected access and contract pins. Upgrade clients and server
+together before authoring DataProducts; older writers cannot preserve the
+complete resource contract.
+
+Revisions 13 through 18 raised both floors again as later resources landed.
+Each of those releases refuses writers and servers that predate its floor.
+
+Contract revision 19 raises both mutation compatibility floors to 19.
+Addressable schemas carry aggregate intent, identifiers, and property
+relationships. An older writer would drop those fields. `GetServerInfo`
+followed by `compat::check` refuses that writer before any mutation is sent.
+Reads stay available.
 
 ## Supported combinations
 

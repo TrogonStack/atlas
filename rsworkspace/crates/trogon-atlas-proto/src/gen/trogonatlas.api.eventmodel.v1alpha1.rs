@@ -1141,6 +1141,10 @@ pub struct Reference {
     pub step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
     #[prost(message, optional, tag="11")]
     pub target_step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    /// Set only when this RPC checked a business property relationship.
+    /// Absent means the hit was not evaluated. Zero is not a resolved status.
+    #[prost(enumeration="BusinessPropertyReferenceStatus", optional, tag="12")]
+    pub business_property_status: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImpactNode {
@@ -1154,6 +1158,41 @@ pub struct ImpactNode {
     /// this node. Empty for depth == 0.
     #[prost(message, repeated, tag="3")]
     pub path: ::prost::alloc::vec::Vec<Reference>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum BusinessPropertyReferenceStatus {
+    Unspecified = 0,
+    EntityOnly = 1,
+    PropertyResolved = 2,
+    PropertyUnresolved = 3,
+    Unavailable = 4,
+}
+impl BusinessPropertyReferenceStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "BUSINESS_PROPERTY_REFERENCE_STATUS_UNSPECIFIED",
+            Self::EntityOnly => "BUSINESS_PROPERTY_REFERENCE_STATUS_ENTITY_ONLY",
+            Self::PropertyResolved => "BUSINESS_PROPERTY_REFERENCE_STATUS_PROPERTY_RESOLVED",
+            Self::PropertyUnresolved => "BUSINESS_PROPERTY_REFERENCE_STATUS_PROPERTY_UNRESOLVED",
+            Self::Unavailable => "BUSINESS_PROPERTY_REFERENCE_STATUS_UNAVAILABLE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BUSINESS_PROPERTY_REFERENCE_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+            "BUSINESS_PROPERTY_REFERENCE_STATUS_ENTITY_ONLY" => Some(Self::EntityOnly),
+            "BUSINESS_PROPERTY_REFERENCE_STATUS_PROPERTY_RESOLVED" => Some(Self::PropertyResolved),
+            "BUSINESS_PROPERTY_REFERENCE_STATUS_PROPERTY_UNRESOLVED" => Some(Self::PropertyUnresolved),
+            "BUSINESS_PROPERTY_REFERENCE_STATUS_UNAVAILABLE" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
 }
 // ---------- Denormalized projections (the "fast map" view) -------------------
 //

@@ -413,6 +413,8 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
     trogon_atlas_core::communication_intent::validate_values(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::business_data::validate_entity(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
     let (title, doc, fields_len, metadata_len) = match entity.kind.as_ref() {
         Some(K::Event(x)) => (
             x.title.as_str(),

@@ -2883,9 +2883,9 @@ pub mod event_model_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Inverse discovery of independent specification message-to-channel
- declarations for one exact channel. Claim routes and operation bindings
- are not included. Branch context uses x-trogon-atlas-branch.
+        /** Inverse discovery preserves independent specification declarations,
+ claim routes and operation-message occurrences for one exact channel.
+ Branch context uses x-trogon-atlas-branch.
 */
         pub async fn list_channel_messages(
             &mut self,
@@ -3720,9 +3720,9 @@ pub mod event_model_service_server {
             tonic::Response<super::GetTypeLibraryDescriptorSetResponse>,
             tonic::Status,
         >;
-        /** Inverse discovery of independent specification message-to-channel
- declarations for one exact channel. Claim routes and operation bindings
- are not included. Branch context uses x-trogon-atlas-branch.
+        /** Inverse discovery preserves independent specification declarations,
+ claim routes and operation-message occurrences for one exact channel.
+ Branch context uses x-trogon-atlas-branch.
 */
         async fn list_channel_messages(
             &self,

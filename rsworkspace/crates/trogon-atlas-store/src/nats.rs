@@ -3497,32 +3497,37 @@ impl Store for NatsStore {
                         }
                     }
                 }
-                let references = |entity: &Entity| -> StoreResult<Vec<EntityKey>> {
-                    let refs =
-                        trogon_atlas_core::refs::try_outbound_refs(entity).map_err(|error| {
-                            StoreError::CorruptEntry {
+                let references =
+                    |owner_key: &EntityKey, entity: &Entity| -> StoreResult<Vec<EntityKey>> {
+                        let refs = trogon_atlas_core::refs::try_outbound_refs(entity).map_err(
+                            |error| StoreError::CorruptEntry {
                                 key: trogon_atlas_core::refs::entity_kind(entity)
                                     .zip(trogon_atlas_core::refs::entity_id(entity))
                                     .map_or_else(String::new, |(kind, id)| {
                                         crate::key::entity_key(kind, id)
                                     }),
                                 reason: error.to_string(),
-                            }
-                        })?;
-                    Ok(refs
-                        .iter()
-                        .filter_map(|reference| {
-                            let kind = reference.to_kind.or_else(|| {
-                                untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
-                            })?;
-                            let target = EntityKey::new(kind, &reference.to_id);
-                            targets.contains(&target).then_some(target)
-                        })
-                        .collect())
-                };
+                            },
+                        )?;
+                        Ok(refs
+                            .iter()
+                            .filter_map(|reference| {
+                                let kind = reference.to_kind.or_else(|| {
+                                    untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
+                                })?;
+                                let target = EntityKey::new(kind, &reference.to_id);
+                                if &target == owner_key {
+                                    return None;
+                                }
+                                targets.contains(&target).then_some(target)
+                            })
+                            .collect())
+                    };
                 let mut referenced = HashSet::new();
-                for entity in replacements.values().flatten() {
-                    referenced.extend(references(entity)?);
+                for (owner_key, entity) in &replacements {
+                    if let Some(entity) = entity {
+                        referenced.extend(references(owner_key, entity)?);
+                    }
                 }
 
                 for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
@@ -3552,7 +3557,8 @@ impl Store for NatsStore {
                             let Some((owner_kind, owner_id)) = owner else {
                                 return Ok(Vec::new());
                             };
-                            if replacements.contains_key(&EntityKey::new(owner_kind, &owner_id)) {
+                            let owner_key = EntityKey::new(owner_kind, &owner_id);
+                            if replacements.contains_key(&owner_key) {
                                 return Ok(Vec::new());
                             }
                             // Merged gets suppress tombstones and replaced baseline references.
@@ -3561,7 +3567,7 @@ impl Store for NatsStore {
                                 Err(StoreError::NotFound) => return Ok(Vec::new()),
                                 Err(error) => return Err(error),
                             };
-                            references(&stored.entity)
+                            references(&owner_key, &stored.entity)
                         })
                         .buffer_unordered(LIST_FETCH_CONCURRENCY);
                     while let Some(found) = checks.next().await {

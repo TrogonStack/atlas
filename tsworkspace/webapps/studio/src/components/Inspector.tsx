@@ -8,6 +8,7 @@ import { DataProductInspector } from '@/components/DataProductInspector';
 import { CommunicationIntentDetails } from '@/components/CommunicationIntentDetails';
 import { MessageClaimsDetails } from '@/components/MessageClaimsDetails';
 import { ArchitecturalRelationshipDetails } from '@/components/ArchitecturalRelationshipDetails';
+import { SchemaBusinessDetails } from '@/components/SchemaBusinessDetails';
 import { ArchitectureResourceDetails } from '@/components/ArchitectureResourceDetails';
 import {
   AgentAnnotationDetails,
@@ -661,6 +662,7 @@ export function Inspector({
           <SourceIntegrationReview namespace={entity.id.namespace} asOf={asOf} />
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <ArchitecturalRelationshipDetails entity={entity} model={model} onSelect={onSelect} />
+          <SchemaBusinessDetails entity={entity} model={model} />
           <CommunicationIntentDetails entity={entity} model={model} onSelect={onSelect} />
           <MessageClaimsDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />

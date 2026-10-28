@@ -220,6 +220,23 @@ fn unit_fields(
             return Err(SourceError::UnsupportedUnit);
         }
     }
+    if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Schema"
+        && unit == OwnershipUnit::WholeOwner
+    {
+        let aggregate = descriptor
+            .get_field_by_name("aggregate_root")
+            .is_some_and(|field| value.has_field(&field));
+        let listed = |name: &str| {
+            value
+                .get_field_by_name(name)
+                .as_deref()
+                .and_then(Value::as_list)
+                .is_some_and(|values| !values.is_empty())
+        };
+        if aggregate || listed("identifiers") || listed("property_relationships") {
+            return Err(SourceError::UnsupportedUnit);
+        }
+    }
     match unit {
         OwnershipUnit::WholeOwner => Ok(descriptor.fields().filter(|f| f.name() != "id").collect()),
         OwnershipUnit::Field(field) => {
@@ -312,7 +329,8 @@ pub fn validate_selection_ownership(
                 Ok(trogon_atlas_proto::EntityKind::Component
                     | trogon_atlas_proto::EntityKind::ExternalSystem
                     | trogon_atlas_proto::EntityKind::DesignGraph
-                    | trogon_atlas_proto::EntityKind::Domain)
+                    | trogon_atlas_proto::EntityKind::Domain
+                    | trogon_atlas_proto::EntityKind::Schema)
             )
         }) {
             return Err(SourceError::UnsupportedUnit);
