@@ -3265,11 +3265,24 @@ async fn decision_cross_branch_landing_checks_final_graph_without_partial_public
 struct AmendmentFaultAuthorizer {
     inner: trogon_atlas_server::ownership::RegistryAuthorizer,
     target: std::sync::Mutex<Option<trogon_atlas_core::NamespaceId>>,
-    fail_lens: std::sync::atomic::AtomicBool,
+    lens_fault: std::sync::Mutex<Option<tonic::Status>>,
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn document_authorization_outage_is_not_empty_discovery_or_a_model_error() {
+    assert_document_authorization_fault(Code::Unavailable, "authorized scope outage").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn document_authorization_deadline_is_not_empty_discovery_or_a_model_error() {
+    assert_document_authorization_fault(
+        Code::DeadlineExceeded,
+        "authorized scope deadline exceeded",
+    )
+    .await;
+}
+
+async fn assert_document_authorization_fault(code: Code, message: &str) {
     let store: Arc<dyn trogon_atlas_store::Store> =
         Arc::new(trogon_atlas_testsupport::shared().await.store().await);
     let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
@@ -3279,7 +3292,7 @@ async fn document_authorization_outage_is_not_empty_discovery_or_a_model_error()
             store.clone(),
         ),
         target: std::sync::Mutex::new(None),
-        fail_lens: std::sync::atomic::AtomicBool::new(false),
+        lens_fault: std::sync::Mutex::new(None),
     });
     let mut client = client_with_service(service.with_authorizer(authorizer.clone())).await;
     let target = put(&mut client, read_model("outage-subject"), None)
@@ -3329,15 +3342,13 @@ async fn document_authorization_outage_is_not_empty_discovery_or_a_model_error()
         .await
         .unwrap();
     let sequence = store.current_change_seq().await.unwrap();
-    authorizer
-        .fail_lens
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    *authorizer.lens_fault.lock().unwrap() = Some(tonic::Status::new(code, message));
     let failure = client
         .list_incoming_document_declarations(request(query(), ADMIN, None))
         .await
         .unwrap_err();
-    assert_eq!(failure.code(), Code::Unavailable);
-    assert_eq!(failure.message(), "authorized scope outage");
+    assert_eq!(failure.code(), code);
+    assert_eq!(failure.message(), message);
     let mut changed = owner.clone();
     if let Some(pb::entity::Kind::Document(body)) = changed.kind.as_mut() {
         body.title = Some(title("Must not publish during outage"));
@@ -3354,8 +3365,8 @@ async fn document_authorization_outage_is_not_empty_discovery_or_a_model_error()
         ))
         .await
         .unwrap_err();
-    assert_eq!(failure.code(), Code::Unavailable);
-    assert_eq!(failure.message(), "authorized scope outage");
+    assert_eq!(failure.code(), code);
+    assert_eq!(failure.message(), message);
     let after = store
         .get(
             pb::EntityKind::Document,
@@ -3367,9 +3378,7 @@ async fn document_authorization_outage_is_not_empty_discovery_or_a_model_error()
     assert_eq!(after.entity, before.entity);
     assert_eq!(after.etag, before.etag);
     assert_eq!(store.current_change_seq().await.unwrap(), sequence);
-    authorizer
-        .fail_lens
-        .store(false, std::sync::atomic::Ordering::SeqCst);
+    *authorizer.lens_fault.lock().unwrap() = None;
     let recovered = client
         .list_incoming_document_declarations(request(query(), ADMIN, None))
         .await
@@ -3397,8 +3406,8 @@ impl trogon_atlas_server::ownership::NamespaceAuthorizer for AmendmentFaultAutho
         &self,
         visibility: &trogon_atlas_server::ownership::Visibility,
     ) -> Result<trogon_atlas_server::ownership::Lens, tonic::Status> {
-        if self.fail_lens.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(tonic::Status::unavailable("authorized scope outage"));
+        if let Some(failure) = self.lens_fault.lock().unwrap().clone() {
+            return Err(failure);
         }
         self.inner.lens(visibility).await
     }
@@ -3438,7 +3447,7 @@ async fn decision_transitive_authorization_faults_are_errors_and_never_leaves() 
     let authorizer = Arc::new(AmendmentFaultAuthorizer {
         inner: trogon_atlas_server::ownership::RegistryAuthorizer::new(service.directory(), store),
         target: std::sync::Mutex::new(None),
-        fail_lens: std::sync::atomic::AtomicBool::new(false),
+        lens_fault: std::sync::Mutex::new(None),
     });
     let mut client = client_with_service(service.with_authorizer(authorizer.clone())).await;
     let mut namespaces = Vec::new();
@@ -3514,9 +3523,8 @@ async fn decision_transitive_authorization_faults_are_errors_and_never_leaves() 
         } else {
             Some(trogon_atlas_core::NamespaceId::parse(&namespaces[1]).unwrap())
         };
-        authorizer
-            .fail_lens
-            .store(lens_fault, std::sync::atomic::Ordering::SeqCst);
+        *authorizer.lens_fault.lock().unwrap() =
+            lens_fault.then(|| tonic::Status::unavailable("authorized scope outage"));
         let error = client
             .put_entity(request(
                 pb::PutEntityRequest {
@@ -3537,9 +3545,7 @@ async fn decision_transitive_authorization_faults_are_errors_and_never_leaves() 
                 "transitive authorization outage"
             }
         );
-        authorizer
-            .fail_lens
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+        *authorizer.lens_fault.lock().unwrap() = None;
         *authorizer.target.lock().unwrap() = None;
         assert_eq!(stored_decision(&mut client, &a, None).await, a_before);
         assert_eq!(stored_decision(&mut client, &b, None).await, b_before);
