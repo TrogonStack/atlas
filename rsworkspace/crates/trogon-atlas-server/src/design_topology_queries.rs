@@ -463,28 +463,46 @@ impl EventModelServiceImpl {
                 continue;
             };
             let owner = checked(&row)?;
+            let mut matching = Vec::new();
             for (index, step) in graph.steps.iter().enumerate() {
                 query.budget.examine(1)?;
-                if !matches!(
+                if matches!(
                     step.target.as_ref().and_then(|t| t.selection.as_ref()),
                     Some(Selection::Subflow(subflow)) if subflow == &selection
                 ) {
-                    continue;
+                    matching.push((index, step));
                 }
-                let transitions = trogon_atlas_core::design_topology::transitions(graph)
+            }
+            if matching.is_empty() {
+                continue;
+            }
+            query
+                .budget
+                .examine(graph.steps.iter().map(|step| step.transitions.len()).sum())?;
+            let inventory = trogon_atlas_core::design_topology::transitions(graph);
+            let mut by_step: HashMap<Option<&str>, Vec<_>> = HashMap::new();
+            for edge in &inventory {
+                let source = edge.source_step_id.as_ref().map(|id| id.value.as_str());
+                let target = edge.target_step_id.as_ref().map(|id| id.value.as_str());
+                by_step.entry(source).or_default().push(edge);
+                if target != source {
+                    by_step.entry(target).or_default().push(edge);
+                }
+            }
+            for (index, step) in matching {
+                let transitions = by_step
+                    .get(&step.step_id.as_ref().map(|id| id.value.as_str()))
                     .into_iter()
-                    .filter(|edge| {
-                        edge.source_step_id == step.step_id || edge.target_step_id == step.step_id
-                    })
+                    .flatten()
                     .map(|edge| {
                         query.budget.output()?;
                         Ok(pb::TopologyTraversalEdge {
                             kind: pb::topology_traversal_edge::Kind::Transition as i32,
                             graph: Some(owner.clone()),
-                            from_step_id: edge.source_step_id,
-                            connection_id: edge.connection_id,
-                            label: edge.label,
-                            to_step_id: edge.target_step_id,
+                            from_step_id: edge.source_step_id.clone(),
+                            connection_id: edge.connection_id.clone(),
+                            label: edge.label.clone(),
+                            to_step_id: edge.target_step_id.clone(),
                             to_graph: None,
                         })
                     })

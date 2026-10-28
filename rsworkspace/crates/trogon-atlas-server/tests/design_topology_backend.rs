@@ -689,6 +689,86 @@ async fn equal_sibling_steps_keep_distinct_ids_across_resubmission() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn incoming_subflows_preserve_incident_order_and_self_loop_identity() {
+    let mut client = client().await;
+    put(
+        &mut client,
+        graph("incident-target", vec![step("Target", None)]),
+    )
+    .await;
+    let created = put(
+        &mut client,
+        graph(
+            "incident-owner",
+            vec![
+                step(
+                    "Subflow",
+                    Some(pb::topology_step_target::Selection::Subflow(graph_ref(
+                        "incident-target",
+                    ))),
+                ),
+                step("Left", None),
+                step("Right", None),
+            ],
+        ),
+    )
+    .await;
+    let mut value = created.entity.unwrap();
+    let body = graph_mut(&mut value);
+    let selected = body.steps[0].step_id.clone().unwrap();
+    let right = body.steps[2].step_id.clone().unwrap();
+    body.steps[0].transitions = vec![
+        transition(&selected, "Loop"),
+        transition(&right, "Outgoing"),
+    ];
+    body.steps[1].transitions = vec![
+        transition(&selected, "Incoming"),
+        transition(&right, "Unrelated"),
+    ];
+    let stored = try_put(&mut client, value, created.etag, ADMIN)
+        .await
+        .unwrap();
+    let body = steps_of(stored.entity.as_ref().unwrap());
+    let expected: Vec<_> = [(&body[0], 0), (&body[0], 1), (&body[1], 0)]
+        .into_iter()
+        .map(|(step, index)| {
+            (
+                step.step_id.clone(),
+                step.transitions[index].connection_id.clone(),
+                step.transitions[index].target_step_id.clone(),
+                step.transitions[index].label.clone(),
+            )
+        })
+        .collect();
+    let incoming = client
+        .list_incoming_design_graph_subflows(request(
+            pb::ListIncomingDesignGraphSubflowsRequest {
+                graph: Some(graph_ref("incident-target")),
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(incoming.references.len(), 1);
+    assert_eq!(incoming.references[0].step_id, Some(selected));
+    let actual: Vec<_> = incoming.references[0]
+        .transitions
+        .iter()
+        .map(|edge| {
+            (
+                edge.from_step_id.clone(),
+                edge.connection_id.clone(),
+                edge.to_step_id.clone(),
+                edge.label.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn incoming_subflows_charge_transition_index_work_once_per_owner() {
     let mut client = client().await;
     put(
