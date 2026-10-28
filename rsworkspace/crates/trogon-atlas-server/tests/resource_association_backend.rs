@@ -7,6 +7,7 @@ use tonic::{Code, Request};
 use trogon_atlas_core::specification::content_digest;
 use trogon_atlas_proto as pb;
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
+use trogon_atlas_store::Store;
 
 const MESSAGE: &str = "11111111-1111-4111-8111-111111111111";
 const QUERY: &str = "22222222-2222-4222-8222-222222222222";
@@ -1442,4 +1443,288 @@ tokens = ["assoc-limited"]
     assert_eq!(foreign.code(), Code::NotFound);
     assert_eq!(foreign.message(), "resource unavailable");
     assert!(!foreign.message().contains("Orders"));
+}
+
+#[tokio::test]
+async fn message_selector_rejects_stale_uid_and_missing_message() {
+    let service = service().await;
+    let world = world(&service).await;
+    let stored = product_of(&world.product).clone();
+    let mut stale = stored.clone();
+    stale.id.as_mut().unwrap().slug = unique("stale-message");
+    let pb::product_resource_association::Target::Message(message) =
+        stale.resource_associations[3].target.as_mut().unwrap()
+    else {
+        panic!("message selector");
+    };
+    message.owner_uid = "stale-owner".into();
+    let error = put_expect(&service, pb::entity::Kind::DataProduct(stale)).await;
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(
+        error
+            .message()
+            .contains("DATA_PRODUCT_REFERENCE_UNRESOLVED"),
+        "{error}"
+    );
+    let mut missing = stored;
+    missing.id.as_mut().unwrap().slug = unique("missing-message");
+    let pb::product_resource_association::Target::Message(message) =
+        missing.resource_associations[3].target.as_mut().unwrap()
+    else {
+        panic!("message selector");
+    };
+    message.member_id = Some(member("99999999-9999-4999-8999-999999999999"));
+    let error = put_expect(&service, pb::entity::Kind::DataProduct(missing)).await;
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(
+        error
+            .message()
+            .contains("DATA_PRODUCT_REFERENCE_UNRESOLVED"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn title_edit_keeps_unchanged_dangling_association_and_rejects_a_new_target() {
+    let service = service().await;
+    let world = world(&service).await;
+    service
+        .delete_entity(Request::new(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(world.event.clone()),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut product = product_of(&world.product).clone();
+    let preserved = product.resource_associations.clone();
+    product.title = "Renamed".into();
+    let updated = put(
+        &service,
+        pb::entity::Kind::DataProduct(product.clone()),
+        None,
+    )
+    .await;
+    let updated_entity = updated.entity.unwrap();
+    let updated_product = product_of(&updated_entity);
+    assert_eq!(updated_product.title, "Renamed");
+    assert_eq!(updated_product.resource_associations, preserved);
+    product.resource_associations[1].connection_id = None;
+    product.resource_associations[1].target = Some(
+        pb::product_resource_association::Target::Event(pb::EventRef {
+            id: Some(eid(&world.namespace, "missing-event")),
+        }),
+    );
+    let error = put_expect(&service, pb::entity::Kind::DataProduct(product)).await;
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(
+        error
+            .message()
+            .contains("DATA_PRODUCT_REFERENCE_UNRESOLVED"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn title_edit_keeps_unchanged_dangling_message_channel_and_rejects_a_new_channel() {
+    let service = service().await;
+    let world = world(&service).await;
+    let mut specification = spec_of(&world.specification).clone();
+    specification.operations.clear();
+    let cleared = put(
+        &service,
+        pb::entity::Kind::Specification(specification),
+        None,
+    )
+    .await;
+    service
+        .delete_entity(Request::new(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Channel as i32,
+            id: Some(world.channel.clone()),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut specification = spec_of(&cleared.entity.unwrap()).clone();
+    let preserved = specification.message_channels.clone();
+    specification.title = "Renamed contract".into();
+    let updated = put(
+        &service,
+        pb::entity::Kind::Specification(specification.clone()),
+        None,
+    )
+    .await;
+    let updated_entity = updated.entity.unwrap();
+    let updated_specification = spec_of(&updated_entity);
+    assert_eq!(updated_specification.title, "Renamed contract");
+    assert_eq!(updated_specification.message_channels, preserved);
+    specification.message_channels[0].connection_id = None;
+    specification.message_channels[0].channel = Some(pb::ChannelRef {
+        id: Some(eid(&world.namespace, "missing-channel")),
+    });
+    let error = put_expect(&service, pb::entity::Kind::Specification(specification)).await;
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(
+        error
+            .message()
+            .contains("SPECIFICATION_REFERENCE_UNRESOLVED"),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn channel_page_token_rejects_a_second_caller_with_the_same_scope() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let registry = trogon_atlas_server::auth::TokenRegistry::from_file_contents(
+        toml::from_str(
+            r#"
+[principals.reader-a]
+role = "reader"
+tokens = ["assoc-reader-a"]
+[principals.reader-b]
+role = "reader"
+tokens = ["assoc-reader-b"]
+"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let store: Arc<dyn Store> = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let direct = EventModelServiceImpl::try_new(Arc::clone(&store), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(0);
+    let world = world(&direct).await;
+    let grpc = pb::event_model_service_server::EventModelServiceServer::new(
+        EventModelServiceImpl::try_new(store, ServerMetrics::default())
+            .unwrap()
+            .with_snapshot_cap(0),
+    );
+    let plane = trogon_atlas_server::mcp::data_plane(
+        grpc,
+        trogon_atlas_server::auth::BearerAuth::new(Arc::new(registry)),
+    );
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(plane)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let mut client = pb::event_model_service_client::EventModelServiceClient::connect(format!(
+        "http://{address}"
+    ))
+    .await
+    .unwrap();
+    let authed = |token: &'static str, body: pb::ListChannelMessagesRequest| {
+        let mut request = Request::new(body);
+        request
+            .metadata_mut()
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        request
+    };
+    let channel = pb::ChannelRef {
+        id: Some(world.channel.clone()),
+    };
+    let first = client
+        .list_channel_messages(authed(
+            "assoc-reader-a",
+            pb::ListChannelMessagesRequest {
+                channel: Some(channel.clone()),
+                page_size: 1,
+                ..Default::default()
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(first.records.len(), 1, "{first:?}");
+    assert!(!first.next_page_token.is_empty());
+    let continued = client
+        .list_channel_messages(authed(
+            "assoc-reader-a",
+            pb::ListChannelMessagesRequest {
+                channel: Some(channel.clone()),
+                page_size: 1,
+                page_token: first.next_page_token.clone(),
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(continued.records.len(), 1, "{continued:?}");
+    let rejected = client
+        .list_channel_messages(authed(
+            "assoc-reader-b",
+            pb::ListChannelMessagesRequest {
+                channel: Some(channel),
+                page_size: 1,
+                page_token: first.next_page_token,
+            },
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.code(), Code::InvalidArgument, "{rejected}");
+    assert_eq!(rejected.message(), "page token does not match this query");
+}
+
+#[tokio::test]
+async fn channel_page_scans_the_full_scope_before_paging() {
+    let service = service().await;
+    let namespace = unique("assoc-budget");
+    let channel_id = eid(&namespace, "orders");
+    service
+        .store
+        .put(
+            pb::EntityKind::Channel,
+            &entity(pb::entity::Kind::Channel(pb::Channel {
+                id: Some(channel_id.clone()),
+                title: "Orders".into(),
+                ..Default::default()
+            })),
+            false,
+            trogon_atlas_store::WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let mut ops = Vec::with_capacity(5_000);
+    for index in 0..5_000 {
+        ops.push(trogon_atlas_store::store::MutationOp::Put {
+            kind: pb::EntityKind::Specification,
+            entity: entity(pb::entity::Kind::Specification(pb::Specification {
+                id: Some(eid(&namespace, &format!("s{index:04}"))),
+                title: "Declared".into(),
+                message_channels: vec![pb::MessageChannelDeclaration {
+                    channel: Some(pb::ChannelRef {
+                        id: Some(channel_id.clone()),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            if_match: None,
+            force: false,
+        });
+    }
+    for chunk in ops.chunks(500) {
+        service
+            .store
+            .batch_apply(chunk, trogon_atlas_store::WriteContext::baseline())
+            .await
+            .unwrap();
+    }
+    let error = service
+        .list_channel_messages(Request::new(pb::ListChannelMessagesRequest {
+            channel: Some(pb::ChannelRef {
+                id: Some(channel_id),
+            }),
+            page_size: 1,
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::ResourceExhausted, "{error}");
+    assert_eq!(error.message(), "channel message budget exhausted");
 }

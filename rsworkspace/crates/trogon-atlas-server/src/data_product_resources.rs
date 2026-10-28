@@ -60,6 +60,16 @@ pub(crate) fn validate_in_context_with_previous(
                 );
             }
         }
+        if let Some(pb::product_resource_association::Target::Message(message)) =
+            &association.target
+        {
+            let field = format!("resource_associations[{index}].message");
+            if !message_member_resolves(message, context)
+                && !stable_occurrence(previous, entity, &field)
+            {
+                issue("DATA_PRODUCT_REFERENCE_UNRESOLVED", &field);
+            }
+        }
     }
     for (index, output) in product.outputs.iter().enumerate() {
         if !contract_resolves(output.contract.as_ref(), context) {
@@ -269,9 +279,34 @@ fn stable_occurrence(previous: Option<&pb::Entity>, current: &pb::Entity, field:
         return false;
     };
     now.iter().any(|occurrence| {
-        (field == occurrence.path || field.starts_with(&format!("{}.", occurrence.path)))
+        let path = body_path(&occurrence.path);
+        (field == path || field.starts_with(&format!("{path}.")))
             && prior.iter().any(|old| old == occurrence)
     })
+}
+
+/// Occurrence paths are entity-rooted. Outbound fields are body-relative.
+fn body_path(occurrence_path: &str) -> &str {
+    occurrence_path
+        .split_once('.')
+        .map_or(occurrence_path, |(_, rest)| rest)
+}
+
+fn message_member_resolves(
+    message: &pb::ContractMemberRef,
+    context: &ArchitectureContext<'_>,
+) -> bool {
+    message
+        .specification
+        .as_ref()
+        .and_then(|specification| specification.id.as_ref())
+        .and_then(|id| context.find(pb::EntityKind::Specification, id))
+        .is_some_and(|owner| {
+            matches!(
+                trogon_atlas_core::specification::resolve_member(owner, message),
+                Ok(trogon_atlas_core::specification::ContractMember::Message(_))
+            )
+        })
 }
 
 fn resource_contract_resolves(
