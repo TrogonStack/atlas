@@ -1134,6 +1134,88 @@ async fn independent_domain_claim_rows_obey_exact_shared_discovery_row_boundary(
         .into_inner();
     assert_eq!(boundary.declarations, []);
     assert!(!boundary.incomplete);
+    let current = store
+        .get(pb::EntityKind::Domain, &id(&namespace, "row-0"), None)
+        .await
+        .unwrap();
+    let mut selected_owner = current.entity;
+    let Some(pb::entity::Kind::Specification(definition)) = &spec.kind else {
+        panic!()
+    };
+    let declarations =
+        trogon_atlas_core::message_claims::declarations_mut(&mut selected_owner).unwrap();
+    declarations.field_selections.push(pb::ClaimFieldSelection {
+        claim_id: declarations.claims[0].connection_id.clone(),
+        binding: Some(pb::ConnectionRef {
+            owner: Some(reference(&spec)),
+            owner_uid: spec.system.as_ref().unwrap().uid.clone(),
+            id: definition.messages[0].schemas[0].connection_id.clone(),
+        }),
+        selectors: vec![pb::ClaimFieldSelector {
+            selector: Some(pb::claim_field_selector::Selector::Path(pb::FieldPath {
+                segments: vec!["name".into()],
+            })),
+        }],
+        ..Default::default()
+    });
+    let selected_owner = put(&mut client, selected_owner, &current.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let native_field = pb::ConnectionRef {
+        owner: Some(reference(&selected_owner)),
+        owner_uid: selected_owner.system.as_ref().unwrap().uid.clone(),
+        id: trogon_atlas_core::message_claims::declarations(&selected_owner)
+            .unwrap()
+            .field_selections[0]
+            .connection_id
+            .clone(),
+    };
+    let native_request = || {
+        authed(
+            pb::ListSubjectAssignmentsRequest {
+                subject: Some(pb::ResponsibilitySubject {
+                    selection: Some(pb::responsibility_subject::Selection::Connection(
+                        native_field.clone(),
+                    )),
+                }),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        )
+    };
+    client
+        .delete_entity(authed(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: Some(id(&namespace, "row-4997")),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap();
+    let schema_boundary = client
+        .list_subject_assignments(native_request())
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        schema_boundary.subject_state,
+        pb::ResponsibilityResolutionState::Resolved as i32
+    );
+    let mut restored = owner(&namespace, pb::EntityKind::Domain, message.clone());
+    if let Some(pb::entity::Kind::Domain(value)) = &mut restored.kind {
+        value.id.as_mut().unwrap().slug = "row-4997".into();
+    }
+    put(&mut client, restored, "").await.unwrap();
+    let failure = client
+        .list_subject_assignments(native_request())
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code(), Code::ResourceExhausted);
     let mut owner_entity = owner(&namespace, pb::EntityKind::Domain, message);
     if let Some(pb::entity::Kind::Domain(domain)) = &mut owner_entity.kind {
         domain.id.as_mut().unwrap().slug = "row-overflow".into();
