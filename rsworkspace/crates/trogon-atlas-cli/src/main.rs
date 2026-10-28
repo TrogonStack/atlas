@@ -301,6 +301,12 @@ enum Cmd {
         #[arg(long)]
         request: String,
     },
+    /// List messages carried by an exact channel using proto3 JSON `ListChannelMessagesRequest`.
+    ListChannelMessages {
+        /// Proto3 JSON `ListChannelMessagesRequest`.
+        #[arg(long)]
+        request: String,
+    },
     /// Inspect a DesignGraph with exact hydrated targets using proto3 JSON `GetDesignGraphDetailRequest`.
     GetDesignGraphDetail {
         /// Proto3 JSON `GetDesignGraphDetailRequest`.
@@ -1827,6 +1833,26 @@ async fn run(
                     request,
                 )
                 .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListChannelMessages { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::channel_messages::parse_request(
+                "ListChannelMessagesRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::channel_messages::list_channel_messages(&mut client, request)
+                    .await?;
             if text {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }

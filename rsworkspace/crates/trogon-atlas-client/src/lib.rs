@@ -10,6 +10,7 @@
 //! derived from the proto, never hand-maintained.
 pub mod apply;
 pub mod branch;
+pub mod channel_messages;
 pub mod client;
 pub mod compat;
 pub mod data_product;
