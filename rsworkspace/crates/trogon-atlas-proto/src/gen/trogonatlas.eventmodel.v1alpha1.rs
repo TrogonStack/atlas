@@ -1100,11 +1100,11 @@ pub struct AgentTool {
     #[prost(message, optional, tag="2")]
     pub r#type: ::core::option::Option<ToolKindText>,
     #[prost(message, optional, tag="3")]
-    pub description: ::core::option::Option<super::super::annotation::v1alpha1::MetadataText>,
+    pub description: ::core::option::Option<AgentDescription>,
     #[prost(message, optional, tag="4")]
-    pub icon: ::core::option::Option<super::super::annotation::v1alpha1::IconToken>,
+    pub icon: ::core::option::Option<AgentIcon>,
     #[prost(message, optional, tag="5")]
-    pub url: ::core::option::Option<super::super::annotation::v1alpha1::MetadataUrl>,
+    pub url: ::core::option::Option<AgentUrl>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AgentAnnotation {
@@ -1112,6 +1112,21 @@ pub struct AgentAnnotation {
     pub model: ::core::option::Option<AgentModel>,
     #[prost(message, repeated, tag="2")]
     pub tools: ::prost::alloc::vec::Vec<AgentTool>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentDescription {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentIcon {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AgentUrl {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
 }
 /// Command slice: Command -> Event(s)
 ///

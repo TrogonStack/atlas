@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package trogonatlas.eventmodel.v1alpha1;
 
-import "trogonatlas/annotation/v1alpha1/annotations.proto";
 
 // Explanation for why an entity is intentionally disconnected from the
 // model's slice graph (no command slice produces it, no read-model slice
@@ -205,11 +204,15 @@ message AgentModel {
 message AgentTool {
   ToolName name = 1;
   ToolKindText type = 2;
-  trogonatlas.annotation.v1alpha1.MetadataText description = 3;
-  trogonatlas.annotation.v1alpha1.IconToken icon = 4;
-  trogonatlas.annotation.v1alpha1.MetadataUrl url = 5;
+  AgentDescription description = 3;
+  AgentIcon icon = 4;
+  AgentUrl url = 5;
 }
 message AgentAnnotation {
   AgentModel model = 1;
   repeated AgentTool tools = 2;
 }
+
+message AgentDescription { string value = 1; }
+message AgentIcon { string value = 1; }
+message AgentUrl { string value = 1; }
