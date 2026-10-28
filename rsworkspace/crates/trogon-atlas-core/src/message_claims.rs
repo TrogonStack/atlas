@@ -405,3 +405,29 @@ pub fn validate_field_selection(owner:&Entity,selection:&pb::ClaimFieldSelection
  }
  Ok(output)
 }
+
+/// Connects an extracted reference to its own identified leaf, without following local claims.
+pub fn reference_occurrence(owner: &Entity, from_field: &str) -> std::result::Result<Option<connections::ConnectionOccurrence>, connections::ConnectionError> {
+    if !from_field.starts_with("message_claims.") { return Ok(None) }
+    connections::validate_stored_connection_ids(owner)?;
+    Ok(connections::connection_occurrences(owner)?.into_iter().find(|v| {
+        v.path.split_once('.').is_some_and(|(_,relative)| from_field.strip_prefix(relative).is_some_and(|suffix|suffix.starts_with('.')))
+    }))
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaimRouteAuthority<'a> {
+    pub claim: &'a pb::MessageClaim,
+    pub route: &'a pb::ClaimRoute,
+}
+/// Independent claim-route authority for an inverse Channel message query.
+/// The caller owns authorization and request-wide scan and output budgets.
+pub fn routes_for_channel<'a>(owner: &'a Entity, channel: &pb::ChannelRef) -> Result<Vec<ClaimRouteAuthority<'a>>> {
+    exact(channel.id.as_ref())?;
+    validate_values(owner)?;
+    let Some(v)=declarations(owner) else {return Ok(Vec::new())};
+    v.routes.iter().filter(|r|r.channel.as_ref()==Some(channel)).map(|route| {
+        let claim=v.claims.iter().find(|c|c.connection_id==route.claim_id).ok_or_else(||ClaimError("local claim unavailable".into()))?;
+        Ok(ClaimRouteAuthority{claim,route})
+    }).collect()
+}

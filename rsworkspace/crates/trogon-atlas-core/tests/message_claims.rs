@@ -157,3 +157,39 @@ fn payload_selection_resolves_exact_message_binding_and_inline_paths_only() {
     if let Some(entity::Kind::Specification(s))=&mut spec.kind{s.messages[0].schemas[0].role=schema_binding::Role::Headers as i32;}
     assert!(validate_field_selection(&e,&selection,&spec,None).is_err());
 }
+
+#[test]
+fn prepared_owner_size_includes_server_owned_incarnation_metadata() {
+    use prost::Message;
+    use trogon_atlas_core::{connection_persistence::prepare_entity,message_claims::MAX_ENCODED_BYTES};
+    let mut raw=owner(); connections::assign_connection_ids(&mut raw).unwrap();
+    if let Some(entity::Kind::Domain(d))=&mut raw.kind {d.doc="x".repeat(MAX_ENCODED_BYTES-1000);}
+    let remaining=MAX_ENCODED_BYTES-raw.encoded_len();
+    if let Some(entity::Kind::Domain(d))=&mut raw.kind {d.doc.push_str(&"x".repeat(remaining));}
+    assert_eq!(raw.encoded_len(),MAX_ENCODED_BYTES);
+    assert!(prepare_entity(None,&raw).is_err());
+}
+
+#[test]
+fn occurrence_inventory_provenance_subjects_and_inverse_authority_are_independent() {
+    use trogon_atlas_core::{connection_persistence::prepare_entity,message_claims as claims,responsibility,decision_document};
+    let base=with_route();let mut next=base.clone();
+    let v=claims::declarations_mut(&mut next).unwrap(); let mut equal=v.routes[0].clone();equal.connection_id=None;v.routes.push(equal);
+    let next=prepare_entity(Some(&base),&next).unwrap();let v=claims::declarations(&next).unwrap();assert_ne!(v.routes[0].connection_id,v.routes[1].connection_id);
+    let authorities=claims::routes_for_channel(&next,v.routes[0].channel.as_ref().unwrap()).unwrap();assert_eq!(authorities.len(),2);assert_eq!(authorities[0].claim.connection_id,v.claims[0].connection_id);
+    for reference in outbound_refs(&next) {
+        let occurrence=claims::reference_occurrence(&next,&reference.from_field).unwrap().unwrap();
+        let selected=ConnectionRef{owner:Some(EntityRef{kind:EntityKind::Domain as i32,id:Some(id("owner"))}),owner_uid:next.system.as_ref().unwrap().uid.clone(),id:occurrence.id.map(Into::into)};
+        let context=claims::resolve_connection_context(&next,&selected).unwrap();assert_eq!(context.id,Some(reference.to_id));
+        responsibility::resolve_subject(&ResponsibilitySubject{selection:Some(responsibility_subject::Selection::Connection(selected.clone()))},&next).unwrap();
+        decision_document::resolve_subject(&CatalogSubject{selection:Some(catalog_subject::Selection::Connection(selected))},&next).unwrap();
+    }
+}
+#[test]
+fn route_annotations_keep_identity_but_channel_keys_and_claim_direction_do_not() {
+    use trogon_atlas_core::{connection_persistence::prepare_entity,message_claims as claims,retarget_refs};
+    let base=with_route();let mut descriptive=base.clone();let v=claims::declarations_mut(&mut descriptive).unwrap();v.routes[0].parameter_values.insert("tenant".into(),"".into());v.routes[0].delivery_mode=Some(ClaimDeliveryMode::Pull as i32);v.claims[0].group=Some(CatalogTitle{value:"Group".into()});
+    let edited=prepare_entity(Some(&base),&descriptive).unwrap();assert_eq!(claims::declarations(&edited).unwrap().routes[0].connection_id,claims::declarations(&base).unwrap().routes[0].connection_id);
+    assert_eq!(retarget_refs(&mut descriptive,EntityKind::Channel,&id("channel"),&id("another")),vec!["message_claims.routes[0].channel"]);assert!(claims::declarations(&descriptive).unwrap().routes[0].connection_id.is_none());prepare_entity(Some(&base),&descriptive).unwrap();
+    let mut changed=base.clone();claims::declarations_mut(&mut changed).unwrap().claims[0].direction=CommunicationDirection::Send as i32;assert!(prepare_entity(Some(&base),&changed).is_err());
+}
