@@ -60,6 +60,7 @@ fn kind_name(e: &pb::Entity) -> &'static str {
         Some(K::Person(_)) => "Person",
         Some(K::Decision(_)) => "Decision",
         Some(K::Document(_)) => "Document",
+        Some(K::DesignGraph(_)) => "DesignGraph",
         None => "<empty>",
     }
 }
@@ -693,6 +694,25 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
                     ("purpose", "purpose"),
                     ("filename", "filename"),
                     ("related_content", "relatedContent"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
+        (Some(K::DesignGraph(x)), Some(K::DesignGraph(y))) => {
+            resource_fields(
+                ops,
+                "DesignGraph",
+                x,
+                y,
+                &[
+                    ("title", "title"),
+                    ("doc", "doc"),
+                    ("profile", "profile"),
+                    ("steps", "steps"),
+                    ("entry_steps", "entrySteps"),
+                    ("subjects", "subjects"),
+                    ("layout_document", "layoutDocument"),
+                    ("supersedes", "supersedes"),
                 ],
             );
             resource_metadata(ops, &x.metadata, &y.metadata);

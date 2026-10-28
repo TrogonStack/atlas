@@ -292,6 +292,32 @@ mod tests {
         ));
     }
 
+    const LAST_REVISION_WITHOUT_DESIGN_GRAPH: u32 = 18;
+
+    #[test]
+    fn server_from_before_design_graph_is_refused_for_every_intent() {
+        let info = pb::GetServerInfoResponse {
+            contract_revision: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
+            min_client_contract_revision: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
+            ..current_server()
+        };
+        for intent in every_intent() {
+            assert!(matches!(
+                check(&info, intent),
+                Err(CompatibilityError::ServerTooOld {
+                    server: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn writer_from_before_design_graph_falls_below_the_advertised_client_floor() {
+        let advertised = current_server().min_client_contract_revision;
+        assert!(LAST_REVISION_WITHOUT_DESIGN_GRAPH < advertised);
+    }
+
     #[test]
     fn newer_server_that_still_accepts_this_client_is_allowed() {
         let info = pb::GetServerInfoResponse {

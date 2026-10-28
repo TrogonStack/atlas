@@ -40,6 +40,7 @@ const KINDS: Record<EntityKind, true> = {
   person: true,
   decision: true,
   document: true,
+  designGraph: true,
   dataProduct: true,
   specification: true,
 };

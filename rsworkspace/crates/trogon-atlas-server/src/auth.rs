@@ -188,7 +188,11 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDocumentDetail"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTermDomainDeclarations"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDecisionDeclarations"
-        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDocumentDeclarations" => Role::Reader,
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDocumentDeclarations"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDesignGraphDetail"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSubjectDesignGraphs"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/TraverseDesignGraphTopology"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDesignGraphSubflows" => Role::Reader,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BatchGetEntities" => Role::Reader,
 
         // Discovery

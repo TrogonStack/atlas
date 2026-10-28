@@ -38,7 +38,7 @@ fn failure(error: impl fmt::Display) -> CatalogError {
 fn connection_error(error: CatalogError) -> ConnectionError {
     ConnectionError::Catalog(error.0)
 }
-fn exact(id: Option<&pb::Id>) -> Result<()> {
+pub(crate) fn exact(id: Option<&pb::Id>) -> Result<()> {
     let id = id.ok_or_else(|| CatalogError("exact entity ID required".into()))?;
     require(
         id.version > 0
@@ -47,7 +47,7 @@ fn exact(id: Option<&pb::Id>) -> Result<()> {
         "invalid exact entity ID",
     )
 }
-fn text(value: &str, limit: usize) -> Result<()> {
+pub(crate) fn text(value: &str, limit: usize) -> Result<()> {
     require(
         !value.trim().is_empty() && value.len() <= limit,
         "catalog text blank or byte limit exceeded",
@@ -226,13 +226,14 @@ pub fn subjects(entity: &Entity) -> &[pb::SubjectAssociation] {
     match &entity.kind {
         Some(entity::Kind::Decision(v)) => &v.subjects,
         Some(entity::Kind::Document(v)) => &v.subjects,
+        Some(entity::Kind::DesignGraph(v)) => &v.subjects,
         _ => &[],
     }
 }
-fn validate_subjects(entity: &Entity) -> Result<()> {
+pub(crate) fn validate_subjects(entity: &Entity, required: bool) -> Result<()> {
     let values = subjects(entity);
     require(
-        !values.is_empty() && values.len() <= MAX_SUBJECTS,
+        (!required || !values.is_empty()) && values.len() <= MAX_SUBJECTS,
         "subject collection outside bounds",
     )?;
     let mut seen = HashSet::new();
@@ -529,7 +530,7 @@ pub fn validate_values(entity: &Entity) -> Result<()> {
         entity.encoded_len() <= MAX_ENCODED_BYTES,
         "catalog entity byte limit exceeded",
     )?;
-    validate_subjects(entity)?;
+    validate_subjects(entity, true)?;
     inventory(entity, false)?;
     connections::validate_connection_ids(entity).map_err(failure)
 }
@@ -762,6 +763,7 @@ pub(crate) fn restore_values(
 
 pub fn decorate_reference(entity: &Entity, reference: &mut pb::Reference) {
     crate::decision_document_refs::decorate_reference(entity, reference);
+    crate::design_topology_refs::decorate_reference(entity, reference);
 }
 
 pub fn decision_maker_ref(maker: &pb::DecisionMaker) -> Result<pb::EntityRef> {

@@ -349,6 +349,8 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
                         "trogonatlas.eventmodel.v1alpha1.Component"
                             | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
                     ))
+                || (matches!(name.as_str(), "steps" | "entry_steps")
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.DesignGraph")
             {
                 assert_eq!(result, Err(SourceError::UnsupportedUnit));
             } else {
@@ -483,4 +485,33 @@ fn contextual_comparison_failure_propagates_after_eager_historical_pair() {
     );
     assert_eq!(outcome.unwrap_err(), SourceError::NativeValue);
     assert_eq!(calls, 2);
+}
+
+fn design_graph(steps: &serde_json::Value) -> Entity {
+    decode(&serde_json::json!({"designGraph":{"id":{"namespace":"test","slug":"flow","version":1},"title":{"value":"Flow"},"profile":"DESIGN_GRAPH_PROFILE_FLOW","steps":steps}})).expect("valid native input")
+}
+
+#[test]
+fn design_topology_steps_are_native_only_for_source_ownership() {
+    let populated = design_graph(&serde_json::json!([{"title":{"value":"Start"}}]));
+    let empty = design_graph(&serde_json::json!([]));
+    let whole = SourceFieldOwnership {
+        policy: Some(Policy::WholeOwner(SourceWholeOwnerOwnership {})),
+    };
+    assert_eq!(
+        validate_ownership(&populated, &whole),
+        Err(SourceError::UnsupportedUnit)
+    );
+    assert!(validate_ownership(&empty, &whole).is_ok());
+    for field in [SourceOwnedField::Steps, SourceOwnedField::EntrySteps] {
+        assert_eq!(
+            validate_ownership(&empty, &ownership(&[field])),
+            Err(SourceError::UnsupportedUnit)
+        );
+    }
+    assert!(validate_ownership(
+        &populated,
+        &ownership(&[SourceOwnedField::Title, SourceOwnedField::Profile])
+    )
+    .is_ok());
 }

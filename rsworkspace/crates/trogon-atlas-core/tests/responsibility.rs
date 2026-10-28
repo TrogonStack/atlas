@@ -1030,6 +1030,8 @@ fn generic_references_preserve_full_typed_assignment_and_membership_provenance()
             responsibility: Some(assignment),
             membership: None,
             from_uid: owner_uid.clone(),
+            step_id: None,
+            target_step_id: None,
         };
         assert_eq!(
             Reference::decode(reference.encode_to_vec().as_slice()).unwrap(),

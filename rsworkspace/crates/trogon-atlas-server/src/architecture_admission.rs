@@ -76,7 +76,11 @@ fn overlay_of(metas: &[OpMetaLike]) -> HashMap<pb::EntityKey, Option<&pb::Entity
 fn is_catalog(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
-        Some(pb::entity::Kind::Decision(_) | pb::entity::Kind::Document(_))
+        Some(
+            pb::entity::Kind::Decision(_)
+                | pb::entity::Kind::Document(_)
+                | pb::entity::Kind::DesignGraph(_)
+        )
     )
 }
 
@@ -205,6 +209,7 @@ impl EventModelServiceImpl {
                             | pb::EntityKind::Decision
                             | pb::EntityKind::Term
                             | pb::EntityKind::Document
+                            | pb::EntityKind::DesignGraph
                     )
             })
             .filter_map(|meta| meta.entity.as_ref())
@@ -406,6 +411,7 @@ impl EventModelServiceImpl {
                             | pb::entity::Kind::Decision(_)
                             | pb::entity::Kind::Term(_)
                             | pb::entity::Kind::Document(_)
+                            | pb::entity::Kind::DesignGraph(_)
                     )
                 )
             })
@@ -595,6 +601,7 @@ impl EventModelServiceImpl {
                         pb::EntityKind::Decision,
                         pb::EntityKind::Document,
                         pb::EntityKind::Term,
+                        pb::EntityKind::DesignGraph,
                     ],
                     namespaces: &namespaces,
                     ..Default::default()
@@ -730,18 +737,15 @@ impl EventModelServiceImpl {
             budget.owner(&row.entity)?;
         }
         for entity in &resources {
-            for association in crate::decision_document_resources::subjects(entity) {
-                if let Some(subject) = &association.subject {
-                    if let Ok(reference) =
-                        trogon_atlas_core::decision_document::subject_owner(subject)
-                    {
-                        if let (Ok(kind), Some(id)) = (
-                            pb::EntityKind::try_from(reference.kind),
-                            reference.id.as_ref(),
-                        ) {
-                            if let Some(owner) = world.get(&pb::EntityKey::new(kind, id)) {
-                                budget.selection(subject, &owner.entity)?;
-                            }
+            for subject in crate::decision_document_resources::catalog_subjects(entity) {
+                if let Ok(reference) = trogon_atlas_core::decision_document::subject_owner(subject)
+                {
+                    if let (Ok(kind), Some(id)) = (
+                        pb::EntityKind::try_from(reference.kind),
+                        reference.id.as_ref(),
+                    ) {
+                        if let Some(owner) = world.get(&pb::EntityKey::new(kind, id)) {
+                            budget.selection(subject, &owner.entity)?;
                         }
                     }
                 }
@@ -1052,6 +1056,7 @@ impl EventModelServiceImpl {
                     | pb::entity::Kind::Decision(_)
                     | pb::entity::Kind::Term(_)
                     | pb::entity::Kind::Document(_)
+                    | pb::entity::Kind::DesignGraph(_)
             )
         ) {
             let meta = OpMetaLike {
@@ -1186,8 +1191,7 @@ fn catalog_endpoints(
 ) -> Vec<(pb::EntityKind, pb::Id)> {
     resources
         .iter()
-        .flat_map(|entity| crate::decision_document_resources::subjects(entity))
-        .filter_map(|association| association.subject.as_ref())
+        .flat_map(|entity| crate::decision_document_resources::catalog_subjects(entity))
         .flat_map(|subject| {
             let converted = crate::decision_document_resources::responsibility_subject(subject);
             crate::responsibility_resources::subject_owner(&converted)

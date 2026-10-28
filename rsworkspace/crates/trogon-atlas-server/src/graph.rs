@@ -79,7 +79,7 @@ impl ReverseIndex {
                     let key = pb::EntityKey::new(to_kind, &o.to_id);
                     let (responsibility, membership) =
                         responsibility_provenance(&se.entity, &o.from_field);
-                    let (catalog_subject, document_selection, connection_id) =
+                    let (catalog_subject, document_selection, connection_id, step_id) =
                         catalog_provenance(&se.entity, &o.from_field, &group_ids);
                     by_target.entry(key).or_default().push(pb::Reference {
                         from: Some(from_ref.clone()),
@@ -94,7 +94,23 @@ impl ReverseIndex {
                         catalog_subject,
                         document_selection,
                         connection_id,
+                        step_id,
+                        target_step_id: None,
                     });
+                }
+            }
+        }
+        for se in all {
+            for r in transition_references(&se.entity) {
+                if let Some(to) = r.to.as_ref() {
+                    if let (Ok(kind), Some(id)) =
+                        (pb::EntityKind::try_from(to.kind), to.id.as_ref())
+                    {
+                        by_target
+                            .entry(pb::EntityKey::new(kind, id))
+                            .or_default()
+                            .push(r);
+                    }
                 }
             }
         }
@@ -349,7 +365,7 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
     for o in refs {
         for to_kind in resolve_to_kinds(o.to_kind, &o.to_id, known) {
             let (responsibility, membership) = responsibility_provenance(entity, &o.from_field);
-            let (catalog_subject, document_selection, connection_id) =
+            let (catalog_subject, document_selection, connection_id, step_id) =
                 catalog_provenance(entity, &o.from_field, &group_ids);
             out.push(pb::Reference {
                 from: Some(from_ref.clone()),
@@ -364,10 +380,46 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
                 catalog_subject,
                 document_selection,
                 connection_id,
+                step_id,
+                target_step_id: None,
             });
         }
     }
+    out.extend(transition_references(entity));
     Ok(out)
+}
+
+/// Same-owner transition structure is surfaced as self-references carrying
+/// the internal step descriptors instead of fabricating cross-entity refs.
+fn transition_references(entity: &pb::Entity) -> Vec<pb::Reference> {
+    let (Some(graph), Some(kind), Some(id)) = (
+        trogon_atlas_core::design_topology::graph(entity),
+        ref_entity_kind(entity),
+        ref_entity_id(entity),
+    ) else {
+        return Vec::new();
+    };
+    let owner = pb::EntityRef {
+        kind: kind as i32,
+        id: Some(id.clone()),
+    };
+    let uid = entity_uid(entity);
+    trogon_atlas_core::design_topology::transitions(graph)
+        .into_iter()
+        .map(|edge| pb::Reference {
+            from: Some(owner.clone()),
+            from_field: format!(
+                "steps[{}].transitions[{}]",
+                edge.step_index, edge.transition_index
+            ),
+            to: Some(owner.clone()),
+            from_uid: uid.clone(),
+            connection_id: edge.connection_id,
+            step_id: edge.source_step_id,
+            target_step_id: edge.target_step_id,
+            ..Default::default()
+        })
+        .collect()
 }
 
 /// Which end of a `pb::Reference` is the "other entity" relative to the
@@ -811,6 +863,7 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
         K::Person(x) => x.supersedes.as_ref(),
         K::Decision(x) => x.supersedes.as_ref(),
         K::Document(x) => x.supersedes.as_ref(),
+        K::DesignGraph(x) => x.supersedes.as_ref(),
     }
 }
 
@@ -991,6 +1044,7 @@ fn catalog_provenance(
     Option<pb::CatalogSubject>,
     Option<pb::DocumentSelection>,
     Option<pb::ConnectionId>,
+    Option<pb::LocalValueId>,
 ) {
     let mut reference = pb::Reference {
         from_field: field.to_owned(),
@@ -1052,6 +1106,7 @@ fn catalog_provenance(
         reference.catalog_subject,
         reference.document_selection,
         reference.connection_id,
+        reference.step_id,
     )
 }
 

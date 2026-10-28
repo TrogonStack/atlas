@@ -351,6 +351,10 @@ const READ_RPCS = new Set([
   "getDocumentDetail",
   "listIncomingDecisionDeclarations",
   "listIncomingDocumentDeclarations",
+  "getDesignGraphDetail",
+  "listSubjectDesignGraphs",
+  "traverseDesignGraphTopology",
+  "listIncomingDesignGraphSubflows",
 
   "getChangeset",
   "getEntityHistory",
@@ -1965,6 +1969,10 @@ const CATALOG_QUERIES = new Map([
   ["document-detail", "getDocumentDetail"],
   ["incoming-decisions", "listIncomingDecisionDeclarations"],
   ["incoming-documents", "listIncomingDocumentDeclarations"],
+  ["design-graph-detail", "getDesignGraphDetail"],
+  ["subject-design-graphs", "listSubjectDesignGraphs"],
+  ["design-topology", "traverseDesignGraphTopology"],
+  ["incoming-subflows", "listIncomingDesignGraphSubflows"],
 ]);
 
 app.get(

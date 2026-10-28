@@ -508,9 +508,7 @@ fn provider(target: Option<&pb::ProviderTarget>) -> Result<()> {
     }
 }
 fn environment_name_ok(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && !name.chars().any(char::is_control)
-        && !name.trim().is_empty()
+    (1..=64).contains(&name.len()) && !name.chars().any(char::is_control) && !name.trim().is_empty()
 }
 
 fn validate_schema_variants(value: &Specification) -> Result<()> {
@@ -562,17 +560,19 @@ fn validate_schema_variants(value: &Specification) -> Result<()> {
     Ok(())
 }
 
-fn validate_message_channels(
-    value: &Specification,
-    ids: &HashMap<MemberId, Kind>,
-) -> Result<()> {
+fn validate_message_channels(value: &Specification, ids: &HashMap<MemberId, Kind>) -> Result<()> {
     for declaration in &value.message_channels {
         let id = member_id(declaration.member_id.as_ref())?;
         require(
             ids.get(&id) == Some(&Kind::Message),
             format!("missing or wrong-kind local member {id}"),
         )?;
-        exact(declaration.channel.as_ref().and_then(|channel| channel.id.as_ref()))?;
+        exact(
+            declaration
+                .channel
+                .as_ref()
+                .and_then(|channel| channel.id.as_ref()),
+        )?;
         if let Some(mode) = declaration.delivery_mode {
             require(
                 matches!(
@@ -591,7 +591,10 @@ fn validate_message_channels(
             )?;
         }
         require(
-            declaration.parameter_values.keys().all(|name| !name.is_empty()),
+            declaration
+                .parameter_values
+                .keys()
+                .all(|name| !name.is_empty()),
             "message channel parameter names must be nonblank",
         )?;
     }

@@ -20,6 +20,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/design_topology_queries.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
 
@@ -1191,6 +1192,11 @@ service EventModelService {
   rpc ListTermDomainDeclarations(ListTermDomainDeclarationsRequest) returns (ListTermDomainDeclarationsResponse);
   rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);
   rpc ListIncomingDocumentDeclarations(ListIncomingDocumentDeclarationsRequest) returns (ListIncomingDocumentDeclarationsResponse);
+
+  rpc GetDesignGraphDetail(GetDesignGraphDetailRequest) returns (GetDesignGraphDetailResponse);
+  rpc ListSubjectDesignGraphs(ListSubjectDesignGraphsRequest) returns (ListSubjectDesignGraphsResponse);
+  rpc TraverseDesignGraphTopology(TraverseDesignGraphTopologyRequest) returns (TraverseDesignGraphTopologyResponse);
+  rpc ListIncomingDesignGraphSubflows(ListIncomingDesignGraphSubflowsRequest) returns (ListIncomingDesignGraphSubflowsResponse);
 
   rpc ListSubjectAssignments(ListSubjectAssignmentsRequest) returns (ListSubjectAssignmentsResponse);
   rpc ListAssigneeResponsibilities(ListAssigneeResponsibilitiesRequest) returns (ListAssigneeResponsibilitiesResponse);

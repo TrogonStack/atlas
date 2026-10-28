@@ -91,6 +91,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::Person(x) => x.supersedes.as_ref(),
         EntityOneof::Decision(x) => x.supersedes.as_ref(),
         EntityOneof::Document(x) => x.supersedes.as_ref(),
+        EntityOneof::DesignGraph(x) => x.supersedes.as_ref(),
     };
     if let Some(s) = supersedes_of {
         if let Some(self_kind) = entity_kind(entity) {
@@ -824,6 +825,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::Decision(_) | EntityOneof::Document(_) => {
             crate::decision_document_refs::outbound(entity, &mut out);
         }
+        EntityOneof::DesignGraph(_) => crate::design_topology_refs::outbound(entity, &mut out),
         EntityOneof::DataStore(x) => {
             for (i, attachment) in x.attachments.iter().enumerate() {
                 if let Some(id) = attachment.read_model.as_ref().and_then(|r| r.id.as_ref()) {
@@ -1116,6 +1118,7 @@ pub fn entity_kind(entity: &Entity) -> Option<EntityKind> {
         EntityOneof::Person(_) => EntityKind::Person,
         EntityOneof::Decision(_) => EntityKind::Decision,
         EntityOneof::Document(_) => EntityKind::Document,
+        EntityOneof::DesignGraph(_) => EntityKind::DesignGraph,
     })
 }
 
@@ -1162,6 +1165,7 @@ pub fn entity_id(entity: &Entity) -> Option<&Id> {
         EntityOneof::Person(x) => x.id.as_ref(),
         EntityOneof::Decision(x) => x.id.as_ref(),
         EntityOneof::Document(x) => x.id.as_ref(),
+        EntityOneof::DesignGraph(x) => x.id.as_ref(),
     }
 }
 
@@ -1229,6 +1233,7 @@ pub fn retarget_refs(
             EntityOneof::Person(x) => x.supersedes.as_mut(),
             EntityOneof::Decision(x) => x.supersedes.as_mut(),
             EntityOneof::Document(x) => x.supersedes.as_mut(),
+            EntityOneof::DesignGraph(x) => x.supersedes.as_mut(),
         };
         if self_kind_matches {
             if let Some(s) = supersedes_opt {
@@ -2045,6 +2050,15 @@ pub fn retarget_refs(
                 &mut rewritten,
             );
         }
+        EntityOneof::DesignGraph(_) => {
+            crate::design_topology_refs::retarget(
+                entity,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
+        }
         EntityOneof::Team(_) | EntityOneof::Person(_) => {
             crate::responsibility_refs::retarget(entity, from_kind, from_id, to_id, &mut rewritten);
         }
@@ -2251,6 +2265,7 @@ fn matches_kind(kind: &EntityOneof, ek: EntityKind) -> bool {
             | (EntityOneof::Person(_), EntityKind::Person)
             | (EntityOneof::Decision(_), EntityKind::Decision)
             | (EntityOneof::Document(_), EntityKind::Document)
+            | (EntityOneof::DesignGraph(_), EntityKind::DesignGraph)
     )
 }
 

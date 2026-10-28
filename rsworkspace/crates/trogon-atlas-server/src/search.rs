@@ -428,6 +428,7 @@ fn kind_label(entity: &pb::Entity) -> String {
         Some(K::Person(_)) => "person",
         Some(K::Decision(_)) => "decision",
         Some(K::Document(_)) => "document",
+        Some(K::DesignGraph(_)) => "design_graph",
         None => "",
     }
     .to_string()
@@ -473,6 +474,7 @@ pub fn kind_label_for(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::Person => "person",
         pb::EntityKind::Decision => "decision",
         pb::EntityKind::Document => "document",
+        pb::EntityKind::DesignGraph => "design_graph",
         pb::EntityKind::Unspecified => "",
     }
 }
@@ -532,6 +534,10 @@ fn title_of(entity: &pb::Entity) -> String {
             .as_ref()
             .map_or_else(String::new, |v| v.value.clone()),
         Some(K::Document(x)) => x
+            .title
+            .as_ref()
+            .map_or_else(String::new, |v| v.value.clone()),
+        Some(K::DesignGraph(x)) => x
             .title
             .as_ref()
             .map_or_else(String::new, |v| v.value.clone()),
@@ -646,6 +652,22 @@ fn body_of(entity: &pb::Entity) -> String {
             for anchor in &x.anchors {
                 if let Some(label) = &anchor.label {
                     push(&mut s, &label.value);
+                }
+            }
+        }
+        Some(K::DesignGraph(x)) => {
+            push(&mut s, x.doc.as_deref().unwrap_or_default());
+            for step in &x.steps {
+                if let Some(title) = &step.title {
+                    push(&mut s, &title.value);
+                }
+                if let Some(summary) = &step.summary {
+                    push(&mut s, &summary.value);
+                }
+                for transition in &step.transitions {
+                    if let Some(label) = &transition.label {
+                        push(&mut s, &label.value);
+                    }
                 }
             }
         }

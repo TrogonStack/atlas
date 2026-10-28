@@ -965,6 +965,8 @@ fn native_relationships_only(
                 || !trogon_atlas_core::architectural_relationships::relationships(entity)
                     .is_empty()
                 || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
+                || trogon_atlas_core::design_topology::graph(entity)
+                    .is_some_and(|graph| !graph.steps.is_empty() || !graph.entry_steps.is_empty())
                 || trogon_atlas_core::agent_metadata::has_native_additions(entity)
                     .map_err(|_| invalid())?,
         )

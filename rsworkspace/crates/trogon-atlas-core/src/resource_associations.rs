@@ -31,7 +31,10 @@ pub fn bind_parameters(
             return Err("channel address parameters are invalid");
         }
     }
-    if values.keys().any(|name| !parameters.contains_key(name.as_str())) {
+    if values
+        .keys()
+        .any(|name| !parameters.contains_key(name.as_str()))
+    {
         return Err("message channel parameter name is not declared");
     }
     for (name, parameter) in &parameters {

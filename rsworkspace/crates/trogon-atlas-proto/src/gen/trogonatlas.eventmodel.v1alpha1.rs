@@ -130,6 +130,11 @@ pub struct DocumentRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DesignGraphRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
 /// Discriminated union over every addressable thing. The shape of the inner
 /// message determines the kind unambiguously; EntityKind is provided
 /// separately on the service surface so callers don't need to inspect the
@@ -175,6 +180,7 @@ pub enum EntityKind {
     Person = 35,
     Decision = 36,
     Document = 37,
+    DesignGraph = 38,
 }
 impl EntityKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -221,6 +227,7 @@ impl EntityKind {
             Self::Person => "ENTITY_KIND_PERSON",
             Self::Decision => "ENTITY_KIND_DECISION",
             Self::Document => "ENTITY_KIND_DOCUMENT",
+            Self::DesignGraph => "ENTITY_KIND_DESIGN_GRAPH",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -264,6 +271,7 @@ impl EntityKind {
             "ENTITY_KIND_PERSON" => Some(Self::Person),
             "ENTITY_KIND_DECISION" => Some(Self::Decision),
             "ENTITY_KIND_DOCUMENT" => Some(Self::Document),
+            "ENTITY_KIND_DESIGN_GRAPH" => Some(Self::DesignGraph),
             _ => None,
         }
     }
@@ -4763,6 +4771,138 @@ impl ResponsibilityKind {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TopologyActor {
+    #[prost(message, optional, tag="1")]
+    pub name: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="2")]
+    pub summary: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyCustomStep {
+    #[prost(message, optional, tag="1")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="2")]
+    pub summary: ::core::option::Option<CatalogText>,
+    #[prost(string, tag="3")]
+    pub icon: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub url: ::prost::alloc::string::String,
+    #[prost(map="string, string", tag="5")]
+    pub properties: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TopologyExternalSystem {
+    #[prost(message, optional, tag="1")]
+    pub name: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="2")]
+    pub summary: ::core::option::Option<CatalogText>,
+    #[prost(string, tag="3")]
+    pub url: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyStepTarget {
+    #[prost(oneof="topology_step_target::Selection", tags="1, 2, 3, 4, 5, 6, 7, 8, 9")]
+    pub selection: ::core::option::Option<topology_step_target::Selection>,
+}
+/// Nested message and enum types in `TopologyStepTarget`.
+pub mod topology_step_target {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Selection {
+        #[prost(message, tag="1")]
+        CatalogMessage(super::CatalogSubject),
+        #[prost(message, tag="2")]
+        Component(super::EntityRef),
+        #[prost(message, tag="3")]
+        Channel(super::EntityRef),
+        #[prost(message, tag="4")]
+        DataStore(super::EntityRef),
+        #[prost(message, tag="5")]
+        DataProduct(super::EntityRef),
+        #[prost(message, tag="6")]
+        Subflow(super::DesignGraphRef),
+        #[prost(message, tag="7")]
+        Actor(super::TopologyActor),
+        #[prost(message, tag="8")]
+        Custom(super::TopologyCustomStep),
+        #[prost(message, tag="9")]
+        ExternalSystem(super::TopologyExternalSystem),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TopologyTransition {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="3")]
+    pub target_step_id: ::core::option::Option<LocalValueId>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyStep {
+    #[prost(message, optional, tag="1")]
+    pub step_id: ::core::option::Option<LocalValueId>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="3")]
+    pub summary: ::core::option::Option<CatalogText>,
+    #[prost(message, optional, tag="4")]
+    pub target: ::core::option::Option<TopologyStepTarget>,
+    #[prost(message, repeated, tag="5")]
+    pub transitions: ::prost::alloc::vec::Vec<TopologyTransition>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DesignGraph {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<CatalogTitle>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration="DesignGraphProfile", tag="4")]
+    pub profile: i32,
+    #[prost(message, repeated, tag="5")]
+    pub steps: ::prost::alloc::vec::Vec<TopologyStep>,
+    #[prost(message, repeated, tag="6")]
+    pub entry_steps: ::prost::alloc::vec::Vec<LocalValueId>,
+    #[prost(message, repeated, tag="7")]
+    pub subjects: ::prost::alloc::vec::Vec<SubjectAssociation>,
+    #[prost(message, optional, tag="8")]
+    pub layout_document: ::core::option::Option<DocumentRef>,
+    #[prost(message, repeated, tag="9")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="10")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DesignGraphProfile {
+    Unspecified = 0,
+    Flow = 1,
+    Diagram = 2,
+}
+impl DesignGraphProfile {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DESIGN_GRAPH_PROFILE_UNSPECIFIED",
+            Self::Flow => "DESIGN_GRAPH_PROFILE_FLOW",
+            Self::Diagram => "DESIGN_GRAPH_PROFILE_DIAGRAM",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DESIGN_GRAPH_PROFILE_UNSPECIFIED" => Some(Self::Unspecified),
+            "DESIGN_GRAPH_PROFILE_FLOW" => Some(Self::Flow),
+            "DESIGN_GRAPH_PROFILE_DIAGRAM" => Some(Self::Diagram),
+            _ => None,
+        }
+    }
+}
 // =============================================================================
 // Event Modeling schema.
 //
@@ -5251,7 +5391,7 @@ impl ResponsibilityKind {
 pub struct Entity {
     #[prost(message, optional, tag="29")]
     pub system: ::core::option::Option<super::super::r#type::v1alpha1::SystemMeta>,
-    #[prost(oneof="entity::Kind", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35, 36, 37, 38")]
+    #[prost(oneof="entity::Kind", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39")]
     pub kind: ::core::option::Option<entity::Kind>,
 }
 /// Nested message and enum types in `Entity`.
@@ -5332,6 +5472,8 @@ pub mod entity {
         Decision(super::Decision),
         #[prost(message, tag="38")]
         Document(super::Document),
+        #[prost(message, tag="39")]
+        DesignGraph(super::DesignGraph),
     }
 }
 // @@protoc_insertion_point(module)

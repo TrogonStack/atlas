@@ -352,6 +352,7 @@ fn kind_from_short(s: &str) -> Option<EntityKind> {
         "person" => EntityKind::Person,
         "decision" => EntityKind::Decision,
         "document" => EntityKind::Document,
+        "design_graph" => EntityKind::DesignGraph,
         _ => return None,
     })
 }
@@ -381,6 +382,7 @@ mod tests {
             EntityKind::Person,
             EntityKind::Decision,
             EntityKind::Document,
+            EntityKind::DesignGraph,
         ] {
             let id = id("shop", "order-feed", 2);
             assert_eq!(

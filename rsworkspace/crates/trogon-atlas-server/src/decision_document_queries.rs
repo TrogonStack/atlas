@@ -10,17 +10,24 @@ use super::{
 };
 use crate::decision_document_resources::{self as resources, CatalogBudget};
 
-struct CatalogQuery {
+pub(super) struct CatalogQuery {
     world: HashMap<pb::EntityKey, Option<StoredEntity>>,
-    rows: Vec<StoredEntity>,
-    lens: Lens,
+    pub(super) rows: Vec<StoredEntity>,
+    pub(super) lens: Lens,
     branch: Option<String>,
-    budget: CatalogBudget,
+    pub(super) budget: CatalogBudget,
     subjects: Vec<pb::CatalogSubject>,
     documents: Vec<pb::DocumentSelection>,
 }
 
-fn checked(row: &StoredEntity) -> Result<pb::CatalogCheckedOwner, Status> {
+#[derive(Clone, Copy)]
+pub(super) enum SubjectFamily {
+    Decisions,
+    Documents,
+    DesignGraphs,
+}
+
+pub(super) fn checked(row: &StoredEntity) -> Result<pb::CatalogCheckedOwner, Status> {
     Ok(pb::CatalogCheckedOwner {
         owner: Some(crate::conv::entity_to_ref(&row.entity)?),
         uid: row
@@ -32,7 +39,7 @@ fn checked(row: &StoredEntity) -> Result<pb::CatalogCheckedOwner, Status> {
     })
 }
 
-fn exact(reference: &pb::EntityRef) -> Result<(pb::EntityKind, &pb::Id), Status> {
+pub(super) fn exact(reference: &pb::EntityRef) -> Result<(pb::EntityKind, &pb::Id), Status> {
     let kind = super::kind_from_i32(reference.kind, "catalog.kind")?;
     let id = super::require_id(reference.id.as_ref(), "catalog.id")?;
     if id.version == 0 {
@@ -53,7 +60,7 @@ fn decision_ref(reference: &pb::DecisionRef) -> Result<pb::EntityRef, Status> {
 }
 
 impl CatalogQuery {
-    fn scope(&mut self) -> Result<pb::CatalogCheckedScope, Status> {
+    pub(super) fn scope(&mut self) -> Result<pb::CatalogCheckedScope, Status> {
         let namespaces: BTreeSet<_> = match &self.lens {
             Lens::Everything => self.world.keys().map(|key| key.namespace.clone()).collect(),
             Lens::Only(namespaces) => namespaces
@@ -136,7 +143,7 @@ impl CatalogQuery {
 }
 
 impl EventModelServiceImpl {
-    async fn catalog_query(
+    pub(super) async fn catalog_query(
         &self,
         branch: Option<&str>,
         vis: &Visibility,
@@ -177,7 +184,7 @@ impl EventModelServiceImpl {
         })
     }
 
-    async fn catalog_read(
+    pub(super) async fn catalog_read(
         &self,
         query: &mut CatalogQuery,
         reference: &pb::EntityRef,
@@ -202,7 +209,7 @@ impl EventModelServiceImpl {
         Ok(row)
     }
 
-    async fn catalog_subject_state(
+    pub(super) async fn catalog_subject_state(
         &self,
         query: &mut CatalogQuery,
         subject: &pb::CatalogSubject,
@@ -349,7 +356,7 @@ impl EventModelServiceImpl {
         )
     }
 
-    async fn catalog_declarations(
+    pub(super) async fn catalog_declarations(
         &self,
         query: &mut CatalogQuery,
         row: &StoredEntity,
@@ -488,11 +495,11 @@ impl EventModelServiceImpl {
         Ok(declarations)
     }
 
-    async fn catalog_subject_matches(
+    pub(super) async fn catalog_subject_matches(
         &self,
         subject: &pb::CatalogSubject,
         status: Option<i32>,
-        decisions: bool,
+        family: SubjectFamily,
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<(Vec<pb::CatalogDeclaration>, pb::CatalogCheckedScope, State), Status> {
@@ -518,11 +525,12 @@ impl EventModelServiceImpl {
         let state = self.catalog_subject_state(&mut query, subject).await?;
         let mut declarations = Vec::new();
         for row in query.rows.clone() {
-            let selected = match &row.entity.kind {
-                Some(pb::entity::Kind::Decision(value)) if decisions => {
+            let selected = match (&row.entity.kind, family) {
+                (Some(pb::entity::Kind::Decision(value)), SubjectFamily::Decisions) => {
                     status.is_none_or(|status| value.status == status)
                 }
-                Some(pb::entity::Kind::Document(_)) => !decisions,
+                (Some(pb::entity::Kind::Document(_)), SubjectFamily::Documents)
+                | (Some(pb::entity::Kind::DesignGraph(_)), SubjectFamily::DesignGraphs) => true,
                 _ => false,
             };
             if !selected {
@@ -556,7 +564,7 @@ impl EventModelServiceImpl {
             .subject
             .ok_or_else(|| Status::invalid_argument("subject is required"))?;
         let (declarations, scope, state) = self
-            .catalog_subject_matches(&subject, req.status, true, branch, vis)
+            .catalog_subject_matches(&subject, req.status, SubjectFamily::Decisions, branch, vis)
             .await?;
         Ok(pb::ListSubjectDecisionsResponse {
             declarations,
@@ -577,7 +585,7 @@ impl EventModelServiceImpl {
             .subject
             .ok_or_else(|| Status::invalid_argument("subject is required"))?;
         let (declarations, scope, state) = self
-            .catalog_subject_matches(&subject, None, false, branch, vis)
+            .catalog_subject_matches(&subject, None, SubjectFamily::Documents, branch, vis)
             .await?;
         Ok(pb::ListSubjectDocumentsResponse {
             declarations,

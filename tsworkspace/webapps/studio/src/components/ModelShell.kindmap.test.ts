@@ -40,6 +40,7 @@ const ALL_ENTITY_KINDS: EntityKind[] = [
   'specification',
   'decision',
   'document',
+  'designGraph',
 ];
 
 describe('KIND_SHORT_TO_CAMEL registry completeness', () => {

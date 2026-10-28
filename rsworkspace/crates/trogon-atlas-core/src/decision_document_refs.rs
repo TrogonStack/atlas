@@ -72,50 +72,60 @@ fn walk(entity: &mut Entity, visit: &mut impl FnMut(EntityKind, &mut Option<Id>,
         }
         _ => return,
     };
+    walk_subjects(subjects, visit);
+}
+pub(crate) fn walk_subjects(
+    subjects: &mut [pb::SubjectAssociation],
+    visit: &mut impl FnMut(EntityKind, &mut Option<Id>, String, bool),
+) {
     for (i, association) in subjects.iter_mut().enumerate() {
-        let path = format!("subjects[{i}].subject");
-        match association
-            .subject
-            .as_mut()
-            .and_then(|s| s.selection.as_mut())
-        {
-            Some(pb::catalog_subject::Selection::Entity(r)) => {
-                if let Ok(kind) = EntityKind::try_from(r.kind) {
-                    visit(kind, &mut r.id, format!("{path}.entity"), false);
-                }
-            }
-            Some(pb::catalog_subject::Selection::Connection(r)) => {
-                if let Some(r) = &mut r.owner {
-                    if let Ok(kind) = EntityKind::try_from(r.kind) {
-                        visit(kind, &mut r.id, format!("{path}.connection.owner"), true);
-                    }
-                }
-            }
-            Some(pb::catalog_subject::Selection::Member(r)) => {
-                if let Some(r) = &mut r.specification {
-                    visit(
-                        EntityKind::Specification,
-                        &mut r.id,
-                        format!("{path}.member.specification"),
-                        true,
-                    );
-                }
-            }
-            Some(pb::catalog_subject::Selection::Port(r)) => {
-                if let Some(r) = &mut r.product {
-                    visit(
-                        EntityKind::DataProduct,
-                        &mut r.id,
-                        format!("{path}.port.product"),
-                        true,
-                    );
-                }
-            }
-            None => {}
+        if let Some(subject) = association.subject.as_mut() {
+            walk_subject(subject, &format!("subjects[{i}].subject"), visit);
         }
     }
 }
-fn document(
+pub(crate) fn walk_subject(
+    subject: &mut pb::CatalogSubject,
+    path: &str,
+    visit: &mut impl FnMut(EntityKind, &mut Option<Id>, String, bool),
+) {
+    match subject.selection.as_mut() {
+        Some(pb::catalog_subject::Selection::Entity(r)) => {
+            if let Ok(kind) = EntityKind::try_from(r.kind) {
+                visit(kind, &mut r.id, format!("{path}.entity"), false);
+            }
+        }
+        Some(pb::catalog_subject::Selection::Connection(r)) => {
+            if let Some(r) = &mut r.owner {
+                if let Ok(kind) = EntityKind::try_from(r.kind) {
+                    visit(kind, &mut r.id, format!("{path}.connection.owner"), true);
+                }
+            }
+        }
+        Some(pb::catalog_subject::Selection::Member(r)) => {
+            if let Some(r) = &mut r.specification {
+                visit(
+                    EntityKind::Specification,
+                    &mut r.id,
+                    format!("{path}.member.specification"),
+                    true,
+                );
+            }
+        }
+        Some(pb::catalog_subject::Selection::Port(r)) => {
+            if let Some(r) = &mut r.product {
+                visit(
+                    EntityKind::DataProduct,
+                    &mut r.id,
+                    format!("{path}.port.product"),
+                    true,
+                );
+            }
+        }
+        None => {}
+    }
+}
+pub(crate) fn document(
     selection: &mut pb::DocumentSelection,
     path: &str,
     visit: &mut impl FnMut(EntityKind, &mut Option<Id>, String, bool),

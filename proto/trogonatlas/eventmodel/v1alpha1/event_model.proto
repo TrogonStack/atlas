@@ -83,6 +83,7 @@ import "trogonatlas/eventmodel/v1alpha1/specification.proto";
 import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
 import "trogonatlas/eventmodel/v1alpha1/responsibility.proto";
 import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+import "trogonatlas/eventmodel/v1alpha1/design_topology.proto";
 
 // =============================================================================
 // Event Modeling schema.
@@ -607,6 +608,7 @@ message Entity {
     Person person = 36;
     Decision decision = 37;
     Document document = 38;
+    DesignGraph design_graph = 39;
   }
   trogonatlas.type.v1alpha1.SystemMeta system = 29;
 }

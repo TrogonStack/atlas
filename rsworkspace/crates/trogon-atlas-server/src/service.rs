@@ -13,6 +13,8 @@ mod data_product_events;
 mod data_product_inspection;
 #[path = "decision_document_queries.rs"]
 mod decision_document_queries;
+#[path = "design_topology_queries.rs"]
+mod design_topology_queries;
 #[path = "responsibility_queries.rs"]
 mod responsibility_queries;
 
@@ -3398,6 +3400,78 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .map(Response::new)
     }
 
+    async fn get_design_graph_detail(
+        &self,
+        req: Request<pb::GetDesignGraphDetailRequest>,
+    ) -> Result<Response<pb::GetDesignGraphDetailResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.design_graph_detail(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn list_subject_design_graphs(
+        &self,
+        req: Request<pb::ListSubjectDesignGraphsRequest>,
+    ) -> Result<Response<pb::ListSubjectDesignGraphsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.subject_design_graphs(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn traverse_design_graph_topology(
+        &self,
+        req: Request<pb::TraverseDesignGraphTopologyRequest>,
+    ) -> Result<Response<pb::TraverseDesignGraphTopologyResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.traverse_topology(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn list_incoming_design_graph_subflows(
+        &self,
+        req: Request<pb::ListIncomingDesignGraphSubflowsRequest>,
+    ) -> Result<Response<pb::ListIncomingDesignGraphSubflowsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.incoming_subflows(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
     async fn list_incoming_document_declarations(
         &self,
         req: Request<pb::ListIncomingDocumentDeclarationsRequest>,
@@ -4420,20 +4494,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     "Responsibility local selectors require an explicit guarded replacement using returned owner and local identities",
                 ));
             }
-            if crate::decision_document_resources::subjects(&stored.entity)
+            if crate::decision_document_resources::catalog_subjects(&stored.entity)
                 .iter()
-                .any(|association| {
-                    association.subject.as_ref().is_some_and(|subject| {
-                        !matches!(
-                            subject.selection,
-                            Some(pb::catalog_subject::Selection::Entity(_))
-                        ) && trogon_atlas_core::decision_document::subject_owner(subject).is_ok_and(
-                            |owner| {
-                                owner.kind == from_kind as i32
-                                    && owner.id.as_ref() == Some(&from_id)
-                            },
-                        )
-                    })
+                .any(|subject| {
+                    !matches!(
+                        subject.selection,
+                        Some(pb::catalog_subject::Selection::Entity(_))
+                    ) && trogon_atlas_core::decision_document::subject_owner(subject).is_ok_and(
+                        |owner| {
+                            owner.kind == from_kind as i32 && owner.id.as_ref() == Some(&from_id)
+                        },
+                    )
                 })
                 || crate::decision_document_resources::documents(&stored.entity)
                     .iter()
@@ -8497,6 +8568,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 | pb::EntityKind::Decision
                 | pb::EntityKind::Term
                 | pb::EntityKind::Document
+                | pb::EntityKind::DesignGraph
         ) {
             self.authorize_write(
                 principal.as_ref(),

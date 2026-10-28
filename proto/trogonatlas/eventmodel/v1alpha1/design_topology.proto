@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+
+enum DesignGraphProfile {
+  DESIGN_GRAPH_PROFILE_UNSPECIFIED = 0;
+  DESIGN_GRAPH_PROFILE_FLOW = 1;
+  DESIGN_GRAPH_PROFILE_DIAGRAM = 2;
+}
+message TopologyActor {
+  CatalogTitle name = 1;
+  CatalogText summary = 2;
+}
+message TopologyCustomStep {
+  CatalogTitle title = 1;
+  CatalogText summary = 2;
+  string icon = 3;
+  string url = 4;
+  map<string, string> properties = 5;
+}
+message TopologyExternalSystem {
+  CatalogTitle name = 1;
+  CatalogText summary = 2;
+  string url = 3;
+}
+message TopologyStepTarget {
+  oneof selection {
+    CatalogSubject catalog_message = 1;
+    EntityRef component = 2;
+    EntityRef channel = 3;
+    EntityRef data_store = 4;
+    EntityRef data_product = 5;
+    DesignGraphRef subflow = 6;
+    TopologyActor actor = 7;
+    TopologyCustomStep custom = 8;
+    TopologyExternalSystem external_system = 9;
+  }
+}
+message TopologyTransition {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  CatalogTitle label = 2;
+  LocalValueId target_step_id = 3;
+}
+message TopologyStep {
+  LocalValueId step_id = 1;
+  CatalogTitle title = 2;
+  CatalogText summary = 3;
+  TopologyStepTarget target = 4;
+  repeated TopologyTransition transitions = 5;
+}
+message DesignGraph {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  CatalogTitle title = 2;
+  optional string doc = 3;
+  DesignGraphProfile profile = 4;
+  repeated TopologyStep steps = 5;
+  repeated LocalValueId entry_steps = 6;
+  repeated SubjectAssociation subjects = 7;
+  DocumentRef layout_document = 8;
+  repeated google.protobuf.Any metadata = 9;
+  trogonatlas.type.v1alpha1.Id supersedes = 10;
+}

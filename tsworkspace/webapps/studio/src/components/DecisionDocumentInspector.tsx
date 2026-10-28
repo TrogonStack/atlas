@@ -18,12 +18,12 @@ import { responsibilitySubjects } from '@/lib/responsibility';
 function record(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
-function Exact({ value }: { value: unknown }) {
+export function Exact({ value }: { value: unknown }) {
   return (
     <pre className="whitespace-pre-wrap break-words text-xs">{JSON.stringify(value, null, 2) ?? 'Undeclared'}</pre>
   );
 }
-function Query({ title, load }: { title: string; load: (signal: AbortSignal) => Promise<CatalogInspection> }) {
+export function Query({ title, load }: { title: string; load: (signal: AbortSignal) => Promise<CatalogInspection> }) {
   // The keyed context owns this query's lifetime, including its initial loader.
   const [loadContext] = useState(() => load);
   const [result, setResult] = useState<{ data?: CatalogInspection; error?: string }>();
