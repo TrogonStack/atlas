@@ -881,6 +881,8 @@ fn native_relationships_only(
     let has_relationships = |entity: &pb::Entity| {
         !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
             || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
+            || !trogon_atlas_core::channel_links::links(entity).is_empty()
+            || !trogon_atlas_core::storage_claims::claims(entity).is_empty()
     };
     let whole_owner = matches!(
         ownership.policy,
@@ -891,7 +893,7 @@ fn native_relationships_only(
             && (current.is_some_and(has_relationships) || incoming.is_some_and(has_relationships)))
     {
         return Err(Status::invalid_argument(
-            "architectural relationships and communications support native authoring only",
+            "architectural relationships, communications, channel links and storage claims support native authoring only",
         ));
     }
     Ok(())
