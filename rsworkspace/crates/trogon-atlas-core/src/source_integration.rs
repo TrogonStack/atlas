@@ -104,6 +104,16 @@ fn unit_fields(
             return Err(SourceError::UnsupportedUnit);
         }
     }
+    if unit == OwnershipUnit::WholeOwner
+        && descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Term"
+        && value.get_field_by_name("owning_domain").is_some_and(|_| {
+            descriptor
+                .get_field_by_name("owning_domain")
+                .is_some_and(|field| value.has_field(&field))
+        })
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     match unit {
         OwnershipUnit::WholeOwner => Ok(descriptor.fields().filter(|f| f.name() != "id").collect()),
         OwnershipUnit::Field(field) => {

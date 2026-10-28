@@ -3646,6 +3646,8 @@ pub struct Term {
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="7")]
+    pub owning_domain: ::core::option::Option<DomainRef>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Ambiguity {

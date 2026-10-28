@@ -289,6 +289,12 @@ enum Cmd {
         #[arg(long)]
         request: String,
     },
+    /// Find declarations selecting an exact Domain using proto3 JSON `ListTermDomainDeclarationsRequest`.
+    ListTermDomainDeclarations {
+        /// Proto3 JSON `ListTermDomainDeclarationsRequest`.
+        #[arg(long)]
+        request: String,
+    },
     /// Find declarations selecting a Document using proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
     ListIncomingDocumentDeclarations {
         /// Proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
@@ -1752,6 +1758,28 @@ async fn run(
                     request,
                 )
                 .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListTermDomainDeclarations { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListTermDomainDeclarationsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::term_domains::list_term_domain_declarations(
+                &mut client,
+                request,
+            )
+            .await?;
             if text {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }

@@ -10,11 +10,11 @@ use tonic::{Request, Response, Status};
 use trogon_atlas_core::{source_bundle as bundle, source_integration as core};
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
-    source::{SourceDocumentKey, SourcePublication, SourcePublicationOutcome},
     StoreError,
+    source::{SourceDocumentKey, SourcePublication, SourcePublicationOutcome},
 };
 
-use super::{entity_id, entity_kind, store_err, EventModelServiceImpl, Visibility, WriteTargets};
+use super::{EventModelServiceImpl, Visibility, WriteTargets, entity_id, entity_kind, store_err};
 
 #[derive(Clone, PartialEq, Message)]
 struct SourceState {
@@ -880,6 +880,7 @@ fn native_relationships_only(
 ) -> Result<(), Status> {
     let has_relationships = |entity: &pb::Entity| {
         matches!(&entity.kind, Some(pb::entity::Kind::Decision(value)) if value.authored_on.is_some() || value.decided_on.is_some() || !value.decision_makers.is_empty() || !value.amends.is_empty())
+            || matches!(&entity.kind, Some(pb::entity::Kind::Term(term)) if term.owning_domain.is_some())
             || !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
             || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
     };

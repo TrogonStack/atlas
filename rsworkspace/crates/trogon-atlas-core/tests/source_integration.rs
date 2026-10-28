@@ -1,8 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use trogon_atlas_core::{source_integration::*, transcode};
 use trogon_atlas_proto::{
-    source_field_ownership::Policy, source_selection, Entity, SourceFieldOwnership,
-    SourceOwnedField, SourceOwnedFields, SourceSelection, SourceWholeOwnerOwnership,
+    Entity, SourceFieldOwnership, SourceOwnedField, SourceOwnedFields, SourceSelection,
+    SourceWholeOwnerOwnership, source_field_ownership::Policy, source_selection,
 };
 
 fn decode(value: &serde_json::Value) -> Result<Entity, transcode::TranscodeError> {
@@ -315,7 +315,7 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
                 assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
                 continue;
             }
-            if name == "communications"
+            if (name == "owning_domain" && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Term") || name == "communications"
                 && matches!(
                     owner.full_name(),
                     "trogonatlas.eventmodel.v1alpha1.Component"

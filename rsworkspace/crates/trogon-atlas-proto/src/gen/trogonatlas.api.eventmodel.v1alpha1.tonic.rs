@@ -902,6 +902,36 @@ pub mod event_model_service_client {
             self.inner.unary(req, path, codec).await
         }
         ///
+        pub async fn list_term_domain_declarations(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListTermDomainDeclarationsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTermDomainDeclarationsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTermDomainDeclarations",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListTermDomainDeclarations",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn list_incoming_decision_declarations(
             &mut self,
             request: impl tonic::IntoRequest<
@@ -2963,6 +2993,14 @@ pub mod event_model_service_server {
             tonic::Status,
         >;
         ///
+        async fn list_term_domain_declarations(
+            &self,
+            request: tonic::Request<super::ListTermDomainDeclarationsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTermDomainDeclarationsResponse>,
+            tonic::Status,
+        >;
+        ///
         async fn list_incoming_decision_declarations(
             &self,
             request: tonic::Request<super::ListIncomingDecisionDeclarationsRequest>,
@@ -4879,6 +4917,60 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetDocumentDetailSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTermDomainDeclarations" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListTermDomainDeclarationsSvc<T: EventModelService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<
+                        super::ListTermDomainDeclarationsRequest,
+                    > for ListTermDomainDeclarationsSvc<T> {
+                        type Response = super::ListTermDomainDeclarationsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ListTermDomainDeclarationsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_term_domain_declarations(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListTermDomainDeclarationsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

@@ -539,6 +539,19 @@ export function screenOfUi(model: Model, ui: Entity): Entity | undefined {
   );
 }
 
+export function termOwningDomain(entity: Entity): EntityId | undefined {
+  if (entity.kind !== 'term' || !entity.raw.owningDomain) return undefined;
+  const reference = entity.raw.owningDomain as { id?: unknown };
+  if (!reference.id || typeof reference.id !== 'object') return undefined;
+  const version = (reference.id as { version?: unknown }).version;
+  if (typeof version === 'number' && (!Number.isSafeInteger(version) || version <= 0)) return undefined;
+  if (typeof version !== 'string' && typeof version !== 'number') return undefined;
+  const exactVersion = String(version);
+  if (!/^[1-9][0-9]*$/.test(exactVersion) || BigInt(exactVersion) > 18446744073709551615n) return undefined;
+  const id = asId(reference.id);
+  return id.namespace && id.slug ? id : undefined;
+}
+
 export function termEmbodiedBy(entity: Entity): { kind: EntityKind; id: EntityId }[] {
   if (entity.kind !== 'term') return [];
   const refs = Array.isArray(entity.raw.embodiedBy) ? (entity.raw.embodiedBy as Record<string, unknown>[]) : [];

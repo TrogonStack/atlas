@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
+
+message ListTermDomainDeclarationsRequest {
+  trogonatlas.eventmodel.v1alpha1.DomainRef domain = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message TermDomainDeclaration {
+  CatalogCheckedOwner owner = 1;
+  trogonatlas.eventmodel.v1alpha1.DomainRef domain = 2;
+  CatalogResolutionState state = 3;
+}
+
+message ListTermDomainDeclarationsResponse {
+  repeated TermDomainDeclaration declarations = 1;
+  string next_page_token = 2;
+  bool incomplete = 3;
+}

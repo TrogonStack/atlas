@@ -650,6 +650,17 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
             let _ = x;
         }
         EntityOneof::Term(x) => {
+            if let Some(id) = x
+                .owning_domain
+                .as_ref()
+                .and_then(|reference| reference.id.as_ref())
+            {
+                out.push(OutboundRef {
+                    to_kind: Some(EntityKind::Domain),
+                    to_id: id.clone(),
+                    from_field: "owning_domain".into(),
+                });
+            }
             for (i, r) in x.embodied_by.iter().enumerate() {
                 if let (Ok(kind), Some(id)) = (EntityKind::try_from(r.kind), r.id.as_ref()) {
                     if kind == EntityKind::Unspecified {
@@ -1878,6 +1889,14 @@ pub fn retarget_refs(
             let _ = x;
         }
         EntityOneof::Term(x) => {
+            if from_kind == EntityKind::Domain {
+                if let Some(reference) = x.owning_domain.as_mut() {
+                    if reference.id.as_ref() == Some(from_id) {
+                        reference.id = Some(to_id.clone());
+                        rewritten.push("owning_domain".into());
+                    }
+                }
+            }
             for (i, r) in x.embodied_by.iter_mut().enumerate() {
                 if r.id.as_ref() == Some(from_id) {
                     if let Ok(k) = EntityKind::try_from(r.kind) {

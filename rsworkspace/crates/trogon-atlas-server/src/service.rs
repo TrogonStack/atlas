@@ -1,5 +1,7 @@
 #[path = "source_integration.rs"]
 mod source_integration;
+#[path = "term_domains.rs"]
+mod term_domains;
 
 #[path = "architecture_admission.rs"]
 mod architecture_admission;
@@ -3304,6 +3306,24 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             return Err(Status::not_found("branch not found"));
         }
         self.document_detail(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn list_term_domain_declarations(
+        &self,
+        req: Request<pb::ListTermDomainDeclarationsRequest>,
+    ) -> Result<Response<pb::ListTermDomainDeclarationsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.term_domains(req.into_inner(), branch.as_deref(), &vis)
             .await
             .map(Response::new)
     }
@@ -8404,6 +8424,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 | pb::EntityKind::Team
                 | pb::EntityKind::Person
                 | pb::EntityKind::Decision
+                | pb::EntityKind::Term
                 | pb::EntityKind::Document
         ) {
             self.authorize_write(

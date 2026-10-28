@@ -46,6 +46,7 @@ import {
   storyboardEntryReadModel,
   subdomainsOf,
   termEmbodiedBy,
+  termOwningDomain,
   trackingOf,
   uiTransitionsOf,
 } from '@/lib/model';
@@ -704,6 +705,36 @@ export function Inspector({
                 );
               }
             } else if (entity.kind === 'term') {
+              const domain = termOwningDomain(entity);
+              if (domain) {
+                const target = model.entities.find(
+                  (candidate) =>
+                    candidate.kind === 'domain' &&
+                    candidate.id.namespace === domain.namespace &&
+                    candidate.id.slug === domain.slug &&
+                    candidate.id.version === domain.version,
+                );
+                rows.push(
+                  target ? (
+                    <button
+                      key="owning-domain"
+                      type="button"
+                      onClick={() => onSelect(target.key)}
+                      className="w-full rounded-md border border-lime-200 bg-lime-50/70 px-2 py-1.5 text-left text-xs hover:bg-lime-100"
+                    >
+                      owning domain{' '}
+                      <span className="font-mono">
+                        {domain.namespace}/{domain.slug}@{domain.version}
+                      </span>
+                    </button>
+                  ) : (
+                    <div key="owning-domain" className="text-xs">
+                      owning domain unavailable
+                    </div>
+                  ),
+                );
+              }
+
               for (const ref of termEmbodiedBy(entity)) {
                 const target = find(ref.kind, ref.id);
                 rows.push(
