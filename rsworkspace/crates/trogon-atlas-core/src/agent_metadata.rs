@@ -12,6 +12,7 @@ pub const AGENT: &str = "trogonatlas.eventmodel.v1alpha1.AgentAnnotation";
 pub const LIFECYCLE: &str = "trogonatlas.annotation.v1alpha1.LifecycleAnnotation";
 pub const BADGES: &str = "trogonatlas.annotation.v1alpha1.BadgesAnnotation";
 pub const GROUPS: &str = "trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation";
+const SCHEMA: &str = "trogonatlas.eventmodel.v1alpha1.Schema";
 
 pub fn known_type(url: &str) -> Option<&str> {
     let name = url.rsplit('/').next()?;
@@ -82,6 +83,13 @@ fn validate_tree(message: &DynamicMessage, path: &str, depth: usize) -> Result<(
                                 .unwrap_or_default()
                                 .parse::<crate::authored_date::AuthoredDate>()
                                 .map_err(|_| MetadataError(locator.clone()))?;
+                        }
+                    }
+                } else if any.type_url.rsplit('/').next() == Some(SCHEMA) {
+                    if let Ok(descriptor) = crate::transcode::message_descriptor(SCHEMA) {
+                        if let Ok(nested) = DynamicMessage::decode(descriptor, any.value.as_slice())
+                        {
+                            validate_tree(&nested, &locator, depth + 1)?;
                         }
                     }
                 }

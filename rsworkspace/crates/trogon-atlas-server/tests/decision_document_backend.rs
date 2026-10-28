@@ -3265,7 +3265,127 @@ async fn decision_cross_branch_landing_checks_final_graph_without_partial_public
 struct AmendmentFaultAuthorizer {
     inner: trogon_atlas_server::ownership::RegistryAuthorizer,
     target: std::sync::Mutex<Option<trogon_atlas_core::NamespaceId>>,
-    fail_lens: std::sync::atomic::AtomicBool,
+    lens_fault: std::sync::Mutex<Option<tonic::Status>>,
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn document_authorization_outage_is_not_empty_discovery_or_a_model_error() {
+    assert_document_authorization_fault(Code::Unavailable, "authorized scope outage").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn document_authorization_deadline_is_not_empty_discovery_or_a_model_error() {
+    assert_document_authorization_fault(
+        Code::DeadlineExceeded,
+        "authorized scope deadline exceeded",
+    )
+    .await;
+}
+
+async fn assert_document_authorization_fault(code: Code, message: &str) {
+    let store: Arc<dyn trogon_atlas_store::Store> =
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let authorizer = Arc::new(AmendmentFaultAuthorizer {
+        inner: trogon_atlas_server::ownership::RegistryAuthorizer::new(
+            service.directory(),
+            store.clone(),
+        ),
+        target: std::sync::Mutex::new(None),
+        lens_fault: std::sync::Mutex::new(None),
+    });
+    let mut client = client_with_service(service.with_authorizer(authorizer.clone())).await;
+    let target = put(&mut client, read_model("outage-subject"), None)
+        .await
+        .entity
+        .unwrap();
+    let selected = subject(reference(&target));
+    let hub = put(&mut client, document("outage-hub", selected.clone()), None)
+        .await
+        .entity
+        .unwrap();
+    let selection = pb::DocumentSelection {
+        selection: Some(pb::document_selection::Selection::Document(
+            pb::DocumentRef {
+                id: reference(&hub).id,
+            },
+        )),
+    };
+    let mut owner = document("outage-referrer", selected);
+    let Some(pb::entity::Kind::Document(body)) = owner.kind.as_mut() else {
+        panic!("expected document");
+    };
+    body.related_content.push(pb::RelatedContent {
+        role: pb::RelatedContentRole::Example as i32,
+        document: Some(selection.clone()),
+        ..Default::default()
+    });
+    let owner = put(&mut client, owner, None).await.entity.unwrap();
+    let query = || pb::ListIncomingDocumentDeclarationsRequest {
+        document: Some(selection.clone()),
+        page_size: 1,
+        ..Default::default()
+    };
+    let healthy = client
+        .list_incoming_document_declarations(request(query(), ADMIN, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(healthy.declarations.len(), 1);
+    assert!(!healthy.incomplete);
+    let before = store
+        .get(
+            pb::EntityKind::Document,
+            reference(&owner).id.as_ref().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let sequence = store.current_change_seq().await.unwrap();
+    *authorizer.lens_fault.lock().unwrap() = Some(tonic::Status::new(code, message));
+    let failure = client
+        .list_incoming_document_declarations(request(query(), ADMIN, None))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code(), code);
+    assert_eq!(failure.message(), message);
+    let mut changed = owner.clone();
+    if let Some(pb::entity::Kind::Document(body)) = changed.kind.as_mut() {
+        body.title = Some(title("Must not publish during outage"));
+    }
+    let failure = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(changed),
+                if_match: before.etag.clone(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code(), code);
+    assert_eq!(failure.message(), message);
+    let after = store
+        .get(
+            pb::EntityKind::Document,
+            reference(&owner).id.as_ref().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.entity, before.entity);
+    assert_eq!(after.etag, before.etag);
+    assert_eq!(store.current_change_seq().await.unwrap(), sequence);
+    *authorizer.lens_fault.lock().unwrap() = None;
+    let recovered = client
+        .list_incoming_document_declarations(request(query(), ADMIN, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(recovered.declarations, healthy.declarations);
+    assert!(!recovered.incomplete);
 }
 
 #[async_trait::async_trait]
@@ -3286,8 +3406,8 @@ impl trogon_atlas_server::ownership::NamespaceAuthorizer for AmendmentFaultAutho
         &self,
         visibility: &trogon_atlas_server::ownership::Visibility,
     ) -> Result<trogon_atlas_server::ownership::Lens, tonic::Status> {
-        if self.fail_lens.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(tonic::Status::unavailable("authorized scope outage"));
+        if let Some(failure) = self.lens_fault.lock().unwrap().clone() {
+            return Err(failure);
         }
         self.inner.lens(visibility).await
     }
@@ -3327,7 +3447,7 @@ async fn decision_transitive_authorization_faults_are_errors_and_never_leaves() 
     let authorizer = Arc::new(AmendmentFaultAuthorizer {
         inner: trogon_atlas_server::ownership::RegistryAuthorizer::new(service.directory(), store),
         target: std::sync::Mutex::new(None),
-        fail_lens: std::sync::atomic::AtomicBool::new(false),
+        lens_fault: std::sync::Mutex::new(None),
     });
     let mut client = client_with_service(service.with_authorizer(authorizer.clone())).await;
     let mut namespaces = Vec::new();
@@ -3403,9 +3523,8 @@ async fn decision_transitive_authorization_faults_are_errors_and_never_leaves() 
         } else {
             Some(trogon_atlas_core::NamespaceId::parse(&namespaces[1]).unwrap())
         };
-        authorizer
-            .fail_lens
-            .store(lens_fault, std::sync::atomic::Ordering::SeqCst);
+        *authorizer.lens_fault.lock().unwrap() =
+            lens_fault.then(|| tonic::Status::unavailable("authorized scope outage"));
         let error = client
             .put_entity(request(
                 pb::PutEntityRequest {
@@ -3426,9 +3545,7 @@ async fn decision_transitive_authorization_faults_are_errors_and_never_leaves() 
                 "transitive authorization outage"
             }
         );
-        authorizer
-            .fail_lens
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+        *authorizer.lens_fault.lock().unwrap() = None;
         *authorizer.target.lock().unwrap() = None;
         assert_eq!(stored_decision(&mut client, &a, None).await, a_before);
         assert_eq!(stored_decision(&mut client, &b, None).await, b_before);

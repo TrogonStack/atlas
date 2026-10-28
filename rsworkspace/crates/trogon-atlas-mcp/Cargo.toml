@@ -26,6 +26,7 @@ thiserror = { workspace = true }
 base64 = { workspace = true }
 
 [dev-dependencies]
+jsonschema = { workspace = true }
 prost-types = { workspace = true }
 trogon-atlas-server = { workspace = true }
 trogon-atlas-store = { workspace = true }
