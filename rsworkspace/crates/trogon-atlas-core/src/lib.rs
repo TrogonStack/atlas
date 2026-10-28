@@ -36,6 +36,7 @@ pub mod semantic_eq;
 pub mod source_bundle;
 pub mod source_integration;
 pub mod specification;
+pub mod storage_claims;
 mod specification_refs;
 pub mod system_meta;
 pub mod transcode;
