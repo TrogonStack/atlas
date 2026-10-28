@@ -64,7 +64,6 @@ impl EventModelServiceImpl {
             if let Some(pb::entity::Kind::Term(term)) = &row.entity.kind {
                 budget.examine(1)?;
                 if term.owning_domain.as_ref() == Some(&domain) {
-                    budget.output()?;
                     declarations.push(pb::TermDomainDeclaration {
                         owner: Some(pb::CatalogCheckedOwner {
                             owner: Some(crate::conv::entity_to_ref(&row.entity)?),
@@ -113,6 +112,9 @@ impl EventModelServiceImpl {
             req.page_size as usize
         };
         let end = offset.saturating_add(size).min(declarations.len());
+        for _ in offset..end {
+            budget.output()?;
+        }
         Ok(pb::ListTermDomainDeclarationsResponse {
             next_page_token: if end < declarations.len() {
                 format!("{binding}:{end}")
