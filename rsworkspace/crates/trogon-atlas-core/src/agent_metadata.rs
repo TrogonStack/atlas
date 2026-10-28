@@ -129,12 +129,27 @@ fn url(value: &str) -> Result<(), MetadataError> {
     }
     Ok(())
 }
+pub(crate) fn reject_unknown(message: &DynamicMessage) -> Result<(), MetadataError> {
+    if message.unknown_fields().next().is_some() { return Err(MetadataError("unknown wire field".into())); }
+    for field in message.descriptor().fields() {
+        match message.get_field(&field).as_ref() {
+            Value::Message(child) => reject_unknown(child)?,
+            Value::List(values) => for child in values.iter().filter_map(Value::as_message) { reject_unknown(child)?; },
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn validate_payload(name: &str, bytes: &[u8]) -> Result<(), MetadataError> {
     use trogon_atlas_proto::{
         AgentAnnotation, BadgesAnnotation, EntityKind, LifecycleAnnotation,
         ResourceGroupsAnnotation,
     };
     let error = || MetadataError("payload".into());
+    let descriptor = crate::transcode::message_descriptor(name).map_err(|_| error())?;
+    let payload = DynamicMessage::decode(descriptor, bytes).map_err(|_| error())?;
+    reject_unknown(&payload)?;
     match name {
         AGENT => {
             let a = AgentAnnotation::decode(bytes).map_err(|_| error())?;
@@ -265,8 +280,9 @@ pub(crate) fn map_groups(
             if let Some(name) = known_type(&any.type_url) {
                 let descriptor = crate::transcode::message_descriptor(name)
                     .map_err(|_| MetadataError(path.into()))?;
-                DynamicMessage::decode(descriptor, any.value.as_slice())
+                let payload = DynamicMessage::decode(descriptor, any.value.as_slice())
                     .map_err(|_| MetadataError(path.into()))?;
+                reject_unknown(&payload)?;
                 if name == GROUPS {
                     let mut groups =
                         trogon_atlas_proto::ResourceGroupsAnnotation::decode(any.value.as_slice())

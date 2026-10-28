@@ -226,6 +226,7 @@ fn visit(
                 .ok_or_else(|| ConnectionError::Encoding("annotation descriptor missing".into()))?;
             let mut payload = DynamicMessage::decode(descriptor, any.value.as_slice())
                 .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
+            crate::agent_metadata::reject_unknown(&payload).map_err(|e| ConnectionError::Encoding(e.to_string()))?;
             if name == crate::agent_metadata::GROUPS {
                 visit(&mut payload, path, role, predecessor, callback)?;
                 any.value = payload.encode_to_vec();
