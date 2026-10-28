@@ -6,9 +6,15 @@ Status: partially verified requirements for the
 [backend admission and lifecycle tests](../../rsworkspace/crates/trogon-atlas-server/tests/agent_metadata_backend.rs),
 [Studio protobuf decoding](../../tsworkspace/webapps/studio/server/decode-annotations.test.mjs)
 and [Inspector tests](../../tsworkspace/webapps/studio/src/components/AgentMetadataDetails.test.tsx).
-These fixtures do not establish every requirement below. Complete group-reference
-authorization/provenance, Source safety and combined native-client acceptance
-remain pending; component and codec checks are not deployed-browser evidence.
+Additional implemented coverage includes
+[authorized group lifecycle tests](../../rsworkspace/crates/trogon-atlas-server/tests/native_metadata_authz_backend.rs),
+[tenant-context digest tests](../../rsworkspace/crates/trogon-atlas-server/tests/native_metadata_digest_backend.rs)
+and combined manifest, CLI and MCP acceptance. The authorized lifecycle and digest
+targets pass in the combined parent checkout, including Reader refusal, hidden
+target parity, hidden-referrer deletion guards, branch identity and same-batch
+tenant descriptors. These fixtures do not establish every requirement below;
+requirement-by-requirement closure remains open. Component and codec checks are
+not deployed-browser evidence.
 
 ## Common fixture and observable results
 
