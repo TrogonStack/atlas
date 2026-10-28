@@ -4033,12 +4033,32 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             ADVERTISED_MAX_PAGE_SIZE,
         );
         let offset = parse_page_token(&req.page_token)?;
-        // One snapshot stamps the reference and checks its occurrence. A page
-        // must not open a fresh budget, and a later read must not supply the path.
-        let snapshot = self.snapshot_for(branch.as_deref(), &vis).await?;
+        // One snapshot stamps the reference and checks its occurrence. Row and
+        // occurrence accounting covers every schema that snapshot examined.
+        // Status and the output charge apply only to the page returned here,
+        // and a later read must not supply the path.
+        if let Some(branch_name) = branch.as_deref() {
+            self.require_branch(branch_name).await?;
+        }
+        let (snapshot, truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let discovered = self
             .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
             .await?;
+        self.refuse_omitted_schema_referrers(
+            &snapshot,
+            branch.as_deref(),
+            &vis,
+            &filter_kinds,
+            truncated,
+        )
+        .await?;
+        let mut budget = trogon_atlas_core::business_data::ReferenceBudget::default();
+        Self::account_examined_schemas(
+            &mut budget,
+            discovered.iter().map(|stored| &stored.entity),
+        )?;
         let index = ReferenceIndexPurpose::Discovery.build(&discovered)?;
         let owners: HashMap<pb::EntityKey, pb::Entity> = discovered
             .iter()
@@ -4051,22 +4071,22 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let refs = index.incoming(kind, &id).to_vec();
         // Incoming refs have the queried entity in `to`; the referrer kind
         // lives in `from`.
-        let mut all_references =
-            graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::From);
-        self.decorate_business_property_status(
-            &mut all_references,
-            None,
-            branch.as_deref(),
-            &vis,
-            Some(&owners),
-        )
-        .await?;
+        let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::From);
         let total = all_references.len();
-        let references: Vec<pb::Reference> = all_references
+        let mut references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
             .take(page_size)
             .collect();
+        self.decorate_business_property_status(
+            &mut references,
+            None,
+            branch.as_deref(),
+            &vis,
+            Some(&owners),
+            &mut budget,
+        )
+        .await?;
         let next_offset = offset + references.len();
         let next_page_token = if next_offset >= total {
             String::new()
@@ -4119,23 +4139,26 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let mut refs = graph::outgoing_of_resolved(&stored.entity, &known);
         refs.extend(graph::TypeOwners::build(&snap).schema_ref(&stored.entity));
         // Outgoing refs have the queried entity in `from`; the target kind
-        // lives in `to`.
-        let mut all_references =
-            graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::To);
-        self.decorate_business_property_status(
-            &mut all_references,
-            Some(&stored.entity),
-            branch.as_deref(),
-            &vis,
-            None,
-        )
-        .await?;
+        // lives in `to`. The owner's inventory is scan work. Status and the
+        // output charge stay on the page.
+        let mut budget = trogon_atlas_core::business_data::ReferenceBudget::default();
+        Self::account_examined_schemas(&mut budget, std::slice::from_ref(&stored.entity))?;
+        let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::To);
         let total = all_references.len();
-        let references: Vec<pb::Reference> = all_references
+        let mut references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
             .take(page_size)
             .collect();
+        self.decorate_business_property_status(
+            &mut references,
+            Some(&stored.entity),
+            branch.as_deref(),
+            &vis,
+            None,
+            &mut budget,
+        )
+        .await?;
         let next_offset = offset + references.len();
         let next_page_token = if next_offset >= total {
             String::new()

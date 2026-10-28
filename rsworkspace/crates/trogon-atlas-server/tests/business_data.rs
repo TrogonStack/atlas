@@ -228,6 +228,10 @@ fn product_without_sku(namespace: &str) -> pb::Entity {
 }
 
 fn fan_in(namespace: &str, slug: &str, count: usize) -> pb::Entity {
+    fan_in_toward(namespace, slug, "product", count)
+}
+
+fn fan_in_toward(namespace: &str, slug: &str, target: &str, count: usize) -> pb::Entity {
     schema_entity(
         namespace,
         slug,
@@ -239,7 +243,7 @@ fn fan_in(namespace: &str, slug: &str, count: usize) -> pb::Entity {
                 .map(|_| pb::BusinessPropertyRelationship {
                     source: Some(path(&[("product_ref", false)])),
                     target_entity: Some(pb::SchemaRef {
-                        id: Some(id(namespace, "product", 1)),
+                        id: Some(id(namespace, target, 1)),
                     }),
                     ..Default::default()
                 })
@@ -2547,9 +2551,24 @@ async fn review_red_rebase_revalidates_an_added_source_when_the_target_property_
     );
 }
 
+fn incoming_page(
+    namespace: &str,
+    slug: &str,
+    page_size: i32,
+    page_token: &str,
+) -> pb::GetReferencesRequest {
+    pb::GetReferencesRequest {
+        kind: pb::EntityKind::Schema as i32,
+        id: Some(id(namespace, slug, 1)),
+        page_size,
+        page_token: page_token.into(),
+        ..Default::default()
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn review_red_small_reference_page_still_charges_the_full_scan() {
-    let namespace = "bd-ref-budget";
+async fn review_red_one_row_page_of_4097_references_stays_valid() {
+    let namespace = "bd-ref-page";
     let service = service().await;
     put(&service, product_schema(namespace, 1)).await;
     for index in 0..4 {
@@ -2560,33 +2579,131 @@ async fn review_red_small_reference_page_still_charges_the_full_scan() {
         .await;
     }
     let within = service
-        .get_incoming_references(Request::new(pb::GetReferencesRequest {
-            kind: pb::EntityKind::Schema as i32,
-            id: Some(id(namespace, "product", 1)),
-            page_size: 1,
-            ..Default::default()
-        }))
+        .get_incoming_references(Request::new(incoming_page(namespace, "product", 1, "")))
         .await
         .unwrap()
         .into_inner();
     assert_eq!(within.references.len(), 1);
     assert_ne!(within.next_page_token, "");
+    assert_eq!(
+        within.references[0].business_property_status,
+        Some(pb::BusinessPropertyReferenceStatus::EntityOnly as i32)
+    );
     put(&service, fan_in(namespace, "owner-4", 1)).await;
-    let overflow = service
-        .get_incoming_references(Request::new(pb::GetReferencesRequest {
-            kind: pb::EntityKind::Schema as i32,
-            id: Some(id(namespace, "product", 1)),
-            page_size: 1,
-            ..Default::default()
-        }))
+    let page = service
+        .get_incoming_references(Request::new(incoming_page(namespace, "product", 1, "")))
         .await
-        .unwrap_err();
-    assert_eq!(overflow.code(), Code::ResourceExhausted, "{overflow:?}");
+        .expect("page_size 1 emits one reference, so 4097 matches stay paginated")
+        .into_inner();
+    assert_eq!(page.references.len(), 1);
+    assert_ne!(page.next_page_token, "");
+    assert_eq!(
+        page.references[0].business_property_status,
+        Some(pb::BusinessPropertyReferenceStatus::EntityOnly as i32)
+    );
+    let next = service
+        .get_incoming_references(Request::new(incoming_page(
+            namespace,
+            "product",
+            1,
+            &page.next_page_token,
+        )))
+        .await
+        .expect("the following page opens no second output charge for rows it does not return")
+        .into_inner();
+    assert_eq!(next.references.len(), 1);
+    assert_eq!(
+        next.references[0].business_property_status,
+        Some(pb::BusinessPropertyReferenceStatus::EntityOnly as i32)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_red_truncated_snapshot_does_not_present_omitted_schema_referrers_as_complete() {
+    let namespace = "bd-schema-omit";
+    // Slug order is aaa-filler, product, zzz-referrer. A cap of 2 keeps the
+    // first two and drops the only schema that points at product.
+    let service = service().await.with_snapshot_cap(2);
+    put(&service, product_schema(namespace, 1)).await;
+    put(
+        &service,
+        schema_entity(
+            namespace,
+            "aaa-filler",
+            1,
+            pb::Schema {
+                title: "Filler".into(),
+                fields: vec![string_field("name")],
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    let referrer = put(&service, fan_in(namespace, "zzz-referrer", 1)).await;
+    let referrer_connection = schema_of(&referrer).property_relationships[0]
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    let stored = get(&service, namespace, "zzz-referrer", 1).await;
+    assert!(schema_of(&stored)
+        .property_relationships
+        .iter()
+        .any(|relationship| {
+            relationship
+                .connection_id
+                .as_ref()
+                .is_some_and(|id| id.value == referrer_connection)
+        }));
+    let discovered = service
+        .get_incoming_references(Request::new(incoming_page(namespace, "product", 50, "")))
+        .await;
+    let error = discovered.expect_err(
+        "a capped snapshot that dropped zzz-referrer must not answer as a complete incoming set",
+    );
+    assert_eq!(error.code(), Code::ResourceExhausted, "{error:?}");
+    assert!(error.message().contains("omitted schemas"), "{error:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_red_incoming_discovery_charges_every_examined_schema() {
+    let namespace = "bd-examined";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    put(
+        &service,
+        schema_entity(
+            namespace,
+            "other",
+            1,
+            pb::Schema {
+                title: "Other".into(),
+                fields: vec![string_field("sku")],
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    // Ten owners point at `other`, not `product`. 10 * 1024 occurrences is
+    // past the shared scan budget even though none of them is a match.
+    for index in 0..10 {
+        put(
+            &service,
+            fan_in_toward(namespace, &format!("owner-{index}"), "other", 1_024),
+        )
+        .await;
+    }
+    let error = service
+        .get_incoming_references(Request::new(incoming_page(namespace, "product", 1, "")))
+        .await
+        .expect_err("schemas examined while scanning are part of the shared occurrence budget");
+    assert_eq!(error.code(), Code::ResourceExhausted, "{error:?}");
     assert!(
-        overflow
+        error
             .message()
-            .contains("business reference output budget exceeded"),
-        "{overflow:?}"
+            .contains("business reference occurrence budget exceeded"),
+        "{error:?}"
     );
 }
 

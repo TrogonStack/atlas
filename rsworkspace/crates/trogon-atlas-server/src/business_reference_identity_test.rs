@@ -92,8 +92,9 @@ async fn status_for(
 ) -> Option<i32> {
     let vis = crate::ownership::Visibility::unrestricted(Arc::from("bd-occurrence"));
     let mut references = [reference(connection_id)];
+    let mut budget = trogon_atlas_core::business_data::ReferenceBudget::default();
     service
-        .decorate_business_property_status(&mut references, None, None, &vis, owners)
+        .decorate_business_property_status(&mut references, None, None, &vis, owners, &mut budget)
         .await
         .unwrap();
     references[0].business_property_status

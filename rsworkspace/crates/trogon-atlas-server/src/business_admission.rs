@@ -2,7 +2,10 @@ use std::collections::{HashMap, HashSet};
 
 use trogon_atlas_store::error::StoreError;
 
-use super::{entity_id, pb, store_err, EventModelServiceImpl, OpMetaLike, Status, Visibility};
+use super::{
+    entity_id, pb, store_err, EventModelServiceImpl, ListFilter, OpMetaLike, Status, StoredEntity,
+    Visibility,
+};
 
 impl EventModelServiceImpl {
     pub(super) async fn validate_business_writes(
@@ -130,6 +133,78 @@ impl EventModelServiceImpl {
         }
     }
 
+    /// Schemas share the general snapshot cap and the architecture resource
+    /// scan does not restore them. Callers that asked for schema referrers
+    /// cannot treat that incoming set as complete when the cap dropped schemas.
+    pub(super) async fn refuse_omitted_schema_referrers(
+        &self,
+        snapshot: &[StoredEntity],
+        branch: Option<&str>,
+        vis: &Visibility,
+        filter_kinds: &[pb::EntityKind],
+        truncated: bool,
+    ) -> Result<(), Status> {
+        if !truncated || !schema_referrers_in_scope(filter_kinds) {
+            return Ok(());
+        }
+        let lens = self.lens(vis).await?;
+        let namespaces: Vec<String> = match &lens {
+            super::Lens::Everything => Vec::new(),
+            super::Lens::Only(namespaces) if namespaces.is_empty() => return Ok(()),
+            super::Lens::Only(namespaces) => {
+                namespaces.iter().map(|id| id.as_str().to_owned()).collect()
+            }
+        };
+        let kept = snapshot
+            .iter()
+            .filter(|stored| matches!(stored.entity.kind, Some(pb::entity::Kind::Schema(_))))
+            .filter(|stored| entity_id(&stored.entity).is_ok_and(|id| lens.admits(&id.namespace)))
+            .count();
+        let kinds = [pb::EntityKind::Schema];
+        let probe = self
+            .store
+            .list(
+                ListFilter {
+                    kinds: &kinds,
+                    namespaces: &namespaces,
+                    ..Default::default()
+                },
+                Some(kept.saturating_add(1)),
+                branch,
+            )
+            .await
+            .map_err(store_err)?;
+        if probe.len() > kept {
+            return Err(Status::resource_exhausted(
+                "business reference discovery is incomplete: the entity snapshot omitted schemas",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Every schema opened by the scan pays the shared row and occurrence
+    /// budget once. A schema that is not a match was still examined.
+    pub(super) fn account_examined_schemas<'a>(
+        budget: &mut trogon_atlas_core::business_data::ReferenceBudget,
+        entities: impl IntoIterator<Item = &'a pb::Entity>,
+    ) -> Result<(), Status> {
+        for entity in entities {
+            let Some(pb::entity::Kind::Schema(schema)) = entity.kind.as_ref() else {
+                continue;
+            };
+            let Ok(id) = entity_id(entity) else {
+                continue;
+            };
+            budget
+                .charge_row(&examined_schema_key(id))
+                .map_err(|error| budget_status(&error))?;
+            budget
+                .charge_occurrences(schema.identifiers.len() + schema.property_relationships.len())
+                .map_err(|error| budget_status(&error))?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn decorate_business_property_status(
         &self,
         references: &mut [pb::Reference],
@@ -137,6 +212,7 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
         coherent_owners: Option<&HashMap<pb::EntityKey, pb::Entity>>,
+        budget: &mut trogon_atlas_core::business_data::ReferenceBudget,
     ) -> Result<(), Status> {
         if !references.iter().any(|reference| {
             trogon_atlas_core::business_data::relationship_index(&reference.from_field).is_some()
@@ -144,7 +220,6 @@ impl EventModelServiceImpl {
             return Ok(());
         }
         let lens = self.lens(vis).await?;
-        let mut budget = trogon_atlas_core::business_data::ReferenceBudget::default();
         let mut owners: HashMap<pb::EntityKey, pb::Entity> = HashMap::new();
         let mut targets: HashMap<pb::EntityKey, Option<pb::Schema>> = HashMap::new();
         let mut inventoried = HashSet::new();
@@ -178,45 +253,27 @@ impl EventModelServiceImpl {
                 continue;
             };
             let owner_key = pb::EntityKey::new(kind, owner_id);
-            if inventoried.insert(owner_key.clone()) {
-                budget
-                    .charge_row(&format!(
-                        "owner:{}:{}:{}:{}",
-                        kind as i32, owner_id.namespace, owner_id.slug, owner_id.version
-                    ))
-                    .map_err(|error| budget_status(&error))?;
-                if !owners.contains_key(&owner_key) {
-                    // A supplied snapshot is the body that stamped the reference.
-                    // Falling through to a later read can attach a sibling path.
-                    if let Some(coherent) = coherent_owners {
-                        if let Some(entity) = coherent.get(&owner_key) {
-                            owners.insert(owner_key.clone(), entity.clone());
-                        } else {
+            if inventoried.insert(owner_key.clone()) && !owners.contains_key(&owner_key) {
+                // A supplied snapshot is the body that stamped the reference.
+                // Falling through to a later read can attach a sibling path.
+                if let Some(coherent) = coherent_owners {
+                    if let Some(entity) = coherent.get(&owner_key) {
+                        owners.insert(owner_key.clone(), entity.clone());
+                    } else {
+                        reference.business_property_status = Some(unavailable());
+                        continue;
+                    }
+                } else {
+                    match self.store.get(kind, owner_id, branch).await {
+                        Ok(stored) => {
+                            owners.insert(owner_key.clone(), stored.entity);
+                        }
+                        Err(StoreError::NotFound) => {
                             reference.business_property_status = Some(unavailable());
                             continue;
                         }
-                    } else {
-                        match self.store.get(kind, owner_id, branch).await {
-                            Ok(stored) => {
-                                owners.insert(owner_key.clone(), stored.entity);
-                            }
-                            Err(StoreError::NotFound) => {
-                                reference.business_property_status = Some(unavailable());
-                                continue;
-                            }
-                            Err(error) => return Err(store_err(error)),
-                        }
+                        Err(error) => return Err(store_err(error)),
                     }
-                }
-                if let Some(pb::entity::Kind::Schema(schema)) = owners
-                    .get(&owner_key)
-                    .and_then(|entity| entity.kind.as_ref())
-                {
-                    budget
-                        .charge_occurrences(
-                            schema.identifiers.len() + schema.property_relationships.len(),
-                        )
-                        .map_err(|error| budget_status(&error))?;
                 }
             }
             let relationship = owners.get(&owner_key).and_then(|entity| {
@@ -245,10 +302,7 @@ impl EventModelServiceImpl {
             let target_key = pb::EntityKey::new(pb::EntityKind::Schema, &target_id);
             if !targets.contains_key(&target_key) {
                 budget
-                    .charge_row(&format!(
-                        "target:{}:{}:{}",
-                        target_id.namespace, target_id.slug, target_id.version
-                    ))
+                    .charge_row(&examined_schema_key(&target_id))
                     .map_err(|error| budget_status(&error))?;
                 let loaded = match self
                     .store
@@ -277,6 +331,14 @@ impl EventModelServiceImpl {
         }
         Ok(())
     }
+}
+
+fn schema_referrers_in_scope(filter_kinds: &[pb::EntityKind]) -> bool {
+    filter_kinds.is_empty() || filter_kinds.contains(&pb::EntityKind::Schema)
+}
+
+fn examined_schema_key(id: &pb::Id) -> String {
+    format!("schema:{}:{}:{}", id.namespace, id.slug, id.version)
 }
 
 fn occurrence_relationship<'a>(
