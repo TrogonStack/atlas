@@ -1027,17 +1027,40 @@ async fn incoming_subflow_output_stops_at_the_emitted_record_ceiling() {
             })
             .collect()
     };
+    let mut last = None;
     for owner in 0..8 {
-        put(
-            &mut client,
-            graph(&format!("emit-owner-{owner}"), subflows(512)),
-        )
-        .await;
+        last = Some(
+            put(
+                &mut client,
+                graph(
+                    &format!("emit-owner-{owner}"),
+                    subflows(if owner == 7 { 503 } else { 512 }),
+                ),
+            )
+            .await
+            .entity
+            .unwrap(),
+        );
     }
     let at_ceiling = list_incoming(&mut client).await.unwrap().into_inner();
-    assert_eq!(at_ceiling.references.len(), 4_096);
+    assert_eq!(at_ceiling.references.len(), 4_087);
+    let scope = at_ceiling.scope.unwrap();
+    assert_eq!(
+        at_ceiling.references.len()
+            + scope.visited.len()
+            + scope.visited_subjects.len()
+            + scope.visited_documents.len(),
+        4_096
+    );
 
-    put(&mut client, graph("emit-owner-8", subflows(1))).await;
+    let mut overflow = last.unwrap();
+    graph_mut(&mut overflow).steps.push(step(
+        "One more",
+        Some(pb::topology_step_target::Selection::Subflow(graph_ref(
+            "emit-target",
+        ))),
+    ));
+    put(&mut client, overflow).await;
     let exhausted = list_incoming(&mut client).await.unwrap_err();
     assert_eq!(exhausted.code(), Code::ResourceExhausted);
     assert_eq!(exhausted.message(), "catalog output budget exceeded");

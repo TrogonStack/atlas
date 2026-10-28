@@ -987,7 +987,13 @@ fn native_relationships_only(
         || (whole_owner && (current_native || incoming_native))
     {
         return Err(Status::invalid_argument(
-            "selected extensions support native authoring only",
+            if trogon_atlas_core::design_topology::graph(incoming.or(current).ok_or_else(invalid)?)
+                .is_some()
+            {
+                "design topology support native authoring only"
+            } else {
+                "selected extensions support native authoring only"
+            },
         ));
     }
     if (current.is_none() && incoming.is_some_and(carries_slice_authoring))
