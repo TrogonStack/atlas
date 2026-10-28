@@ -396,15 +396,300 @@ async fn authenticated_native_claim_authoring_keeps_flat_identity_and_exact_fiel
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn selected_native_fields_become_unavailable_without_rebinding_or_vetoing_title_edits() {
+    use trogon_atlas_core::message_claims as claims;
+    let (mut c, ns) = fixture().await;
+    let (spec, m, _) = targets(&mut c, &ns).await;
+    let Some(pb::entity::Kind::Specification(s)) = &spec.kind else {
+        panic!()
+    };
+    let first = put(&mut c, owner(&ns, pb::EntityKind::Domain, m), "")
+        .await
+        .unwrap();
+    let mut e = first.entity.unwrap();
+    let v = claims::declarations_mut(&mut e).unwrap();
+    v.field_selections.push(pb::ClaimFieldSelection {
+        claim_id: v.claims[0].connection_id.clone(),
+        binding: Some(pb::ConnectionRef {
+            owner: Some(reference(&spec)),
+            owner_uid: spec.system.as_ref().unwrap().uid.clone(),
+            id: s.messages[0].schemas[0].connection_id.clone(),
+        }),
+        selectors: vec![pb::ClaimFieldSelector {
+            selector: Some(pb::claim_field_selector::Selector::Path(pb::FieldPath {
+                segments: vec!["name".into()],
+            })),
+        }],
+        ..Default::default()
+    });
+    let stored = put(&mut c, e, &first.etag).await.unwrap();
+    let e = stored.entity.unwrap();
+    let selected = pb::ConnectionRef {
+        owner: Some(reference(&e)),
+        owner_uid: e.system.as_ref().unwrap().uid.clone(),
+        id: claims::declarations(&e).unwrap().field_selections[0]
+            .connection_id
+            .clone(),
+    };
+    let request = || {
+        authed(
+            pb::ListSubjectAssignmentsRequest {
+                subject: Some(pb::ResponsibilitySubject {
+                    selection: Some(pb::responsibility_subject::Selection::Connection(
+                        selected.clone(),
+                    )),
+                }),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        )
+    };
+    assert_eq!(
+        c.list_subject_assignments(request())
+            .await
+            .unwrap()
+            .into_inner()
+            .subject_state,
+        pb::ResponsibilityResolutionState::Resolved as i32
+    );
+    let schema = c
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(&ns, "payload")),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut changed = schema.entity.unwrap();
+    if let Some(pb::entity::Kind::Schema(s)) = &mut changed.kind {
+        s.fields.clear();
+    }
+    put(&mut c, changed, &schema.etag).await.unwrap();
+    assert_eq!(
+        c.list_subject_assignments(request())
+            .await
+            .unwrap()
+            .into_inner()
+            .subject_state,
+        pb::ResponsibilityResolutionState::Unresolved as i32
+    );
+    let mut title = e.clone();
+    if let Some(pb::entity::Kind::Domain(d)) = &mut title.kind {
+        d.title = "Unrelated title".into();
+    }
+    let title = put(&mut c, title, &stored.etag).await.unwrap();
+    assert_eq!(
+        claims::declarations(title.entity.as_ref().unwrap()),
+        claims::declarations(&e)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hidden_targets_and_hidden_referrers_do_not_leak_or_bypass_safe_delete() {
+    use support::two_tenants::{ACME_TOKEN, BETA_TOKEN};
+    let (mut c, _) = fixture().await;
+    let acme = c
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: "claims-a".into(),
+                parent: String::new(),
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let beta = c
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: "claims-b".into(),
+                parent: String::new(),
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let (spec, m, _) = targets(&mut c, &beta).await;
+    let request = |message| {
+        authed(
+            pb::PutEntityRequest {
+                entity: Some(owner(&acme, pb::EntityKind::Component, message)),
+                ..Default::default()
+            },
+            ACME_TOKEN,
+        )
+    };
+    let hidden = c.put_entity(request(m.clone())).await.unwrap_err();
+    let mut missing = m.clone();
+    missing.specification.as_mut().unwrap().id = Some(id(&beta, "nonexistent"));
+    let absent = c.put_entity(request(missing)).await.unwrap_err();
+    assert_eq!(hidden.code(), absent.code());
+    assert_eq!(hidden.message(), absent.message());
+    assert!(!hidden.message().contains(&beta));
+    let authored = put(&mut c, owner(&acme, pb::EntityKind::Domain, m), "")
+        .await
+        .unwrap();
+    let deletion = pb::DeleteEntityRequest {
+        kind: pb::EntityKind::Specification as i32,
+        id: reference(&spec).id,
+        mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+        ..Default::default()
+    };
+    assert_eq!(
+        c.delete_entity(authed(deletion.clone(), BETA_TOKEN))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    c.delete_entity(authed(
+        pb::DeleteEntityRequest {
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..deletion
+        },
+        BETA_TOKEN,
+    ))
+    .await
+    .unwrap();
+    let e = authored.entity.unwrap();
+    let after = c
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: reference(&e).id,
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(after.entity, Some(e.clone()));
+    assert_eq!(after.etag, authored.etag);
+    let selected = pb::ConnectionRef {
+        owner: Some(reference(&e)),
+        owner_uid: e.system.as_ref().unwrap().uid.clone(),
+        id: trogon_atlas_core::message_claims::declarations(&e)
+            .unwrap()
+            .claims[0]
+            .connection_id
+            .clone(),
+    };
+    let state = c
+        .list_subject_assignments(authed(
+            pb::ListSubjectAssignmentsRequest {
+                subject: Some(pb::ResponsibilitySubject {
+                    selection: Some(pb::responsibility_subject::Selection::Connection(selected)),
+                }),
+                ..Default::default()
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        state.subject_state,
+        pb::ResponsibilityResolutionState::Unresolved as i32
+    );
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn final_batch_tombstones_and_validate_only_refuse_partial_claim_publication() {
+    let (mut c, ns) = fixture().await;
+    let (spec, m, _) = targets(&mut c, &ns).await;
+    let proposed = owner(&ns, pb::EntityKind::Domain, m.clone());
+    let result = c
+        .batch_mutate(authed(
+            pb::BatchMutateRequest {
+                ops: vec![
+                    pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(proposed),
+                            ..Default::default()
+                        })),
+                    },
+                    pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                            kind: pb::EntityKind::Specification as i32,
+                            id: reference(&spec).id,
+                            mode: pb::delete_entity_request::Mode::Force as i32,
+                            ..Default::default()
+                        })),
+                    },
+                ],
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(result.code(), Code::InvalidArgument);
+    assert!(c
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Specification as i32,
+                id: reference(&spec).id
+            },
+            ROOT_TOKEN
+        ))
+        .await
+        .is_ok());
+    assert_eq!(
+        c.get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: Some(id(&ns, "owner"))
+            },
+            ROOT_TOKEN
+        ))
+        .await
+        .unwrap_err()
+        .code(),
+        Code::NotFound
+    );
+    let preview = c
+        .put_entity(authed(
+            pb::PutEntityRequest {
+                entity: Some(owner(&ns, pb::EntityKind::Domain, m)),
+                validate_only: true,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(preview.etag.is_empty());
+    assert_eq!(
+        c.get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: Some(id(&ns, "owner"))
+            },
+            ROOT_TOKEN
+        ))
+        .await
+        .unwrap_err()
+        .code(),
+        Code::NotFound
+    );
+}
+
 #[tokio::test(flavor="multi_thread")]
-async fn selected_native_fields_become_unavailable_without_rebinding_or_vetoing_title_edits(){
- use trogon_atlas_core::message_claims as claims;
- let (mut c,ns)=fixture().await;let (spec,m,_)=targets(&mut c,&ns).await;let Some(pb::entity::Kind::Specification(s))=&spec.kind else{panic!()};
- let first=put(&mut c,owner(&ns,pb::EntityKind::Domain,m),"").await.unwrap();let mut e=first.entity.unwrap();let v=claims::declarations_mut(&mut e).unwrap();v.field_selections.push(pb::ClaimFieldSelection{claim_id:v.claims[0].connection_id.clone(),binding:Some(pb::ConnectionRef{owner:Some(reference(&spec)),owner_uid:spec.system.as_ref().unwrap().uid.clone(),id:s.messages[0].schemas[0].connection_id.clone()}),selectors:vec![pb::ClaimFieldSelector{selector:Some(pb::claim_field_selector::Selector::Path(pb::FieldPath{segments:vec!["name".into()]}))}],..Default::default()});
- let stored=put(&mut c,e,&first.etag).await.unwrap();let e=stored.entity.unwrap();let selected=pb::ConnectionRef{owner:Some(reference(&e)),owner_uid:e.system.as_ref().unwrap().uid.clone(),id:claims::declarations(&e).unwrap().field_selections[0].connection_id.clone()};
- let request=||authed(pb::ListSubjectAssignmentsRequest{subject:Some(pb::ResponsibilitySubject{selection:Some(pb::responsibility_subject::Selection::Connection(selected.clone()))}),..Default::default()},ROOT_TOKEN);
- assert_eq!(c.list_subject_assignments(request()).await.unwrap().into_inner().subject_state,pb::ResponsibilityResolutionState::Resolved as i32);
- let schema=c.get_entity(authed(pb::GetEntityRequest{kind:pb::EntityKind::Schema as i32,id:Some(id(&ns,"payload"))},ROOT_TOKEN)).await.unwrap().into_inner();let mut changed=schema.entity.unwrap();if let Some(pb::entity::Kind::Schema(s))=&mut changed.kind{s.fields.clear();}put(&mut c,changed,&schema.etag).await.unwrap();
- assert_eq!(c.list_subject_assignments(request()).await.unwrap().into_inner().subject_state,pb::ResponsibilityResolutionState::Unresolved as i32);
- let mut title=e.clone();if let Some(pb::entity::Kind::Domain(d))=&mut title.kind{d.title="Unrelated title".into();}let title=put(&mut c,title,&stored.etag).await.unwrap();assert_eq!(claims::declarations(title.entity.as_ref().unwrap()),claims::declarations(&e));
+async fn foreign_branch_is_refused_before_claim_target_hydration(){
+ use support::two_tenants::{ACME_TOKEN,authed_branch};
+ let (mut c,_)=fixture().await;let ns=c.register_namespace(authed(pb::RegisterNamespaceRequest{name:"claims-private-test".into(),parent:String::new()},ACME_TOKEN)).await.unwrap().into_inner().namespace.unwrap().id;
+ c.create_branch(authed(pb::CreateBranchRequest{name:"claims-private".into(),..Default::default()},ROOT_TOKEN)).await.unwrap();
+ let error=c.put_entity(authed_branch(pb::PutEntityRequest{entity:Some(owner(&ns,pb::EntityKind::Domain,unavailable_message(&ns))),..Default::default()},ACME_TOKEN,"claims-private")).await.unwrap_err();
+ assert_eq!(error.code(),Code::NotFound);
 }
