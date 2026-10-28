@@ -9,6 +9,11 @@ Executable coverage includes [core values](../../rsworkspace/crates/trogon-atlas
 [Decision backend](../../rsworkspace/crates/trogon-atlas-server/tests/decision_document_backend.rs),
 [Document authorization/lifecycle](../../rsworkspace/crates/trogon-atlas-server/tests/document_catalog_auth_lifecycle_backend.rs)
 and [Term ownership](../../rsworkspace/crates/trogon-atlas-server/tests/term_domain_backend.rs).
+[Storage-fault acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_fault_backend.rs)
+checks that unreadable persisted catalog bytes cause an operational error during
+incoming discovery and that restoring readable bytes recovers the exact declaration
+identity under a new etag. Timeout and authorization-service failures remain
+separate acceptance obligations.
 The [composed fixture](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_composed.rs)
 passes in the parent checkout. Decision transitive safety, exact provenance and
 branch-landing controls also have independent passing runs. These checks prove
