@@ -873,6 +873,30 @@ fn selection_owner(selection: &pb::SourceSelection) -> Result<pb::EntityRef, Sta
         }
     }
 }
+fn native_document_context_only(
+    current: Option<&pb::Entity>,
+    incoming: Option<&pb::Entity>,
+    ownership: &pb::SourceFieldOwnership,
+) -> Result<(), Status> {
+    let has_extensions = |entity: &pb::Entity| {
+        trogon_atlas_core::document_catalog_context::document_has_native_extensions(entity)
+            .unwrap_or(false)
+    };
+    let whole_owner = matches!(
+        ownership.policy,
+        Some(pb::source_field_ownership::Policy::WholeOwner(_))
+    );
+    if (current.is_none() && incoming.is_some_and(has_extensions))
+        || (whole_owner
+            && (current.is_some_and(has_extensions) || incoming.is_some_and(has_extensions)))
+    {
+        return Err(Status::invalid_argument(
+            "document catalog context supports native authoring only",
+        ));
+    }
+    Ok(())
+}
+
 fn native_relationships_only(
     current: Option<&pb::Entity>,
     incoming: Option<&pb::Entity>,
@@ -1077,6 +1101,7 @@ async fn prepare_mapping(
     match checked_selection(service, ctx, selection).await {
         Ok(current) => {
             native_relationships_only(Some(&current.entity), None, policy)?;
+            native_document_context_only(Some(&current.entity), None, policy)?;
             bounded(core::validate_ownership(&current.entity, policy))?;
             let observation = observed(&owner, &current);
             let adoption = value.adoption.as_ref().ok_or_else(|| {
@@ -1894,6 +1919,11 @@ async fn preview_source_run_attempt(
                 Some(incoming),
                 ownership,
             )?;
+            native_document_context_only(
+                current.as_ref().map(|value| &value.entity),
+                Some(incoming),
+                ownership,
+            )?;
             let guard = native_guard(&owner, current.as_ref());
             if !plan.native_guards.contains(&guard) {
                 plan.native_guards.push(guard.clone());
@@ -2157,6 +2187,11 @@ async fn preview_source_run_attempt(
                     .await
                     .map_err(store_err)?;
                 native_relationships_only(
+                    Some(&current.entity),
+                    None,
+                    mapping.ownership.as_ref().ok_or_else(invalid)?,
+                )?;
+                native_document_context_only(
                     Some(&current.entity),
                     None,
                     mapping.ownership.as_ref().ok_or_else(invalid)?,

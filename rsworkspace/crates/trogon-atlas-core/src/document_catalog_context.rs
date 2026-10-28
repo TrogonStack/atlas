@@ -10,6 +10,16 @@ use trogon_atlas_proto::{self as pb, entity, Entity};
 use crate::decision_document::{self, CatalogError};
 
 pub const COLLECTION: &str = "trogonatlas.eventmodel.v1alpha1.DocumentCollectionAnnotation";
+const COLLECTION_SHORT: &str = "DocumentCollectionAnnotation";
+
+#[must_use]
+pub fn is_collection_annotation(type_url: &str) -> bool {
+    type_url.contains(COLLECTION)
+        || type_url
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name == COLLECTION_SHORT)
+}
 pub const MAX_RELATED_CONTENT: usize = 128;
 pub const MAX_RETAINED_BYTES: usize = 262_144;
 
@@ -42,11 +52,16 @@ pub fn validate_retained_media_type(value: &pb::MediaType) -> CatalogResult<()> 
     let Some((ty, sub)) = media.split_once('/') else {
         return Err(CatalogError("invalid retained media type".into()));
     };
+    let restricted_name = |name: &str| {
+        name.bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"!#$&-^_.+".contains(&b))
+    };
     require(
-        !ty.is_empty()
-            && !sub.is_empty()
-            && ty.bytes().all(|b| b.is_ascii_lowercase() || b == b'+')
-            && sub.bytes().all(|b| b.is_ascii_lowercase() || b == b'+' || b == b'.'),
+        restricted_name(ty) && restricted_name(sub),
         "invalid retained media type",
     )
 }
@@ -62,7 +77,7 @@ pub fn validate_logical_filename(value: &pb::LogicalFilename) -> CatalogResult<(
         "logical filename must not contain path separators",
     )?;
     require(
-        !name.bytes().any(|b| b.is_ascii_control()),
+        !name.chars().any(char::is_control),
         "logical filename must not contain control characters",
     )?;
     require(name != "." && name != "..", "logical filename is reserved")
@@ -82,16 +97,22 @@ pub fn validate_purpose(value: pb::DocumentPurpose) -> CatalogResult<()> {
     )
 }
 
-pub fn purpose_matches_role(
-    purpose: pb::DocumentPurpose,
-    role: pb::RelatedContentRole,
-) -> bool {
+pub fn purpose_matches_role(purpose: pb::DocumentPurpose, role: pb::RelatedContentRole) -> bool {
     matches!(
         (purpose, role),
-        (pb::DocumentPurpose::Example, pb::RelatedContentRole::Example)
-            | (pb::DocumentPurpose::Diagram, pb::RelatedContentRole::Diagram)
-            | (pb::DocumentPurpose::Attachment, pb::RelatedContentRole::Attachment)
-            | (pb::DocumentPurpose::Changelog, pb::RelatedContentRole::Changelog)
+        (
+            pb::DocumentPurpose::Example,
+            pb::RelatedContentRole::Example
+        ) | (
+            pb::DocumentPurpose::Diagram,
+            pb::RelatedContentRole::Diagram
+        ) | (
+            pb::DocumentPurpose::Attachment,
+            pb::RelatedContentRole::Attachment
+        ) | (
+            pb::DocumentPurpose::Changelog,
+            pb::RelatedContentRole::Changelog
+        )
     )
 }
 
@@ -149,10 +170,7 @@ pub fn validate_collection_annotation(payload: &[u8]) -> CatalogResult<()> {
 pub fn validate_document_metadata(metadata: &[prost_types::Any]) -> CatalogResult<()> {
     let mut collection = 0usize;
     for any in metadata {
-        if any
-            .type_url
-            .contains("DocumentCollectionAnnotation")
-        {
+        if is_collection_annotation(&any.type_url) {
             collection += 1;
             validate_collection_annotation(&any.value)?;
         }
@@ -170,9 +188,10 @@ pub fn validate_related_content_list(
     )?;
     let mut seen = HashSet::new();
     for item in values {
-        validate_related_role(pb::RelatedContentRole::try_from(item.role).map_err(|_| {
-            CatalogError("unknown related content role".into())
-        })?)?;
+        validate_related_role(
+            pb::RelatedContentRole::try_from(item.role)
+                .map_err(|_| CatalogError("unknown related content role".into()))?,
+        )?;
         let selection = item
             .document
             .as_ref()
@@ -188,7 +207,10 @@ pub fn validate_related_content_list(
             .map_err(|_| CatalogError("unknown related content role".into()))?;
         let mut encoded = (role as i32).to_le_bytes().to_vec();
         encoded.extend(selection.encode_to_vec());
-        require(seen.insert(encoded), "duplicate related content role and target")?;
+        require(
+            seen.insert(encoded),
+            "duplicate related content role and target",
+        )?;
         if item.label.is_some() {
             decision_document::validate_catalog_title(item.label.as_ref())?;
         }
@@ -210,11 +232,13 @@ pub fn validate_document_extensions(document: &pb::Document) -> CatalogResult<()
     validate_related_content_list(&document.related_content, document.id.as_ref())?;
     match &document.body {
         Some(pb::document::Body::RetainedContent(body)) => {
-            require(document.anchors.is_empty(), "binary body cannot declare anchors")?;
+            require(
+                document.anchors.is_empty(),
+                "binary body cannot declare anchors",
+            )?;
             validate_retained_content(body)?;
         }
-        Some(pb::document::Body::Retained(_)) | Some(pb::document::Body::Link(_)) => {}
-        None => {}
+        Some(pb::document::Body::Retained(_) | pb::document::Body::Link(_)) | None => {}
     }
     Ok(())
 }
@@ -223,16 +247,11 @@ pub fn has_native_extensions(document: &pb::Document) -> bool {
     document.purpose.is_some()
         || document.filename.is_some()
         || !document.related_content.is_empty()
-        || matches!(
-            document.body,
-            Some(pb::document::Body::RetainedContent(_))
-        )
-        || document.metadata.iter().any(|any| {
-            any.type_url
-                .rsplit('/')
-                .next()
-                .is_some_and(|name| name == "DocumentCollectionAnnotation")
-        })
+        || matches!(document.body, Some(pb::document::Body::RetainedContent(_)))
+        || document
+            .metadata
+            .iter()
+            .any(|any| is_collection_annotation(&any.type_url))
 }
 
 pub fn document_has_native_extensions(entity: &Entity) -> CatalogResult<bool> {
@@ -255,12 +274,8 @@ pub fn dynamic_has_native_extensions(document: &DynamicMessage) -> CatalogResult
             return Ok(true);
         }
     }
-    if let Some(body) = document.get_field_by_name("body") {
-        if let Some(message) = body.as_message() {
-            if message.descriptor().name() == "RetainedContent" {
-                return Ok(true);
-            }
-        }
+    if document.has_field_by_name("retained_content") {
+        return Ok(true);
     }
     metadata_has_collection(document)
 }
@@ -271,12 +286,7 @@ pub fn metadata_has_collection(owner: &DynamicMessage) -> CatalogResult<bool> {
             for message in values.iter().filter_map(Value::as_message) {
                 let any = prost_types::Any::decode(message.encode_to_vec().as_slice())
                     .map_err(|_| CatalogError("metadata".into()))?;
-                if any
-                    .type_url
-                    .rsplit('/')
-                    .next()
-                    .is_some_and(|name| name == "DocumentCollectionAnnotation")
-                {
+                if is_collection_annotation(&any.type_url) {
                     return Ok(true);
                 }
             }

@@ -744,8 +744,9 @@ impl EventModelServiceImpl {
         };
         let page_size = super::clamp_page_size(req.page_size, 100, 500);
         let mut query = self.catalog_query(branch, vis, true).await?;
+        query.documents.push(selection.clone());
         let scope = query.scope()?;
-        let start = decode_catalog_page_token(&req.page_token, &scope, role_filter)?;
+        let start = decode_catalog_page_token(&req.page_token, &scope, role_filter, &selection)?;
         let state = self.catalog_document_state(&mut query, &selection).await?;
         let mut declarations = Vec::new();
         for row in query.rows.clone() {
@@ -755,7 +756,6 @@ impl EventModelServiceImpl {
                         if supporting.document.as_ref() != Some(&selection) {
                             continue;
                         }
-                        query.budget.output()?;
                         let field = format!("documents[{index}].document");
                         declarations.push((
                             catalog_declaration_sort_key(
@@ -781,7 +781,6 @@ impl EventModelServiceImpl {
                         if navigation.document.as_ref() != Some(&selection) {
                             continue;
                         }
-                        query.budget.output()?;
                         let field = format!("navigation[{index}].document");
                         declarations.push((
                             catalog_declaration_sort_key(
@@ -810,7 +809,6 @@ impl EventModelServiceImpl {
                         if role_filter.is_some_and(|filter| filter != role) {
                             continue;
                         }
-                        query.budget.output()?;
                         let field = format!("related_content[{index}].document");
                         declarations.push((
                             catalog_declaration_sort_key(
@@ -836,15 +834,17 @@ impl EventModelServiceImpl {
         }
         declarations.sort_by(|left, right| left.0.cmp(&right.0));
         let total = declarations.len();
-        let page: Vec<_> = declarations
-            .into_iter()
-            .skip(start)
-            .take(page_size)
-            .map(|(_, declaration)| declaration)
-            .collect();
+        if start > total {
+            return Err(Status::invalid_argument("page token offset out of range"));
+        }
+        let mut page = Vec::new();
+        for (_, declaration) in declarations.into_iter().skip(start).take(page_size) {
+            query.budget.output()?;
+            page.push(declaration);
+        }
         let next = start + page.len();
         let next_page_token = if next < total {
-            encode_catalog_page_token(&scope, role_filter, next)?
+            encode_catalog_page_token(&scope, role_filter, &selection, next)?
         } else {
             String::new()
         };
@@ -885,12 +885,14 @@ fn catalog_declaration_sort_key(
 fn encode_catalog_page_token(
     scope: &pb::CatalogCheckedScope,
     role: Option<pb::RelatedContentRole>,
+    selection: &pb::DocumentSelection,
     index: usize,
 ) -> Result<String, Status> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     let payload = serde_json::json!({
         "revision": scope.revision,
         "role": role.map(|value| value as i32),
+        "selection": URL_SAFE_NO_PAD.encode(selection.encode_to_vec()),
         "index": index,
     });
     Ok(URL_SAFE_NO_PAD.encode(
@@ -903,6 +905,7 @@ fn decode_catalog_page_token(
     token: &str,
     scope: &pb::CatalogCheckedScope,
     role: Option<pb::RelatedContentRole>,
+    selection: &pb::DocumentSelection,
 ) -> Result<usize, Status> {
     if token.is_empty() {
         return Ok(0);
@@ -920,15 +923,29 @@ fn decode_catalog_page_token(
     if revision != scope.revision {
         return Err(Status::invalid_argument("stale page token"));
     }
-    let token_role = payload.get("role").and_then(|value| value.as_i64());
+    let token_role = payload.get("role").and_then(serde_json::Value::as_i64);
     let expected = role.map(|value| i64::from(value as i32));
     if token_role != expected {
         return Err(Status::invalid_argument("page token filter mismatch"));
     }
+    let encoded = payload
+        .get("selection")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| Status::invalid_argument("page token selection mismatch"))?;
+    let decoded = pb::DocumentSelection::decode(
+        URL_SAFE_NO_PAD
+            .decode(encoded)
+            .map_err(|_| Status::invalid_argument("page token selection mismatch"))?
+            .as_slice(),
+    )
+    .map_err(|_| Status::invalid_argument("page token selection mismatch"))?;
+    if decoded.encode_to_vec() != selection.encode_to_vec() {
+        return Err(Status::invalid_argument("page token selection mismatch"));
+    }
     usize::try_from(
         payload
             .get("index")
-            .and_then(|value| value.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .ok_or_else(|| Status::invalid_argument("invalid page token"))?,
     )
     .map_err(|_| Status::invalid_argument("invalid page token"))

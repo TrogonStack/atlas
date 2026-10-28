@@ -2,18 +2,18 @@
 
 use prost::Message;
 use trogon_atlas_core::{
-    decision_document::{self, validate_values},
+    decision_document::validate_values,
     document_catalog_context::{
-        self, bytes_content_digest, validate_logical_filename, validate_purpose,
-        validate_retained_content, validate_retained_media_type, COLLECTION,
+        self, bytes_content_digest, validate_logical_filename, validate_retained_content,
+        validate_retained_media_type, COLLECTION,
     },
     source_integration::{self, SourceError},
 };
 use trogon_atlas_proto::{
     self as pb, entity, source_field_ownership::Policy, Document, DocumentCollectionAnnotation,
     DocumentPurpose, Entity, EntityKind, LogicalFilename, MediaType, RelatedContent,
-    RelatedContentRole, RetainedContent, SourceFieldOwnership, SourceOwnedField,
-    SourceOwnedFields, SourceWholeOwnerOwnership,
+    RelatedContentRole, RetainedContent, SourceFieldOwnership, SourceOwnedField, SourceOwnedFields,
+    SourceWholeOwnerOwnership,
 };
 
 fn id(slug: &str) -> pb::Id {
@@ -86,8 +86,23 @@ fn retained_media_type_rejects_parameters_and_mixed_case() {
 }
 
 #[test]
+fn retained_media_types_accept_registered_names_with_digits_and_hyphens() {
+    for value in [
+        "application/vnd.acme-v2+json",
+        "video/mp4",
+        "multipart/form-data",
+        "image/x-icon",
+    ] {
+        validate_retained_media_type(&MediaType {
+            value: value.into(),
+        })
+        .unwrap();
+    }
+}
+
+#[test]
 fn logical_filename_rejects_path_like_names() {
-    for value in ["../x", "a/b", "a\\b", ".", "..", ""] {
+    for value in ["../x", "a/b", "a\\b", ".", "..", "", "bad\u{0085}.txt"] {
         assert!(validate_logical_filename(&LogicalFilename {
             value: value.into(),
         })
@@ -106,7 +121,9 @@ fn purpose_absent_differs_from_explicit_general_in_manifest() {
             value: "text/markdown".into(),
         }),
         content: "# Title\n".into(),
-        digest: Some(trogon_atlas_core::specification::content_digest("# Title\n")),
+        digest: Some(trogon_atlas_core::specification::content_digest(
+            "# Title\n",
+        )),
     }));
     let mut general = absent.clone();
     if let Some(entity::Kind::Document(doc)) = &mut general.kind {
@@ -134,12 +151,8 @@ fn binary_body_rejects_anchors_and_empty_or_oversized_bytes() {
             body.digest = Some(bytes_content_digest(&body.content));
         }
         doc.anchors.push(pb::DocumentAnchor {
-            fragment: Some(pb::AnchorFragment {
-                value: "x".into(),
-            }),
-            label: Some(pb::CatalogTitle {
-                value: "X".into(),
-            }),
+            fragment: Some(pb::AnchorFragment { value: "x".into() }),
+            label: Some(pb::CatalogTitle { value: "X".into() }),
             ..Default::default()
         });
     }
@@ -154,7 +167,9 @@ fn related_content_enforces_role_identity_and_self_rejection() {
             value: "text/markdown".into(),
         }),
         content: "# Parent\n".into(),
-        digest: Some(trogon_atlas_core::specification::content_digest("# Parent\n")),
+        digest: Some(trogon_atlas_core::specification::content_digest(
+            "# Parent\n",
+        )),
     }));
     if let Some(entity::Kind::Document(doc)) = &mut entity.kind {
         doc.related_content = vec![RelatedContent {
@@ -178,13 +193,33 @@ fn related_content_enforces_role_identity_and_self_rejection() {
         doc.related_content.pop();
         doc.related_content[0].document = Some(pb::DocumentSelection {
             selection: Some(pb::document_selection::Selection::Document(
-                pb::DocumentRef {
-                    id: doc.id.clone(),
-                },
+                pb::DocumentRef { id: doc.id.clone() },
             )),
         });
     }
     assert!(validate_values(&entity).is_err());
+}
+
+#[test]
+fn collection_annotation_detects_full_type_url_and_short_suffix() {
+    let mut entity = text_document(pb::document::Body::Link(pb::ExternalDocumentLink {
+        value: "https://example.com/doc".into(),
+    }));
+    let annotation = DocumentCollectionAnnotation {
+        category: Some(pb::CatalogTitle {
+            value: "Guides".into(),
+        }),
+        ..Default::default()
+    };
+    if let Some(entity::Kind::Document(doc)) = &mut entity.kind {
+        doc.metadata = vec![prost_types::Any {
+            type_url:
+                "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DocumentCollectionAnnotation"
+                    .into(),
+            value: annotation.encode_to_vec(),
+        }];
+    }
+    assert!(document_catalog_context::document_has_native_extensions(&entity).unwrap());
 }
 
 #[test]
@@ -220,7 +255,9 @@ fn source_ownership_rejects_native_document_extensions() {
             value: "text/markdown".into(),
         }),
         content: "# Native\n".into(),
-        digest: Some(trogon_atlas_core::specification::content_digest("# Native\n")),
+        digest: Some(trogon_atlas_core::specification::content_digest(
+            "# Native\n",
+        )),
     }));
     if let Some(entity::Kind::Document(doc)) = &mut entity.kind {
         doc.purpose = Some(DocumentPurpose::Diagram as i32);
@@ -238,17 +275,72 @@ fn source_ownership_rejects_native_document_extensions() {
             fields: vec![SourceOwnedField::Title as i32],
         })),
     };
-    assert_eq!(
-        source_integration::validate_ownership(&entity, &title),
-        Err(SourceError::UnsupportedUnit)
-    );
-    let mut plain = text_document(pb::document::Body::Retained(pb::RetainedDocumentText {
+    assert!(source_integration::validate_ownership(&entity, &title).is_ok());
+    let mut incoming = entity.clone();
+    if let Some(entity::Kind::Document(doc)) = &mut incoming.kind {
+        doc.title = Some(pb::CatalogTitle {
+            value: "Source title".into(),
+        });
+        doc.purpose = Some(DocumentPurpose::Attachment as i32);
+    }
+    let mut expected = entity.clone();
+    if let Some(entity::Kind::Document(doc)) = &mut expected.kind {
+        doc.title = Some(pb::CatalogTitle {
+            value: "Source title".into(),
+        });
+    }
+    let mut budget =
+        source_integration::RunBudget::new(source_integration::profile_budgets()).unwrap();
+    let merged =
+        source_integration::plan_merge(&entity, &entity, &incoming, &entity, &title, &mut budget)
+            .unwrap();
+    assert_eq!(merged.proposed, expected);
+    let plain = text_document(pb::document::Body::Retained(pb::RetainedDocumentText {
         media_type: Some(MediaType {
             value: "text/markdown".into(),
         }),
         content: "# Native\n".into(),
-        digest: Some(trogon_atlas_core::specification::content_digest("# Native\n")),
+        digest: Some(trogon_atlas_core::specification::content_digest(
+            "# Native\n",
+        )),
     }));
     validate_values(&plain).unwrap();
     assert!(source_integration::validate_ownership(&plain, &title).is_ok());
+}
+
+#[test]
+fn source_whole_owner_rejects_binary_only_and_collection_only_extensions() {
+    let whole = SourceFieldOwnership {
+        policy: Some(Policy::WholeOwner(SourceWholeOwnerOwnership {})),
+    };
+    let binary = text_document(pb::document::Body::RetainedContent(RetainedContent {
+        content: vec![0xff],
+        media_type: Some(MediaType {
+            value: "application/json".into(),
+        }),
+        digest: Some(bytes_content_digest(&[0xff])),
+    }));
+    let mut collection = text_document(pb::document::Body::Link(pb::ExternalDocumentLink {
+        value: "https://example.com/doc".into(),
+    }));
+    if let Some(entity::Kind::Document(doc)) = &mut collection.kind {
+        doc.metadata.push(prost_types::Any {
+            type_url: format!("type.googleapis.com/{COLLECTION}"),
+            value: DocumentCollectionAnnotation {
+                category: Some(pb::CatalogTitle {
+                    value: "Guides".into(),
+                }),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        });
+    }
+    for entity in [collection, binary] {
+        validate_values(&entity).unwrap();
+        assert!(document_catalog_context::document_has_native_extensions(&entity).unwrap());
+        assert_eq!(
+            source_integration::validate_ownership(&entity, &whole),
+            Err(SourceError::UnsupportedUnit)
+        );
+    }
 }

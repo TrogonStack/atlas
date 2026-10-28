@@ -149,6 +149,19 @@ describe('native catalog inspector', () => {
     expect(api.getDocumentDetail).not.toHaveBeenCalled();
     expect(api.listSubjectDocuments).not.toHaveBeenCalled();
   });
+  it('keeps retained binary and textual media inert without activating markup', async () => {
+    const note = entity();
+    delete note.raw.retained;
+    note.raw.retainedContent = {
+      mediaType: { value: 'text/html' },
+      content: '<svg onload="alert(1)"></svg>',
+      digest: { sha256: 'b'.repeat(64) },
+    };
+    const { container } = render(<DecisionDocumentInspector entity={note} />);
+    await waitFor(() => expect(api.getDocumentDetail).toHaveBeenCalled());
+    expect(container.querySelector('svg,script,iframe')).toBeNull();
+    expect([...container.querySelectorAll('pre')].some((node) => node.textContent?.includes('<svg'))).toBe(true);
+  });
   it('reports errors explicitly and keeps link-only content inert', async () => {
     vi.mocked(api.getDocumentDetail).mockRejectedValue(new Error('Not found'));
     const note = entity();
