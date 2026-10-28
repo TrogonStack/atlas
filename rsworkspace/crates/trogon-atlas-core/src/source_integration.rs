@@ -76,25 +76,37 @@ fn unit_fields(
     {
         return Err(SourceError::UnsupportedUnit);
     }
-    if matches!(
-        descriptor.full_name(),
-        "trogonatlas.eventmodel.v1alpha1.Component"
-            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-    ) {
-        if unit == OwnershipUnit::Field(SourceOwnedField::Relationships) {
+    let (native_units, native_collections): (&[SourceOwnedField], &[&str]) =
+        match descriptor.full_name() {
+            "trogonatlas.eventmodel.v1alpha1.Component"
+            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem" => (
+                &[SourceOwnedField::Relationships],
+                &["relationships", "communications"],
+            ),
+            "trogonatlas.eventmodel.v1alpha1.SystemGroup" => (
+                &[SourceOwnedField::Members, SourceOwnedField::Relationships],
+                &["members", "relationships", "actors"],
+            ),
+            "trogonatlas.eventmodel.v1alpha1.Domain" => {
+                (&[SourceOwnedField::Members], &["members"])
+            }
+            _ => (&[], &[]),
+        };
+    if let OwnershipUnit::Field(field) = unit {
+        if native_units.contains(&field) {
             return Err(SourceError::UnsupportedUnit);
         }
-        if unit == OwnershipUnit::WholeOwner
-            && ["relationships", "communications"].iter().any(|name| {
-                value
-                    .get_field_by_name(name)
-                    .as_deref()
-                    .and_then(Value::as_list)
-                    .is_some_and(|values| !values.is_empty())
-            })
-        {
-            return Err(SourceError::UnsupportedUnit);
-        }
+    }
+    if unit == OwnershipUnit::WholeOwner
+        && native_collections.iter().any(|name| {
+            value
+                .get_field_by_name(name)
+                .as_deref()
+                .and_then(Value::as_list)
+                .is_some_and(|values| !values.is_empty())
+        })
+    {
+        return Err(SourceError::UnsupportedUnit);
     }
     match unit {
         OwnershipUnit::WholeOwner => Ok(descriptor.fields().filter(|f| f.name() != "id").collect()),
@@ -169,7 +181,9 @@ pub fn validate_selection_ownership(
             matches!(
                 trogon_atlas_proto::EntityKind::try_from(owner.kind),
                 Ok(trogon_atlas_proto::EntityKind::Component
-                    | trogon_atlas_proto::EntityKind::ExternalSystem)
+                    | trogon_atlas_proto::EntityKind::ExternalSystem
+                    | trogon_atlas_proto::EntityKind::SystemGroup
+                    | trogon_atlas_proto::EntityKind::Domain)
             )
         }) {
             return Err(SourceError::UnsupportedUnit);

@@ -306,12 +306,14 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
             );
         for name in names {
             let enum_name = format!("SOURCE_OWNED_FIELD_{}", name.to_ascii_uppercase());
-            if name == "communications"
+            if (name == "communications"
                 && matches!(
                     owner.full_name(),
                     "trogonatlas.eventmodel.v1alpha1.Component"
                         | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-                )
+                ))
+                || (matches!(name.as_str(), "scope" | "actors")
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.SystemGroup")
             {
                 assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
                 continue;
@@ -324,12 +326,19 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
             use prost::Message;
             let entity = Entity::decode(dynamic.encode_to_vec().as_slice()).expect("entity");
             let result = validate_ownership(&entity, &ownership(&[field]));
-            if name == "relationships"
+            if (name == "relationships"
                 && matches!(
                     owner.full_name(),
                     "trogonatlas.eventmodel.v1alpha1.Component"
                         | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-                )
+                        | "trogonatlas.eventmodel.v1alpha1.SystemGroup"
+                ))
+                || (name == "members"
+                    && matches!(
+                        owner.full_name(),
+                        "trogonatlas.eventmodel.v1alpha1.SystemGroup"
+                            | "trogonatlas.eventmodel.v1alpha1.Domain"
+                    ))
             {
                 assert_eq!(result, Err(SourceError::UnsupportedUnit));
             } else {

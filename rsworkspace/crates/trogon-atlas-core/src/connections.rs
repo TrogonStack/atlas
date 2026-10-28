@@ -302,7 +302,10 @@ fn visit(
                     .as_ref()
                     .and_then(crate::architectural_relationships::endpoint_ref)
             } else {
-                None
+                crate::system_group::occurrence_target(
+                    descriptor.full_name(),
+                    &message.encode_to_vec(),
+                )
             },
             signature,
         };
