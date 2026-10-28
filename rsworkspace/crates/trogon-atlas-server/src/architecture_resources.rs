@@ -124,6 +124,7 @@ pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
         entity.kind,
         Some(
             pb::entity::Kind::Component(_)
+                | pb::entity::Kind::Domain(_)
                 | pb::entity::Kind::ExternalSystem(_)
                 | pb::entity::Kind::Channel(_)
                 | pb::entity::Kind::DataStore(_)

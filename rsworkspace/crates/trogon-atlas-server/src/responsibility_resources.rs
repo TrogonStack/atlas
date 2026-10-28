@@ -5,8 +5,12 @@ use crate::validation::architecture_resources::ArchitectureContext;
 pub(crate) const MAX_RESPONSIBILITY_OCCURRENCES: usize = 10_000;
 
 pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
+    let claims = trogon_atlas_core::message_claims::declarations(entity).map_or(0, |v| {
+        v.claims.len() + v.routes.len() + v.triggers.len() + v.field_selections.len()
+    });
     assignments(entity)
         .len()
+        .saturating_add(claims)
         .saturating_add(match &entity.kind {
             Some(pb::entity::Kind::Team(value)) => value.members.len(),
             Some(pb::entity::Kind::Component(value)) => value

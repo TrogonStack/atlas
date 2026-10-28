@@ -117,6 +117,7 @@ fn responsibility_occurrence_count(all: &[StoredEntity]) -> usize {
                 entity.kind,
                 Some(
                     pb::entity::Kind::Component(_)
+                        | pb::entity::Kind::Domain(_)
                         | pb::entity::Kind::ExternalSystem(_)
                         | pb::entity::Kind::Team(_)
                         | pb::entity::Kind::Person(_)
@@ -985,6 +986,11 @@ fn catalog_provenance(
         reference.connection_id = trogon_atlas_core::communication_intent::declarations(entity)
             .get(index)
             .and_then(|declaration| declaration.connection_id.clone());
+    }
+    if let Ok(Some(occurrence)) =
+        trogon_atlas_core::message_claims::reference_occurrence(entity, field)
+    {
+        reference.connection_id = occurrence.id.map(Into::into);
     }
     (
         reference.catalog_subject,

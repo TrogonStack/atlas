@@ -71,7 +71,8 @@ impl CatalogBudget {
             crate::conv::entity_kind(entity)?,
             crate::conv::entity_id(entity)?,
         );
-        if crate::validation::architecture_resources::is_resource(entity)
+        if (crate::validation::architecture_resources::is_resource(entity)
+            || matches!(entity.kind, Some(pb::entity::Kind::Schema(_))))
             && self.rows.insert(key.clone())
             && self.rows.len() > 5_000
         {
@@ -114,7 +115,11 @@ impl CatalogBudget {
         let count = match kind {
             1 if matches!(
                 owner.kind,
-                Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+                Some(
+                    pb::entity::Kind::Component(_)
+                        | pb::entity::Kind::ExternalSystem(_)
+                        | pb::entity::Kind::Domain(_)
+                )
             ) =>
             {
                 0

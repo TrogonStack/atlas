@@ -29,11 +29,66 @@ fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::Out
     trogon_atlas_core::refs::outbound_refs(entity)
         .into_iter()
         .filter(|reference| {
-            !architectural
-                || reference.from_field.starts_with("relationships[")
-                || reference.from_field.starts_with("communications[")
+            !reference.from_field.starts_with("message_claims.")
+                && (!architectural
+                    || reference.from_field.starts_with("relationships[")
+                    || reference.from_field.starts_with("communications["))
         })
         .collect()
+}
+
+fn claim_access_error(status: Status) -> Status {
+    if matches!(status.code(), Code::PermissionDenied | Code::NotFound) {
+        crate::message_claims_resources::unavailable()
+    } else {
+        status
+    }
+}
+fn charge_claim_selections(
+    owner: &pb::Entity,
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+    budget: &mut crate::decision_document_resources::CatalogBudget,
+) -> Result<(), Status> {
+    let Some(v) = trogon_atlas_core::message_claims::declarations(owner) else {
+        return Ok(());
+    };
+    for m in v
+        .claims
+        .iter()
+        .filter_map(|v| v.message.as_ref())
+        .chain(v.triggers.iter().filter_map(|v| v.message.as_ref()))
+    {
+        if let Some(spec) = m
+            .specification
+            .as_ref()
+            .and_then(|s| s.id.as_ref())
+            .and_then(|id| world.get(&pb::EntityKey::new(pb::EntityKind::Specification, id)))
+        {
+            budget.selection(
+                &pb::CatalogSubject {
+                    selection: Some(pb::catalog_subject::Selection::Member(m.clone())),
+                },
+                &spec.entity,
+            )?;
+        }
+    }
+    for s in &v.field_selections {
+        if let Some(b) = &s.binding {
+            if let Some(spec) =
+                b.owner.as_ref().and_then(|o| o.id.as_ref()).and_then(|id| {
+                    world.get(&pb::EntityKey::new(pb::EntityKind::Specification, id))
+                })
+            {
+                budget.selection(
+                    &pb::CatalogSubject {
+                        selection: Some(pb::catalog_subject::Selection::Connection(b.clone())),
+                    },
+                    &spec.entity,
+                )?;
+            }
+        }
+    }
+    Ok(())
 }
 
 fn is_catalog(entity: &pb::Entity) -> bool {
@@ -107,6 +162,7 @@ impl EventModelServiceImpl {
                     && matches!(
                         meta.kind,
                         pb::EntityKind::Component
+                            | pb::EntityKind::Domain
                             | pb::EntityKind::ExternalSystem
                             | pb::EntityKind::Channel
                             | pb::EntityKind::DataStore
@@ -209,6 +265,61 @@ impl EventModelServiceImpl {
             &mut catalog_budget,
         )
         .await?;
+        let mut claim_prepared = HashMap::new();
+        for resource in &resources {
+            if trogon_atlas_core::message_claims::declarations(resource).is_none() {
+                continue;
+            }
+            let kind = entity_kind(resource)?;
+            let id = entity_id(resource)?;
+            let previous = match self.store.get(kind, id, branch).await {
+                Ok(row) => Some(row.entity),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let prepared =
+                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
+            catalog_budget.owner(&prepared)?;
+            let changed = crate::message_claims_resources::changed(previous.as_ref(), &prepared);
+            let targets = trogon_atlas_core::outbound_refs(&changed)
+                .into_iter()
+                .filter(|r| r.from_field.starts_with("message_claims."))
+                .filter_map(|r| Some((r.to_kind?, r.to_id)))
+                .collect();
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            let targets = crate::message_claims_resources::native_targets(
+                &changed,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+            charge_claim_selections(&changed, &world, &mut catalog_budget)?;
+            crate::message_claims_resources::validate(
+                &changed,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            claim_prepared.insert(pb::EntityKey::new(kind, id), prepared);
+        }
         let context: Vec<_> = world.into_values().collect();
         let event_products: Vec<_> = resources
             .iter()
@@ -240,13 +351,17 @@ impl EventModelServiceImpl {
         for resource in resources {
             let kind = entity_kind(resource)?;
             let id = entity_id(resource)?;
-            let previous = match self.store.get(kind, id, branch).await {
-                Ok(stored) => Some(stored.entity),
-                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
-                Err(error) => return Err(store_err(error)),
-            };
             let prepared =
-                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
+                if let Some(prepared) = claim_prepared.remove(&pb::EntityKey::new(kind, id)) {
+                    prepared
+                } else {
+                    let previous = match self.store.get(kind, id, branch).await {
+                        Ok(stored) => Some(stored.entity),
+                        Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                        Err(error) => return Err(store_err(error)),
+                    };
+                    prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
+                };
             super::validate_entity_content(&prepared)?;
             let issues = validation::architecture_resources::validate(&prepared, &context);
             if !issues.is_empty() {
@@ -293,6 +408,7 @@ impl EventModelServiceImpl {
                     entity.kind,
                     Some(
                         pb::entity::Kind::Component(_)
+                            | pb::entity::Kind::Domain(_)
                             | pb::entity::Kind::ExternalSystem(_)
                             | pb::entity::Kind::Channel(_)
                             | pb::entity::Kind::DataStore(_)
@@ -561,6 +677,11 @@ impl EventModelServiceImpl {
             if !loaded.insert(key.clone()) {
                 continue;
             }
+            if loaded.len() > 5_000 {
+                return Err(Status::resource_exhausted(
+                    "architecture row budget exceeded",
+                ));
+            }
             let stored = match self.store.get(kind, &id, branch).await {
                 Ok(stored) => Some(stored),
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
@@ -819,6 +940,7 @@ impl EventModelServiceImpl {
             entity.kind,
             Some(
                 pb::entity::Kind::Component(_)
+                    | pb::entity::Kind::Domain(_)
                     | pb::entity::Kind::ExternalSystem(_)
                     | pb::entity::Kind::Channel(_)
                     | pb::entity::Kind::DataStore(_)
