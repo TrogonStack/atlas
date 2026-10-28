@@ -5291,8 +5291,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
         if let Some(exp) = if_match {
             if _stored.etag != exp {
-                tracing::debug!(expected = %exp, found = %_stored.etag, "etag mismatch on delete_entity");
-                let status = Status::aborted("etag mismatch");
+                let status = crate::conv::stale_precondition(exp, _stored.etag.clone());
                 if let Some(key) = &claim_key {
                     operation_receipts::settle_for_status(&*self.store, key, &status).await;
                 }

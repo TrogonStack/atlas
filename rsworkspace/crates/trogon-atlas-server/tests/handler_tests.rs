@@ -5,9 +5,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 use tonic::Request;
+use tonic_types::StatusExt;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
+use trogon_atlas_server::{
+    conv::reason, metrics::ServerMetrics, service::EventModelServiceImpl,
+};
 use trogon_atlas_store::{
     store::{
         BranchInfo, ChangeRecord, ChangeStreamStats, ListFilter, MutationOp, MutationOutcome,
@@ -1515,16 +1518,18 @@ async fn delete_by_query_successful_delete_removes_from_store() {
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_entity_etag_mismatch_aborts() {
     let svc = svc().await;
-    svc.put_entity(Request::new(pb::PutEntityRequest {
-        operation_id: String::new(),
-        entity: Some(make_event("orders", "placed", 1)),
-        create_only: true,
-        if_match: String::new(),
-        validate_only: false,
-        force: false,
-    }))
-    .await
-    .unwrap();
+    let put = svc
+        .put_entity(Request::new(pb::PutEntityRequest {
+            operation_id: String::new(),
+            entity: Some(make_event("orders", "placed", 1)),
+            create_only: true,
+            if_match: String::new(),
+            validate_only: false,
+            force: false,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
 
     let err = svc
         .delete_entity(Request::new(pb::DeleteEntityRequest {
@@ -1537,6 +1542,18 @@ async fn delete_entity_etag_mismatch_aborts() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::Aborted);
+    let info = err
+        .get_details_error_info()
+        .expect("delete etag mismatch must carry ErrorInfo");
+    assert_eq!(info.reason, reason::STALE_PRECONDITION);
+    assert_eq!(
+        info.metadata.get("expected_etag").map(String::as_str),
+        Some("wrong-etag")
+    );
+    assert_eq!(
+        info.metadata.get("actual_etag").map(String::as_str),
+        Some(put.etag.as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
