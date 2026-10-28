@@ -372,6 +372,13 @@ impl Failure {
     ) -> Option<Self> {
         let (category, code, next_action): (FailureCategory, &'static str, Option<NextAction>) =
             match reason {
+                // A conditional write whose target is gone carries expected_etag
+                // (and empty actual_etag). That is a stale plan, not a generic miss.
+                "NOT_FOUND" if metadata.contains_key("expected_etag") => (
+                    FailureCategory::StaleState,
+                    "NOT_FOUND",
+                    Some(NextAction::Replan),
+                ),
                 "NOT_FOUND" => (FailureCategory::NotFound, "NOT_FOUND", None),
                 "ALREADY_EXISTS" => (FailureCategory::Precondition, "ALREADY_EXISTS", None),
                 "STALE_PRECONDITION" => (FailureCategory::StaleState, "STALE_PRECONDITION", None),
@@ -763,7 +770,9 @@ mod tests {
         );
         let status = Status::with_error_details(Code::NotFound, "entity not found", details);
         let failure = Failure::from_status(&status);
-        assert_eq!(failure.category, FailureCategory::NotFound);
+        assert_eq!(failure.category, FailureCategory::StaleState);
+        assert_eq!(failure.next_action, NextAction::Replan);
+        assert_eq!(failure.code.unwrap().as_str(), "NOT_FOUND");
         assert_eq!(failure.details.0["expected_etag"], json!("3"));
         assert_eq!(failure.details.0["actual_etag"], Value::Null);
     }

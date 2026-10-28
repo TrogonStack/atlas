@@ -5086,6 +5086,23 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     {
                         crate::conv::not_found_for_if_match(req.if_match.clone())
                     }
+                    trogon_atlas_store::error::StoreError::EtagMismatch { expected, found }
+                        if !create_only && !req.if_match.is_empty() =>
+                    {
+                        // Match dry-run: always name the live revision. An empty
+                        // `found` from the store (for example a non-numeric
+                        // if_match) must not be reported as "absent" when the
+                        // entity is still there.
+                        let actual = if found.is_empty() {
+                            match self.store.get(kind, &id, branch.as_deref()).await {
+                                Ok(current) => current.etag,
+                                Err(_) => String::new(),
+                            }
+                        } else {
+                            found.clone()
+                        };
+                        crate::conv::stale_precondition(expected.clone(), actual)
+                    }
                     _ => store_err(e),
                 };
                 if let Some(key) = &claim_key {

@@ -2986,12 +2986,18 @@ impl Store for NatsStore {
                 return Ok(wrote.written);
             }
             let key = entity_key(kind, &id);
-            let expected: u64 = expected_etag
-                .parse()
-                .map_err(|_| StoreError::EtagMismatch {
-                    expected: expected_etag.into(),
-                    found: String::new(),
-                })?;
+            // A non-numeric `if_match` can never match a baseline revision.
+            // Report the live etag (empty when absent) so callers do not treat
+            // a present entity as gone.
+            let expected: u64 = match expected_etag.parse() {
+                Ok(revision) => revision,
+                Err(_) => {
+                    return Err(StoreError::EtagMismatch {
+                        expected: expected_etag.into(),
+                        found: live_found_etag(&self.kv, &key).await,
+                    });
+                }
+            };
             // Capture the revision we saw at decode time for no-op detection and
             // system stamping. CAS failures re-read via `live_found_etag` so
             // `EtagMismatch.found` is not this stale pre-CAS value.

@@ -387,6 +387,30 @@ async fn single_put_dry_run_refuses_a_stale_if_match_like_apply() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn single_put_dry_run_and_apply_agree_on_malformed_if_match_actual_etag() {
+    let mut c = client().await;
+    let ns = "stale-put-malformed";
+    let actual = put_etag(&mut c, event(ns, "e", "Base")).await;
+
+    for validate_only in [true, false] {
+        expect_put_status(
+            &mut c,
+            tonic::Request::new(put_with_validate_only(
+                event(ns, "e", "Mine"),
+                false,
+                "not-a-revision",
+                validate_only,
+            )),
+            Code::Aborted,
+            reason::STALE_PRECONDITION,
+            "not-a-revision",
+            &actual,
+        )
+        .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn single_put_dry_run_refuses_create_only_against_an_existing_entity() {
     let mut c = client().await;
     let ns = "stale-put-create";
