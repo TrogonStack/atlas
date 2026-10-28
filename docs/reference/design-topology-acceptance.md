@@ -47,7 +47,7 @@ rendering and request shape only. The
 | Branch keep-ours and take-theirs restoration renews only the restored step and its transitions | `keep_ours_restoration_renews_only_the_restored_step_and_transitions`, `take_theirs_restoration_renews_only_the_restored_step_and_transitions` |
 | Prepared owner accepts exactly 1 MiB and rejects one byte more without changing the stored owner | `prepared_owner_accepts_exactly_one_mebibyte_and_rejects_one_byte_more` |
 | Emitted incoming-subflow records stop at the output ceiling | `incoming_subflow_output_stops_at_the_emitted_record_ceiling` |
-| Writers from before DesignGraph are refused in both directions | `server_from_before_design_graph_is_refused_for_every_intent`, `writer_from_before_design_graph_is_refused_by_a_current_server` |
+| Writers from before DesignGraph are refused in both directions | `server_from_before_design_graph_is_refused_for_every_intent`, `writer_from_before_design_graph_falls_below_the_advertised_client_floor` |
 
 ## Source field disposition
 

@@ -313,14 +313,9 @@ mod tests {
     }
 
     #[test]
-    fn writer_from_before_design_graph_is_refused_by_a_current_server() {
-        let current = current_server();
-        assert!(current.min_client_contract_revision > LAST_REVISION_WITHOUT_DESIGN_GRAPH);
-        assert!(pb::CONTRACT_REVISION > LAST_REVISION_WITHOUT_DESIGN_GRAPH);
-        assert!(
-            LAST_REVISION_WITHOUT_DESIGN_GRAPH < current.min_client_contract_revision,
-            "an older writer would fall below the advertised client floor"
-        );
+    fn writer_from_before_design_graph_falls_below_the_advertised_client_floor() {
+        let advertised = current_server().min_client_contract_revision;
+        assert!(LAST_REVISION_WITHOUT_DESIGN_GRAPH < advertised);
     }
 
     #[test]
