@@ -88,3 +88,92 @@ fn flat_claim_lists_preserve_exact_selectors_and_optional_delivery() {
         assert!(jsonschema::validator_for(&schema).unwrap().is_valid(&input));
     }
 }
+
+fn reference() -> serde_json::Value {
+    json!({"specification":"messages@1","ownerUid":"spec-uid","kind":"CONTRACT_MEMBER_KIND_MESSAGE","memberId":{"value":"message-id"}})
+}
+fn claim_manifest(kind: &str, claims: serde_json::Value) -> String {
+    json!({"apiVersion":manifest::API_VERSION,"kind":kind,"metadata":{"namespace":"claims","name":"owner"},"spec":{"title":"Owner","messageClaims":claims}}).to_string()
+}
+fn selection(binding: serde_json::Value, selectors: serde_json::Value) -> serde_json::Value {
+    json!({"claims":[{"connectionId":{"value":"claim-a"},"direction":"COMMUNICATION_DIRECTION_SEND","message":reference()}],
+        "fieldSelections":[{"connectionId":{"value":"selection-a"},"claimId":{"value":"claim-a"},"binding":binding,"selectors":selectors}]})
+}
+fn exact_binding() -> serde_json::Value {
+    json!({"owner":{"kind":"ENTITY_KIND_SPECIFICATION","id":"messages@1"},"ownerUid":"spec-uid","id":{"value":"binding-a"}})
+}
+
+#[test]
+fn malformed_claim_manifests_are_rejected_without_guessing_targets_or_alternatives() {
+    let cases: Vec<(&str, serde_json::Value)> = vec![
+        (
+            "both selector alternatives",
+            selection(
+                exact_binding(),
+                json!([{"path":{"segments":["a"]},"opaque":{"syntax":"json-pointer","value":"/a"}}]),
+            ),
+        ),
+        (
+            "selector with no alternative",
+            selection(exact_binding(), json!([{}])),
+        ),
+        (
+            "unknown selector alternative",
+            selection(exact_binding(), json!([{"regex":{"value":"a.*"}}])),
+        ),
+        (
+            "bare string path alternative",
+            selection(exact_binding(), json!([{"path":"a.b"}])),
+        ),
+        (
+            "bare string binding without kind or incarnation",
+            selection(json!("messages@1"), json!([])),
+        ),
+        (
+            "binding owner without an exact kind",
+            selection(
+                json!({"owner":"messages@1","ownerUid":"spec-uid","id":{"value":"binding-a"}}),
+                json!([]),
+            ),
+        ),
+        (
+            "bare string message selector",
+            json!({"claims":[{"direction":"COMMUNICATION_DIRECTION_SEND","message":"messages@1"}]}),
+        ),
+        (
+            "abbreviated direction",
+            json!({"claims":[{"direction":"SEND","message":reference()}]}),
+        ),
+        (
+            "numeric delivery mode",
+            json!({"claims":[{"connectionId":{"value":"claim-a"},"direction":"COMMUNICATION_DIRECTION_SEND","message":reference()}],
+                "routes":[{"claimId":{"value":"claim-a"},"channel":"channel@1","deliveryMode":"PUSH"}]}),
+        ),
+        (
+            "route parameter value that is not text",
+            json!({"claims":[{"connectionId":{"value":"claim-a"},"direction":"COMMUNICATION_DIRECTION_SEND","message":reference()}],
+                "routes":[{"claimId":{"value":"claim-a"},"channel":"channel@1","parameterValues":{"tenant":1}}]}),
+        ),
+        (
+            "unknown claim field",
+            json!({"claims":[{"direction":"COMMUNICATION_DIRECTION_SEND","message":reference(),"peer":"provider@1"}]}),
+        ),
+        (
+            "unknown container list",
+            json!({"claims":[],"links":[]}),
+        ),
+        (
+            "trigger with a bare string message",
+            json!({"triggers":[{"claimId":{"value":"claim-a"},"message":"messages@1","condition":{"value":"c"}}]}),
+        ),
+    ];
+    let mut accepted = Vec::new();
+    for kind in ["Component", "ExternalSystem", "Domain"] {
+        for (name, claims) in &cases {
+            if manifest::parse_str(&claim_manifest(kind, claims.clone()), "claims.yaml").is_ok() {
+                accepted.push(format!("{kind}: {name}"));
+            }
+        }
+    }
+    assert!(accepted.is_empty(), "accepted malformed manifests: {accepted:#?}");
+}
