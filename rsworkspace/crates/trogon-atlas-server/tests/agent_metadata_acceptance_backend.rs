@@ -155,7 +155,7 @@ fn agent(model: pb::AgentModel, tools: Vec<pb::AgentTool>) -> prost_types::Any {
     )
 }
 
-fn lifecycle(value: pb::LifecycleAnnotation) -> prost_types::Any {
+fn lifecycle(value: &pb::LifecycleAnnotation) -> prost_types::Any {
     any(LIFECYCLE, value.encode_to_vec())
 }
 
@@ -348,7 +348,7 @@ fn full_owner(ns: &str, slug: &str) -> pb::Entity {
         slug,
         vec![
             agent(provider_only(), vec![tool("lookup")]),
-            lifecycle(pb::LifecycleAnnotation {
+            lifecycle(&pb::LifecycleAnnotation {
                 status: "draft".into(),
                 draft: Some(pb::DraftNotice {
                     title: None,
@@ -365,6 +365,106 @@ fn full_owner(ns: &str, slug: &str) -> pb::Entity {
             }]),
         ],
     )
+}
+
+fn agent_at_aggregate_size(others: usize, target_size: usize) -> prost_types::Any {
+    let tools: Vec<_> = (0..15)
+        .map(|index| {
+            let mut value = tool(&format!("tool-{index}"));
+            value.description = Some(pb::AgentDescription {
+                value: "é".repeat(2048),
+            });
+            value
+        })
+        .collect();
+    let (mut low, mut high) = (1, 4096);
+    while low <= high {
+        let size = usize::midpoint(low, high);
+        let mut candidate_tools = tools.clone();
+        let mut last = tool("last");
+        last.description = Some(pb::AgentDescription {
+            value: format!("{}{}", "é".repeat(size / 2), "a".repeat(size % 2)),
+        });
+        candidate_tools.push(last);
+        let candidate = agent(provider_only(), candidate_tools);
+        match (candidate.encoded_len() + others).cmp(&target_size) {
+            std::cmp::Ordering::Equal => return candidate,
+            std::cmp::Ordering::Less => low = size + 1,
+            std::cmp::Ordering::Greater => high = size - 1,
+        }
+    }
+    panic!("cannot construct exact aggregate size {target_size}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn aggregate_metadata_boundary_is_atomic_after_server_identity_assignment() {
+    let mut world = world().await;
+    let ns = world.ns.clone();
+    world.put(component(&ns, "target", vec![])).await;
+    let initial = world.put(full_owner(&ns, "aggregate-owner")).await;
+    let mut owner = initial.entity.unwrap();
+    let others: usize = metadata_of(&owner)
+        .iter()
+        .filter(|value| value.type_url != AGENT)
+        .map(Message::encoded_len)
+        .sum();
+    let Some(pb::entity::Kind::Component(body)) = owner.kind.as_mut() else {
+        panic!("expected component");
+    };
+    let annotation = body
+        .metadata
+        .iter_mut()
+        .find(|value| value.type_url == AGENT)
+        .unwrap();
+    *annotation = agent_at_aggregate_size(others, 65_536);
+    assert_eq!(
+        metadata_of(&owner)
+            .iter()
+            .map(Message::encoded_len)
+            .sum::<usize>(),
+        65_536
+    );
+    let accepted = world
+        .put_as(ADMIN, owner, &initial.etag, false)
+        .await
+        .unwrap();
+    let mut overflow = accepted.entity.unwrap();
+    assert_eq!(
+        metadata_of(&overflow)
+            .iter()
+            .map(Message::encoded_len)
+            .sum::<usize>(),
+        65_536
+    );
+    let before = world.get("aggregate-owner").await;
+    let incoming = world.incoming("target").await;
+    let outgoing = world.outgoing("aggregate-owner").await;
+    assert_eq!(incoming.len(), 2);
+    assert_eq!(outgoing.len(), 2);
+    let Some(pb::entity::Kind::Component(body)) = overflow.kind.as_mut() else {
+        panic!("expected component");
+    };
+    *body
+        .metadata
+        .iter_mut()
+        .find(|value| value.type_url == AGENT)
+        .unwrap() = agent_at_aggregate_size(others, 65_537);
+    assert_eq!(
+        metadata_of(&overflow)
+            .iter()
+            .map(Message::encoded_len)
+            .sum::<usize>(),
+        65_537
+    );
+    let refused = world
+        .put_as(ADMIN, overflow, &accepted.etag, false)
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Code::InvalidArgument);
+    assert!(refused.message().contains("invalid metadata"));
+    assert_eq!(world.get("aggregate-owner").await, before);
+    assert_eq!(world.incoming("target").await, incoming);
+    assert_eq!(world.outgoing("aggregate-owner").await, outgoing);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -416,7 +516,7 @@ async fn nested_field_and_scenario_scope_is_refused_by_the_public_put() {
     );
     let proposed = [
         agent(provider_only(), vec![]),
-        lifecycle(pb::LifecycleAnnotation {
+        lifecycle(&pb::LifecycleAnnotation {
             status: "draft".into(),
             ..Default::default()
         }),
@@ -614,7 +714,7 @@ async fn invalid_updates_are_atomic_and_leave_the_index_untouched() {
         }
     };
     let draft = |title: Option<&str>, message: Option<&str>, status: &str| {
-        lifecycle(pb::LifecycleAnnotation {
+        lifecycle(&pb::LifecycleAnnotation {
             status: status.into(),
             draft: Some(pb::DraftNotice {
                 title: title.map(|value| pb::MetadataTitle {
@@ -628,7 +728,7 @@ async fn invalid_updates_are_atomic_and_leave_the_index_untouched() {
         })
     };
     let dated = |status: &str, date: &str| {
-        lifecycle(pb::LifecycleAnnotation {
+        lifecycle(&pb::LifecycleAnnotation {
             status: status.into(),
             deprecated_on: Some(pb::CalendarDate { value: date.into() }),
             ..Default::default()
@@ -910,7 +1010,7 @@ async fn future_dates_never_change_status_and_note_attribution_is_untouched() {
         }
         .encode_to_vec(),
     );
-    let future = lifecycle(pb::LifecycleAnnotation {
+    let future = lifecycle(&pb::LifecycleAnnotation {
         status: "deprecated".into(),
         deprecated_on: Some(pb::CalendarDate {
             value: "9999-12-31".into(),
