@@ -141,3 +141,10 @@ fn group_refs_retarget_and_malformed_payloads_are_accounted_for() {
     );
     assert!(outbound_refs(&owner).iter().all(|r| r.to_id == new));
 }
+
+#[test]
+fn known_annotations_cannot_hide_behind_unknown_wire_fields() {
+    let owner = Entity { kind: Some(entity::Kind::Component(Component { metadata: vec![annotation("trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",vec![0xA0,0x06,0x01])], ..Default::default() })), ..Default::default() };
+    assert!(validate(&owner).is_err());
+    assert!(trogon_atlas_core::refs::try_outbound_refs(&owner).is_err());
+}
