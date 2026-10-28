@@ -62,10 +62,8 @@ pub fn validate_values(entity: &Entity) -> Result<()> {
         let target = exact(value.target.as_ref().and_then(|t| t.id.as_ref()))?;
         let owner = channel.id.as_ref();
         require(
-            owner.is_none_or(|owner| {
-                owner.namespace != target.namespace || owner.slug != target.slug
-            }),
-            "channel link to the same channel key forbidden",
+            owner.is_none_or(|owner| owner != target),
+            "channel link to the same channel forbidden",
         )?;
         if let Some(doc) = &value.doc {
             crate::decision_document::validate_catalog_text(Some(doc))

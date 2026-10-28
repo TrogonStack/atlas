@@ -1378,7 +1378,7 @@ async fn channel_links_select_another_exact_version_of_the_same_slug_but_never_t
         }),
         ..Default::default()
     };
-    put(&mut client, pb::entity::Kind::Channel(at(2, vec![]))).await;
+    let newer = put(&mut client, pb::entity::Kind::Channel(at(2, vec![]))).await;
     let first = put(
         &mut client,
         pb::entity::Kind::Channel(at(1, vec![toward(2)])),
@@ -1389,11 +1389,9 @@ async fn channel_links_select_another_exact_version_of_the_same_slug_but_never_t
         Some(versioned("versioned", 2)),
         "exact target version is retained"
     );
-    let second = put(
-        &mut client,
-        pb::entity::Kind::Channel(at(2, vec![toward(1)])),
-    )
-    .await;
+    let mut back = channel_value(&newer);
+    back.links = vec![toward(1)];
+    let second = put(&mut client, pb::entity::Kind::Channel(back)).await;
     assert_eq!(
         channel_value(&second).links[0].target.as_ref().unwrap().id,
         Some(versioned("versioned", 1))

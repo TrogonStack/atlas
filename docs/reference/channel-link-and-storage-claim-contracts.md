@@ -14,7 +14,7 @@ delivery, runtime behavior or storage access control.
 | --- | --- |
 | `connection_id` | Server-assigned occurrence ID. Equal links may repeat and receive distinct IDs. |
 | `kind` | `COMPOSES` or `ROUTES_TO`. Required. |
-| `target` | Exact typed Channel reference with kind, key and version. A self-key target is rejected. Descriptive cross-key cycles are allowed. |
+| `target` | Exact typed Channel reference with kind, key and version. A target equal to the source Channel's own exact key and version is rejected. Another exact version of the same slug is selectable. Descriptive cycles between distinct exact Channels are allowed. |
 | `parameter_values` | Authored values for the target address. Names must be declared by the target address, values must be in the allowed set, and a target without an address accepts none. Required target parameters reject omission unless the address authors a default. |
 | `doc` | Descriptive text. |
 
