@@ -249,10 +249,7 @@ async fn same_batch_library(branch_name: Option<&str>) {
     let plain = service
         .batch_mutate(on_branch(
             batch_of(
-                vec![
-                    library(&namespace),
-                    component(&namespace, "plain", "alpha"),
-                ],
+                vec![library(&namespace), component(&namespace, "plain", "alpha")],
                 "",
             ),
             branch_name,
