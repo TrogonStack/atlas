@@ -1185,7 +1185,7 @@ async fn exact_mebibyte_entity_survives_write_read_reapply() {
         })),
     };
     loop {
-        let size = owner.encoded_len();
+        let size = trogon_atlas_core::stamp_system(None, &owner).encoded_len();
         if size == 1_048_576 {
             break;
         }
@@ -1198,7 +1198,7 @@ async fn exact_mebibyte_entity_survives_write_read_reapply() {
             }
         }
     }
-    assert_eq!(owner.encoded_len(), 1_048_576);
+    assert_eq!(trogon_atlas_core::stamp_system(None, &owner).encoded_len(), 1_048_576);
     let receipt = store
         .create(kind, &owner, WriteContext::baseline())
         .await
@@ -1207,6 +1207,7 @@ async fn exact_mebibyte_entity_survives_write_read_reapply() {
         .get(kind, &id("capacity", "exact", 1), None)
         .await
         .unwrap();
+    assert_eq!(stored.entity.encoded_len(), 1_048_576);
     assert_eq!(stored.etag, receipt.etag);
     assert_eq!(stored.entity.kind, owner.kind);
     store
@@ -1221,7 +1222,7 @@ async fn exact_mebibyte_entity_survives_write_read_reapply() {
     if let Some(pb::entity::Kind::Document(ref mut document)) = owner.kind {
         document.doc.as_mut().unwrap().push('x');
     }
-    assert_eq!(owner.encoded_len(), 1_048_577);
+    assert_eq!(trogon_atlas_core::stamp_system(Some(&reapplied.entity), &owner).encoded_len(), 1_048_577);
     let sequence = store.current_change_seq().await.unwrap();
     assert!(matches!(
         store
