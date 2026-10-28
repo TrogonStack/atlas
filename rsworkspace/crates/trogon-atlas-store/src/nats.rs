@@ -77,6 +77,21 @@ use crate::{
 };
 
 fn prepare_entity(previous: Option<&Entity>, entity: &Entity) -> StoreResult<Entity> {
+    if matches!(
+        entity.kind,
+        Some(
+            trogon_atlas_proto::entity::Kind::Document(_)
+                | trogon_atlas_proto::entity::Kind::Decision(_)
+        )
+    ) {
+        let mut owner = entity.clone();
+        owner.system = None;
+        if owner.encoded_len() > trogon_atlas_core::decision_document::MAX_ENCODED_BYTES {
+            return Err(StoreError::InvalidArgument(
+                "catalog entity byte limit exceeded".into(),
+            ));
+        }
+    }
     trogon_atlas_core::connection_persistence::prepare_entity(previous, entity)
         .map_err(|error| StoreError::InvalidArgument(error.to_string()))
 }
@@ -617,6 +632,16 @@ impl NatsStore {
         let client = connect_options.connect(&config.url).await.map_err(|e| {
             StoreError::Unavailable(format!("nats connect {url}: {e}", url = config.url))
         })?;
+        client
+            .flush()
+            .await
+            .map_err(|e| StoreError::Unavailable(format!("NATS capacity negotiation: {e}")))?;
+        let max_payload = client.max_payload();
+        if max_payload < 8_388_608 {
+            return Err(StoreError::Unavailable(format!(
+                "NATS max_payload is {max_payload} bytes; Atlas requires at least 8388608 bytes for accepted entity sizes and storage envelopes; configure max_payload: 8388608"
+            )));
+        }
         let js = jetstream::new(client);
         let config = Arc::new(config);
         let kv = ensure_kv(

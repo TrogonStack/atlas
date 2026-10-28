@@ -17,7 +17,7 @@ use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     ContainerAsync, GenericImage, ImageExt,
 };
-use testcontainers_modules::nats::{Nats, NatsServerCmd};
+use testcontainers_modules::nats::Nats;
 use tokio::sync::OnceCell;
 use trogon_atlas_store::{NatsStore, NatsStoreConfig, StoreMetrics};
 
@@ -65,10 +65,17 @@ impl TestNats {
     /// [`TestNats::start`].
     pub async fn try_start() -> Result<Self, String> {
         use testcontainers::runners::AsyncRunner;
-        let cmd = NatsServerCmd::default().with_jetstream();
-        let container = Nats::default().with_cmd(&cmd).start().await.map_err(|e| {
-            format!("testcontainers: NATS container failed to start (is Docker running?): {e}")
-        })?;
+        let container = Nats::default()
+            .with_copy_to(
+                "/etc/atlas-test-nats.conf",
+                include_bytes!("../nats-server.conf").to_vec(),
+            )
+            .with_cmd(["-c", "/etc/atlas-test-nats.conf"])
+            .start()
+            .await
+            .map_err(|e| {
+                format!("testcontainers: NATS container failed to start (is Docker running?): {e}")
+            })?;
         register_for_exit_cleanup(container.id());
         let port = container
             .get_host_port_ipv4(4222)
