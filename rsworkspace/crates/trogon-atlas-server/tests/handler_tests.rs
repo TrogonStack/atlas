@@ -3782,6 +3782,7 @@ fn make_domain(ns: &str, slug: &str, project_ns: Option<&str>) -> pb::Entity {
             doc: String::new(),
             metadata: Vec::new(),
             supersedes: None,
+            message_claims: None,
             project: project_ns.map(|pns| pb::ProjectRef {
                 id: Some(pb::Id {
                     namespace: pns.into(),

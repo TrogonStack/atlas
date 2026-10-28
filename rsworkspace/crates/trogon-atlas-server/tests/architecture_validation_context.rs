@@ -8,7 +8,7 @@ use trogon_atlas_proto as pb;
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 use trogon_atlas_store::{store::ListFilter, Store, WriteContext};
 
-const BRANCH: &str = "resource-diagnostics";
+const BRANCH: &str = "@resource-reader:resource-diagnostics";
 
 fn id(namespace: &str, slug: &str) -> pb::Id {
     pb::Id {

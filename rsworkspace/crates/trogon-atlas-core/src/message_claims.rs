@@ -163,25 +163,32 @@ pub fn validate_values(owner: &Entity) -> Result<()> {
     }
     let mut pairs = HashSet::new();
     for s in &v.field_selections {
-        let c = claim(s.claim_id.as_ref())?;
-        let m = message(c.message.as_ref())?;
-        let b = s
+        let selected_claim = claim(s.claim_id.as_ref())?;
+        let message_selection = message(selected_claim.message.as_ref())?;
+        let binding = s
             .binding
             .as_ref()
             .ok_or_else(|| ClaimError("binding required".into()))?;
-        let o = b
+        let binding_owner = binding
             .owner
             .as_ref()
             .ok_or_else(|| ClaimError("binding owner required".into()))?;
         check(
-            o.kind == EntityKind::Specification as i32
-                && o.id.as_ref() == m.specification.as_ref().and_then(|v| v.id.as_ref())
-                && b.owner_uid == m.owner_uid,
+            binding_owner.kind == EntityKind::Specification as i32
+                && binding_owner.id.as_ref()
+                    == message_selection
+                        .specification
+                        .as_ref()
+                        .and_then(|v| v.id.as_ref())
+                && binding.owner_uid == message_selection.owner_uid,
             "binding must select same Specification incarnation",
         )?;
-        local(b.id.as_ref())?;
+        local(binding.id.as_ref())?;
         check(
-            pairs.insert((local(s.claim_id.as_ref())?.value.clone(), b.encode_to_vec())),
+            pairs.insert((
+                local(s.claim_id.as_ref())?.value.clone(),
+                binding.encode_to_vec(),
+            )),
             "duplicate claim binding selection",
         )?;
         check(
@@ -196,8 +203,10 @@ pub fn validate_values(owner: &Entity) -> Result<()> {
                         && p.segments.iter().all(|s| !s.is_empty()),
                     "invalid native field path",
                 )?,
-                Some(pb::claim_field_selector::Selector::Opaque(o)) => check(
-                    !o.syntax.trim().is_empty() && !o.value.is_empty() && o.value.len() <= 1024,
+                Some(pb::claim_field_selector::Selector::Opaque(binding_owner)) => check(
+                    !binding_owner.syntax.trim().is_empty()
+                        && !binding_owner.value.is_empty()
+                        && binding_owner.value.len() <= 1024,
                     "invalid opaque selector",
                 )?,
                 None => return Err(ClaimError("field selector required".into())),
@@ -500,7 +509,7 @@ pub fn validate_field_selection(
     for selector in &selection.selectors {
         match &selector.selector {
             Some(pb::claim_field_selector::Selector::Opaque(_)) => {
-                output.push(FieldSelectorVerification::OpaqueUnverified)
+                output.push(FieldSelectorVerification::OpaqueUnverified);
             }
             Some(pb::claim_field_selector::Selector::Path(path)) => {
                 let expected = target.as_ref().ok_or_else(|| {

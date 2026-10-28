@@ -1227,7 +1227,7 @@ async fn responsibility_query_occurrence_and_contact_output_budgets_are_shared_p
     client
         .create_branch(request(
             pb::CreateBranchRequest {
-                name: "budget-branch".into(),
+                name: "@limited:budget-branch".into(),
                 ..Default::default()
             },
             ADMIN,
@@ -1295,7 +1295,7 @@ async fn responsibility_query_occurrence_and_contact_output_budgets_are_shared_p
         .await
         .unwrap();
     let mut statuses = Vec::new();
-    for branch in [None, Some("budget-branch")] {
+    for branch in [None, Some("@limited:budget-branch")] {
         let incoming = client
             .get_incoming_references(request(
                 pb::GetReferencesRequest {
@@ -1326,7 +1326,7 @@ async fn responsibility_query_occurrence_and_contact_output_budgets_are_shared_p
         statuses.push(impact.map_or_else(|error| error.code(), |_| Code::Ok));
     }
     assert_eq!(statuses, vec![Code::ResourceExhausted; 4]);
-    for branch in [None, Some("budget-branch")] {
+    for branch in [None, Some("@limited:budget-branch")] {
         let incoming = client
             .get_incoming_references(request(
                 pb::GetReferencesRequest {
@@ -1435,7 +1435,7 @@ async fn responsibility_query_occurrence_and_contact_output_budgets_are_shared_p
     }
     let replacement = put(&mut client, replacement, None).await.entity.unwrap();
     let mut migrations = Vec::new();
-    for branch in [Some("budget-branch"), None] {
+    for branch in [Some("@limited:budget-branch"), None] {
         let before = get(
             &mut client,
             pb::EntityKind::Team,
@@ -1507,7 +1507,7 @@ async fn responsibility_query_occurrence_and_contact_output_budgets_are_shared_p
             .iter()
             .all(|result| result.error.is_empty()));
     }
-    for branch in [None, Some("budget-branch")] {
+    for branch in [None, Some("@limited:budget-branch")] {
         for index in 0..10 {
             let owner = get(
                 &mut client,

@@ -9,7 +9,7 @@ use super::{
     entity_id, entity_kind, pb, store_err, EventModelServiceImpl, Lens, StoredEntity, Visibility,
 };
 use crate::{
-    decision_document_resources::occurrence_count as occurrences,
+    decision_document_resources::checked_occurrence_count as occurrences,
     responsibility_resources::{
         assignments, selected_endpoints, subject_owner, MAX_RESPONSIBILITY_OCCURRENCES,
     },
@@ -27,6 +27,7 @@ pub(super) struct ResponsibilityQuery {
     resource_rows: HashSet<pb::EntityKey>,
     output: usize,
     subjects: Vec<pb::ResponsibilitySubject>,
+    claim_budget: crate::decision_document_resources::CatalogBudget,
 }
 
 impl ResponsibilityQuery {
@@ -46,7 +47,8 @@ impl ResponsibilityQuery {
 
     fn owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
         let key = pb::EntityKey::new(entity_kind(entity)?, entity_id(entity)?);
-        if crate::validation::architecture_resources::is_resource(entity)
+        if (crate::validation::architecture_resources::is_resource(entity)
+            || matches!(entity.kind, Some(pb::entity::Kind::Schema(_))))
             && self.resource_rows.insert(key.clone())
             && self.resource_rows.len() > 5_000
         {
@@ -55,7 +57,7 @@ impl ResponsibilityQuery {
             ));
         }
         if self.examined_owners.insert(key) {
-            self.examine(occurrences(entity))?;
+            self.examine(occurrences(entity)?)?;
         }
         Ok(())
     }
@@ -289,11 +291,20 @@ impl EventModelServiceImpl {
         };
         rows.sort_by_key(|row| row.entity.encode_to_vec());
         let mut world = World::new();
+        let mut resource_rows = HashSet::new();
         for row in &rows {
-            world.insert(
-                pb::EntityKey::new(entity_kind(&row.entity)?, entity_id(&row.entity)?),
-                Some(row.clone()),
-            );
+            let key = pb::EntityKey::new(entity_kind(&row.entity)?, entity_id(&row.entity)?);
+            if crate::validation::architecture_resources::is_resource(&row.entity)
+                || matches!(row.entity.kind, Some(pb::entity::Kind::Schema(_)))
+            {
+                resource_rows.insert(key.clone());
+            }
+            world.insert(key, Some(row.clone()));
+        }
+        if resource_rows.len() > 5_000 {
+            return Err(Status::resource_exhausted(
+                "responsibility resource budget exceeded",
+            ));
         }
         Ok(ResponsibilityQuery {
             world,
@@ -302,9 +313,10 @@ impl EventModelServiceImpl {
             branch: branch.map(str::to_owned),
             examined: 0,
             examined_owners: HashSet::new(),
-            resource_rows: HashSet::new(),
+            resource_rows,
             output: 0,
             subjects: Vec::new(),
+            claim_budget: crate::decision_document_resources::CatalogBudget::default(),
         })
     }
 
@@ -369,7 +381,11 @@ impl EventModelServiceImpl {
         }
         let architectural = matches!(
             row.entity.kind,
-            Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+            Some(
+                pb::entity::Kind::Component(_)
+                    | pb::entity::Kind::ExternalSystem(_)
+                    | pb::entity::Kind::Domain(_)
+            )
         );
         for (kind, id) in selected_endpoints(subject, &row.entity) {
             if !query.lens.admits(&id.namespace) {
@@ -391,6 +407,52 @@ impl EventModelServiceImpl {
             if architectural && target.is_none() {
                 return Ok(State::Unresolved);
             }
+        }
+        if let Some(selected) = crate::message_claims_resources::selected(subject, &row.entity) {
+            let Ok(targets) = crate::message_claims_resources::native_targets(
+                &selected,
+                &crate::validation::architecture_resources::ArchitectureContext::new(
+                    query.world.values().filter_map(Option::as_ref),
+                ),
+            ) else {
+                return Ok(State::Unresolved);
+            };
+            for (kind, id) in targets {
+                if !query.lens.admits(&id.namespace) {
+                    return Ok(State::Unresolved);
+                }
+                if self
+                    .responsibility_read(
+                        query,
+                        &pb::EntityRef {
+                            kind: kind as i32,
+                            id: Some(id),
+                        },
+                    )
+                    .await?
+                    .is_none()
+                {
+                    return Ok(State::Unresolved);
+                }
+            }
+            let before = query.claim_budget.examined();
+            let valid = {
+                let context = crate::validation::architecture_resources::ArchitectureContext::new(
+                    query.world.values().filter_map(Option::as_ref),
+                );
+                crate::message_claims_resources::charge_selections(
+                    &selected,
+                    &context,
+                    &mut query.claim_budget,
+                )?;
+                crate::message_claims_resources::validate(&selected, &context).is_ok()
+            };
+            query.examine(query.claim_budget.examined() - before)?;
+            return Ok(if valid {
+                State::Resolved
+            } else {
+                State::Unresolved
+            });
         }
         if let Some(selection) =
             crate::responsibility_resources::selected_message(subject, &row.entity)
