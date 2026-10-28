@@ -16,13 +16,18 @@ use trogon_atlas_server::{
 };
 
 const ADMIN: &str = "document-paging-admin";
+const LIMITED: &str = "document-paging-reader";
 
 type Client = EventModelServiceClient<Channel>;
 
 fn request<T>(body: T, branch: Option<&str>) -> Request<T> {
+    request_as(body, ADMIN, branch)
+}
+
+fn request_as<T>(body: T, token: &str, branch: Option<&str>) -> Request<T> {
     let mut req = Request::new(body);
     req.metadata_mut()
-        .insert("authorization", format!("Bearer {ADMIN}").parse().unwrap());
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
     if let Some(branch) = branch {
         req.metadata_mut()
             .insert("x-trogon-atlas-branch", branch.parse().unwrap());
@@ -49,6 +54,10 @@ tokens = ["{ADMIN}"]
 [principals.peer]
 role = "admin"
 tokens = ["document-paging-peer"]
+[principals.limited]
+role = "reader"
+parent = "document-paging"
+tokens = ["{LIMITED}"]
 "#
         ))
         .unwrap(),
@@ -220,6 +229,140 @@ fn hub_selection(hub_id: pb::Id) -> pb::DocumentSelection {
             pb::DocumentRef { id: Some(hub_id) },
         )),
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn incoming_document_cursor_is_bound_to_caller_visibility() {
+    let mut client = client().await;
+    let namespace = client
+        .register_namespace(request(
+            pb::RegisterNamespaceRequest {
+                name: "paging-visible".into(),
+                parent: "document-paging".into(),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let scoped_id = |slug: &str| pb::Id {
+        namespace: namespace.clone(),
+        slug: slug.into(),
+        version: 1,
+    };
+    put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(scoped_id("receipt")),
+                title: "Receipt".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let document = |slug: &str| pb::Entity {
+        kind: Some(pb::entity::Kind::Document(pb::Document {
+            id: Some(scoped_id(slug)),
+            title: Some(pb::CatalogTitle { value: slug.into() }),
+            subjects: vec![pb::SubjectAssociation {
+                subject: Some(pb::CatalogSubject {
+                    selection: Some(pb::catalog_subject::Selection::Entity(pb::EntityRef {
+                        kind: pb::EntityKind::ReadModel as i32,
+                        id: Some(scoped_id("receipt")),
+                    })),
+                }),
+                ..Default::default()
+            }],
+            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                value: "https://example.com/document".into(),
+            })),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    put(&mut client, document("hub")).await;
+    let selection = hub_selection(scoped_id("hub"));
+    for slug in ["first", "second"] {
+        let mut owner = document(slug);
+        let Some(pb::entity::Kind::Document(body)) = owner.kind.as_mut() else {
+            panic!("expected document");
+        };
+        body.related_content.push(pb::RelatedContent {
+            role: pb::RelatedContentRole::Example as i32,
+            document: Some(selection.clone()),
+            ..Default::default()
+        });
+        put(&mut client, owner).await;
+    }
+    let mut hidden = document("private-owner");
+    let Some(pb::entity::Kind::Document(body)) = hidden.kind.as_mut() else {
+        panic!("expected document");
+    };
+    body.id.as_mut().unwrap().namespace = "document-private".into();
+    body.title = Some(pb::CatalogTitle {
+        value: "Private owner detail".into(),
+    });
+    let hidden = put(&mut client, hidden).await;
+    let hidden_uid = hidden.system.unwrap().uid;
+    assert!(!hidden_uid.is_empty());
+    let query = |page_token: String| pb::ListIncomingDocumentDeclarationsRequest {
+        document: Some(selection.clone()),
+        page_size: 1,
+        page_token,
+        ..Default::default()
+    };
+    let unrestricted = client
+        .list_incoming_document_declarations(request(query(String::new()), None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(unrestricted.declarations.len(), 1);
+    assert!(!unrestricted.next_page_token.is_empty());
+    let restricted = client
+        .list_incoming_document_declarations(request_as(query(String::new()), LIMITED, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(restricted.declarations, unrestricted.declarations);
+    let restricted_scope = restricted.scope.as_ref().unwrap();
+    assert_eq!(restricted_scope.authorized_namespaces, [namespace]);
+    let visible_receipt = format!("{restricted:?}");
+    assert!(!visible_receipt.contains("document-private"));
+    assert!(!visible_receipt.contains("Private owner detail"));
+    assert!(!visible_receipt.contains(&hidden_uid));
+    assert_ne!(
+        restricted_scope.revision,
+        unrestricted.scope.unwrap().revision
+    );
+    let refused = client
+        .list_incoming_document_declarations(request_as(
+            query(unrestricted.next_page_token),
+            LIMITED,
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Code::InvalidArgument);
+    assert!(refused.message().contains("stale page token"));
+    assert!(!refused.message().contains(&hidden_uid));
+    assert!(!refused.message().contains("document-private"));
+    let next = client
+        .list_incoming_document_declarations(request_as(
+            query(restricted.next_page_token),
+            LIMITED,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(next.declarations.len(), 1);
+    assert_ne!(next.declarations, restricted.declarations);
+    assert!(next.next_page_token.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
