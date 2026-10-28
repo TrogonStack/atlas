@@ -12,8 +12,9 @@ and [Term ownership](../../rsworkspace/crates/trogon-atlas-server/tests/term_dom
 The [composed fixture](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_composed.rs)
 passes in the parent checkout. Decision transitive safety, exact provenance and
 branch-landing controls also have independent passing runs. These checks prove
-their explicit assertions, not every requirement below. Safe Studio retained-content
-presentation/download and remaining Document restoration/pagination cases remain
+their explicit assertions, not every requirement below. Studio retained-content presentation/download has component and generated-codec
+coverage, including invalid projections and download URL cleanup. Real-browser
+verification has not run. Remaining Document restoration/pagination cases stay
 open in the [coverage status](eventcatalog-coverage.md#delivery-status).
 
 ## Fixtures and executable acceptance targets
