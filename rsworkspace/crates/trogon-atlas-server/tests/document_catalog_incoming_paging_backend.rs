@@ -39,6 +39,9 @@ async fn client() -> Client {
 [principals.admin]
 role = "admin"
 tokens = ["{ADMIN}"]
+[principals.peer]
+role = "admin"
+tokens = ["document-paging-peer"]
 "#
         ))
         .unwrap(),
@@ -278,6 +281,22 @@ async fn incoming_document_paging_surpasses_output_ceiling_with_multipage_contin
             .into_inner();
         assert!(!page.incomplete);
         assert!(page.failures.is_empty());
+        let scope = page.scope.as_ref().unwrap();
+        let receipt = scope.page_receipt.as_ref().expect("explicit page receipt");
+        assert_eq!(receipt.checked_owner_count, (REFERRERS + FILLER + 1) as u64);
+        assert_eq!(receipt.total_declarations, REFERRERS as u64);
+        assert_eq!(receipt.start_offset, seen.len() as u64);
+        assert_eq!(receipt.end_offset, (seen.len() + page.declarations.len()) as u64);
+        assert!(scope.visited.len() <= page.declarations.len() + 1);
+        assert!(page.declarations.len() + scope.visited.len() + scope.visited_subjects.len() + scope.visited_documents.len() + 1 <= 4_096);
+        for owner in &scope.visited {
+            assert!(owner.owner.as_ref().unwrap().id.as_ref().unwrap().slug == "incoming-hub" || page.declarations.iter().any(|declaration| declaration.owner.as_ref() == Some(owner)));
+        }
+        if !token.is_empty() {
+            let mut replay = request(pb::ListIncomingDocumentDeclarationsRequest { document: Some(whole.clone()), page_size: page_size as i32, page_token: token.clone(), ..Default::default() }, None);
+            replay.metadata_mut().insert("authorization", "Bearer document-paging-peer".parse().unwrap());
+            assert_eq!(client.list_incoming_document_declarations(replay).await.unwrap_err().code(), Code::InvalidArgument);
+        }
         for declaration in &page.declarations {
             let owner = declaration.owner.as_ref().expect("owner");
             assert!(seen.insert(owner.uid.clone()));

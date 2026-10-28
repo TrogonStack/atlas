@@ -24,6 +24,14 @@ message CatalogCheckedOwner {
   string uid = 2;
   string etag = 3;
 }
+// Explicitly bounds the owner inventory returned with a Document page.
+// The enclosing revision still fingerprints the complete authorized scan.
+message CatalogPageReceipt {
+  uint64 checked_owner_count = 1;
+  uint64 total_declarations = 2;
+  uint64 start_offset = 3;
+  uint64 end_offset = 4;
+}
 message CatalogCheckedScope {
   optional string branch = 1;
   repeated string authorized_namespaces = 2;
@@ -31,6 +39,10 @@ message CatalogCheckedScope {
   repeated CatalogCheckedOwner visited = 4;
   repeated trogonatlas.eventmodel.v1alpha1.CatalogSubject visited_subjects = 5;
   repeated trogonatlas.eventmodel.v1alpha1.DocumentSelection visited_documents = 6;
+  // Present only for paginated incoming Document declarations. visited then
+  // contains the selected owner and this page's declaring owners, not all
+  // checked owners. Absent retains the full checked inventory contract.
+  CatalogPageReceipt page_receipt = 7;
 }
 message CatalogDeclaration {
   CatalogCheckedOwner owner = 1;

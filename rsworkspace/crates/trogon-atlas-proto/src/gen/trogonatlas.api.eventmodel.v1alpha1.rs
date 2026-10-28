@@ -522,6 +522,19 @@ pub struct CatalogCheckedOwner {
     #[prost(string, tag="3")]
     pub etag: ::prost::alloc::string::String,
 }
+/// Explicitly bounds the owner inventory returned with a Document page.
+/// The enclosing revision still fingerprints the complete authorized scan.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogPageReceipt {
+    #[prost(uint64, tag="1")]
+    pub checked_owner_count: u64,
+    #[prost(uint64, tag="2")]
+    pub total_declarations: u64,
+    #[prost(uint64, tag="3")]
+    pub start_offset: u64,
+    #[prost(uint64, tag="4")]
+    pub end_offset: u64,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CatalogCheckedScope {
     #[prost(string, optional, tag="1")]
@@ -536,6 +549,11 @@ pub struct CatalogCheckedScope {
     pub visited_subjects: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::CatalogSubject>,
     #[prost(message, repeated, tag="6")]
     pub visited_documents: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::DocumentSelection>,
+    /// Present only for paginated incoming Document declarations. visited then
+    /// contains the selected owner and this page's declaring owners, not all
+    /// checked owners. Absent retains the full checked inventory contract.
+    #[prost(message, optional, tag="7")]
+    pub page_receipt: ::core::option::Option<CatalogPageReceipt>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CatalogDeclaration {
