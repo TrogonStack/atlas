@@ -1341,8 +1341,8 @@ async fn catalog_discovery_output_and_shared_row_boundaries_are_exact() {
         .entity
         .unwrap();
     let selected = subject(reference(&target));
-    for start in (0..4_096).step_by(128) {
-        let ops: Vec<_> = (start..(start + 128).min(4_096))
+    for start in (0..2_047).step_by(128) {
+        let ops: Vec<_> = (start..(start + 128).min(2_047))
             .map(|index| {
                 let mut value = document(&format!("note-{index}"), selected.clone());
                 if let Some(pb::entity::Kind::Document(value)) = &mut value.kind {
@@ -1367,8 +1367,42 @@ async fn catalog_discovery_output_and_shared_row_boundaries_are_exact() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(boundary.declarations.len(), 4_096);
+    assert_eq!(boundary.declarations.len(), 2_047);
+    let checked = boundary.scope.as_ref().unwrap();
+    assert_eq!(
+        boundary.declarations.len()
+            + checked.visited.len()
+            + checked.visited_subjects.len()
+            + checked.visited_documents.len(),
+        4_096
+    );
     assert!(!boundary.incomplete);
+    for start in (2_047..4_096).step_by(128) {
+        let ops: Vec<_> = (start..(start + 128).min(4_096))
+            .map(|index| {
+                let mut value = document(&format!("note-{index}"), selected.clone());
+                if let Some(pb::entity::Kind::Document(value)) = &mut value.kind {
+                    value.anchors.clear();
+                }
+                MutationOp::Create {
+                    kind: pb::EntityKind::Document,
+                    entity: value,
+                }
+            })
+            .collect();
+        store
+            .batch_apply(&ops, WriteContext::baseline())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        client
+            .list_subject_documents(request(request_body.clone(), READER, None))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::ResourceExhausted
+    );
     let failure = client
         .list_decision_amendments(request(
             pb::ListDecisionAmendmentsRequest {
@@ -1570,10 +1604,9 @@ async fn catalog_discovery_output_and_shared_row_boundaries_are_exact() {
     let boundary = client
         .list_subject_decisions(request(query.clone(), READER, None))
         .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(boundary.declarations, Vec::<pb::CatalogDeclaration>::new());
-    assert!(!boundary.incomplete);
+        .unwrap_err();
+    assert_eq!(boundary.code(), Code::ResourceExhausted);
+    assert!(boundary.message().contains("output"));
     store
         .create(
             pb::EntityKind::Person,

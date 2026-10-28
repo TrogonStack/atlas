@@ -1742,3 +1742,192 @@ async fn domain_declaration_conflict_requires_guarded_choice_between_clear_and_e
         );
     }
 }
+
+async fn seed_native_rows(store: &trogon_atlas_store::NatsStore, rows: Vec<pb::Entity>) {
+    use trogon_atlas_store::{Store, WriteContext, store::MutationOp};
+    for chunk in rows.chunks(128) {
+        let ops: Vec<_> = chunk
+            .iter()
+            .map(|value| MutationOp::Create {
+                kind: trogon_atlas_core::refs::entity_kind(value).unwrap(),
+                entity: value.clone(),
+            })
+            .collect();
+        store
+            .batch_apply(&ops, WriteContext::baseline())
+            .await
+            .unwrap();
+    }
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn term_listing_row_boundary_pages_exhaust_exact_snapshot_and_rejects_overflow() {
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let mut client = client_with_store(store.clone(), 10_000).await;
+    put_native(
+        &mut client,
+        entity(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(id("rows-domain")),
+            ..Default::default()
+        })),
+        None,
+    )
+    .await;
+    seed_native_rows(
+        &store,
+        (0..5_000)
+            .map(|i| term(&format!("row-{i:04}"), "rows-domain"))
+            .collect(),
+    )
+    .await;
+    let mut query = pb::ListTermDomainDeclarationsRequest {
+        page_size: 500,
+        ..domain_query(id("rows-domain"))
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    loop {
+        let page = client
+            .list_term_domain_declarations(request(query.clone(), READER, None))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(!page.incomplete);
+        assert_eq!(page.declarations.len(), 500);
+        for entry in page.declarations {
+            assert_eq!(entry.domain, query.domain);
+            let owner = entry.owner.unwrap();
+            assert_ne!(owner.uid, "");
+            assert_ne!(owner.etag, "");
+            assert!(seen.insert(owner.owner.unwrap().id.unwrap().slug));
+        }
+        if page.next_page_token.is_empty() {
+            break;
+        }
+        query.page_token = page.next_page_token;
+    }
+    assert_eq!(seen.len(), 5_000);
+    seed_native_rows(&store, vec![term("row-overflow", "rows-domain")]).await;
+    query.page_token.clear();
+    let overflow = client
+        .list_term_domain_declarations(request(query, READER, None))
+        .await
+        .unwrap_err();
+    assert_eq!(overflow.code(), Code::ResourceExhausted);
+    assert!(overflow.message().contains("entity budget"), "{overflow}");
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn term_listing_work_boundary_shares_real_directory_occurrences() {
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let mut client = client_with_store(store.clone(), 10_000).await;
+    put_native(
+        &mut client,
+        entity(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(id("work-domain")),
+            ..Default::default()
+        })),
+        None,
+    )
+    .await;
+    seed_native_rows(
+        &store,
+        (0..1_000)
+            .map(|i| {
+                entity(pb::entity::Kind::Person(pb::Person {
+                    id: Some(id(&format!("person-{i}"))),
+                    title: Some(pb::DirectoryDisplayName {
+                        value: "Person".into(),
+                    }),
+                    ..Default::default()
+                }))
+            })
+            .collect(),
+    )
+    .await;
+    seed_native_rows(
+        &store,
+        (0..10)
+            .map(|i| {
+                entity(pb::entity::Kind::Team(pb::Team {
+                    id: Some(id(&format!("team-{i}"))),
+                    title: Some(pb::DirectoryDisplayName {
+                        value: "Team".into(),
+                    }),
+                    members: (0..if i == 9 { 999 } else { 1000 })
+                        .map(|j| pb::TeamMember {
+                            person: Some(pb::PersonRef {
+                                id: Some(id(&format!("person-{j}"))),
+                            }),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                }))
+            })
+            .collect(),
+    )
+    .await;
+    put_native(&mut client, term("work-word", "work-domain"), None).await;
+    let query = domain_query(id("work-domain"));
+    let boundary = client
+        .list_term_domain_declarations(request(query.clone(), READER, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(boundary.declarations.len(), 1);
+    assert!(!boundary.incomplete);
+    put_native(&mut client, term("work-overflow", "work-domain"), None).await;
+    let overflow = client
+        .list_term_domain_declarations(request(query, READER, None))
+        .await
+        .unwrap_err();
+    assert_eq!(overflow.code(), Code::ResourceExhausted);
+    assert!(overflow.message().contains("work"), "{overflow}");
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn term_subject_checked_scope_records_share_output_budget() {
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let mut client = client_with_store(store.clone(), 10_000).await;
+    let rows = (0..4_095)
+        .map(|i| {
+            entity(pb::entity::Kind::Term(pb::Term {
+                id: Some(id(&format!("checked-{i}"))),
+                ..Default::default()
+            }))
+        })
+        .collect();
+    seed_native_rows(&store, rows).await;
+    let query = pb::ListSubjectDocumentsRequest {
+        subject: Some(pb::CatalogSubject {
+            selection: Some(pb::catalog_subject::Selection::Entity(native_ref(
+                pb::EntityKind::Term,
+                "checked-0",
+            ))),
+        }),
+    };
+    let boundary = client
+        .list_subject_documents(request(query.clone(), READER, None))
+        .await
+        .unwrap()
+        .into_inner();
+    let scope = boundary.scope.unwrap();
+    assert_eq!(
+        boundary.declarations.len()
+            + scope.visited.len()
+            + scope.visited_subjects.len()
+            + scope.visited_documents.len(),
+        4_096
+    );
+    seed_native_rows(
+        &store,
+        vec![entity(pb::entity::Kind::Term(pb::Term {
+            id: Some(id("checked-overflow")),
+            ..Default::default()
+        }))],
+    )
+    .await;
+    let overflow = client
+        .list_subject_documents(request(query, READER, None))
+        .await
+        .unwrap_err();
+    assert_eq!(overflow.code(), Code::ResourceExhausted);
+    assert!(overflow.message().contains("output"), "{overflow}");
+}

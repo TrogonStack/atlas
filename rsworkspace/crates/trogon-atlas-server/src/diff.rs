@@ -430,6 +430,16 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
             scalar(ops, "doc", &x.doc, &y.doc);
             diff_id_ref(
                 ops,
+                "owning_domain",
+                x.owning_domain
+                    .as_ref()
+                    .and_then(|reference| reference.id.as_ref()),
+                y.owning_domain
+                    .as_ref()
+                    .and_then(|reference| reference.id.as_ref()),
+            );
+            diff_id_ref(
+                ops,
                 "supersedes",
                 x.supersedes.as_ref(),
                 y.supersedes.as_ref(),
