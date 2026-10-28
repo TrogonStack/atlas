@@ -129,8 +129,8 @@ connection IDs, request/response roles and provider selections. Upgrade clients
 and server before authoring these resources; an exact entity version alone
 does not pin a mutable contract's content or member incarnation.
 
-The current contract revision is 12, with both mutation compatibility floors
-also at 12. DataProduct writers preserve independent port IDs, nested
+Contract revision 12 raised both mutation compatibility floors to 12.
+DataProduct writers preserve independent port IDs, nested
 association IDs and exact selected access and contract pins. Upgrade clients
 and server together before authoring DataProducts; older writers cannot
 preserve the complete resource contract.
@@ -166,4 +166,9 @@ drift.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
 
-Contract revision 19 requires client and server floor 19 to prevent lossy native catalog context writes. CalendarDate uses the shared type package with descriptor break acknowledgments.
+The current contract revision is 19, with both mutation compatibility floors
+at 19. Native catalog context writers preserve Decision dates, makers and
+amendments, Term domain ownership, and Document content and classifications.
+CalendarDate uses the shared type package with descriptor break acknowledgments.
+Upgrade clients and server together before authoring these fields to prevent
+lossy writes.

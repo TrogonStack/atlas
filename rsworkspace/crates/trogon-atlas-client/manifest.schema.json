@@ -2086,6 +2086,15 @@
     "trogonatlas.eventmodel.v1alpha1.Decision": {
       "additionalProperties": false,
       "properties": {
+        "amends": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionAmendment"
+          },
+          "type": "array"
+        },
+        "authoredOn": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+        },
         "consequences": {
           "items": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionConsequence"
@@ -2094,6 +2103,15 @@
         },
         "context": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "decidedOn": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.CalendarDate"
+        },
+        "decisionMakers": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionMaker"
+          },
+          "type": "array"
         },
         "doc": {
           "type": "string"
@@ -2157,6 +2175,28 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.DecisionAmendment": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "decision": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DecisionRef"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "trogonatlas.eventmodel.v1alpha1.DecisionConsequence": {
       "additionalProperties": false,
       "properties": {
@@ -2177,6 +2217,41 @@
         "KIND_UNSPECIFIED"
       ],
       "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DecisionMaker": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "person",
+                  "team"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            },
+            "person": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.PersonRef"
+            },
+            "team": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TeamRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
     },
     "trogonatlas.eventmodel.v1alpha1.DecisionOption": {
       "additionalProperties": false,
@@ -5993,6 +6068,22 @@
         }
       ]
     },
+    "trogonatlas.eventmodel.v1alpha1.TeamRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "trogonatlas.eventmodel.v1alpha1.TechnologyName": {
       "additionalProperties": false,
       "properties": {
@@ -6831,6 +6922,15 @@
         },
         "ui": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.UIEdge"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.type.v1alpha1.CalendarDate": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
         }
       },
       "type": "object"
