@@ -465,6 +465,20 @@ impl EventModelServiceImpl {
                         declaration: Some(D::Navigation(navigation.clone())),
                     });
                 }
+                for (index, related) in value.related_content.iter().enumerate() {
+                    let state = if let Some(selection) = &related.document {
+                        self.catalog_document_state(query, selection).await?
+                    } else {
+                        State::Unresolved
+                    };
+                    query.budget.output()?;
+                    declarations.push(pb::CatalogDeclaration {
+                        owner: Some(owner.clone()),
+                        field: format!("related_content[{index}].document"),
+                        state: state as i32,
+                        declaration: Some(D::RelatedContent(related.clone())),
+                    });
+                }
             }
             _ => {}
         }
