@@ -201,3 +201,113 @@ async fn tenant_typed_metadata_has_a_stable_operation_digest() {
 async fn tenant_typed_metadata_has_a_stable_operation_digest_on_a_branch() {
     exercise(Some("digest-branch")).await;
 }
+
+fn batch_of(entities: Vec<pb::Entity>, operation_id: &str) -> pb::BatchMutateRequest {
+    pb::BatchMutateRequest {
+        ops: entities
+            .into_iter()
+            .map(|entity| pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(entity),
+                    ..Default::default()
+                })),
+            })
+            .collect(),
+        operation_id: operation_id.into(),
+        ..Default::default()
+    }
+}
+
+async fn component_exists(
+    service: &EventModelServiceImpl,
+    namespace: &str,
+    slug: &str,
+    branch_name: Option<&str>,
+) -> bool {
+    service
+        .get_entity(on_branch(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Component as i32,
+                id: Some(id(namespace, slug)),
+            },
+            branch_name,
+        ))
+        .await
+        .is_ok()
+}
+
+async fn same_batch_library(branch_name: Option<&str>) {
+    let service = service().await;
+    let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
+    let namespace = format!("same-batch-{suffix}");
+    if let Some(name) = branch_name {
+        branch(&service, &format!("{name}-{suffix}")).await;
+    }
+    let branch_name = branch_name.map(|name| format!("{name}-{suffix}"));
+    let branch_name = branch_name.as_deref();
+
+    let plain = service
+        .batch_mutate(on_branch(
+            batch_of(
+                vec![library(&namespace), component(&namespace, "plain", "alpha")],
+                "",
+            ),
+            branch_name,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        plain.status,
+        pb::batch_mutate_response::Status::Applied as i32,
+        "the same operation without an operation_id is the public contract: {plain:?}"
+    );
+
+    let other = format!("same-batch-other-{suffix}");
+    let op = format!("same-batch-{suffix}");
+    let entities = |text: &str| {
+        vec![
+            library(&other),
+            component(&other, "keyed", text),
+            component(&other, "keyed-too", text),
+        ]
+    };
+    let applied = service
+        .batch_mutate(on_branch(batch_of(entities("alpha"), &op), branch_name))
+        .await
+        .unwrap_or_else(|status| panic!("same-batch tenant metadata must digest: {status}"))
+        .into_inner();
+    assert_eq!(
+        applied.status,
+        pb::batch_mutate_response::Status::Applied as i32,
+        "{applied:?}"
+    );
+    assert!(component_exists(&service, &other, "keyed", branch_name).await);
+    assert!(component_exists(&service, &other, "keyed-too", branch_name).await);
+
+    let replayed = service
+        .batch_mutate(on_branch(batch_of(entities("alpha"), &op), branch_name))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        replayed.operation_receipt.as_ref().map(|r| r.replayed),
+        Some(true),
+        "{replayed:?}"
+    );
+    let reused = service
+        .batch_mutate(on_branch(batch_of(entities("beta"), &op), branch_name))
+        .await
+        .unwrap_err();
+    assert_eq!(reused.code(), Code::AlreadyExists, "{reused}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_creating_a_type_library_digests_tenant_metadata_written_with_it() {
+    same_batch_library(None).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_batch_creating_a_type_library_digests_tenant_metadata_written_with_it_on_a_branch() {
+    same_batch_library(Some("same-batch")).await;
+}

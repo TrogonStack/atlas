@@ -707,31 +707,42 @@ impl EventModelServiceImpl {
     ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
         let files = self
             .type_libraries
-            .tenant_files(&*self.store, namespace, branch)
+            .tenant_files(&*self.store, namespace, &[], branch)
             .await?;
         trogon_atlas_core::transcode::TranscodePool::builtin()
             .and_then(|pool| pool.with_files(files))
             .map_err(|e| Status::internal(format!("building type pool: {e}")))
     }
 
-    /// The built-in types plus the live type libraries of every namespace
+    /// The built-in types plus the type libraries of every namespace
     /// `entities` belong to, so an operation digest renders tenant payloads
-    /// instead of failing on them.
+    /// instead of failing on them. A library among `entities` replaces its
+    /// live version, so payloads written with the library that declares their
+    /// type digest the same way as once it is live.
     async fn digest_pool<'a>(
         &self,
         entities: impl IntoIterator<Item = &'a pb::Entity>,
         branch: Option<&str>,
     ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
+        let entities: Vec<&pb::Entity> = entities.into_iter().collect();
         let namespaces: std::collections::BTreeSet<&str> = entities
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(trogon_atlas_core::refs::entity_id)
             .map(|id| id.namespace.as_str())
+            .collect();
+        let pending: Vec<&pb::TypeLibrary> = entities
+            .iter()
+            .filter_map(|entity| match entity.kind.as_ref()? {
+                pb::entity::Kind::TypeLibrary(library) => Some(library),
+                _ => None,
+            })
             .collect();
         let mut files: Vec<prost_types::FileDescriptorProto> = Vec::new();
         for namespace in namespaces {
             for file in self
                 .type_libraries
-                .tenant_files(&*self.store, namespace, branch)
+                .tenant_files(&*self.store, namespace, &pending, branch)
                 .await?
             {
                 match files.iter().find(|known| known.name == file.name) {
