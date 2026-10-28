@@ -82,13 +82,21 @@ fn subject() -> pb::CatalogSubject {
 }
 
 async fn put(client: &mut Client, entity: pb::Entity) -> pb::Entity {
+    put_on_branch(client, entity, None).await
+}
+
+async fn put_on_branch(
+    client: &mut Client,
+    entity: pb::Entity,
+    branch: Option<&str>,
+) -> pb::Entity {
     client
         .put_entity(request(
             pb::PutEntityRequest {
                 entity: Some(entity),
                 ..Default::default()
             },
-            None,
+            branch,
         ))
         .await
         .unwrap()
@@ -338,6 +346,282 @@ async fn incoming_document_page_token_binds_selection_and_paginates() {
         .err()
         .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
+}
+
+fn document_ref(slug: &str) -> pb::DocumentRef {
+    pb::DocumentRef { id: Some(id(slug)) }
+}
+
+fn target_document(slug: &str, purpose: pb::DocumentPurpose) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::Document(pb::Document {
+            id: Some(id(slug)),
+            title: Some(pb::CatalogTitle { value: slug.into() }),
+            subjects: vec![pb::SubjectAssociation {
+                subject: Some(subject()),
+                ..Default::default()
+            }],
+            purpose: Some(purpose as i32),
+            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                value: "https://example.com/target".into(),
+            })),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+fn owner_with_related(slug: &str, role: pb::RelatedContentRole, target: &str) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::Document(pb::Document {
+            id: Some(id(slug)),
+            title: Some(pb::CatalogTitle { value: slug.into() }),
+            subjects: vec![pb::SubjectAssociation {
+                subject: Some(subject()),
+                ..Default::default()
+            }],
+            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                value: "https://example.com/owner".into(),
+            })),
+            related_content: vec![pb::RelatedContent {
+                role: role as i32,
+                document: Some(pb::DocumentSelection {
+                    selection: Some(pb::document_selection::Selection::Document(document_ref(
+                        target,
+                    ))),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+async fn get_doc(client: &mut Client, slug: &str) -> pb::Entity {
+    client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id(slug)),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap()
+}
+
+#[tokio::test]
+async fn related_content_purpose_agreement_rejects_conflicting_target_edit_in_batch() {
+    let mut client = client().await;
+    let _ = put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id("receipt")),
+                title: "Receipt".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    put(
+        &mut client,
+        target_document("diagram-target", pb::DocumentPurpose::Diagram),
+    )
+    .await;
+    put(
+        &mut client,
+        owner_with_related(
+            "diagram-owner",
+            pb::RelatedContentRole::Diagram,
+            "diagram-target",
+        ),
+    )
+    .await;
+    let before = get_doc(&mut client, "diagram-owner").await;
+    let mut edited_target = get_doc(&mut client, "diagram-target").await;
+    if let Some(pb::entity::Kind::Document(document)) = &mut edited_target.kind {
+        document.purpose = Some(pb::DocumentPurpose::Attachment as i32);
+    }
+    let response = client
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops: vec![
+                    pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(edited_target),
+                            ..Default::default()
+                        })),
+                    },
+                    pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(before.clone()),
+                            ..Default::default()
+                        })),
+                    },
+                ],
+                ..Default::default()
+            },
+            None,
+        ))
+        .await;
+    match response {
+        Err(error) => assert_eq!(error.code(), Code::InvalidArgument, "{error}"),
+        Ok(response) => assert_ne!(
+            response.into_inner().status,
+            pb::batch_mutate_response::Status::Applied as i32
+        ),
+    }
+    assert_eq!(get_doc(&mut client, "diagram-owner").await, before);
+    let target_after = get_doc(&mut client, "diagram-target").await;
+    if let Some(pb::entity::Kind::Document(document)) = &target_after.kind {
+        assert_eq!(
+            document.purpose,
+            Some(pb::DocumentPurpose::Diagram as i32),
+            "target purpose must not partially publish"
+        );
+    }
+}
+
+#[tokio::test]
+async fn related_content_purpose_agreement_rejects_removed_target_in_batch() {
+    let mut client = client().await;
+    let _ = put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id("receipt")),
+                title: "Receipt".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    put(
+        &mut client,
+        target_document("drop-target", pb::DocumentPurpose::Diagram),
+    )
+    .await;
+    put(
+        &mut client,
+        owner_with_related("drop-owner", pb::RelatedContentRole::Diagram, "drop-target"),
+    )
+    .await;
+    let before = get_doc(&mut client, "drop-owner").await;
+    let response = client
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops: vec![
+                    pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(before.clone()),
+                            ..Default::default()
+                        })),
+                    },
+                    pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                            kind: pb::EntityKind::Document as i32,
+                            id: Some(id("drop-target")),
+                            mode: pb::delete_entity_request::Mode::Force as i32,
+                            ..Default::default()
+                        })),
+                    },
+                ],
+                ..Default::default()
+            },
+            None,
+        ))
+        .await;
+    match response {
+        Err(error) => assert_eq!(error.code(), Code::InvalidArgument, "{error}"),
+        Ok(response) => assert_ne!(
+            response.into_inner().status,
+            pb::batch_mutate_response::Status::Applied as i32
+        ),
+    }
+    assert_eq!(get_doc(&mut client, "drop-owner").await, before);
+    get_doc(&mut client, "drop-target").await;
+}
+
+#[tokio::test]
+async fn related_content_purpose_agreement_uses_branch_overlay_in_batch() {
+    let mut client = client().await;
+    let _ = put(
+        &mut client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id("receipt")),
+                title: "Receipt".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    put(
+        &mut client,
+        target_document("branch-target", pb::DocumentPurpose::Diagram),
+    )
+    .await;
+    put(
+        &mut client,
+        owner_with_related(
+            "branch-owner",
+            pb::RelatedContentRole::Diagram,
+            "branch-target",
+        ),
+    )
+    .await;
+    client
+        .create_branch(request(
+            pb::CreateBranchRequest {
+                name: "purpose-branch".into(),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+    let mut branch_target = get_doc(&mut client, "branch-target").await;
+    if let Some(pb::entity::Kind::Document(document)) = &mut branch_target.kind {
+        document.purpose = Some(pb::DocumentPurpose::Attachment as i32);
+    }
+    put_on_branch(&mut client, branch_target, Some("purpose-branch")).await;
+    let mut branch_owner = get_doc(&mut client, "branch-owner").await;
+    if let Some(pb::entity::Kind::Document(document)) = &mut branch_owner.kind {
+        document.title = Some(pb::CatalogTitle {
+            value: "Branch owner title".into(),
+        });
+    }
+    let before = get_doc(&mut client, "branch-owner").await;
+    let response = client
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops: vec![pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                        entity: Some(branch_owner),
+                        ..Default::default()
+                    })),
+                }],
+                ..Default::default()
+            },
+            Some("purpose-branch"),
+        ))
+        .await;
+    match response {
+        Err(error) => assert_eq!(error.code(), Code::InvalidArgument, "{error}"),
+        Ok(response) => assert_ne!(
+            response.into_inner().status,
+            pb::batch_mutate_response::Status::Applied as i32
+        ),
+    }
+    assert_eq!(get_doc(&mut client, "branch-owner").await, before);
 }
 
 #[tokio::test]
