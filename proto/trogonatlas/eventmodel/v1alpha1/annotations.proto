@@ -2,7 +2,6 @@ syntax = "proto3";
 
 package trogonatlas.eventmodel.v1alpha1;
 
-
 // Explanation for why an entity is intentionally disconnected from the
 // model's slice graph (no command slice produces it, no read-model slice
 // consumes it, no automation slice feeds it). The validator's

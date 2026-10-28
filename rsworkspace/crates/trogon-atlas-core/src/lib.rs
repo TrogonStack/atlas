@@ -24,6 +24,7 @@ pub mod data_product;
 mod data_product_refs;
 pub mod decision_document;
 mod decision_document_refs;
+pub mod document_catalog_context;
 pub mod id_component;
 pub mod namespace;
 pub mod operation_id;

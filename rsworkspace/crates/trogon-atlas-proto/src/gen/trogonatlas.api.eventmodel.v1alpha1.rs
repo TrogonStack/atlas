@@ -495,7 +495,7 @@ pub struct CatalogDeclaration {
     pub field: ::prost::alloc::string::String,
     #[prost(enumeration="CatalogResolutionState", tag="3")]
     pub state: i32,
-    #[prost(oneof="catalog_declaration::Declaration", tags="4, 5, 6, 7, 8, 9, 10")]
+    #[prost(oneof="catalog_declaration::Declaration", tags="4, 5, 6, 7, 8, 9, 10, 11")]
     pub declaration: ::core::option::Option<catalog_declaration::Declaration>,
 }
 /// Nested message and enum types in `CatalogDeclaration`.
@@ -516,6 +516,8 @@ pub mod catalog_declaration {
         Maker(super::super::super::super::eventmodel::v1alpha1::DecisionMaker),
         #[prost(message, tag="10")]
         Amendment(super::super::super::super::eventmodel::v1alpha1::DecisionAmendment),
+        #[prost(message, tag="11")]
+        RelatedContent(super::super::super::super::eventmodel::v1alpha1::RelatedContent),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -624,6 +626,12 @@ pub struct ListIncomingDecisionDeclarationsResponse {
 pub struct ListIncomingDocumentDeclarationsRequest {
     #[prost(message, optional, tag="1")]
     pub document: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DocumentSelection>,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::RelatedContentRole", optional, tag="2")]
+    pub related_content_role: ::core::option::Option<i32>,
+    #[prost(int32, tag="3")]
+    pub page_size: i32,
+    #[prost(string, tag="4")]
+    pub page_token: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListIncomingDocumentDeclarationsResponse {
@@ -635,6 +643,8 @@ pub struct ListIncomingDocumentDeclarationsResponse {
     pub incomplete: bool,
     #[prost(message, repeated, tag="4")]
     pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+    #[prost(string, tag="5")]
+    pub next_page_token: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListDecisionAmendmentsRequest {

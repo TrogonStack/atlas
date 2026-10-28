@@ -84,6 +84,25 @@ fn unit_fields(
     {
         return Err(SourceError::UnsupportedUnit);
     }
+    if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Document"
+        && match unit {
+            OwnershipUnit::WholeOwner => {
+                crate::document_catalog_context::dynamic_has_native_extensions(value)
+                    .map_err(|_| SourceError::NativeValue)?
+            }
+            OwnershipUnit::Field(SourceOwnedField::Purpose) => true,
+            OwnershipUnit::Field(SourceOwnedField::Body) => {
+                value.has_field_by_name("retained_content")
+            }
+            OwnershipUnit::Field(SourceOwnedField::Metadata) => {
+                crate::document_catalog_context::metadata_has_collection(value)
+                    .map_err(|_| SourceError::NativeValue)?
+            }
+            OwnershipUnit::Field(_) => false,
+        }
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     if matches!(
         descriptor.full_name(),
         "trogonatlas.eventmodel.v1alpha1.Component"

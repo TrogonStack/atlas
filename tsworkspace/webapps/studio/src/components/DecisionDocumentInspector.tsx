@@ -107,7 +107,14 @@ function Amendments({ entity, branch, incoming }: { entity: Entity; branch?: str
 }
 function Authored({ entity }: { entity: Entity }) {
   const retained = record(entity.raw.retained);
+  const retainedContent = record(entity.raw.retainedContent);
   const link = record(entity.raw.link).value;
+  const binary =
+    typeof retainedContent.content === 'string'
+      ? retainedContent.content
+      : retainedContent.content instanceof Uint8Array
+        ? `[${retainedContent.content.length} retained bytes]`
+        : undefined;
   return (
     <section className="flex flex-col gap-2">
       <h4 className="font-semibold">Loaded authored declarations</h4>
@@ -119,6 +126,15 @@ function Authored({ entity }: { entity: Entity }) {
             verify rendered headings.
           </p>
           <pre className="whitespace-pre-wrap break-words">{retained.content}</pre>
+        </>
+      )}
+      {binary !== undefined && (
+        <>
+          <p>
+            Retained binary content is shown inertly. HTML, SVG and other media are not rendered or executed; use
+            authorized download paths for exact bytes.
+          </p>
+          <pre className="whitespace-pre-wrap break-words">{binary}</pre>
         </>
       )}
       {typeof link === 'string' && (

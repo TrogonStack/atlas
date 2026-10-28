@@ -117,6 +117,35 @@ message RetainedDocumentText {
   string content = 2;
   ContentDigest digest = 3;
 }
+message RetainedContent {
+  MediaType media_type = 1;
+  bytes content = 2;
+  ContentDigest digest = 3;
+}
+message LogicalFilename {
+  string value = 1;
+}
+enum DocumentPurpose {
+  DOCUMENT_PURPOSE_UNSPECIFIED = 0;
+  DOCUMENT_PURPOSE_GENERAL = 1;
+  DOCUMENT_PURPOSE_EXAMPLE = 2;
+  DOCUMENT_PURPOSE_DIAGRAM = 3;
+  DOCUMENT_PURPOSE_ATTACHMENT = 4;
+  DOCUMENT_PURPOSE_CHANGELOG = 5;
+}
+enum RelatedContentRole {
+  RELATED_CONTENT_ROLE_UNSPECIFIED = 0;
+  RELATED_CONTENT_ROLE_EXAMPLE = 1;
+  RELATED_CONTENT_ROLE_DIAGRAM = 2;
+  RELATED_CONTENT_ROLE_ATTACHMENT = 3;
+  RELATED_CONTENT_ROLE_CHANGELOG = 4;
+}
+message RelatedContent {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DocumentSelection document = 2;
+  RelatedContentRole role = 3;
+  CatalogTitle label = 4;
+}
 message DocumentAnchor {
   LocalValueId anchor_id = 1;
   AnchorFragment fragment = 2;
@@ -137,7 +166,18 @@ message Document {
   oneof body {
     RetainedDocumentText retained = 7;
     ExternalDocumentLink link = 8;
+    RetainedContent retained_content = 13;
   }
   repeated DocumentAnchor anchors = 9;
   repeated DocumentNavigation navigation = 10;
+  optional DocumentPurpose purpose = 11;
+  LogicalFilename filename = 12;
+  repeated RelatedContent related_content = 14;
+}
+
+// Marks a navigation Document as a category container. At most one per
+// Document; membership is declared only through explicit navigation edges.
+message DocumentCollectionAnnotation {
+  CatalogTitle category = 1;
+  CatalogText description = 2;
 }

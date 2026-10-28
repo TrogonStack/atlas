@@ -406,6 +406,7 @@ async fn catalog_public_exact_queries_preserve_bytes_pins_and_provenance_outside
             .list_incoming_document_declarations(request(
                 pb::ListIncomingDocumentDeclarationsRequest {
                     document: Some(selection.clone()),
+                    ..Default::default()
                 },
                 READER,
                 None,

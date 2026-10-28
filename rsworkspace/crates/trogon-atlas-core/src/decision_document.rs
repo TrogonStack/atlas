@@ -204,7 +204,7 @@ pub fn resolve_document_selection<'a>(
     validate_stored_values(owner)?;
     connections::validate_stored_connection_ids(owner).map_err(failure)?;
     let Some(pb::document::Body::Retained(body)) = &document.body else {
-        return Err(CatalogError("anchor requires retained body".into()));
+        return Err(CatalogError("anchor requires retained text body".into()));
     };
     if let Some(pin) = &reference.expected_digest {
         digest(pin)?;
@@ -473,8 +473,10 @@ fn validate_document(value: &pb::Document) -> Result<()> {
             };
             responsibility::validate_contact(&contact).map_err(failure)?;
         }
+        Some(pb::document::Body::RetainedContent(_)) => {}
         None => return Err(CatalogError("document body required".into())),
     }
+    crate::document_catalog_context::validate_document_extensions(value)?;
     require(
         value.anchors.len() <= 256 && value.navigation.len() <= 128,
         "document collection limit exceeded",
@@ -511,7 +513,8 @@ fn validate_document(value: &pb::Document) -> Result<()> {
         }
     }
     require(
-        value.subjects.len() + value.navigation.len() <= MAX_ASSOCIATIONS,
+        value.subjects.len() + value.navigation.len() + value.related_content.len()
+            <= MAX_ASSOCIATIONS,
         "association limit exceeded",
     )
 }

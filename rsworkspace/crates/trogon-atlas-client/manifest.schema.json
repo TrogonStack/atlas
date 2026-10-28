@@ -2291,6 +2291,22 @@
               "link"
             ]
           }
+        },
+        {
+          "not": {
+            "required": [
+              "retained",
+              "retainedContent"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "link",
+              "retainedContent"
+            ]
+          }
         }
       ],
       "properties": {
@@ -2302,6 +2318,9 @@
         },
         "doc": {
           "type": "string"
+        },
+        "filename": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LogicalFilename"
         },
         "link": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalDocumentLink"
@@ -2326,8 +2345,20 @@
           },
           "type": "array"
         },
+        "purpose": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentPurpose"
+        },
+        "relatedContent": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.RelatedContent"
+          },
+          "type": "array"
+        },
         "retained": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.RetainedDocumentText"
+        },
+        "retainedContent": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.RetainedContent"
         },
         "subjects": {
           "items": {
@@ -2398,6 +2429,17 @@
         }
       },
       "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DocumentPurpose": {
+      "enum": [
+        "DOCUMENT_PURPOSE_ATTACHMENT",
+        "DOCUMENT_PURPOSE_CHANGELOG",
+        "DOCUMENT_PURPOSE_DIAGRAM",
+        "DOCUMENT_PURPOSE_EXAMPLE",
+        "DOCUMENT_PURPOSE_GENERAL",
+        "DOCUMENT_PURPOSE_UNSPECIFIED"
+      ],
+      "type": "string"
     },
     "trogonatlas.eventmodel.v1alpha1.DocumentRef": {
       "oneOf": [
@@ -3546,6 +3588,15 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.LogicalFilename": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.MediaType": {
       "additionalProperties": false,
       "properties": {
@@ -4595,6 +4646,34 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.RelatedContent": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "document": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentSelection"
+        },
+        "label": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "role": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.RelatedContentRole"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.RelatedContentRole": {
+      "enum": [
+        "RELATED_CONTENT_ROLE_ATTACHMENT",
+        "RELATED_CONTENT_ROLE_CHANGELOG",
+        "RELATED_CONTENT_ROLE_DIAGRAM",
+        "RELATED_CONTENT_ROLE_EXAMPLE",
+        "RELATED_CONTENT_ROLE_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
     "trogonatlas.eventmodel.v1alpha1.RelatedDecision": {
       "oneOf": [
         {
@@ -4721,6 +4800,22 @@
         },
         "port": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataPortRef"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.RetainedContent": {
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "description": "base64-encoded bytes",
+          "type": "string"
+        },
+        "digest": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ContentDigest"
+        },
+        "mediaType": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.MediaType"
         }
       },
       "type": "object"

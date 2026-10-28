@@ -165,3 +165,5 @@ drift.
   field or an optional RPC already covered by a feature flag: no bump.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
+
+Contract revision 19 requires client and server floor 19 to prevent lossy native catalog context writes. CalendarDate uses the shared type package with descriptor break acknowledgments.
