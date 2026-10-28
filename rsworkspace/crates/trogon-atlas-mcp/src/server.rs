@@ -396,6 +396,11 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
+        tool: "list_channel_messages",
+        rpcs: &["ListChannelMessages"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
         tool: "list_subject_assignments",
         rpcs: &["ListSubjectAssignments"],
         min_role: ToolRole::Reader,
@@ -2637,6 +2642,45 @@ impl McpServer {
         )
         .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
         let result = trogon_atlas_client::decision_document::list_incoming_document_declarations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListChannelMessages: list messages declared on an exact channel version. Preserve returned authority, owner UID, occurrence selectors, parameter values, delivery mode, and doc presence. A page token continues the same caller and scope. Incomplete, hidden, or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_channel_messages(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::channel_messages::parse_request(
+            "ListChannelMessagesRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::channel_messages::list_channel_messages(
             &mut self.client(),
             request,
         )

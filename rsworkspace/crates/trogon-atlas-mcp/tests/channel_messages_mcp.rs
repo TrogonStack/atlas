@@ -42,9 +42,9 @@ async fn server() -> (String, String, String) {
     let registry = TokenRegistry::from_file_contents(
         serde_json::from_value(json!({"principals": {
             "admin": {"role": "admin", "tokens": [ADMIN]},
-            "reader-a": {"role": "reader", "tokens": [READER_A], "parent": OWNER},
-            "reader-b": {"role": "reader", "tokens": [READER_B], "parent": OWNER},
-            "hidden": {"role": "reader", "tokens": [HIDDEN], "parent": "other-owner"}
+            "reader-a": {"role": "reader", "kind": "agent", "tokens": [READER_A], "parent": OWNER},
+            "reader-b": {"role": "reader", "kind": "agent", "tokens": [READER_B], "parent": OWNER},
+            "hidden": {"role": "reader", "kind": "agent", "tokens": [HIDDEN], "parent": "other-owner"}
         }}))
         .unwrap(),
     )
