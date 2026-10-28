@@ -7,6 +7,12 @@ import { DataProductInspector } from '@/components/DataProductInspector';
 import { CommunicationIntentDetails } from '@/components/CommunicationIntentDetails';
 import { ArchitecturalRelationshipDetails } from '@/components/ArchitecturalRelationshipDetails';
 import { ArchitectureResourceDetails } from '@/components/ArchitectureResourceDetails';
+import {
+  AgentAnnotationDetails,
+  BadgesAnnotationDetails,
+  LifecycleAnnotationDetails,
+  ResourceGroupsAnnotationDetails,
+} from '@/components/AgentMetadataDetails';
 import { SpecificationDetails } from '@/components/SpecificationDetails';
 import { CopyContextButton } from '@/components/CopyContextButton';
 import { EntityHistory } from '@/components/EntityHistory';
@@ -303,9 +309,19 @@ function annotationLabel(type: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function AnnotationView({ annotation }: { annotation: Annotation }) {
+function AnnotationView({
+  annotation,
+  model,
+  onSelect,
+}: {
+  annotation: Annotation;
+  model: Model;
+  onSelect: (key: string) => void;
+}) {
   const d = annotation.data;
   switch (annotation.type) {
+    case 'AgentAnnotation':
+      return <AgentAnnotationDetails annotation={annotation} />;
     case 'Uuidv5IdentityAnnotation': {
       const ns = d.dns ?? d.url ?? d.uuid;
       const nsKind = d.dns ? 'dns' : d.url ? 'url' : 'uuid';
@@ -391,12 +407,11 @@ function AnnotationView({ annotation }: { annotation: Annotation }) {
       );
     }
     case 'LifecycleAnnotation':
-      return (
-        <div className="rounded-md border border-border px-2 py-1.5 text-xs">
-          <Badge variant="secondary">{String(d.status ?? '')}</Badge>
-          {d.doc ? <span className="ml-2 text-muted-foreground">{String(d.doc)}</span> : null}
-        </div>
-      );
+      return <LifecycleAnnotationDetails annotation={annotation} />;
+    case 'BadgesAnnotation':
+      return <BadgesAnnotationDetails annotation={annotation} />;
+    case 'ResourceGroupsAnnotation':
+      return <ResourceGroupsAnnotationDetails annotation={annotation} model={model} onSelect={onSelect} />;
     case 'FailureModeAnnotation':
       return (
         <div className="rounded-md border border-border px-2 py-1.5 text-xs">
@@ -1145,7 +1160,7 @@ export function Inspector({
               <div className="space-y-1.5">
                 {listedAnnotations.map((a, i) => (
                   // oxlint-disable-next-line react/no-array-index-key -- annotations have no stable id
-                  <AnnotationView key={i} annotation={a} />
+                  <AnnotationView key={i} annotation={a} model={model} onSelect={onSelect} />
                 ))}
               </div>
             </section>
