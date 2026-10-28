@@ -5935,6 +5935,79 @@ async fn message_claims_source_rpc_isolation_covers_every_owner_and_supported_po
                 .mapping
                 .unwrap();
             assert_eq!(after, mapping);
+            if policy == Some(pb::SourceOwnedField::Unspecified) {
+                let native = server
+                    .client
+                    .put_entity(req(
+                        ADMIN,
+                        pb::PutEntityRequest {
+                            entity: Some(incoming.clone()),
+                            ..Default::default()
+                        },
+                        None,
+                    ))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut cleared = native.entity.clone().unwrap();
+                match cleared.kind.as_mut().unwrap() {
+                    pb::entity::Kind::Component(v) => v.message_claims = None,
+                    pb::entity::Kind::ExternalSystem(v) => v.message_claims = None,
+                    pb::entity::Kind::Domain(v) => v.message_claims = None,
+                    _ => panic!("claim owner"),
+                }
+                let error = server
+                    .client
+                    .preview_source_run(req(
+                        ADMIN,
+                        pb::PreviewSourceRunRequest {
+                            registration_id: registration.id.clone(),
+                            registration_revision: registration.revision.clone(),
+                            snapshot_id: snapshot.id.clone(),
+                            run_id: "claim-clear".into(),
+                            native_payloads: vec![pb::SourceNativePayload {
+                                source: Some(source(&registration.id)),
+                                entity: Some(cleared),
+                            }],
+                            ..Default::default()
+                        },
+                        None,
+                    ))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code(), Code::InvalidArgument);
+                let after = server
+                    .client
+                    .get_entity(req(
+                        ADMIN,
+                        pb::GetEntityRequest {
+                            kind: kind as i32,
+                            id: Some(owner_id.clone()),
+                        },
+                        None,
+                    ))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(after.entity, native.entity);
+                assert_eq!(after.etag, native.etag);
+                let after_mapping = server
+                    .client
+                    .get_source_mapping(req(
+                        ADMIN,
+                        pb::GetSourceMappingRequest {
+                            registration_id: registration.id.clone(),
+                            mapping_id: mapping.id.clone(),
+                        },
+                        None,
+                    ))
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .mapping
+                    .unwrap();
+                assert_eq!(after_mapping, mapping);
+            }
             if policy != Some(pb::SourceOwnedField::Title) {
                 continue;
             }

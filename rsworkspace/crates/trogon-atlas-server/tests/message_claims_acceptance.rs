@@ -286,7 +286,17 @@ async fn targets(
 async fn authenticated_native_claim_authoring_keeps_flat_identity_and_exact_field_validation() {
     use trogon_atlas_core::message_claims as claims;
     let (mut client, namespace) = fixture().await;
-    let (spec, message, channel) = targets(&mut client, &namespace).await;
+    let (mut spec, message, channel) = targets(&mut client, &namespace).await;
+    let current = client.get_entity(authed(pb::GetEntityRequest {
+        kind: pb::EntityKind::Specification as i32, id: reference(&spec).id, ..Default::default()
+    }, ROOT_TOKEN)).await.unwrap().into_inner();
+    if let Some(pb::entity::Kind::Specification(value)) = &mut spec.kind {
+        let mut header = value.messages[0].schemas[0].clone();
+        header.role = pb::schema_binding::Role::Headers as i32;
+        header.connection_id = None;
+        value.messages[0].schemas.push(header);
+    }
+    spec = put(&mut client, spec, &current.etag).await.unwrap().entity.unwrap();
     let Some(pb::entity::Kind::Specification(definition)) = &spec.kind else {
         panic!()
     };
@@ -402,6 +412,32 @@ async fn authenticated_native_claim_authoring_keeps_flat_identity_and_exact_fiel
                 .code(),
             Code::InvalidArgument
         );
+        let mut wrong_role = owner_entity.clone();
+        let declarations = claims::declarations_mut(&mut wrong_role).unwrap();
+        declarations.field_selections[0]
+            .binding
+            .as_mut()
+            .unwrap()
+            .id = definition.messages[0].schemas[1].connection_id.clone();
+        declarations.field_selections[0].connection_id = None;
+        assert_eq!(
+            put(&mut client, wrong_role, &valid.etag)
+                .await
+                .unwrap_err()
+                .code(),
+            Code::InvalidArgument
+        );
+        let mut sending = owner_entity.clone();
+        let declarations = claims::declarations_mut(&mut sending).unwrap();
+        declarations.claims[0].direction = pb::CommunicationDirection::Send as i32;
+        declarations.claims[0].connection_id = None;
+        assert_eq!(
+            put(&mut client, sending, &valid.etag)
+                .await
+                .unwrap_err()
+                .code(),
+            Code::InvalidArgument
+        );
         let mut opaque = owner_entity.clone();
         claims::declarations_mut(&mut opaque)
             .unwrap()
@@ -415,6 +451,55 @@ async fn authenticated_native_claim_authoring_keeps_flat_identity_and_exact_fiel
         ));
         put(&mut client, opaque, &valid.etag).await.unwrap();
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn channel_default_supplies_an_omitted_claim_route_parameter() {
+    use trogon_atlas_core::message_claims as claims;
+    let (mut client, namespace) = fixture().await;
+    let (_, message, mut channel) = targets(&mut client, &namespace).await;
+    let current = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Channel as i32,
+                id: reference(&channel).id,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    if let Some(pb::entity::Kind::Channel(value)) = &mut channel.kind {
+        value.address.as_mut().unwrap().parameters[0].default = Some("default-tenant".into());
+    }
+    put(&mut client, channel.clone(), &current.etag)
+        .await
+        .unwrap();
+    let first = put(
+        &mut client,
+        owner(&namespace, pb::EntityKind::Domain, message),
+        "",
+    )
+    .await
+    .unwrap();
+    let mut proposed = first.entity.unwrap();
+    let declarations = claims::declarations_mut(&mut proposed).unwrap();
+    declarations.routes.push(pb::ClaimRoute {
+        claim_id: declarations.claims[0].connection_id.clone(),
+        channel: Some(pb::ChannelRef {
+            id: reference(&channel).id,
+        }),
+        ..Default::default()
+    });
+    let result = put(&mut client, proposed, &first.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    assert!(claims::declarations(&result).unwrap().routes[0]
+        .parameter_values
+        .is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1442,4 +1527,130 @@ async fn explicit_branch_restoration_renews_retired_claims_and_revalidates_remot
             pb::merge_branch_response::Status::Applied as i32
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn selected_claim_budget_includes_identified_resource_group_any_leaves() {
+    use prost::Message;
+    use trogon_atlas_core::message_claims as claims;
+    use trogon_atlas_store::{Store, WriteContext};
+    let (mut client, namespace, store) = fixture_with_store().await;
+    let (spec, message, _) = targets(&mut client, &namespace).await;
+    let groups = pb::ResourceGroupsAnnotation {
+        groups: vec![pb::ResourceGroup {
+            items: vec![
+                pb::ResourceGroupItem {
+                    target: Some(reference(&spec)),
+                    ..Default::default()
+                };
+                256
+            ],
+            ..Default::default()
+        }],
+    };
+    let mut subjects = Vec::new();
+    for index in 0..40 {
+        let mut raw = owner(&namespace, pb::EntityKind::Domain, message.clone());
+        if let Some(pb::entity::Kind::Domain(domain)) = &mut raw.kind {
+            domain.id.as_mut().unwrap().slug = format!("group-owner-{index}");
+            domain.metadata.push(prost_types::Any {
+                type_url:
+                    "type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation"
+                        .into(),
+                value: groups.encode_to_vec(),
+            });
+        }
+        let authored = put(&mut client, raw, "").await.unwrap().entity.unwrap();
+        subjects.push(pb::SubjectAssociation {
+            subject: Some(pb::CatalogSubject {
+                selection: Some(pb::catalog_subject::Selection::Connection(
+                    pb::ConnectionRef {
+                        owner: Some(reference(&authored)),
+                        owner_uid: authored.system.as_ref().unwrap().uid.clone(),
+                        id: claims::declarations(&authored).unwrap().claims[0]
+                            .connection_id
+                            .clone(),
+                    },
+                )),
+            }),
+            ..Default::default()
+        });
+    }
+    let mut doc = note(&namespace, "group-budget", pb::ConnectionRef::default(), 1);
+    if let Some(pb::entity::Kind::Document(document)) = &mut doc.kind {
+        document.subjects = subjects;
+    }
+    store
+        .put(
+            pb::EntityKind::Document,
+            &doc,
+            false,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let error = client
+        .get_document_detail(authed(
+            pb::GetDocumentDetailRequest {
+                document: Some(pb::DocumentSelection {
+                    selection: Some(pb::document_selection::Selection::Document(
+                        pb::DocumentRef {
+                            id: Some(id(&namespace, "group-budget")),
+                        },
+                    )),
+                }),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::ResourceExhausted);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reader_cannot_publish_claims_or_obtain_authority_from_a_claim() {
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let service = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
+    let registry=trogon_atlas_server::auth::TokenRegistry::from_file_contents(toml::from_str::<trogon_atlas_server::auth::RegistryFile>(&format!("[principals.root]\nrole=\"admin\"\ntokens=[\"{ROOT_TOKEN}\"]\n[principals.reader]\nrole=\"reader\"\ntokens=[\"claims-reader-token\"]\n")).unwrap()).unwrap();
+    let mut client = serve_with_registry(service, registry).await;
+    let namespace = client
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: "claims-reader".into(),
+                parent: "commerce".into(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let (_, message, _) = targets(&mut client, &namespace).await;
+    let error = client
+        .put_entity(authed(
+            pb::PutEntityRequest {
+                entity: Some(owner(&namespace, pb::EntityKind::Component, message)),
+                ..Default::default()
+            },
+            "claims-reader-token",
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::PermissionDenied);
+    assert_eq!(
+        client
+            .get_entity(authed(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::Component as i32,
+                    id: Some(id(&namespace, "owner"))
+                },
+                ROOT_TOKEN
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
 }
