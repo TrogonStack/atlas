@@ -461,6 +461,8 @@ fn lifecycle_ann_any(status: &str) -> prost_types::Any {
     let ann = pb::LifecycleAnnotation {
         status: status.into(),
         doc: String::new(),
+        draft: None,
+        deprecated_on: None,
     };
     prost_types::Any {
         type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation".into(),

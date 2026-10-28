@@ -10228,6 +10228,8 @@ mod slice_stale_ref_tests {
         let ann = pb::LifecycleAnnotation {
             status: status.into(),
             doc: String::new(),
+            draft: None,
+            deprecated_on: None,
         };
         prost_types::Any {
             type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation"

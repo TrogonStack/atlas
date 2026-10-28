@@ -13,6 +13,9 @@ mod data_product_inspection;
 mod decision_document_queries;
 #[path = "responsibility_queries.rs"]
 mod responsibility_queries;
+#[cfg(test)]
+#[path = "source_business_bypass_test.rs"]
+mod source_business_bypass_test;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -2640,6 +2643,7 @@ fn build_op_results(
         .collect()
 }
 
+#[derive(Clone)]
 struct OpMetaLike {
     kind: pb::EntityKind,
     id: pb::Id,
@@ -5491,9 +5495,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .extensions()
             .get::<source_integration::SourceExecution>()
             .cloned();
-        // Source preview already rejected broken local paths. Target admission
-        // stays on native writes so a dangling target property does not block
-        // a source title update.
+        // `preview_source_run_attempt` and `apply_source_run_attempt` insert
+        // `SourceBusinessBypass`. Shape and local-path checks still run below.
+        // Target admission skips only declarations that already match storage.
         let source_business_bypass = source_execution.is_some()
             || req
                 .extensions()
@@ -5683,10 +5687,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
-            if !source_business_bypass {
-                self.validate_business_writes(&metas, branch.as_deref(), &vis)
-                    .await?;
-            }
+            self.validate_batch_business_writes(
+                &metas,
+                branch.as_deref(),
+                &vis,
+                source_business_bypass,
+            )
+            .await?;
         }
         for admission in &type_library_admissions {
             self.type_libraries
@@ -6127,16 +6134,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
                 return Err(status);
             }
-            if !source_business_bypass {
-                if let Err(status) = self
-                    .validate_business_writes(&metas, branch.as_deref(), &vis)
-                    .await
-                {
-                    if let Some(key) = &claim_key {
-                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
-                    }
-                    return Err(status);
+            if let Err(status) = self
+                .validate_batch_business_writes(
+                    &metas,
+                    branch.as_deref(),
+                    &vis,
+                    source_business_bypass,
+                )
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
                 }
+                return Err(status);
             }
 
             if let Some(execution) = source_execution {

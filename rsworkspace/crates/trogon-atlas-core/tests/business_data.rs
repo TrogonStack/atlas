@@ -102,7 +102,11 @@ fn entity_of(schema: Schema) -> Entity {
     }
 }
 
-fn identifier(property: PropertyPath, role: BusinessIdentifierRole, connection: Option<&str>) -> BusinessIdentifier {
+fn identifier(
+    property: PropertyPath,
+    role: BusinessIdentifierRole,
+    connection: Option<&str>,
+) -> BusinessIdentifier {
     BusinessIdentifier {
         connection_id: connection.map(|value| ConnectionId {
             value: value.into(),
@@ -177,7 +181,9 @@ fn alternate_admits_and_role_zero_same_path_and_empty_id_reject() {
     assert!(business_data::validate_entity(&entity_of(schema.clone())).is_err());
 
     schema.identifiers[1].property = Some(path(&[("lines", true), ("sku", false)]));
-    schema.identifiers[1].connection_id = Some(ConnectionId { value: String::new() });
+    schema.identifiers[1].connection_id = Some(ConnectionId {
+        value: String::new(),
+    });
     assert!(business_data::validate_entity(&entity_of(schema.clone())).is_err());
 
     schema.identifiers[1].connection_id = Some(ConnectionId {
@@ -196,23 +202,26 @@ fn repeated_flag_object_leaf_and_ref_walk_follow_the_field_spec() {
             .name,
         "sku"
     );
-    assert!(business_data::resolve_path(&fields, &path(&[("lines", false), ("sku", false)])).is_err());
     assert!(
-        business_data::resolve_path(&fields, &path(&[("lines", true), ("items", false), ("sku", false)]))
-            .is_err()
+        business_data::resolve_path(&fields, &path(&[("lines", false), ("sku", false)])).is_err()
     );
+    assert!(business_data::resolve_path(
+        &fields,
+        &path(&[("lines", true), ("items", false), ("sku", false)])
+    )
+    .is_err());
     assert!(
-        business_data::resolve_path(
-            &fields,
-            &path(&[("product_ref", false), ("sku", false)])
-        )
-        .is_err()
+        business_data::resolve_path(&fields, &path(&[("product_ref", false), ("sku", false)]))
+            .is_err()
     );
     let mut ambiguous = fields.clone();
     ambiguous.push(string_field("sku", false));
     ambiguous.push(string_field("sku", false));
     assert!(business_data::resolve_path(&ambiguous, &path(&[("sku", false)])).is_err());
-    assert!(business_data::resolve_path(&ambiguous, &path(&[("customer", false), ("id", false)])).is_ok());
+    assert!(
+        business_data::resolve_path(&ambiguous, &path(&[("customer", false), ("id", false)]))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -239,9 +248,7 @@ fn relationship_label_and_target_shape_are_independent_of_identifier_roles() {
         Some("belongsTo"),
         Some(OTHER),
     ));
-    schema.property_relationships[0].connection_id = Some(ConnectionId {
-        value: KEPT.into(),
-    });
+    schema.property_relationships[0].connection_id = Some(ConnectionId { value: KEPT.into() });
     business_data::validate_entity(&entity_of(schema.clone())).expect("two occurrences");
     schema.property_relationships[0].label = Some(CatalogTitle { value: "  ".into() });
     assert!(business_data::validate_entity(&entity_of(schema.clone())).is_err());
@@ -301,7 +308,10 @@ fn omitted_ids_are_assigned_and_wording_keeps_them() {
     assert!(occurrences.iter().all(|item| item.id.is_some()));
     assert!(occurrences.iter().any(|item| item.target.is_none()));
     assert!(occurrences.iter().any(|item| {
-        item.target.as_ref().and_then(|target| target.id.as_ref()).map(|id| id.slug.as_str())
+        item.target
+            .as_ref()
+            .and_then(|target| target.id.as_ref())
+            .map(|id| id.slug.as_str())
             == Some("product")
     }));
     let mut wording = prepared.clone();
@@ -396,8 +406,12 @@ fn generic_retarget_moves_the_field_ref_and_the_relationship_and_renews_only_tha
         .id;
     let mut retargeted = prepared.clone();
     let rewritten = retarget_refs(&mut retargeted, EntityKind::Schema, &from, &to);
-    assert!(rewritten.iter().any(|field| field.contains("product_ref") || field.contains("fields[2]")));
-    assert!(rewritten.iter().any(|field| field == "property_relationships[0].target_entity"));
+    assert!(rewritten
+        .iter()
+        .any(|field| field.contains("product_ref") || field.contains("fields[2]")));
+    assert!(rewritten
+        .iter()
+        .any(|field| field == "property_relationships[0].target_entity"));
     connections::renew_retargeted_connection_ids(&prepared, &mut retargeted).unwrap();
     let schema = match &retargeted.kind {
         Some(entity::Kind::Schema(schema)) => schema,
@@ -430,10 +444,19 @@ fn generic_retarget_moves_the_field_ref_and_the_relationship_and_renews_only_tha
         identifier_id.as_ref().map(ToString::to_string)
     );
     let refs = outbound_refs(&retargeted);
-    assert!(refs.iter().any(|item| item.from_field.starts_with("fields[") && item.to_id == to));
-    assert!(refs.iter().any(|item| item.from_field == "property_relationships[0].target_entity" && item.to_id == to));
-    assert!(refs.iter().position(|item| item.from_field.starts_with("fields["))
-        < refs.iter().position(|item| item.from_field.starts_with("property_relationships")));
+    assert!(refs
+        .iter()
+        .any(|item| item.from_field.starts_with("fields[") && item.to_id == to));
+    assert!(refs.iter().any(
+        |item| item.from_field == "property_relationships[0].target_entity" && item.to_id == to
+    ));
+    assert!(
+        refs.iter()
+            .position(|item| item.from_field.starts_with("fields["))
+            < refs
+                .iter()
+                .position(|item| item.from_field.starts_with("property_relationships"))
+    );
 }
 
 #[test]
@@ -495,7 +518,9 @@ fn source_cannot_own_business_declarations_or_select_their_occurrences() {
         source_integration::validate_selection_ownership(
             &selection,
             &SourceFieldOwnership {
-                policy: Some(source_field_ownership::Policy::None(pb::SourceNoOwnership {})),
+                policy: Some(source_field_ownership::Policy::None(
+                    pb::SourceNoOwnership {}
+                )),
             }
         ),
         Err(source_integration::SourceError::UnsupportedUnit)
@@ -532,7 +557,9 @@ fn source_cannot_own_business_declarations_or_select_their_occurrences() {
 fn bounds_reject_the_next_identifier_segment_name_and_encoded_schema() {
     let mut schema = Schema {
         id: Some(id("wide", 1)),
-        fields: (0..1_025).map(|index| string_field(&format!("f{index}"), false)).collect(),
+        fields: (0..1_025)
+            .map(|index| string_field(&format!("f{index}"), false))
+            .collect(),
         ..Default::default()
     };
     schema.identifiers = (0..1_024)
@@ -609,12 +636,9 @@ fn optional_aggregate_root_and_large_versions_round_trip_in_json() {
     };
     let json = transcode::message_json_value(schema::SCHEMA_MESSAGE, &unset).unwrap();
     assert!(json.get("aggregateRoot").is_none());
-    assert_eq!(
-        pb::CONTRACT_REVISION,
-        pb::MIN_SERVER_CONTRACT_REVISION
-    );
+    assert_eq!(pb::CONTRACT_REVISION, pb::MIN_SERVER_CONTRACT_REVISION);
     assert_eq!(pb::CONTRACT_REVISION, pb::MIN_CLIENT_CONTRACT_REVISION);
-    assert_eq!(pb::CONTRACT_REVISION, 18);
+    assert_eq!(pb::CONTRACT_REVISION, 19);
 }
 
 #[test]
@@ -623,7 +647,9 @@ fn a_named_field_does_not_become_an_identifier_occurrence() {
     schema.fields.push(string_field("order_id", false));
     let entity = entity_of(schema);
     business_data::validate_entity(&entity).unwrap();
-    assert!(connection_occurrences(&prepare_entity(None, &entity).unwrap())
-        .unwrap()
-        .is_empty());
+    assert!(
+        connection_occurrences(&prepare_entity(None, &entity).unwrap())
+            .unwrap()
+            .is_empty()
+    );
 }

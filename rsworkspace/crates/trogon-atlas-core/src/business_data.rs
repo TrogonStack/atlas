@@ -121,6 +121,21 @@ pub fn declares_business(entity: &Entity) -> bool {
     })
 }
 
+/// Source title and field updates clone the stored schema and replace only
+/// the owned unit. Admission can skip when these three collections are the
+/// stored ones, because a dangling `target_property` must not block that
+/// unrelated edit. Any other byte, including a clear, is a new declaration.
+pub fn business_declarations_match(current: &Entity, incoming: &Entity) -> bool {
+    match (schema_of(current), schema_of(incoming)) {
+        (Some(current), Some(incoming)) => {
+            current.aggregate_root == incoming.aggregate_root
+                && current.identifiers == incoming.identifiers
+                && current.property_relationships == incoming.property_relationships
+        }
+        _ => false,
+    }
+}
+
 pub fn resolve_path<'a>(
     fields: &'a [FieldSpec],
     path: &PropertyPath,
@@ -207,7 +222,8 @@ fn reject_payload(entity: &Entity) -> Result<(), BusinessError> {
 }
 
 fn validate_schema(schema: &Schema) -> Result<(), BusinessError> {
-    if schema.identifiers.len() > MAX_IDENTIFIERS || schema.property_relationships.len() > MAX_RELATIONSHIPS
+    if schema.identifiers.len() > MAX_IDENTIFIERS
+        || schema.property_relationships.len() > MAX_RELATIONSHIPS
     {
         return Err(BusinessError(
             "a schema declares at most 1024 identifiers and 1024 relationships".into(),
@@ -298,9 +314,7 @@ fn validate_relationship(
     Ok(())
 }
 
-fn optional_text(
-    doc: Option<&trogon_atlas_proto::CatalogText>,
-) -> Result<(), BusinessError> {
+fn optional_text(doc: Option<&trogon_atlas_proto::CatalogText>) -> Result<(), BusinessError> {
     if let Some(doc) = doc {
         decision_document::validate_catalog_text(Some(doc))
             .map_err(|error| BusinessError(error.to_string()))?;

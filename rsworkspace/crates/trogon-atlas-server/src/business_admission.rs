@@ -11,7 +11,59 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<(), Status> {
-        let overlay: HashMap<pb::EntityKey, Option<pb::Entity>> = metas
+        self.admit_business_relationships(metas, metas, branch, vis)
+            .await
+    }
+
+    /// Source batches set `preserve_matching` so a title or fields update can
+    /// keep a dangling target property. The overlay still includes every op,
+    /// including ones whose declarations match and are not rechecked.
+    pub(super) async fn validate_batch_business_writes(
+        &self,
+        metas: &[OpMetaLike],
+        branch: Option<&str>,
+        vis: &Visibility,
+        preserve_matching: bool,
+    ) -> Result<(), Status> {
+        if !preserve_matching {
+            return self.validate_business_writes(metas, branch, vis).await;
+        }
+        let mut checked = Vec::new();
+        for meta in metas {
+            if !meta.is_put {
+                continue;
+            }
+            let Some(entity) = meta.entity.as_ref() else {
+                continue;
+            };
+            if !matches!(entity.kind, Some(pb::entity::Kind::Schema(_))) {
+                continue;
+            }
+            match self.store.get(meta.kind, &meta.id, branch).await {
+                Ok(stored)
+                    if trogon_atlas_core::business_data::business_declarations_match(
+                        &stored.entity,
+                        entity,
+                    ) => {}
+                Ok(_) | Err(StoreError::NotFound) => checked.push(meta.clone()),
+                Err(error) => return Err(store_err(error)),
+            }
+        }
+        if checked.is_empty() {
+            return Ok(());
+        }
+        self.admit_business_relationships(&checked, metas, branch, vis)
+            .await
+    }
+
+    async fn admit_business_relationships(
+        &self,
+        checked: &[OpMetaLike],
+        overlay_metas: &[OpMetaLike],
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        let overlay: HashMap<pb::EntityKey, Option<pb::Entity>> = overlay_metas
             .iter()
             .map(|meta| {
                 (
@@ -20,7 +72,7 @@ impl EventModelServiceImpl {
                 )
             })
             .collect();
-        for meta in metas.iter().filter(|meta| meta.is_put) {
+        for meta in checked.iter().filter(|meta| meta.is_put) {
             let Some(entity) = meta.entity.as_ref() else {
                 continue;
             };
@@ -108,7 +160,9 @@ impl EventModelServiceImpl {
             else {
                 continue;
             };
-            budget.charge_record().map_err(budget_status)?;
+            budget
+                .charge_record()
+                .map_err(|error| budget_status(&error))?;
             let Some(owner_ref) = reference.from.as_ref() else {
                 reference.business_property_status = Some(unavailable());
                 continue;
@@ -128,7 +182,7 @@ impl EventModelServiceImpl {
                         "owner:{}:{}:{}:{}",
                         kind as i32, owner_id.namespace, owner_id.slug, owner_id.version
                     ))
-                    .map_err(budget_status)?;
+                    .map_err(|error| budget_status(&error))?;
                 if !owners.contains_key(&owner_key) {
                     match self.store.get(kind, owner_id, branch).await {
                         Ok(stored) => {
@@ -149,7 +203,7 @@ impl EventModelServiceImpl {
                         .charge_occurrences(
                             schema.identifiers.len() + schema.property_relationships.len(),
                         )
-                        .map_err(budget_status)?;
+                        .map_err(|error| budget_status(&error))?;
                 }
             }
             let relationship = owners
@@ -171,7 +225,7 @@ impl EventModelServiceImpl {
             };
             budget
                 .charge_occurrences(path.segments.len())
-                .map_err(budget_status)?;
+                .map_err(|error| budget_status(&error))?;
             let Some(target_id) = reference.to.as_ref().and_then(|to| to.id.clone()) else {
                 reference.business_property_status = Some(unavailable());
                 continue;
@@ -187,7 +241,7 @@ impl EventModelServiceImpl {
                         "target:{}:{}:{}",
                         target_id.namespace, target_id.slug, target_id.version
                     ))
-                    .map_err(budget_status)?;
+                    .map_err(|error| budget_status(&error))?;
                 let loaded = match self
                     .store
                     .get(pb::EntityKind::Schema, &target_id, branch)
@@ -228,6 +282,6 @@ fn unavailable() -> i32 {
     pb::BusinessPropertyReferenceStatus::Unavailable as i32
 }
 
-fn budget_status(error: trogon_atlas_core::business_data::BusinessError) -> Status {
+fn budget_status(error: &trogon_atlas_core::business_data::BusinessError) -> Status {
     Status::resource_exhausted(error.to_string())
 }

@@ -62,7 +62,12 @@ struct Context {
     branch: Option<String>,
     metadata: tonic::metadata::MetadataMap,
 }
-/// Marks a batch whose local business paths were already gated by source preview.
+/// Marks a source preview or apply batch. `preview_source_run_attempt` inserts
+/// it before the validate-only `batch_mutate`. `apply_source_run_attempt`
+/// inserts `SourceExecution` and then this flag before the real `batch_mutate`.
+/// The flag is not a blanket admission skip: only a stored schema whose
+/// aggregate root, identifiers, and property relationships are unchanged may
+/// skip target admission, so a title update can keep a dangling target property.
 #[derive(Clone, Copy)]
 pub(super) struct SourceBusinessBypass;
 
