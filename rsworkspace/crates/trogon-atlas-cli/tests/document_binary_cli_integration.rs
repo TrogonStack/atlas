@@ -84,7 +84,7 @@ fn cli(endpoint: &str, token: &str, name: &str, request: &Value) -> Value {
     serde_json::from_slice::<Value>(&output.stdout).unwrap()["data"].clone()
 }
 
-const MANIFEST: &str = r#"apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+const MANIFEST: &str = r"apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
 kind: Event
 metadata: {namespace: NAMESPACE, name: receipt}
 spec: {title: Receipt}
@@ -129,7 +129,7 @@ spec:
     mediaType: {value: application/octet-stream}
     content: AGV4YWN0/wo=
     digest: {sha256: ea545ad36a9c4c5bfc95d99937328130e5834502247a772fd585d943c97e6831}
-"#;
+";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn authenticated_document_binary_cli_roundtrip() {
@@ -208,4 +208,22 @@ async fn authenticated_document_binary_cli_roundtrip() {
         &json!({"document":{"document":{"id":{"namespace":namespace,"slug":"binary","version":"9007199254740993"}}}}),
     );
     assert!(detail.to_string().contains("AGV4YWN0/wo="), "{detail}");
+    let invalid_path = directory.path().join("source-selection.yaml");
+    std::fs::write(
+        &invalid_path,
+        manifest.replace(
+            "document: text",
+            "source: {registrationId: native-document-source, category: model, key: retained-example}",
+        ),
+    ).unwrap();
+    let refused = command(
+        &endpoint,
+        "document-binary-cli-writer",
+        &["apply", "-f", invalid_path.to_str().unwrap()],
+    );
+    assert!(
+        !refused.status.success(),
+        "native Document accepted a Source selection"
+    );
+    assert_eq!(before, run(&["get", &key]));
 }

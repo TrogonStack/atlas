@@ -121,7 +121,7 @@ fn body(result: rmcp::model::CallToolResult) -> Value {
     serde_json::from_str(&content.as_text().unwrap().text).unwrap()
 }
 
-const MANIFEST: &str = r#"apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+const MANIFEST: &str = r"apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
 kind: Event
 metadata: {namespace: NAMESPACE, name: receipt}
 spec: {title: Receipt}
@@ -166,7 +166,7 @@ spec:
     mediaType: {value: application/octet-stream}
     content: AGV4YWN0/wo=
     digest: {sha256: ea545ad36a9c4c5bfc95d99937328130e5834502247a772fd585d943c97e6831}
-"#;
+";
 
 async fn tool(client: &McpClient, name: &'static str, args: Value) -> Value {
     body(
@@ -195,7 +195,7 @@ async fn authenticated_document_binary_mcp_roundtrip() {
         json!({"manifests_yaml":manifest}),
     )
     .await;
-    let get = json!({"kind":"document","namespace":namespace,"slug":"binary","version":9007199254740993u64});
+    let get = json!({"kind":"document","namespace":namespace,"slug":"binary","version":9_007_199_254_740_993_u64});
     let text = tool(
         &writer,
         "get_entity_json",
@@ -273,6 +273,25 @@ async fn authenticated_document_binary_mcp_roundtrip() {
         assert!(result.is_err(), "backend accepted {field}: {result:?}");
         assert_eq!(before, tool(&writer, "get_entity_json", get.clone()).await);
     }
+    let mut source_selection = before["json"].clone();
+    source_selection["document"]["relatedContent"][0]["document"] = json!({
+        "source": { "registrationId": "native-document-source", "category": "model", "key": "retained-example" }
+    });
+    let refused_source = writer
+        .call_tool(
+            CallToolRequestParams::new("put_entity_json").with_arguments(
+                json!({"entity_json":source_selection,"if_match":before["etag"]})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
+        )
+        .await;
+    assert!(
+        refused_source.is_err(),
+        "native Document accepted a Source selection: {refused_source:?}"
+    );
+    assert_eq!(before, tool(&writer, "get_entity_json", get.clone()).await);
     let outgoing = tool(&writer, "get_outgoing_references", get.clone()).await;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(outgoing["binpb_base64"].as_str().unwrap())
@@ -285,12 +304,90 @@ async fn authenticated_document_binary_mcp_roundtrip() {
         .collect::<Vec<_>>();
     assert_eq!(related.len(), 3);
     assert!(related.iter().all(|r| r.connection_id.is_some()));
-    let impact = tool(&writer, "get_impact", get.clone()).await;
+    let impact = tool(
+        &writer,
+        "get_impact",
+        json!({"kind":"document","namespace":namespace,"slug":"text","version":1}),
+    )
+    .await;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(impact["binpb_base64"].as_str().unwrap())
         .unwrap();
     let impact = pb::GetImpactResponse::decode(bytes.as_slice()).unwrap();
-    assert!(!impact.nodes.is_empty());
+    let mut reached = impact
+        .nodes
+        .iter()
+        .map(|node| {
+            let entity = node.entity.as_ref().unwrap();
+            let id = entity.id.as_ref().unwrap();
+            (
+                entity.kind,
+                id.namespace.clone(),
+                id.slug.clone(),
+                id.version,
+                node.depth,
+            )
+        })
+        .collect::<Vec<_>>();
+    reached.sort();
+    let mut expected = [
+        (
+            pb::EntityKind::Event as i32,
+            namespace.clone(),
+            "receipt".into(),
+            1,
+            1,
+        ),
+        (
+            pb::EntityKind::Document as i32,
+            namespace.clone(),
+            "text".into(),
+            1,
+            0,
+        ),
+        (
+            pb::EntityKind::Document as i32,
+            namespace.clone(),
+            "general".into(),
+            1,
+            2,
+        ),
+        (
+            pb::EntityKind::Document as i32,
+            namespace.clone(),
+            "binary".into(),
+            9_007_199_254_740_993,
+            1,
+        ),
+    ];
+    expected.sort();
+    assert_eq!(reached, expected);
+    let affected = impact
+        .nodes
+        .iter()
+        .find(|node| {
+            node.entity
+                .as_ref()
+                .and_then(|entity| entity.id.as_ref())
+                .is_some_and(|id| {
+                    id.namespace == namespace
+                        && id.slug == "binary"
+                        && id.version == 9_007_199_254_740_993
+                })
+        })
+        .unwrap();
+    assert_eq!(affected.depth, 1);
+    assert_eq!(affected.path.len(), 1);
+    let path = &affected.path[0];
+    let selected = related
+        .iter()
+        .find(|reference| reference.connection_id == path.connection_id)
+        .unwrap();
+    assert_eq!(path.from_field, selected.from_field);
+    assert_eq!(path.from_uid, selected.from_uid);
+    assert_eq!(path.from, selected.from);
+    assert_eq!(path.to, selected.to);
+    assert_eq!(impact.next_page_token, "");
     let exported = tool(&writer, "export_namespace", json!({"namespace":namespace})).await;
     let files = exported["files"].as_object().unwrap();
     let yaml = files
