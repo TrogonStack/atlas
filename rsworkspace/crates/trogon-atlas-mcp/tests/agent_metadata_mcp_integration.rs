@@ -205,3 +205,250 @@ async fn native_metadata_mcp_apply_get_and_reapply() {
     client.cancel().await.unwrap();
     service.cancel().await.unwrap();
 }
+
+fn changed_fixture(namespace: &str) -> serde_json::Value {
+    let mut manifest = fixture();
+    manifest["metadata"]["namespace"] = json!(namespace);
+    let target = json!({"kind":"ENTITY_KIND_COMPONENT","id":{"namespace":namespace,"slug":"target","version":"18446744073709551615"}});
+    let metadata = manifest["spec"]["metadata"].as_array_mut().unwrap();
+    metadata[3]["groups"][0]["items"] = json!([
+        {"connectionId":{"value":"10000000-0000-4000-8000-000000000002"},"target":target},
+        {"connectionId":{"value":"10000000-0000-4000-8000-000000000003"},"target":target}
+    ]);
+    manifest
+}
+
+async fn tool(
+    client: &McpClient,
+    name: &'static str,
+    pairs: &[(&str, serde_json::Value)],
+) -> Result<rmcp::model::CallToolResult, rmcp::service::ServiceError> {
+    client
+        .call_tool(rmcp::model::CallToolRequestParams::new(name).with_arguments(args_obj(pairs)))
+        .await
+}
+
+async fn stored_metadata(client: &McpClient, namespace: &str) -> serde_json::Value {
+    let result = tool(
+        client,
+        "get_entity_json",
+        &[
+            ("kind", json!("component")),
+            ("namespace", json!(namespace)),
+            ("slug", json!("agent")),
+            ("version", json!(9_007_199_254_740_993_u64)),
+        ],
+    )
+    .await
+    .unwrap();
+    assert!(!result.is_error.unwrap_or(false), "{result:?}");
+    call_tool_result_text(&result)["json"]["component"]["metadata"].clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_metadata_mcp_changed_update_is_diffed_applied_and_semantically_equal() {
+    let (client, service, _) = start_mcp_client().await;
+    let namespace = "catalog-changed-update";
+    let original = changed_fixture(namespace);
+    let target = json!({"apiVersion":trogon_atlas_client::manifest::API_VERSION,"kind":"Component","metadata":{"namespace":namespace,"name":"target","version":"18446744073709551615"},"spec":{"title":"Target"}});
+    for manifest in [&target, &original] {
+        let result = tool(
+            &client,
+            "apply_manifests",
+            &[("manifests_yaml", json!(manifest.to_string()))],
+        )
+        .await
+        .unwrap();
+        assert!(!result.is_error.unwrap_or(false), "{result:?}");
+    }
+    let before = stored_metadata(&client, namespace).await;
+    assert_eq!(before, original["spec"]["metadata"]);
+
+    let mut changed = original.clone();
+    let metadata = changed["spec"]["metadata"].as_array_mut().unwrap();
+    metadata[0]["model"] = json!({"provider":{"value":"example"},"name":{"value":"model-b"}});
+    let tools = metadata[0]["tools"].as_array_mut().unwrap();
+    tools.reverse();
+    tools.push(json!({"name":{"value":"extra"},"type":{"value":"manual"}}));
+    metadata[1] = json!({"@type":"type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation","status":"deprecated","deprecatedOn":{"value":"9999-12-31"}});
+    metadata[2]["badges"] = json!([
+        {"content":{"value":"Preview"},"backgroundColor":{"value":"#112233"},"textColor":{"value":"#FFFFFF"},"icon":{"value":"star"},"url":{"value":"https://example.test/badge"}},
+        {"content":{"value":"Preview"},"backgroundColor":{"value":"#aAbBcC"},"textColor":{"value":"#FFFFFF"}}
+    ]);
+    metadata[3]["groups"][0]["items"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    metadata[3]["groups"][0]["displayLimit"] = json!({"value":2});
+    metadata[3]["groups"][0]["sidebar"] = json!(true);
+
+    let diff = tool(
+        &client,
+        "diff_manifests",
+        &[("manifests_yaml", json!(changed.to_string()))],
+    )
+    .await
+    .unwrap();
+    assert_eq!(call_tool_result_text(&diff)["changed"], true);
+    assert_eq!(stored_metadata(&client, namespace).await, before);
+
+    let applied = tool(
+        &client,
+        "apply_manifests",
+        &[("manifests_yaml", json!(changed.to_string()))],
+    )
+    .await
+    .unwrap();
+    assert!(!applied.is_error.unwrap_or(false), "{applied:?}");
+    let after = stored_metadata(&client, namespace).await;
+    assert_eq!(after, changed["spec"]["metadata"]);
+    assert_ne!(after, before);
+    let types: Vec<_> = after
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|annotation| annotation["@type"].clone())
+        .collect();
+    assert_eq!(
+        types,
+        original["spec"]["metadata"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|annotation| annotation["@type"].clone())
+            .collect::<Vec<_>>()
+    );
+
+    for (manifest, expected) in [(&changed, false), (&original, true)] {
+        let diff = tool(
+            &client,
+            "diff_manifests",
+            &[("manifests_yaml", json!(manifest.to_string()))],
+        )
+        .await
+        .unwrap();
+        assert_eq!(call_tool_result_text(&diff)["changed"], expected);
+    }
+    client.cancel().await.unwrap();
+    service.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn schema_valid_but_semantically_malformed_annotations_are_rejected_by_the_backend() {
+    let (client, service, _) = start_mcp_client().await;
+    let namespace = "catalog-schema-valid";
+    let validator =
+        jsonschema::validator_for(&trogon_atlas_client::manifest_schema::generate().unwrap())
+            .unwrap();
+    let valid = changed_fixture(namespace);
+    let target = json!({"apiVersion":trogon_atlas_client::manifest::API_VERSION,"kind":"Component","metadata":{"namespace":namespace,"name":"target","version":"18446744073709551615"},"spec":{"title":"Target"}});
+    for manifest in [&target, &valid] {
+        let result = tool(
+            &client,
+            "apply_manifests",
+            &[("manifests_yaml", json!(manifest.to_string()))],
+        )
+        .await
+        .unwrap();
+        assert!(!result.is_error.unwrap_or(false), "{result:?}");
+    }
+    let before = stored_metadata(&client, namespace).await;
+    let tool_a = json!({"name":{"value":"lookup"},"type":{"value":"manual"}});
+    let edits: Vec<(&str, usize, Box<dyn Fn(&mut serde_json::Value)>)> = vec![
+        (
+            "empty present model",
+            0,
+            Box::new(|a| a["model"] = json!({})),
+        ),
+        (
+            "duplicate tool pair",
+            0,
+            Box::new(move |a| a["tools"] = json!([tool_a.clone(), tool_a.clone()])),
+        ),
+        (
+            "plain http tool URL",
+            0,
+            Box::new(|a| {
+                a["tools"][0]["url"] = json!({"value":"http://example.test/tool"});
+            }),
+        ),
+        (
+            "blank draft message",
+            1,
+            Box::new(|a| a["draft"]["message"] = json!({"value":"  "})),
+        ),
+        (
+            "date without deprecated status",
+            1,
+            Box::new(|a| a["deprecatedOn"] = json!({"value":"2030-01-01"})),
+        ),
+        (
+            "impossible calendar date",
+            1,
+            Box::new(|a| {
+                a["status"] = json!("deprecated");
+                a["draft"] = json!(null);
+                a["deprecatedOn"] = json!({"value":"2026-02-30"});
+            }),
+        ),
+        (
+            "named color",
+            2,
+            Box::new(|a| a["badges"][0]["backgroundColor"] = json!({"value":"red"})),
+        ),
+        (
+            "identical badges",
+            2,
+            Box::new(|a| {
+                let first = a["badges"][0].clone();
+                a["badges"] = json!([first.clone(), first]);
+            }),
+        ),
+        (
+            "zero display limit",
+            3,
+            Box::new(|a| a["groups"][0]["displayLimit"] = json!({"value":0})),
+        ),
+        (
+            "duplicate item ID",
+            3,
+            Box::new(|a| {
+                a["groups"][0]["items"][1]["connectionId"] =
+                    a["groups"][0]["items"][0]["connectionId"].clone();
+            }),
+        ),
+        (
+            "latest-version selector",
+            3,
+            Box::new(|a| {
+                a["groups"][0]["items"][0]["target"]["id"]["version"] = json!("0");
+            }),
+        ),
+    ];
+    for (name, index, edit) in edits {
+        let mut manifest = valid.clone();
+        let annotation = &mut manifest["spec"]["metadata"][index];
+        edit(annotation);
+        if annotation["draft"].is_null() {
+            annotation.as_object_mut().unwrap().remove("draft");
+        }
+        assert!(
+            validator.is_valid(&manifest),
+            "{name}: the schema must accept it so only the backend can refuse it"
+        );
+        let rejected = tool(
+            &client,
+            "apply_manifests",
+            &[("manifests_yaml", json!(manifest.to_string()))],
+        )
+        .await;
+        let refused = match rejected {
+            Err(error) => error.to_string().contains("invalid metadata"),
+            Ok(result) => result.is_error.unwrap_or(false),
+        };
+        assert!(refused, "{name}: the backend accepted {manifest}");
+        assert_eq!(stored_metadata(&client, namespace).await, before, "{name}");
+    }
+    client.cancel().await.unwrap();
+    service.cancel().await.unwrap();
+}
