@@ -346,3 +346,7 @@ pub fn validate_route_target(route: &pb::ClaimRoute, channel: &pb::Channel) -> R
 pub fn validate_source_write(previous: Option<&Entity>, proposed: &Entity, unit: crate::source_integration::OwnershipUnit) -> Result<()> {
  check(!((previous.is_none() || unit==crate::source_integration::OwnershipUnit::WholeOwner) && has_content(proposed)) && !(unit==crate::source_integration::OwnershipUnit::WholeOwner && previous.is_some_and(has_content)),"message claims are native-only")
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldSelectorVerification { NativePath, OpaqueUnverified }
+pub fn validate_field_selection(_owner:&Entity,_selection:&pb::ClaimFieldSelection,_specification:&Entity,_schema:Option<&Entity>) -> Result<Vec<FieldSelectorVerification>> { Ok(Vec::new()) }

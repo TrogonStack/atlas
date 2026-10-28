@@ -135,3 +135,25 @@ fn complete_values_limits_and_staged_local_ids_are_enforced_without_mutation() {
     let c=claims::declarations(&many).unwrap().claims[0].clone();claims::declarations_mut(&mut many).unwrap().claims.push(c);assert!(prepare_entity(None,&many).is_err());
     let mut large=owner();if let Some(entity::Kind::Domain(d))=&mut large.kind{d.doc="x".repeat(1_048_576);}assert!(prepare_entity(None,&large).is_err());
 }
+
+fn field_fixture() -> (Entity,ClaimFieldSelection,Entity,Entity) {
+    use trogon_atlas_core::{connection_persistence::prepare_entity,message_claims as claims};
+    let spec=prepare_entity(None,&Entity{kind:Some(entity::Kind::Specification(Specification{id:Some(id("messages")),messages:vec![ContractMessage{schemas:vec![SchemaBinding{role:schema_binding::Role::Payload as i32,r#type:Some(schema_binding::Type::Schema(SchemaRef{id:Some(id("payload"))})),..Default::default()}],..Default::default()}],..Default::default()})),..Default::default()}).unwrap();
+    let Some(entity::Kind::Specification(s))=&spec.kind else{panic!()};
+    let mut e=owner();let v=claims::declarations_mut(&mut e).unwrap();let m=v.claims[0].message.as_mut().unwrap();m.owner_uid=spec.system.as_ref().unwrap().uid.clone();m.member_id=s.messages[0].member_id.clone();
+    let e=prepare_entity(None,&e).unwrap();
+    let selection=ClaimFieldSelection{claim_id:claims::declarations(&e).unwrap().claims[0].connection_id.clone(),binding:Some(ConnectionRef{owner:Some(EntityRef{kind:EntityKind::Specification as i32,id:s.id.clone()}),owner_uid:spec.system.as_ref().unwrap().uid.clone(),id:s.messages[0].schemas[0].connection_id.clone()}),selectors:vec![ClaimFieldSelector{selector:Some(claim_field_selector::Selector::Path(FieldPath{segments:vec!["customer".into(),"name".into()]}))}],..Default::default()};
+    let schema=Entity{kind:Some(entity::Kind::Schema(Schema{id:Some(id("payload")),fields:vec![FieldSpec{name:"customer".into(),r#type:Some(FieldType{kind:Some(field_type::Kind::Object(field_type::ObjectType{fields:vec![FieldSpec{name:"name".into(),..Default::default()}]}))}),..Default::default()}],..Default::default()})),..Default::default()};
+    (e,selection,spec,schema)
+}
+#[test]
+fn payload_selection_resolves_exact_message_binding_and_inline_paths_only() {
+    use trogon_atlas_core::message_claims::{validate_field_selection,FieldSelectorVerification};
+    let (e,mut selection,mut spec,schema)=field_fixture();
+    assert_eq!(validate_field_selection(&e,&selection,&spec,Some(&schema)).unwrap(),vec![FieldSelectorVerification::NativePath]);
+    selection.selectors[0].selector=Some(claim_field_selector::Selector::Path(FieldPath{segments:vec!["missing".into()]}));assert!(validate_field_selection(&e,&selection,&spec,Some(&schema)).is_err());
+    selection.selectors[0].selector=Some(claim_field_selector::Selector::Opaque(OpaqueTypeSelector{syntax:"json-pointer".into(),value:"/unknown".into()}));
+    assert_eq!(validate_field_selection(&e,&selection,&spec,None).unwrap(),vec![FieldSelectorVerification::OpaqueUnverified]);
+    if let Some(entity::Kind::Specification(s))=&mut spec.kind{s.messages[0].schemas[0].role=schema_binding::Role::Headers as i32;}
+    assert!(validate_field_selection(&e,&selection,&spec,None).is_err());
+}
