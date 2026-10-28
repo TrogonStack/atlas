@@ -289,219 +289,6 @@ pub struct PreconditionFailure {
     #[prost(string, tag="3")]
     pub actual_etag: ::prost::alloc::string::String,
 }
-/// One independent message carried by a channel. Authority values other than
-/// SPECIFICATION_DECLARATION are reserved for a parent merge and are not
-/// emitted by this slice.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ChannelMessageRecord {
-    #[prost(message, optional, tag="1")]
-    pub owner: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    #[prost(string, tag="2")]
-    pub owner_uid: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="3")]
-    pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(message, optional, tag="4")]
-    pub message: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ContractMemberRef>,
-    #[prost(message, optional, tag="5")]
-    pub channel: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ChannelRef>,
-    #[prost(map="string, string", tag="6")]
-    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
-    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::ClaimDeliveryMode", optional, tag="7")]
-    pub delivery_mode: ::core::option::Option<i32>,
-    #[prost(string, optional, tag="8")]
-    pub doc: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::ChannelMessageAuthority", tag="9")]
-    pub authority: i32,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ListChannelMessagesRequest {
-    #[prost(message, optional, tag="1")]
-    pub channel: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ChannelRef>,
-    #[prost(uint32, tag="2")]
-    pub page_size: u32,
-    #[prost(string, tag="3")]
-    pub page_token: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListChannelMessagesResponse {
-    #[prost(message, repeated, tag="1")]
-    pub records: ::prost::alloc::vec::Vec<ChannelMessageRecord>,
-    #[prost(string, tag="2")]
-    pub next_page_token: ::prost::alloc::string::String,
-    #[prost(bool, tag="3")]
-    pub incomplete: bool,
-    #[prost(bool, tag="4")]
-    pub complete: bool,
-    #[prost(string, optional, tag="5")]
-    pub branch: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, tag="6")]
-    pub scope_digest: ::prost::alloc::string::String,
-    #[prost(uint32, tag="7")]
-    pub authorized_namespace_count: u32,
-}
-/// Branch selection uses the service's x-trogon-atlas-branch metadata.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct InspectDataProductRequest {
-    #[prost(message, optional, tag="1")]
-    pub product: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataProductRef>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DataProductAccessState {
-    #[prost(message, optional, tag="1")]
-    pub declaration: ::core::option::Option<super::super::super::eventmodel::v1alpha1::OutputAccess>,
-    #[prost(enumeration="DataProductSelectionState", tag="2")]
-    pub state: i32,
-    #[prost(enumeration="DataProductSelectionState", tag="3")]
-    pub provider: i32,
-    #[prost(message, repeated, tag="4")]
-    pub checked_connections: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct DataProductEmissionEvidence {
-    #[prost(message, optional, tag="1")]
-    pub input: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataPortRef>,
-    #[prost(message, optional, tag="2")]
-    pub event: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EventRef>,
-    #[prost(message, optional, tag="3")]
-    pub emission: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DataProductProducingEvidence {
-    #[prost(message, optional, tag="1")]
-    pub input: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataPortRef>,
-    #[prost(message, optional, tag="2")]
-    pub output: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataPortRef>,
-    #[prost(message, repeated, tag="3")]
-    pub path: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DataProductPortState {
-    #[prost(message, optional, tag="1")]
-    pub port: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataPortRef>,
-    #[prost(enumeration="DataProductSelectionState", tag="2")]
-    pub data: i32,
-    #[prost(enumeration="DataProductSelectionState", tag="3")]
-    pub contract: i32,
-    #[prost(enumeration="DataProductSelectionState", tag="4")]
-    pub lineage: i32,
-    #[prost(message, repeated, tag="5")]
-    pub access: ::prost::alloc::vec::Vec<DataProductAccessState>,
-    #[prost(bool, tag="6")]
-    pub incomplete: bool,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DataProductCheckedScope {
-    #[prost(string, optional, tag="1")]
-    pub branch: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(string, repeated, tag="2")]
-    pub authorized_namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Identifies the content and branch context actually checked for this evidence.
-    #[prost(string, tag="3")]
-    pub revision: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="4")]
-    pub visited: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::EntityRef>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct InspectDataProductResponse {
-    #[prost(message, optional, tag="1")]
-    pub product: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataProduct>,
-    #[prost(string, tag="2")]
-    pub etag: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="3")]
-    pub scope: ::core::option::Option<DataProductCheckedScope>,
-    #[prost(message, repeated, tag="4")]
-    pub ports: ::prost::alloc::vec::Vec<DataProductPortState>,
-    #[prost(message, repeated, tag="5")]
-    pub emissions: ::prost::alloc::vec::Vec<DataProductEmissionEvidence>,
-    #[prost(message, repeated, tag="6")]
-    pub producing: ::prost::alloc::vec::Vec<DataProductProducingEvidence>,
-    #[prost(bool, tag="7")]
-    pub incomplete: bool,
-    #[prost(enumeration="DataProductOfferingState", tag="8")]
-    pub offering: i32,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum DataProductSelectionState {
-    Unspecified = 0,
-    Undeclared = 1,
-    Resolved = 2,
-    Opaque = 3,
-    Unresolved = 4,
-    Inaccessible = 5,
-    Unknown = 6,
-    ExplicitEmpty = 7,
-    Declared = 8,
-}
-impl DataProductSelectionState {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "DATA_PRODUCT_SELECTION_STATE_UNSPECIFIED",
-            Self::Undeclared => "DATA_PRODUCT_SELECTION_STATE_UNDECLARED",
-            Self::Resolved => "DATA_PRODUCT_SELECTION_STATE_RESOLVED",
-            Self::Opaque => "DATA_PRODUCT_SELECTION_STATE_OPAQUE",
-            Self::Unresolved => "DATA_PRODUCT_SELECTION_STATE_UNRESOLVED",
-            Self::Inaccessible => "DATA_PRODUCT_SELECTION_STATE_INACCESSIBLE",
-            Self::Unknown => "DATA_PRODUCT_SELECTION_STATE_UNKNOWN",
-            Self::ExplicitEmpty => "DATA_PRODUCT_SELECTION_STATE_EXPLICIT_EMPTY",
-            Self::Declared => "DATA_PRODUCT_SELECTION_STATE_DECLARED",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "DATA_PRODUCT_SELECTION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
-            "DATA_PRODUCT_SELECTION_STATE_UNDECLARED" => Some(Self::Undeclared),
-            "DATA_PRODUCT_SELECTION_STATE_RESOLVED" => Some(Self::Resolved),
-            "DATA_PRODUCT_SELECTION_STATE_OPAQUE" => Some(Self::Opaque),
-            "DATA_PRODUCT_SELECTION_STATE_UNRESOLVED" => Some(Self::Unresolved),
-            "DATA_PRODUCT_SELECTION_STATE_INACCESSIBLE" => Some(Self::Inaccessible),
-            "DATA_PRODUCT_SELECTION_STATE_UNKNOWN" => Some(Self::Unknown),
-            "DATA_PRODUCT_SELECTION_STATE_EXPLICIT_EMPTY" => Some(Self::ExplicitEmpty),
-            "DATA_PRODUCT_SELECTION_STATE_DECLARED" => Some(Self::Declared),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum DataProductOfferingState {
-    Unspecified = 0,
-    Draft = 1,
-    Mapped = 2,
-    Unresolved = 3,
-    Unknown = 4,
-}
-impl DataProductOfferingState {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "DATA_PRODUCT_OFFERING_STATE_UNSPECIFIED",
-            Self::Draft => "DATA_PRODUCT_OFFERING_STATE_DRAFT",
-            Self::Mapped => "DATA_PRODUCT_OFFERING_STATE_MAPPED",
-            Self::Unresolved => "DATA_PRODUCT_OFFERING_STATE_UNRESOLVED",
-            Self::Unknown => "DATA_PRODUCT_OFFERING_STATE_UNKNOWN",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "DATA_PRODUCT_OFFERING_STATE_UNSPECIFIED" => Some(Self::Unspecified),
-            "DATA_PRODUCT_OFFERING_STATE_DRAFT" => Some(Self::Draft),
-            "DATA_PRODUCT_OFFERING_STATE_MAPPED" => Some(Self::Mapped),
-            "DATA_PRODUCT_OFFERING_STATE_UNRESOLVED" => Some(Self::Unresolved),
-            "DATA_PRODUCT_OFFERING_STATE_UNKNOWN" => Some(Self::Unknown),
-            _ => None,
-        }
-    }
-}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CatalogQueryFailure {
     #[prost(string, tag="1")]
@@ -795,6 +582,227 @@ impl DecisionAmendmentDirection {
             "DECISION_AMENDMENT_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
             "DECISION_AMENDMENT_DIRECTION_OUTGOING" => Some(Self::Outgoing),
             "DECISION_AMENDMENT_DIRECTION_INCOMING" => Some(Self::Incoming),
+            _ => None,
+        }
+    }
+}
+/// Each native authority retains its own exact occurrence and selectors.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChannelMessageRecord {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="4")]
+    pub message: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ContractMemberRef>,
+    #[prost(message, optional, tag="5")]
+    pub channel: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ChannelRef>,
+    #[prost(map="string, string", tag="6")]
+    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::ClaimDeliveryMode", optional, tag="7")]
+    pub delivery_mode: ::core::option::Option<i32>,
+    #[prost(string, optional, tag="8")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::ChannelMessageAuthority", tag="9")]
+    pub authority: i32,
+    #[prost(message, optional, tag="10")]
+    pub claim: ::core::option::Option<super::super::super::eventmodel::v1alpha1::MessageClaim>,
+    #[prost(message, optional, tag="11")]
+    pub route: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ClaimRoute>,
+    #[prost(message, optional, tag="12")]
+    pub operation: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ContractMemberRef>,
+    #[prost(message, optional, tag="13")]
+    pub operation_message: ::core::option::Option<super::super::super::eventmodel::v1alpha1::OperationMessage>,
+    #[prost(enumeration="CatalogResolutionState", tag="14")]
+    pub state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListChannelMessagesRequest {
+    #[prost(message, optional, tag="1")]
+    pub channel: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ChannelRef>,
+    #[prost(uint32, tag="2")]
+    pub page_size: u32,
+    #[prost(string, tag="3")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListChannelMessagesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub records: ::prost::alloc::vec::Vec<ChannelMessageRecord>,
+    #[prost(string, tag="2")]
+    pub next_page_token: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(bool, tag="4")]
+    pub complete: bool,
+    #[prost(string, optional, tag="5")]
+    pub branch: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag="6")]
+    pub scope_digest: ::prost::alloc::string::String,
+    #[prost(uint32, tag="7")]
+    pub authorized_namespace_count: u32,
+}
+/// Branch selection uses the service's x-trogon-atlas-branch metadata.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InspectDataProductRequest {
+    #[prost(message, optional, tag="1")]
+    pub product: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataProductRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataProductAccessState {
+    #[prost(message, optional, tag="1")]
+    pub declaration: ::core::option::Option<super::super::super::eventmodel::v1alpha1::OutputAccess>,
+    #[prost(enumeration="DataProductSelectionState", tag="2")]
+    pub state: i32,
+    #[prost(enumeration="DataProductSelectionState", tag="3")]
+    pub provider: i32,
+    #[prost(message, repeated, tag="4")]
+    pub checked_connections: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataProductEmissionEvidence {
+    #[prost(message, optional, tag="1")]
+    pub input: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataPortRef>,
+    #[prost(message, optional, tag="2")]
+    pub event: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EventRef>,
+    #[prost(message, optional, tag="3")]
+    pub emission: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataProductProducingEvidence {
+    #[prost(message, optional, tag="1")]
+    pub input: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataPortRef>,
+    #[prost(message, optional, tag="2")]
+    pub output: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataPortRef>,
+    #[prost(message, repeated, tag="3")]
+    pub path: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataProductPortState {
+    #[prost(message, optional, tag="1")]
+    pub port: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataPortRef>,
+    #[prost(enumeration="DataProductSelectionState", tag="2")]
+    pub data: i32,
+    #[prost(enumeration="DataProductSelectionState", tag="3")]
+    pub contract: i32,
+    #[prost(enumeration="DataProductSelectionState", tag="4")]
+    pub lineage: i32,
+    #[prost(message, repeated, tag="5")]
+    pub access: ::prost::alloc::vec::Vec<DataProductAccessState>,
+    #[prost(bool, tag="6")]
+    pub incomplete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataProductCheckedScope {
+    #[prost(string, optional, tag="1")]
+    pub branch: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, repeated, tag="2")]
+    pub authorized_namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Identifies the content and branch context actually checked for this evidence.
+    #[prost(string, tag="3")]
+    pub revision: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub visited: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::EntityRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InspectDataProductResponse {
+    #[prost(message, optional, tag="1")]
+    pub product: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DataProduct>,
+    #[prost(string, tag="2")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub scope: ::core::option::Option<DataProductCheckedScope>,
+    #[prost(message, repeated, tag="4")]
+    pub ports: ::prost::alloc::vec::Vec<DataProductPortState>,
+    #[prost(message, repeated, tag="5")]
+    pub emissions: ::prost::alloc::vec::Vec<DataProductEmissionEvidence>,
+    #[prost(message, repeated, tag="6")]
+    pub producing: ::prost::alloc::vec::Vec<DataProductProducingEvidence>,
+    #[prost(bool, tag="7")]
+    pub incomplete: bool,
+    #[prost(enumeration="DataProductOfferingState", tag="8")]
+    pub offering: i32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DataProductSelectionState {
+    Unspecified = 0,
+    Undeclared = 1,
+    Resolved = 2,
+    Opaque = 3,
+    Unresolved = 4,
+    Inaccessible = 5,
+    Unknown = 6,
+    ExplicitEmpty = 7,
+    Declared = 8,
+}
+impl DataProductSelectionState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DATA_PRODUCT_SELECTION_STATE_UNSPECIFIED",
+            Self::Undeclared => "DATA_PRODUCT_SELECTION_STATE_UNDECLARED",
+            Self::Resolved => "DATA_PRODUCT_SELECTION_STATE_RESOLVED",
+            Self::Opaque => "DATA_PRODUCT_SELECTION_STATE_OPAQUE",
+            Self::Unresolved => "DATA_PRODUCT_SELECTION_STATE_UNRESOLVED",
+            Self::Inaccessible => "DATA_PRODUCT_SELECTION_STATE_INACCESSIBLE",
+            Self::Unknown => "DATA_PRODUCT_SELECTION_STATE_UNKNOWN",
+            Self::ExplicitEmpty => "DATA_PRODUCT_SELECTION_STATE_EXPLICIT_EMPTY",
+            Self::Declared => "DATA_PRODUCT_SELECTION_STATE_DECLARED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DATA_PRODUCT_SELECTION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "DATA_PRODUCT_SELECTION_STATE_UNDECLARED" => Some(Self::Undeclared),
+            "DATA_PRODUCT_SELECTION_STATE_RESOLVED" => Some(Self::Resolved),
+            "DATA_PRODUCT_SELECTION_STATE_OPAQUE" => Some(Self::Opaque),
+            "DATA_PRODUCT_SELECTION_STATE_UNRESOLVED" => Some(Self::Unresolved),
+            "DATA_PRODUCT_SELECTION_STATE_INACCESSIBLE" => Some(Self::Inaccessible),
+            "DATA_PRODUCT_SELECTION_STATE_UNKNOWN" => Some(Self::Unknown),
+            "DATA_PRODUCT_SELECTION_STATE_EXPLICIT_EMPTY" => Some(Self::ExplicitEmpty),
+            "DATA_PRODUCT_SELECTION_STATE_DECLARED" => Some(Self::Declared),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DataProductOfferingState {
+    Unspecified = 0,
+    Draft = 1,
+    Mapped = 2,
+    Unresolved = 3,
+    Unknown = 4,
+}
+impl DataProductOfferingState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DATA_PRODUCT_OFFERING_STATE_UNSPECIFIED",
+            Self::Draft => "DATA_PRODUCT_OFFERING_STATE_DRAFT",
+            Self::Mapped => "DATA_PRODUCT_OFFERING_STATE_MAPPED",
+            Self::Unresolved => "DATA_PRODUCT_OFFERING_STATE_UNRESOLVED",
+            Self::Unknown => "DATA_PRODUCT_OFFERING_STATE_UNKNOWN",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DATA_PRODUCT_OFFERING_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "DATA_PRODUCT_OFFERING_STATE_DRAFT" => Some(Self::Draft),
+            "DATA_PRODUCT_OFFERING_STATE_MAPPED" => Some(Self::Mapped),
+            "DATA_PRODUCT_OFFERING_STATE_UNRESOLVED" => Some(Self::Unresolved),
+            "DATA_PRODUCT_OFFERING_STATE_UNKNOWN" => Some(Self::Unknown),
             _ => None,
         }
     }

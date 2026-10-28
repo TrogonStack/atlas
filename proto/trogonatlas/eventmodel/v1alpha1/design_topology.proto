@@ -7,6 +7,7 @@ import "trogonatlas/type/v1alpha1/id.proto";
 import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
 
 enum DesignGraphProfile {
   DESIGN_GRAPH_PROFILE_UNSPECIFIED = 0;

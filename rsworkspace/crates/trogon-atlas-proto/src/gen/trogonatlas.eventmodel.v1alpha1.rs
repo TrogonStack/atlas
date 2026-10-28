@@ -3381,263 +3381,6 @@ impl ContractMemberKind {
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct DataPortId {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct PortName {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct DataPortRef {
-    #[prost(message, optional, tag="1")]
-    pub product: ::core::option::Option<DataProductRef>,
-    #[prost(string, tag="2")]
-    pub owner_uid: ::prost::alloc::string::String,
-    #[prost(enumeration="DataPortDirection", tag="3")]
-    pub direction: i32,
-    #[prost(message, optional, tag="4")]
-    pub port_id: ::core::option::Option<DataPortId>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct InputDataSelection {
-    #[prost(message, optional, tag="1")]
-    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(oneof="input_data_selection::Target", tags="2, 3")]
-    pub target: ::core::option::Option<input_data_selection::Target>,
-}
-/// Nested message and enum types in `InputDataSelection`.
-pub mod input_data_selection {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Target {
-        #[prost(message, tag="2")]
-        ReadModel(super::ReadModelRef),
-        #[prost(message, tag="3")]
-        Event(super::EventRef),
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct OutputDataSelection {
-    #[prost(message, optional, tag="1")]
-    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(message, optional, tag="2")]
-    pub read_model: ::core::option::Option<ReadModelRef>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct OutputContract {
-    #[prost(message, optional, tag="1")]
-    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(oneof="output_contract::Type", tags="2, 3, 4")]
-    pub r#type: ::core::option::Option<output_contract::Type>,
-}
-/// Nested message and enum types in `OutputContract`.
-pub mod output_contract {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Type {
-        #[prost(message, tag="2")]
-        Schema(super::SchemaRef),
-        #[prost(message, tag="3")]
-        ContractType(super::ContractTypeRef),
-        #[prost(message, tag="4")]
-        LibraryType(super::TypeLibraryTypeRef),
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct StoreAccess {
-    #[prost(message, optional, tag="1")]
-    pub store: ::core::option::Option<DataStoreRef>,
-    #[prost(message, optional, tag="2")]
-    pub attachment: ::core::option::Option<ConnectionRef>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ChannelAccess {
-    #[prost(message, optional, tag="1")]
-    pub channel: ::core::option::Option<ChannelRef>,
-    #[prost(message, optional, tag="2")]
-    pub binding: ::core::option::Option<ConnectionRef>,
-    #[prost(message, optional, tag="3")]
-    pub observation: ::core::option::Option<ConnectionRef>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct OperationAccess {
-    #[prost(message, optional, tag="1")]
-    pub operation: ::core::option::Option<ContractMemberRef>,
-    #[prost(message, optional, tag="2")]
-    pub response: ::core::option::Option<ConnectionRef>,
-    #[prost(message, optional, tag="3")]
-    pub provider_exposure: ::core::option::Option<ConnectionRef>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct OutputAccess {
-    #[prost(message, optional, tag="1")]
-    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(string, optional, tag="5")]
-    pub doc: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(oneof="output_access::Selection", tags="2, 3, 4")]
-    pub selection: ::core::option::Option<output_access::Selection>,
-}
-/// Nested message and enum types in `OutputAccess`.
-pub mod output_access {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Selection {
-        #[prost(message, tag="2")]
-        Store(super::StoreAccess),
-        #[prost(message, tag="3")]
-        Channel(super::ChannelAccess),
-        #[prost(message, tag="4")]
-        Operation(super::OperationAccess),
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct LineageInput {
-    #[prost(message, optional, tag="1")]
-    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(message, optional, tag="2")]
-    pub input_port_id: ::core::option::Option<DataPortId>,
-    #[prost(string, optional, tag="3")]
-    pub doc: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DeclaredLineage {
-    #[prost(message, repeated, tag="1")]
-    pub inputs: ::prost::alloc::vec::Vec<LineageInput>,
-    #[prost(string, optional, tag="2")]
-    pub doc: ::core::option::Option<::prost::alloc::string::String>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct DataInputPort {
-    #[prost(message, optional, tag="1")]
-    pub port_id: ::core::option::Option<DataPortId>,
-    #[prost(message, optional, tag="2")]
-    pub name: ::core::option::Option<PortName>,
-    #[prost(string, optional, tag="3")]
-    pub doc: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(message, optional, tag="4")]
-    pub data: ::core::option::Option<InputDataSelection>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DataOutputPort {
-    #[prost(message, optional, tag="1")]
-    pub port_id: ::core::option::Option<DataPortId>,
-    #[prost(message, optional, tag="2")]
-    pub name: ::core::option::Option<PortName>,
-    #[prost(string, optional, tag="3")]
-    pub doc: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(message, optional, tag="4")]
-    pub data: ::core::option::Option<OutputDataSelection>,
-    #[prost(message, optional, tag="5")]
-    pub contract: ::core::option::Option<OutputContract>,
-    #[prost(message, repeated, tag="6")]
-    pub access: ::prost::alloc::vec::Vec<OutputAccess>,
-    #[prost(message, optional, tag="7")]
-    pub derived_from: ::core::option::Option<DeclaredLineage>,
-}
-/// Exact output-contract pin for a descriptive resource association.
-/// It has no connection id of its own: the parent association is the
-/// occurrence, and this pin is part of that occurrence's fingerprint.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ProductResourceContract {
-    #[prost(oneof="product_resource_contract::Type", tags="1, 2, 3")]
-    pub r#type: ::core::option::Option<product_resource_contract::Type>,
-}
-/// Nested message and enum types in `ProductResourceContract`.
-pub mod product_resource_contract {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Type {
-        #[prost(message, tag="1")]
-        Schema(super::SchemaRef),
-        #[prost(message, tag="2")]
-        ContractType(super::ContractTypeRef),
-        #[prost(message, tag="3")]
-        LibraryType(super::TypeLibraryTypeRef),
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ProductResourceAssociation {
-    #[prost(message, optional, tag="1")]
-    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(enumeration="DataPortDirection", tag="2")]
-    pub direction: i32,
-    #[prost(message, optional, tag="10")]
-    pub contract: ::core::option::Option<ProductResourceContract>,
-    #[prost(string, optional, tag="11")]
-    pub doc: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(oneof="product_resource_association::Target", tags="3, 4, 5, 6, 7, 8, 9")]
-    pub target: ::core::option::Option<product_resource_association::Target>,
-}
-/// Nested message and enum types in `ProductResourceAssociation`.
-pub mod product_resource_association {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Target {
-        #[prost(message, tag="3")]
-        Event(super::EventRef),
-        #[prost(message, tag="4")]
-        Command(super::CommandRef),
-        #[prost(message, tag="5")]
-        Message(super::ContractMemberRef),
-        #[prost(message, tag="6")]
-        Component(super::ComponentRef),
-        #[prost(message, tag="7")]
-        ExternalSystem(super::ExternalSystemRef),
-        #[prost(message, tag="8")]
-        Channel(super::ChannelRef),
-        #[prost(message, tag="9")]
-        DataStore(super::DataStoreRef),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DataProduct {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, optional, tag="3")]
-    pub doc: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(message, repeated, tag="4")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="5")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, optional, tag="6")]
-    pub purpose: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(message, repeated, tag="7")]
-    pub inputs: ::prost::alloc::vec::Vec<DataInputPort>,
-    #[prost(message, repeated, tag="8")]
-    pub outputs: ::prost::alloc::vec::Vec<DataOutputPort>,
-    #[prost(message, repeated, tag="10")]
-    pub resource_associations: ::prost::alloc::vec::Vec<ProductResourceAssociation>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum DataPortDirection {
-    Unspecified = 0,
-    Input = 1,
-    Output = 2,
-}
-impl DataPortDirection {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "DATA_PORT_DIRECTION_UNSPECIFIED",
-            Self::Input => "DATA_PORT_DIRECTION_INPUT",
-            Self::Output => "DATA_PORT_DIRECTION_OUTPUT",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "DATA_PORT_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
-            "DATA_PORT_DIRECTION_INPUT" => Some(Self::Input),
-            "DATA_PORT_DIRECTION_OUTPUT" => Some(Self::Output),
-            _ => None,
-        }
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CatalogTitle {
     #[prost(string, tag="1")]
     pub value: ::prost::alloc::string::String,
@@ -3646,38 +3389,6 @@ pub struct CatalogTitle {
 pub struct CatalogText {
     #[prost(string, tag="1")]
     pub value: ::prost::alloc::string::String,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum ClaimDeliveryMode {
-    Unspecified = 0,
-    Push = 1,
-    Pull = 2,
-    PushPull = 3,
-}
-impl ClaimDeliveryMode {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "CLAIM_DELIVERY_MODE_UNSPECIFIED",
-            Self::Push => "CLAIM_DELIVERY_MODE_PUSH",
-            Self::Pull => "CLAIM_DELIVERY_MODE_PULL",
-            Self::PushPull => "CLAIM_DELIVERY_MODE_PUSH_PULL",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "CLAIM_DELIVERY_MODE_UNSPECIFIED" => Some(Self::Unspecified),
-            "CLAIM_DELIVERY_MODE_PUSH" => Some(Self::Push),
-            "CLAIM_DELIVERY_MODE_PULL" => Some(Self::Pull),
-            "CLAIM_DELIVERY_MODE_PUSH_PULL" => Some(Self::PushPull),
-            _ => None,
-        }
-    }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessageClaims {
@@ -4106,6 +3817,263 @@ pub mod subdomain {
                 "CLASSIFICATION_GENERIC" => Some(Self::Generic),
                 _ => None,
             }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataPortId {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PortName {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataPortRef {
+    #[prost(message, optional, tag="1")]
+    pub product: ::core::option::Option<DataProductRef>,
+    #[prost(string, tag="2")]
+    pub owner_uid: ::prost::alloc::string::String,
+    #[prost(enumeration="DataPortDirection", tag="3")]
+    pub direction: i32,
+    #[prost(message, optional, tag="4")]
+    pub port_id: ::core::option::Option<DataPortId>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InputDataSelection {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(oneof="input_data_selection::Target", tags="2, 3")]
+    pub target: ::core::option::Option<input_data_selection::Target>,
+}
+/// Nested message and enum types in `InputDataSelection`.
+pub mod input_data_selection {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="2")]
+        ReadModel(super::ReadModelRef),
+        #[prost(message, tag="3")]
+        Event(super::EventRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OutputDataSelection {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub read_model: ::core::option::Option<ReadModelRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OutputContract {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(oneof="output_contract::Type", tags="2, 3, 4")]
+    pub r#type: ::core::option::Option<output_contract::Type>,
+}
+/// Nested message and enum types in `OutputContract`.
+pub mod output_contract {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Type {
+        #[prost(message, tag="2")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="3")]
+        ContractType(super::ContractTypeRef),
+        #[prost(message, tag="4")]
+        LibraryType(super::TypeLibraryTypeRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StoreAccess {
+    #[prost(message, optional, tag="1")]
+    pub store: ::core::option::Option<DataStoreRef>,
+    #[prost(message, optional, tag="2")]
+    pub attachment: ::core::option::Option<ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChannelAccess {
+    #[prost(message, optional, tag="1")]
+    pub channel: ::core::option::Option<ChannelRef>,
+    #[prost(message, optional, tag="2")]
+    pub binding: ::core::option::Option<ConnectionRef>,
+    #[prost(message, optional, tag="3")]
+    pub observation: ::core::option::Option<ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OperationAccess {
+    #[prost(message, optional, tag="1")]
+    pub operation: ::core::option::Option<ContractMemberRef>,
+    #[prost(message, optional, tag="2")]
+    pub response: ::core::option::Option<ConnectionRef>,
+    #[prost(message, optional, tag="3")]
+    pub provider_exposure: ::core::option::Option<ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct OutputAccess {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(string, optional, tag="5")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(oneof="output_access::Selection", tags="2, 3, 4")]
+    pub selection: ::core::option::Option<output_access::Selection>,
+}
+/// Nested message and enum types in `OutputAccess`.
+pub mod output_access {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Selection {
+        #[prost(message, tag="2")]
+        Store(super::StoreAccess),
+        #[prost(message, tag="3")]
+        Channel(super::ChannelAccess),
+        #[prost(message, tag="4")]
+        Operation(super::OperationAccess),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct LineageInput {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub input_port_id: ::core::option::Option<DataPortId>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DeclaredLineage {
+    #[prost(message, repeated, tag="1")]
+    pub inputs: ::prost::alloc::vec::Vec<LineageInput>,
+    #[prost(string, optional, tag="2")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DataInputPort {
+    #[prost(message, optional, tag="1")]
+    pub port_id: ::core::option::Option<DataPortId>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<PortName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="4")]
+    pub data: ::core::option::Option<InputDataSelection>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataOutputPort {
+    #[prost(message, optional, tag="1")]
+    pub port_id: ::core::option::Option<DataPortId>,
+    #[prost(message, optional, tag="2")]
+    pub name: ::core::option::Option<PortName>,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="4")]
+    pub data: ::core::option::Option<OutputDataSelection>,
+    #[prost(message, optional, tag="5")]
+    pub contract: ::core::option::Option<OutputContract>,
+    #[prost(message, repeated, tag="6")]
+    pub access: ::prost::alloc::vec::Vec<OutputAccess>,
+    #[prost(message, optional, tag="7")]
+    pub derived_from: ::core::option::Option<DeclaredLineage>,
+}
+/// Exact output-contract pin for a descriptive resource association.
+/// It has no connection id of its own: the parent association is the
+/// occurrence, and this pin is part of that occurrence's fingerprint.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProductResourceContract {
+    #[prost(oneof="product_resource_contract::Type", tags="1, 2, 3")]
+    pub r#type: ::core::option::Option<product_resource_contract::Type>,
+}
+/// Nested message and enum types in `ProductResourceContract`.
+pub mod product_resource_contract {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Type {
+        #[prost(message, tag="1")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="2")]
+        ContractType(super::ContractTypeRef),
+        #[prost(message, tag="3")]
+        LibraryType(super::TypeLibraryTypeRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProductResourceAssociation {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="DataPortDirection", tag="2")]
+    pub direction: i32,
+    #[prost(message, optional, tag="10")]
+    pub contract: ::core::option::Option<ProductResourceContract>,
+    #[prost(string, optional, tag="11")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(oneof="product_resource_association::Target", tags="3, 4, 5, 6, 7, 8, 9")]
+    pub target: ::core::option::Option<product_resource_association::Target>,
+}
+/// Nested message and enum types in `ProductResourceAssociation`.
+pub mod product_resource_association {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="3")]
+        Event(super::EventRef),
+        #[prost(message, tag="4")]
+        Command(super::CommandRef),
+        #[prost(message, tag="5")]
+        Message(super::ContractMemberRef),
+        #[prost(message, tag="6")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="7")]
+        ExternalSystem(super::ExternalSystemRef),
+        #[prost(message, tag="8")]
+        Channel(super::ChannelRef),
+        #[prost(message, tag="9")]
+        DataStore(super::DataStoreRef),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DataProduct {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, optional, tag="3")]
+    pub doc: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, optional, tag="6")]
+    pub purpose: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, repeated, tag="7")]
+    pub inputs: ::prost::alloc::vec::Vec<DataInputPort>,
+    #[prost(message, repeated, tag="8")]
+    pub outputs: ::prost::alloc::vec::Vec<DataOutputPort>,
+    #[prost(message, repeated, tag="10")]
+    pub resource_associations: ::prost::alloc::vec::Vec<ProductResourceAssociation>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DataPortDirection {
+    Unspecified = 0,
+    Input = 1,
+    Output = 2,
+}
+impl DataPortDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DATA_PORT_DIRECTION_UNSPECIFIED",
+            Self::Input => "DATA_PORT_DIRECTION_INPUT",
+            Self::Output => "DATA_PORT_DIRECTION_OUTPUT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DATA_PORT_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "DATA_PORT_DIRECTION_INPUT" => Some(Self::Input),
+            "DATA_PORT_DIRECTION_OUTPUT" => Some(Self::Output),
+            _ => None,
         }
     }
 }
