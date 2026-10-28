@@ -878,20 +878,31 @@ fn native_relationships_only(
     incoming: Option<&pb::Entity>,
     ownership: &pb::SourceFieldOwnership,
 ) -> Result<(), Status> {
-    let has_relationships = |entity: &pb::Entity| {
-        !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
-            || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
+    let has_native_authoring = |entity: &pb::Entity| -> Result<bool, Status> {
+        Ok(
+            !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
+                || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
+                || trogon_atlas_core::agent_metadata::has_native_additions(entity)
+                    .map_err(|_| invalid())?,
+        )
     };
     let whole_owner = matches!(
         ownership.policy,
         Some(pb::source_field_ownership::Policy::WholeOwner(_))
     );
-    if (current.is_none() && incoming.is_some_and(has_relationships))
-        || (whole_owner
-            && (current.is_some_and(has_relationships) || incoming.is_some_and(has_relationships)))
+    let incoming_native = incoming
+        .map(has_native_authoring)
+        .transpose()?
+        .unwrap_or(false);
+    let current_native = current
+        .map(has_native_authoring)
+        .transpose()?
+        .unwrap_or(false);
+    if (current.is_none() && incoming_native)
+        || (whole_owner && (current_native || incoming_native))
     {
         return Err(Status::invalid_argument(
-            "architectural relationships and communications support native authoring only",
+            "architectural relationships, communications and native metadata support native authoring only",
         ));
     }
     Ok(())
