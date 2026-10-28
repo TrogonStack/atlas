@@ -132,6 +132,7 @@ pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
                 | pb::entity::Kind::Team(_)
                 | pb::entity::Kind::Person(_)
                 | pb::entity::Kind::Decision(_)
+                | pb::entity::Kind::Term(_)
                 | pb::entity::Kind::Document(_)
         )
     )
@@ -575,6 +576,16 @@ pub(super) fn validate_in_context(
                     id,
                     context,
                     "attachments.read_model",
+                );
+            }
+        }
+        Some(pb::entity::Kind::Term(term)) => {
+            if let Some(reference) = &term.owning_domain {
+                checks.target(
+                    pb::EntityKind::Domain,
+                    reference.id.as_ref(),
+                    context,
+                    "owning_domain",
                 );
             }
         }

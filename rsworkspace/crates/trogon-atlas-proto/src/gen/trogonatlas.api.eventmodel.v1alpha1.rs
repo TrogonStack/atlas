@@ -2852,6 +2852,33 @@ impl SourceCancellationDisposition {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListTermDomainDeclarationsRequest {
+    #[prost(message, optional, tag="1")]
+    pub domain: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DomainRef>,
+    #[prost(uint32, tag="2")]
+    pub page_size: u32,
+    #[prost(string, tag="3")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TermDomainDeclaration {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<CatalogCheckedOwner>,
+    #[prost(message, optional, tag="2")]
+    pub domain: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DomainRef>,
+    #[prost(enumeration="CatalogResolutionState", tag="3")]
+    pub state: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListTermDomainDeclarationsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub declarations: ::prost::alloc::vec::Vec<TermDomainDeclaration>,
+    #[prost(string, tag="2")]
+    pub next_page_token: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+}
 // =============================================================================
 // Service surface: requests, responses, supporting messages
 // =============================================================================

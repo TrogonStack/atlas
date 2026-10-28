@@ -99,6 +99,7 @@ message Term {
   repeated EntityRef embodied_by = 4;
   repeated google.protobuf.Any metadata = 5;
   trogonatlas.type.v1alpha1.Id supersedes = 6;
+  DomainRef owning_domain = 7;
 }
 
 message Ambiguity {

@@ -1,11 +1,11 @@
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use tonic::Code;
 use trogon_atlas_store::store::BranchLandOp;
 
 use super::{
-    entity_id, entity_kind, pb, store_err, validation, EventModelServiceImpl, Lens, OpMetaLike,
-    Status, StoredEntity, Visibility,
+    EventModelServiceImpl, Lens, OpMetaLike, Status, StoredEntity, Visibility, entity_id,
+    entity_kind, pb, store_err, validation,
 };
 
 pub(super) struct ArchitectureProposal<'a> {
@@ -29,6 +29,9 @@ fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::Out
     trogon_atlas_core::refs::outbound_refs(entity)
         .into_iter()
         .filter(|reference| {
+            if matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
+                return reference.from_field == "owning_domain";
+            }
             !architectural
                 || reference.from_field.starts_with("relationships[")
                 || reference.from_field.starts_with("communications[")
@@ -115,6 +118,7 @@ impl EventModelServiceImpl {
                             | pb::EntityKind::Team
                             | pb::EntityKind::Person
                             | pb::EntityKind::Decision
+                            | pb::EntityKind::Term
                             | pb::EntityKind::Document
                     )
             })
@@ -142,7 +146,7 @@ impl EventModelServiceImpl {
         let mut world = HashMap::new();
         let mut required = Vec::new();
         for entity in &resources {
-            if is_catalog(entity) {
+            if is_catalog(entity) || matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
                 continue;
             }
             required.extend(
@@ -157,6 +161,22 @@ impl EventModelServiceImpl {
             branch,
             ArchitectureTargetAccess::Required(vis),
             required,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let term_targets = resources
+            .iter()
+            .filter(|entity| matches!(entity.kind, Some(pb::entity::Kind::Term(_))))
+            .flat_map(|entity| admission_references(entity))
+            .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
+            .collect();
+        let term_lens = self.lens(vis).await?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactDiagnostic(&term_lens),
+            term_targets,
             &mut loaded,
             &mut world,
         )
@@ -301,6 +321,7 @@ impl EventModelServiceImpl {
                             | pb::entity::Kind::Team(_)
                             | pb::entity::Kind::Person(_)
                             | pb::entity::Kind::Decision(_)
+                            | pb::entity::Kind::Term(_)
                             | pb::entity::Kind::Document(_)
                     )
                 )
@@ -496,6 +517,7 @@ impl EventModelServiceImpl {
                         pb::EntityKind::Person,
                         pb::EntityKind::Decision,
                         pb::EntityKind::Document,
+                        pb::EntityKind::Term,
                     ],
                     namespaces: &namespaces,
                     ..Default::default()
@@ -699,7 +721,7 @@ impl EventModelServiceImpl {
                     _ => {
                         return Err(Status::invalid_argument(
                             "Replacement chain must terminate at an ACCEPTED decision",
-                        ))
+                        ));
                     }
                 }
             }
@@ -827,6 +849,7 @@ impl EventModelServiceImpl {
                     | pb::entity::Kind::Team(_)
                     | pb::entity::Kind::Person(_)
                     | pb::entity::Kind::Decision(_)
+                    | pb::entity::Kind::Term(_)
                     | pb::entity::Kind::Document(_)
             )
         ) {
