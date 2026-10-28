@@ -841,3 +841,904 @@ async fn branch_force_delete_keeps_baseline_and_rejects_only_edited_dangling_own
         })
     );
 }
+
+async fn read_native(
+    client: &mut Client,
+    kind: pb::EntityKind,
+    id: pb::Id,
+    branch: Option<&str>,
+) -> pb::GetEntityResponse {
+    client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(id),
+            },
+            ADMIN,
+            branch,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+}
+fn native_ref(kind: pb::EntityKind, slug: &str) -> pb::EntityRef {
+    pb::EntityRef {
+        kind: kind as i32,
+        id: Some(id(slug)),
+    }
+}
+async fn create_branch(client: &mut Client, name: &str) {
+    client
+        .create_branch(request(
+            pb::CreateBranchRequest {
+                name: name.into(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+}
+async fn merge(
+    client: &mut Client,
+    name: &str,
+    dry_run: bool,
+) -> Result<pb::MergeBranchResponse, tonic::Status> {
+    client
+        .merge_branch(request(
+            pb::MergeBranchRequest {
+                name: name.into(),
+                dry_run,
+                keep_branch: true,
+                auto_merge: true,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .map(tonic::Response::into_inner)
+}
+#[tokio::test]
+async fn hidden_term_referrer_blocks_safe_delete_without_disclosing_identity() {
+    let mut client = client().await;
+    let mut namespaces = Vec::new();
+    for (name, parent) in [
+        ("term-delete-visible", "visible"),
+        ("term-delete-private", "hidden"),
+    ] {
+        namespaces.push(
+            client
+                .register_namespace(request(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        parent: parent.into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let target = pb::Id {
+        namespace: namespaces[0].clone(),
+        ..id("visible-domain")
+    };
+    put_native(
+        &mut client,
+        entity(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(target.clone()),
+            ..Default::default()
+        })),
+        None,
+    )
+    .await;
+    let hidden = entity(pb::entity::Kind::Term(pb::Term {
+        id: Some(pb::Id {
+            namespace: namespaces[1].clone(),
+            ..id("private-word")
+        }),
+        title: "Secret vocabulary title".into(),
+        owning_domain: Some(pb::DomainRef {
+            id: Some(target.clone()),
+        }),
+        ..Default::default()
+    }));
+    put_native(&mut client, hidden.clone(), None).await;
+    let before = read_native(&mut client, pb::EntityKind::Domain, target.clone(), None).await;
+    let error = client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: Some(target.clone()),
+                mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+                ..Default::default()
+            },
+            LIMITED,
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::FailedPrecondition);
+    for secret in [
+        "private-word",
+        "Secret vocabulary title",
+        namespaces[1].as_str(),
+    ] {
+        assert!(!error.message().contains(secret), "{error}");
+    }
+    assert_eq!(
+        read_native(&mut client, pb::EntityKind::Domain, target, None).await,
+        before
+    );
+    let hidden_id = trogon_atlas_core::refs::entity_id(&hidden).unwrap().clone();
+    let persisted = read_native(&mut client, pb::EntityKind::Term, hidden_id, None).await;
+    assert!(trogon_atlas_core::semantically_equal(
+        persisted.entity.as_ref().unwrap(),
+        &hidden
+    ));
+}
+#[tokio::test]
+async fn exact_impact_and_guarded_retarget_preserve_plain_reference_and_owner_uid() {
+    let mut client = client().await;
+    for slug in ["impact-old", "impact-new"] {
+        put_native(
+            &mut client,
+            entity(pb::entity::Kind::Domain(pb::Domain {
+                id: Some(id(slug)),
+                ..Default::default()
+            })),
+            None,
+        )
+        .await;
+    }
+    put_native(&mut client, term("impact-word", "impact-old"), None).await;
+    let before = read_native(&mut client, pb::EntityKind::Term, id("impact-word"), None).await;
+    let target = read_native(&mut client, pb::EntityKind::Domain, id("impact-new"), None).await;
+    let version_two = pb::Id {
+        version: 2,
+        ..id("impact-old")
+    };
+    put_native(
+        &mut client,
+        entity(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(version_two.clone()),
+            ..Default::default()
+        })),
+        None,
+    )
+    .await;
+    put_native(
+        &mut client,
+        entity(pb::entity::Kind::Term(pb::Term {
+            id: Some(id("other-version-word")),
+            owning_domain: Some(pb::DomainRef {
+                id: Some(version_two),
+            }),
+            ..Default::default()
+        })),
+        None,
+    )
+    .await;
+    let other_version = read_native(
+        &mut client,
+        pb::EntityKind::Term,
+        id("other-version-word"),
+        None,
+    )
+    .await;
+    let impact = client
+        .get_impact(request(
+            pb::GetImpactRequest {
+                root: Some(native_ref(pb::EntityKind::Domain, "impact-old")),
+                max_depth: 1,
+                ..Default::default()
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(impact.nodes.len(), 2);
+    let owner = impact
+        .nodes
+        .iter()
+        .find(|node| node.entity.as_ref() == Some(&native_ref(pb::EntityKind::Term, "impact-word")))
+        .unwrap();
+    assert_eq!(owner.depth, 1);
+    assert_eq!(owner.path.len(), 1);
+    assert_eq!(owner.path[0].from_field, "owning_domain");
+    assert_eq!(
+        owner.path[0].to,
+        Some(native_ref(pb::EntityKind::Domain, "impact-old"))
+    );
+    assert_eq!(
+        owner.path[0].from_uid,
+        before.entity.as_ref().unwrap().system.as_ref().unwrap().uid
+    );
+    assert!(owner.path[0].connection_id.is_none());
+    let retarget = pb::RetargetReferencesRequest {
+        from: Some(native_ref(pb::EntityKind::Domain, "impact-old")),
+        to: Some(native_ref(pb::EntityKind::Domain, "impact-new")),
+        filter_kinds: vec![pb::EntityKind::Term as i32],
+        ..Default::default()
+    };
+    assert_eq!(
+        client
+            .retarget_references(request(retarget.clone(), READER, None))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::PermissionDenied
+    );
+    for dry_run in [true, false] {
+        let missing = pb::RetargetReferencesRequest {
+            to: Some(native_ref(pb::EntityKind::Domain, "absent-target")),
+            dry_run,
+            ..retarget.clone()
+        };
+        assert_eq!(
+            client
+                .retarget_references(request(missing, ADMIN, None))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::NotFound
+        );
+        assert_eq!(
+            read_native(&mut client, pb::EntityKind::Term, id("impact-word"), None).await,
+            before
+        );
+    }
+    let preview = client
+        .retarget_references(request(
+            pb::RetargetReferencesRequest {
+                dry_run: true,
+                ..retarget.clone()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(preview.rewritten, 1);
+    assert_eq!(preview.failed, 0);
+    assert_eq!(preview.results[0].fields, vec!["owning_domain"]);
+    assert_eq!(
+        read_native(&mut client, pb::EntityKind::Term, id("impact-word"), None).await,
+        before
+    );
+    let applied = client
+        .retarget_references(request(retarget, ADMIN, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(applied.rewritten, 1);
+    assert_eq!(applied.failed, 0);
+    let after = read_native(&mut client, pb::EntityKind::Term, id("impact-word"), None).await;
+    let mut expected = before.entity.unwrap();
+    if let Some(pb::entity::Kind::Term(word)) = &mut expected.kind {
+        word.owning_domain = Some(pb::DomainRef {
+            id: Some(id("impact-new")),
+        });
+    }
+    assert_eq!(after.entity, Some(expected));
+    assert_ne!(after.etag, before.etag);
+    assert_eq!(
+        read_native(&mut client, pb::EntityKind::Domain, id("impact-new"), None).await,
+        target
+    );
+    assert_eq!(
+        read_native(
+            &mut client,
+            pb::EntityKind::Term,
+            id("other-version-word"),
+            None
+        )
+        .await,
+        other_version
+    );
+}
+#[tokio::test]
+async fn branch_lands_term_and_domain_then_rebases_edits_without_rebinding_owner_identity() {
+    let mut client = client().await;
+    create_branch(&mut client, "term-land").await;
+    put_native(
+        &mut client,
+        entity(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(id("land-domain")),
+            ..Default::default()
+        })),
+        Some("term-land"),
+    )
+    .await;
+    put_native(
+        &mut client,
+        term("land-word", "land-domain"),
+        Some("term-land"),
+    )
+    .await;
+    let branch_word = read_native(
+        &mut client,
+        pb::EntityKind::Term,
+        id("land-word"),
+        Some("term-land"),
+    )
+    .await;
+    let branch_domain = read_native(
+        &mut client,
+        pb::EntityKind::Domain,
+        id("land-domain"),
+        Some("term-land"),
+    )
+    .await;
+    assert_eq!(
+        merge(&mut client, "term-land", true).await.unwrap().status,
+        pb::merge_branch_response::Status::Validated as i32
+    );
+    assert_eq!(
+        merge(&mut client, "term-land", false).await.unwrap().status,
+        pb::merge_branch_response::Status::Applied as i32
+    );
+    let baseline_word = read_native(&mut client, pb::EntityKind::Term, id("land-word"), None).await;
+    let baseline_domain =
+        read_native(&mut client, pb::EntityKind::Domain, id("land-domain"), None).await;
+    assert_eq!(baseline_word.entity, branch_word.entity);
+    assert_eq!(baseline_domain.entity, branch_domain.entity);
+    let mut edited_word = baseline_word.entity.clone().unwrap();
+    if let Some(pb::entity::Kind::Term(word)) = &mut edited_word.kind {
+        word.doc = "Branch definition".into();
+    }
+    put_native(&mut client, edited_word.clone(), Some("term-land")).await;
+    let mut edited_domain = baseline_domain.entity.clone().unwrap();
+    if let Some(pb::entity::Kind::Domain(domain)) = &mut edited_domain.kind {
+        domain.title = "Baseline domain title".into();
+    }
+    put_native(&mut client, edited_domain.clone(), None).await;
+    let update = client
+        .update_branch(request(
+            pb::UpdateBranchRequest {
+                name: "term-land".into(),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(update.conflicts.len(), 0);
+    assert_eq!(
+        read_native(
+            &mut client,
+            pb::EntityKind::Term,
+            id("land-word"),
+            Some("term-land")
+        )
+        .await
+        .entity,
+        Some(edited_word.clone())
+    );
+    assert_eq!(
+        merge(&mut client, "term-land", false).await.unwrap().status,
+        pb::merge_branch_response::Status::Applied as i32
+    );
+    let landed_word = read_native(&mut client, pb::EntityKind::Term, id("land-word"), None).await;
+    assert_eq!(landed_word.entity, Some(edited_word));
+    assert_ne!(landed_word.etag, baseline_word.etag);
+    assert_eq!(
+        read_native(&mut client, pb::EntityKind::Domain, id("land-domain"), None)
+            .await
+            .entity,
+        Some(edited_domain)
+    );
+}
+
+#[tokio::test]
+async fn explicit_conflict_restoration_of_term_or_domain_preserves_trusted_branch_incarnation() {
+    for kind in [pb::EntityKind::Term, pb::EntityKind::Domain] {
+        let mut client = client().await;
+        put_native(
+            &mut client,
+            entity(pb::entity::Kind::Domain(pb::Domain {
+                id: Some(id("restore-domain")),
+                ..Default::default()
+            })),
+            None,
+        )
+        .await;
+        put_native(&mut client, term("restore-word", "restore-domain"), None).await;
+        let slug = if kind == pb::EntityKind::Term {
+            "restore-word"
+        } else {
+            "restore-domain"
+        };
+        let original = read_native(&mut client, kind, id(slug), None).await;
+        let other_kind = if kind == pb::EntityKind::Term {
+            pb::EntityKind::Domain
+        } else {
+            pb::EntityKind::Term
+        };
+        let other_slug = if kind == pb::EntityKind::Term {
+            "restore-domain"
+        } else {
+            "restore-word"
+        };
+        let other = read_native(&mut client, other_kind, id(other_slug), None).await;
+        create_branch(&mut client, "term-restore").await;
+        let mut edited = original.entity.clone().unwrap();
+        match &mut edited.kind {
+            Some(pb::entity::Kind::Term(word)) => word.title = "Branch word".into(),
+            Some(pb::entity::Kind::Domain(domain)) => domain.title = "Branch domain".into(),
+            _ => unreachable!(),
+        }
+        put_native(&mut client, edited.clone(), Some("term-restore")).await;
+        let branch = read_native(&mut client, kind, id(slug), Some("term-restore")).await;
+        client
+            .delete_entity(request(
+                pb::DeleteEntityRequest {
+                    kind: kind as i32,
+                    id: Some(id(slug)),
+                    mode: pb::delete_entity_request::Mode::Force as i32,
+                    if_match: original.etag.clone(),
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap();
+        let refused = merge(&mut client, "term-restore", false).await.unwrap();
+        assert_eq!(
+            refused.status,
+            pb::merge_branch_response::Status::Conflicts as i32
+        );
+        assert_eq!(
+            client
+                .get_entity(request(
+                    pb::GetEntityRequest {
+                        kind: kind as i32,
+                        id: Some(id(slug))
+                    },
+                    ADMIN,
+                    None
+                ))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::NotFound
+        );
+        assert_eq!(
+            read_native(&mut client, other_kind, id(other_slug), None).await,
+            other
+        );
+        let update = client
+            .update_branch(request(
+                pb::UpdateBranchRequest {
+                    name: "term-restore".into(),
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(update.conflicts.len(), 1);
+        assert_eq!(
+            read_native(&mut client, kind, id(slug), Some("term-restore")).await,
+            branch
+        );
+        let state = update.conflicts[0].state.clone();
+        assert!(state.is_some());
+        let mut stale = state.clone().unwrap();
+        stale.theirs_etag = original.etag.clone();
+        assert_eq!(
+            client
+                .resolve_branch_entry(request(
+                    pb::ResolveBranchEntryRequest {
+                        name: "term-restore".into(),
+                        r#ref: Some(native_ref(kind, slug)),
+                        resolution: pb::resolve_branch_entry_request::Resolution::KeepOurs as i32,
+                        expected_state: Some(stale),
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    None
+                ))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::Aborted
+        );
+        assert_eq!(
+            read_native(&mut client, kind, id(slug), Some("term-restore")).await,
+            branch
+        );
+        client
+            .resolve_branch_entry(request(
+                pb::ResolveBranchEntryRequest {
+                    name: "term-restore".into(),
+                    r#ref: Some(native_ref(kind, slug)),
+                    resolution: pb::resolve_branch_entry_request::Resolution::KeepOurs as i32,
+                    expected_state: state,
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            merge(&mut client, "term-restore", true)
+                .await
+                .unwrap()
+                .status,
+            pb::merge_branch_response::Status::Validated as i32
+        );
+        assert_eq!(
+            merge(&mut client, "term-restore", false)
+                .await
+                .unwrap()
+                .status,
+            pb::merge_branch_response::Status::Applied as i32
+        );
+        let restored = read_native(&mut client, kind, id(slug), None).await;
+        assert_eq!(restored.entity, Some(edited));
+        assert_ne!(restored.etag, original.etag);
+        assert_eq!(
+            restored.entity.as_ref().unwrap().system,
+            original.entity.as_ref().unwrap().system
+        );
+        assert_eq!(
+            read_native(&mut client, other_kind, id(other_slug), None).await,
+            other
+        );
+        let declaration = client
+            .list_term_domain_declarations(request(
+                domain_query(id("restore-domain")),
+                READER,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(declaration.declarations.len(), 1);
+        assert_eq!(
+            declaration.declarations[0].state,
+            pb::CatalogResolutionState::Resolved as i32
+        );
+        assert_eq!(
+            declaration.declarations[0].domain,
+            Some(pb::DomainRef {
+                id: Some(id("restore-domain"))
+            })
+        );
+    }
+}
+
+#[tokio::test]
+async fn branch_term_landing_follows_recreated_exact_domain_key_without_uid_pin() {
+    let mut client = client().await;
+    let domain = entity(pb::entity::Kind::Domain(pb::Domain {
+        id: Some(id("recreated-domain")),
+        ..Default::default()
+    }));
+    put_native(&mut client, domain.clone(), None).await;
+    put_native(
+        &mut client,
+        term("recreated-word", "recreated-domain"),
+        None,
+    )
+    .await;
+    let old_domain = read_native(
+        &mut client,
+        pb::EntityKind::Domain,
+        id("recreated-domain"),
+        None,
+    )
+    .await;
+    let original_word = read_native(
+        &mut client,
+        pb::EntityKind::Term,
+        id("recreated-word"),
+        None,
+    )
+    .await;
+    create_branch(&mut client, "term-recreated").await;
+    let mut edited = original_word.entity.clone().unwrap();
+    if let Some(pb::entity::Kind::Term(word)) = &mut edited.kind {
+        word.doc = "Reviewed definition".into();
+    }
+    put_native(&mut client, edited.clone(), Some("term-recreated")).await;
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: Some(id("recreated-domain")),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let refusal = merge(&mut client, "term-recreated", true).await;
+    assert_eq!(refusal.unwrap_err().code(), Code::InvalidArgument);
+    assert_eq!(
+        read_native(
+            &mut client,
+            pb::EntityKind::Term,
+            id("recreated-word"),
+            None
+        )
+        .await,
+        original_word
+    );
+    put_native(&mut client, domain, None).await;
+    let recreated = read_native(
+        &mut client,
+        pb::EntityKind::Domain,
+        id("recreated-domain"),
+        None,
+    )
+    .await;
+    assert_ne!(
+        recreated
+            .entity
+            .as_ref()
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .uid,
+        old_domain
+            .entity
+            .as_ref()
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .uid
+    );
+    assert_ne!(recreated.etag, old_domain.etag);
+    client
+        .update_branch(request(
+            pb::UpdateBranchRequest {
+                name: "term-recreated".into(),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        merge(&mut client, "term-recreated", false)
+            .await
+            .unwrap()
+            .status,
+        pb::merge_branch_response::Status::Applied as i32
+    );
+    let landed = read_native(
+        &mut client,
+        pb::EntityKind::Term,
+        id("recreated-word"),
+        None,
+    )
+    .await;
+    assert_eq!(landed.entity, Some(edited));
+    assert_ne!(landed.etag, original_word.etag);
+    assert_eq!(
+        read_native(
+            &mut client,
+            pb::EntityKind::Domain,
+            id("recreated-domain"),
+            None
+        )
+        .await,
+        recreated
+    );
+}
+
+#[tokio::test]
+async fn structural_merge_preserves_explicit_domain_clear_from_either_side() {
+    for clear_on_branch in [true, false] {
+        let mut client = client().await;
+        put_native(
+            &mut client,
+            entity(pb::entity::Kind::Domain(pb::Domain {
+                id: Some(id("clear-domain")),
+                ..Default::default()
+            })),
+            None,
+        )
+        .await;
+        put_native(&mut client, term("clear-word", "clear-domain"), None).await;
+        let original = read_native(&mut client, pb::EntityKind::Term, id("clear-word"), None).await;
+        let target = read_native(
+            &mut client,
+            pb::EntityKind::Domain,
+            id("clear-domain"),
+            None,
+        )
+        .await;
+        create_branch(&mut client, "term-clear").await;
+        let mut cleared = original.entity.clone().unwrap();
+        if let Some(pb::entity::Kind::Term(word)) = &mut cleared.kind {
+            word.owning_domain = None;
+        }
+        let mut documented = original.entity.clone().unwrap();
+        if let Some(pb::entity::Kind::Term(word)) = &mut documented.kind {
+            word.doc = "Reviewed definition".into();
+        }
+        if clear_on_branch {
+            put_native(&mut client, cleared, Some("term-clear")).await;
+            put_native(&mut client, documented, None).await;
+        } else {
+            put_native(&mut client, documented, Some("term-clear")).await;
+            put_native(&mut client, cleared, None).await;
+        }
+        let captured = client
+            .diff_branch(request(
+                pb::DiffBranchRequest {
+                    name: "term-clear".into(),
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            captured.entries[0].base, original.entity,
+            "branch must capture the common ancestor before baseline changes; clear_on_branch={clear_on_branch}"
+        );
+        assert_eq!(
+            merge(&mut client, "term-clear", true).await.unwrap().status,
+            pb::merge_branch_response::Status::Validated as i32
+        );
+        assert_eq!(
+            merge(&mut client, "term-clear", false)
+                .await
+                .unwrap()
+                .status,
+            pb::merge_branch_response::Status::Applied as i32
+        );
+        let after = read_native(&mut client, pb::EntityKind::Term, id("clear-word"), None).await;
+        let mut expected = original.entity.unwrap();
+        if let Some(pb::entity::Kind::Term(word)) = &mut expected.kind {
+            word.doc = "Reviewed definition".into();
+            word.owning_domain = None;
+        }
+        assert_eq!(after.entity, Some(expected));
+        assert_ne!(after.etag, original.etag);
+        assert_eq!(
+            read_native(
+                &mut client,
+                pb::EntityKind::Domain,
+                id("clear-domain"),
+                None
+            )
+            .await,
+            target
+        );
+        let declarations = client
+            .list_term_domain_declarations(request(domain_query(id("clear-domain")), READER, None))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(declarations.declarations.len(), 0);
+    }
+}
+#[tokio::test]
+async fn domain_declaration_conflict_requires_guarded_choice_between_clear_and_exact_retarget() {
+    for keep_ours in [true, false] {
+        let mut client = client().await;
+        for slug in ["choice-old", "choice-new"] {
+            put_native(
+                &mut client,
+                entity(pb::entity::Kind::Domain(pb::Domain {
+                    id: Some(id(slug)),
+                    ..Default::default()
+                })),
+                None,
+            )
+            .await;
+        }
+        put_native(&mut client, term("choice-word", "choice-old"), None).await;
+        let original =
+            read_native(&mut client, pb::EntityKind::Term, id("choice-word"), None).await;
+        let target = read_native(&mut client, pb::EntityKind::Domain, id("choice-new"), None).await;
+        create_branch(&mut client, "term-choice").await;
+        let mut retargeted = original.entity.clone().unwrap();
+        if let Some(pb::entity::Kind::Term(word)) = &mut retargeted.kind {
+            word.owning_domain = Some(pb::DomainRef {
+                id: Some(id("choice-new")),
+            });
+        }
+        put_native(&mut client, retargeted.clone(), Some("term-choice")).await;
+        let mut cleared = original.entity.clone().unwrap();
+        if let Some(pb::entity::Kind::Term(word)) = &mut cleared.kind {
+            word.owning_domain = None;
+        }
+        put_native(&mut client, cleared.clone(), None).await;
+        let baseline =
+            read_native(&mut client, pb::EntityKind::Term, id("choice-word"), None).await;
+        let refused = merge(&mut client, "term-choice", false).await.unwrap();
+        assert_eq!(
+            refused.status,
+            pb::merge_branch_response::Status::Conflicts as i32
+        );
+        assert_eq!(
+            read_native(&mut client, pb::EntityKind::Term, id("choice-word"), None).await,
+            baseline
+        );
+        assert_eq!(refused.conflicts.len(), 1);
+        client
+            .resolve_branch_entry(request(
+                pb::ResolveBranchEntryRequest {
+                    name: "term-choice".into(),
+                    r#ref: Some(native_ref(pb::EntityKind::Term, "choice-word")),
+                    resolution: if keep_ours {
+                        pb::resolve_branch_entry_request::Resolution::KeepOurs
+                    } else {
+                        pb::resolve_branch_entry_request::Resolution::TakeTheirs
+                    } as i32,
+                    expected_state: refused.conflicts[0].state.clone(),
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap();
+        let resolved = read_native(
+            &mut client,
+            pb::EntityKind::Term,
+            id("choice-word"),
+            Some("term-choice"),
+        )
+        .await;
+        assert_eq!(
+            resolved.entity,
+            Some(if keep_ours {
+                retargeted.clone()
+            } else {
+                cleared.clone()
+            })
+        );
+        assert_eq!(
+            resolved.entity.as_ref().unwrap().system,
+            original.entity.as_ref().unwrap().system
+        );
+        if keep_ours {
+            assert_eq!(
+                merge(&mut client, "term-choice", false)
+                    .await
+                    .unwrap()
+                    .status,
+                pb::merge_branch_response::Status::Applied as i32
+            );
+            let landed =
+                read_native(&mut client, pb::EntityKind::Term, id("choice-word"), None).await;
+            assert_eq!(landed.entity, Some(retargeted));
+            assert_ne!(landed.etag, baseline.etag);
+        } else {
+            assert_eq!(
+                read_native(&mut client, pb::EntityKind::Term, id("choice-word"), None).await,
+                baseline
+            );
+        }
+        assert_eq!(
+            read_native(&mut client, pb::EntityKind::Domain, id("choice-new"), None).await,
+            target
+        );
+    }
+}
