@@ -47,6 +47,7 @@ export function Query({ title, load }: { title: string; load: (signal: AbortSign
       {result?.data && (
         <>
           <Exact value={result.data.scope} />
+          {result.data.scope?.pageReceipt && <p>Checked owners cover this page and the selected Document. The revision identifies the full checked scan.</p>}
           {!result.data.scope && <p>Checked scope unavailable; complete absence remains unproven.</p>}
           {result.data.incomplete && <p>Incomplete inspection; missing records do not prove absence.</p>}
           {!!result.data.failures?.length && (

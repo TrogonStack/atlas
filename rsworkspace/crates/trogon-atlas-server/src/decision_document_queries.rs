@@ -61,6 +61,23 @@ fn decision_ref(reference: &pb::DecisionRef) -> Result<pb::EntityRef, Status> {
 
 impl CatalogQuery {
     pub(super) fn scope(&mut self) -> Result<pb::CatalogCheckedScope, Status> {
+        let scope = self.checked_scope(None)?;
+        self.charge_scope(&scope)?;
+        Ok(scope)
+    }
+
+    fn charge_scope(&mut self, scope: &pb::CatalogCheckedScope) -> Result<(), Status> {
+        for _ in 0..scope.visited.len()
+            + scope.visited_subjects.len()
+            + scope.visited_documents.len()
+            + usize::from(scope.page_receipt.is_some())
+        {
+            self.budget.output()?;
+        }
+        Ok(())
+    }
+
+    fn checked_scope(&self, caller: Option<&str>) -> Result<pb::CatalogCheckedScope, Status> {
         let namespaces: BTreeSet<_> = match &self.lens {
             Lens::Everything => self.world.keys().map(|key| key.namespace.clone()).collect(),
             Lens::Only(namespaces) => namespaces
@@ -83,9 +100,12 @@ impl CatalogQuery {
             ))
             .map_err(|_| Status::internal("cannot encode catalog scope"))?,
         );
+        if let Some(caller) = caller {
+            feed(b"incoming-document-page-v2");
+            feed(caller.as_bytes());
+        }
         let mut visited = Vec::new();
         for (key, row) in rows {
-            self.budget.output()?;
             let reference = pb::EntityRef {
                 kind: key.kind as i32,
                 id: Some(key.id()),
@@ -115,11 +135,9 @@ impl CatalogQuery {
         documents.sort_by_key(prost::Message::encode_to_vec);
         documents.dedup();
         for subject in &subjects {
-            self.budget.output()?;
             feed(&subject.encode_to_vec());
         }
         for document in &documents {
-            self.budget.output()?;
             feed(&document.encode_to_vec());
         }
         let digest = hash
@@ -134,7 +152,11 @@ impl CatalogQuery {
         Ok(pb::CatalogCheckedScope {
             branch: self.branch.clone(),
             authorized_namespaces: namespaces.into_iter().collect(),
-            revision: format!("catalog-checked-v1:{digest}"),
+            revision: if caller.is_some() {
+                format!("catalog-page-checked-v2:{digest}")
+            } else {
+                format!("catalog-checked-v1:{digest}")
+            },
             visited,
             visited_subjects: subjects,
             visited_documents: documents,
@@ -800,7 +822,9 @@ impl EventModelServiceImpl {
         req: pb::ListIncomingDocumentDeclarationsRequest,
         branch: Option<&str>,
         vis: &Visibility,
+        caller: &str,
     ) -> Result<pb::ListIncomingDocumentDeclarationsResponse, Status> {
+        let _guard = self.lock_mutations().await;
         let selection = req
             .document
             .ok_or_else(|| Status::invalid_argument("document is required"))?;
@@ -822,9 +846,9 @@ impl EventModelServiceImpl {
         let page_size = super::clamp_page_size(req.page_size, 100, 500);
         let mut query = self.catalog_query(branch, vis, true).await?;
         query.documents.push(selection.clone());
-        let scope = query.scope()?;
-        let start = decode_catalog_page_token(&req.page_token, &scope, role_filter, &selection)?;
         let state = self.catalog_document_state(&mut query, &selection).await?;
+        let mut scope = query.checked_scope(Some(caller))?;
+        let start = decode_catalog_page_token(&req.page_token, &scope, role_filter, &selection)?;
         let mut declarations = Vec::new();
         for row in query.rows.clone() {
             match &row.entity.kind {
@@ -920,6 +944,41 @@ impl EventModelServiceImpl {
             page.push(declaration);
         }
         let next = start + page.len();
+        let mut owners = HashSet::new();
+        owners.insert(pb::EntityKey::new(
+            exact(&reference)?.0,
+            exact(&reference)?.1,
+        ));
+        for declaration in &page {
+            if let Some(owner) = declaration
+                .owner
+                .as_ref()
+                .and_then(|checked| checked.owner.as_ref())
+            {
+                let (kind, id) = exact(owner)?;
+                owners.insert(pb::EntityKey::new(kind, id));
+            }
+        }
+        let checked_owner_count = scope.visited.len() as u64;
+        let mut visited = Vec::new();
+        for checked in scope.visited {
+            let owner = checked
+                .owner
+                .as_ref()
+                .ok_or_else(|| Status::internal("checked owner missing reference"))?;
+            let (kind, id) = exact(owner)?;
+            if owners.contains(&pb::EntityKey::new(kind, id)) {
+                visited.push(checked);
+            }
+        }
+        scope.visited = visited;
+        scope.page_receipt = Some(pb::CatalogPageReceipt {
+            checked_owner_count,
+            total_declarations: total as u64,
+            start_offset: start as u64,
+            end_offset: next as u64,
+        });
+        query.charge_scope(&scope)?;
         let next_page_token = if next < total {
             encode_catalog_page_token(&scope, role_filter, &selection, next)?
         } else {
@@ -1126,6 +1185,9 @@ fn decode_catalog_page_token(
 ) -> Result<usize, Status> {
     if token.is_empty() {
         return Ok(0);
+    }
+    if token.len() > 4096 {
+        return Err(Status::invalid_argument("invalid page token"));
     }
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     let bytes = URL_SAFE_NO_PAD

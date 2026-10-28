@@ -31,6 +31,13 @@ fn request<T>(body: T, branch: Option<&str>) -> Request<T> {
 }
 
 async fn client() -> Client {
+    client_with_store(std::sync::Arc::new(
+        trogon_atlas_testsupport::shared().await.store().await,
+    ))
+    .await
+}
+
+async fn client_with_store(store: std::sync::Arc<dyn trogon_atlas_store::Store>) -> Client {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let registry = TokenRegistry::from_file_contents(
@@ -47,11 +54,7 @@ tokens = ["document-paging-peer"]
         .unwrap(),
     )
     .unwrap();
-    let service = EventModelServiceImpl::try_new(
-        std::sync::Arc::new(trogon_atlas_testsupport::shared().await.store().await),
-        ServerMetrics::default(),
-    )
-    .unwrap();
+    let service = EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap();
     let grpc = InterceptedService::new(
         tower::ServiceBuilder::new()
             .layer(AuthzLayer)
@@ -286,16 +289,50 @@ async fn incoming_document_paging_surpasses_output_ceiling_with_multipage_contin
         assert_eq!(receipt.checked_owner_count, (REFERRERS + FILLER + 1) as u64);
         assert_eq!(receipt.total_declarations, REFERRERS as u64);
         assert_eq!(receipt.start_offset, seen.len() as u64);
-        assert_eq!(receipt.end_offset, (seen.len() + page.declarations.len()) as u64);
+        assert_eq!(
+            receipt.end_offset,
+            (seen.len() + page.declarations.len()) as u64
+        );
         assert!(scope.visited.len() <= page.declarations.len() + 1);
-        assert!(page.declarations.len() + scope.visited.len() + scope.visited_subjects.len() + scope.visited_documents.len() + 1 <= 4_096);
+        assert!(
+            page.declarations.len()
+                + scope.visited.len()
+                + scope.visited_subjects.len()
+                + scope.visited_documents.len()
+                + 1
+                <= 4_096
+        );
         for owner in &scope.visited {
-            assert!(owner.owner.as_ref().unwrap().id.as_ref().unwrap().slug == "incoming-hub" || page.declarations.iter().any(|declaration| declaration.owner.as_ref() == Some(owner)));
+            assert!(
+                owner.owner.as_ref().unwrap().id.as_ref().unwrap().slug == "incoming-hub"
+                    || page
+                        .declarations
+                        .iter()
+                        .any(|declaration| declaration.owner.as_ref() == Some(owner))
+            );
         }
         if !token.is_empty() {
-            let mut replay = request(pb::ListIncomingDocumentDeclarationsRequest { document: Some(whole.clone()), page_size: page_size as i32, page_token: token.clone(), ..Default::default() }, None);
-            replay.metadata_mut().insert("authorization", "Bearer document-paging-peer".parse().unwrap());
-            assert_eq!(client.list_incoming_document_declarations(replay).await.unwrap_err().code(), Code::InvalidArgument);
+            let mut replay = request(
+                pb::ListIncomingDocumentDeclarationsRequest {
+                    document: Some(whole.clone()),
+                    page_size: page_size as i32,
+                    page_token: token.clone(),
+                    ..Default::default()
+                },
+                None,
+            );
+            replay.metadata_mut().insert(
+                "authorization",
+                "Bearer document-paging-peer".parse().unwrap(),
+            );
+            assert_eq!(
+                client
+                    .list_incoming_document_declarations(replay)
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::InvalidArgument
+            );
         }
         for declaration in &page.declarations {
             let owner = declaration.owner.as_ref().expect("owner");
@@ -328,6 +365,77 @@ async fn incoming_document_paging_surpasses_output_ceiling_with_multipage_contin
     }
     assert_eq!(seen.len(), REFERRERS);
     assert_eq!(pages, (REFERRERS + page_size - 1) / page_size);
+    let first_request = pb::ListIncomingDocumentDeclarationsRequest {
+        document: Some(whole.clone()),
+        page_size: 1,
+        ..Default::default()
+    };
+    let first = client
+        .list_incoming_document_declarations(request(first_request.clone(), None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        first
+            .scope
+            .as_ref()
+            .unwrap()
+            .page_receipt
+            .as_ref()
+            .unwrap()
+            .checked_owner_count,
+        5_000
+    );
+    client
+        .create_branch(request(
+            pb::CreateBranchRequest {
+                name: "paging-context".into(),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+    let continuation = pb::ListIncomingDocumentDeclarationsRequest {
+        page_token: first.next_page_token.clone(),
+        ..first_request
+    };
+    assert_eq!(
+        client
+            .list_incoming_document_declarations(request(
+                continuation.clone(),
+                Some("paging-context")
+            ))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
+    let mut filler = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id("filler-0")),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    if let Some(pb::entity::Kind::Document(document)) = &mut filler.kind {
+        document.title.as_mut().unwrap().value = "Unreturned scan owner changed".into();
+    }
+    put(&mut client, filler).await;
+    assert_eq!(
+        client
+            .list_incoming_document_declarations(request(continuation, None))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::InvalidArgument
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -447,4 +555,130 @@ async fn incoming_document_page_token_rejects_malformed_stale_and_out_of_range_o
         .unwrap();
     assert_eq!(err.code(), Code::InvalidArgument);
     assert!(err.message().contains("invalid page token"));
+}
+
+async fn seed(store: &trogon_atlas_store::NatsStore, entities: Vec<pb::Entity>) {
+    use trogon_atlas_store::{store::MutationOp, Store, WriteContext};
+    for chunk in entities.chunks(128) {
+        let ops: Vec<_> = chunk
+            .iter()
+            .map(|entity| MutationOp::Create {
+                kind: trogon_atlas_core::entity_kind(entity).unwrap(),
+                entity: entity.clone(),
+            })
+            .collect();
+        store
+            .batch_apply(&ops, WriteContext::baseline())
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn incoming_document_small_pages_do_not_bypass_full_scan_row_and_work_limits() {
+    let store = std::sync::Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let mut client = client_with_store(store.clone()).await;
+    let query = pb::ListIncomingDocumentDeclarationsRequest {
+        document: Some(hub_selection(id("absent-target"))),
+        page_size: 1,
+        ..Default::default()
+    };
+    seed(
+        &store,
+        (0..5_001)
+            .map(|index| pb::Entity {
+                kind: Some(pb::entity::Kind::Person(pb::Person {
+                    id: Some(id(&format!("row-{index}"))),
+                    title: Some(pb::DirectoryDisplayName {
+                        value: "Person".into(),
+                    }),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })
+            .collect(),
+    )
+    .await;
+    let row_error = client
+        .list_incoming_document_declarations(request(query.clone(), None))
+        .await
+        .unwrap_err();
+    assert_eq!(row_error.code(), Code::ResourceExhausted);
+    assert!(row_error.message().contains("entity budget"));
+
+    let store = std::sync::Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let mut client = client_with_store(store.clone()).await;
+    seed(
+        &store,
+        (0..1_000)
+            .map(|index| pb::Entity {
+                kind: Some(pb::entity::Kind::Person(pb::Person {
+                    id: Some(id(&format!("member-{index}"))),
+                    title: Some(pb::DirectoryDisplayName {
+                        value: "Person".into(),
+                    }),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })
+            .collect(),
+    )
+    .await;
+    seed(
+        &store,
+        (0..10)
+            .map(|index| pb::Entity {
+                kind: Some(pb::entity::Kind::Team(pb::Team {
+                    id: Some(id(&format!("team-{index}"))),
+                    title: Some(pb::DirectoryDisplayName {
+                        value: "Team".into(),
+                    }),
+                    members: (0..1_000)
+                        .map(|member| pb::TeamMember {
+                            person: Some(pb::PersonRef {
+                                id: Some(id(&format!("member-{member}"))),
+                            }),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })
+            .collect(),
+    )
+    .await;
+    let boundary = client
+        .list_incoming_document_declarations(request(query.clone(), None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(boundary.declarations.is_empty());
+    assert!(!boundary.incomplete);
+    seed(
+        &store,
+        vec![pb::Entity {
+            kind: Some(pb::entity::Kind::Team(pb::Team {
+                id: Some(id("work-overflow")),
+                title: Some(pb::DirectoryDisplayName {
+                    value: "Overflow".into(),
+                }),
+                members: vec![pb::TeamMember {
+                    person: Some(pb::PersonRef {
+                        id: Some(id("member-0")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        }],
+    )
+    .await;
+    let work_error = client
+        .list_incoming_document_declarations(request(query, None))
+        .await
+        .unwrap_err();
+    assert_eq!(work_error.code(), Code::ResourceExhausted);
+    assert!(work_error.message().contains("work budget"));
 }

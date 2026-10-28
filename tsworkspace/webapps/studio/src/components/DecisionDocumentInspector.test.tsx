@@ -54,6 +54,11 @@ afterEach(() => {
   window.history.replaceState({}, '', '/');
 });
 describe('native catalog inspector', () => {
+  it('labels page receipts without presenting their owners as the full scan', async () => {
+    vi.mocked(api.listIncomingDocumentDeclarations).mockResolvedValue({ scope: { revision: 'page-revision', pageReceipt: { checkedOwnerCount: '5000', totalDeclarations: '4097', startOffset: '0', endOffset: '100' } }, nextPageToken: 'continuation', incomplete: false });
+    render(<DecisionDocumentInspector entity={entity()} />);
+    await screen.findByText('Checked owners cover this page and the selected Document. The revision identifies the full checked scan.');
+  });
   it('preserves pending and completed queries across same-context parent renders', async () => {
     let resolveDetail: ((value: CatalogInspection) => void) | undefined;
     vi.mocked(api.getDocumentDetail).mockImplementation(

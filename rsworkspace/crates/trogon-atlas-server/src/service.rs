@@ -3496,7 +3496,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         {
             return Err(Status::not_found("branch not found"));
         }
-        self.incoming_documents(req.into_inner(), branch.as_deref(), &vis)
+        let caller = principal
+            .as_ref()
+            .map(|principal| format!("{principal:?}"))
+            .unwrap_or_default();
+        self.incoming_documents(req.into_inner(), branch.as_deref(), &vis, &caller)
             .await
             .map(Response::new)
     }
