@@ -601,3 +601,62 @@ fn opaque_selectors_remain_unverified_when_a_local_schema_target_is_unresolved()
         vec![FieldSelectorVerification::OpaqueUnverified]
     );
 }
+
+#[test]
+fn generic_source_title_updates_preserve_native_claims_on_all_owner_kinds() {
+    use trogon_atlas_core::message_claims as claims;
+    for kind in [
+        EntityKind::Component,
+        EntityKind::ExternalSystem,
+        EntityKind::Domain,
+    ] {
+        let mut current = with_route();
+        let native = claims::declarations(&current).cloned();
+        current.kind = Some(match kind {
+            EntityKind::Component => entity::Kind::Component(Component {
+                id: Some(id("owner")),
+                title: "Before".into(),
+                message_claims: native.clone(),
+                ..Default::default()
+            }),
+            EntityKind::ExternalSystem => entity::Kind::ExternalSystem(ExternalSystem {
+                id: Some(id("owner")),
+                title: "Before".into(),
+                message_claims: native.clone(),
+                ..Default::default()
+            }),
+            _ => entity::Kind::Domain(Domain {
+                id: Some(id("owner")),
+                title: "Before".into(),
+                message_claims: native.clone(),
+                ..Default::default()
+            }),
+        });
+        let mut incoming = current.clone();
+        match &mut incoming.kind {
+            Some(entity::Kind::Component(v)) => v.title = "After".into(),
+            Some(entity::Kind::ExternalSystem(v)) => v.title = "After".into(),
+            Some(entity::Kind::Domain(v)) => v.title = "After".into(),
+            _ => panic!(),
+        }
+        let title = OwnershipUnit::Field(SourceOwnedField::Title);
+        claims::validate_source_write(Some(&current), &incoming, title).unwrap();
+        let selected = source_integration::extract_unit(&incoming, title).unwrap();
+        source_integration::replace_unit(&mut current, title, &selected).unwrap();
+        assert_eq!(current, incoming);
+        assert_eq!(claims::declarations(&current), native.as_ref());
+        assert!(claims::validate_source_write(None, &incoming, title).is_err());
+        let mut cleared = current.clone();
+        *claims::declarations_mut(&mut cleared).unwrap() = MessageClaims::default();
+        let selected =
+            source_integration::extract_unit(&cleared, OwnershipUnit::WholeOwner).unwrap();
+        let before = current.clone();
+        assert!(source_integration::replace_unit(
+            &mut current,
+            OwnershipUnit::WholeOwner,
+            &selected
+        )
+        .is_err());
+        assert_eq!(current, before);
+    }
+}
