@@ -113,10 +113,15 @@ fn responsibility_occurrence_count(all: &[StoredEntity]) -> usize {
     all.iter()
         .filter_map(|stored| {
             let entity = &stored.entity;
+            if !crate::validation::architecture_resources::is_resource(entity) {
+                return None;
+            }
             if !matches!(
                 entity.kind,
                 Some(
-                    pb::entity::Kind::Component(_)
+                    pb::entity::Kind::SystemGroup(_)
+                        | pb::entity::Kind::Domain(_)
+                        | pb::entity::Kind::Component(_)
                         | pb::entity::Kind::ExternalSystem(_)
                         | pb::entity::Kind::Team(_)
                         | pb::entity::Kind::Person(_)
@@ -986,6 +991,33 @@ fn catalog_provenance(
         reference.connection_id = trogon_atlas_core::communication_intent::declarations(entity)
             .get(index)
             .and_then(|declaration| declaration.connection_id.clone());
+    }
+    if let Some((collection, index)) = field.split_once(']').and_then(|(head, _)| {
+        let (collection, index) = head.split_once('[')?;
+        Some((collection, index.parse::<usize>().ok()?))
+    }) {
+        let connection_id = match (&entity.kind, collection) {
+            (Some(pb::entity::Kind::SystemGroup(group)), "members") => group
+                .members
+                .get(index)
+                .and_then(|value| value.connection_id.clone()),
+            (Some(pb::entity::Kind::SystemGroup(group)), "relationships") => group
+                .relationships
+                .get(index)
+                .and_then(|value| value.connection_id.clone()),
+            (Some(pb::entity::Kind::SystemGroup(group)), "actors") => group
+                .actors
+                .get(index)
+                .and_then(|value| value.connection_id.clone()),
+            (Some(pb::entity::Kind::Domain(domain)), "members") => domain
+                .members
+                .get(index)
+                .and_then(|value| value.connection_id.clone()),
+            _ => None,
+        };
+        if connection_id.is_some() {
+            reference.connection_id = connection_id;
+        }
     }
     (
         reference.catalog_subject,

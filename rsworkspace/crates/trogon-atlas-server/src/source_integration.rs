@@ -878,9 +878,15 @@ fn native_relationships_only(
     incoming: Option<&pb::Entity>,
     ownership: &pb::SourceFieldOwnership,
 ) -> Result<(), Status> {
-    let has_relationships = |entity: &pb::Entity| {
-        !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
-            || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
+    let has_relationships = |entity: &pb::Entity| match entity.kind.as_ref() {
+        Some(pb::entity::Kind::SystemGroup(group)) => {
+            !group.members.is_empty() || !group.relationships.is_empty() || !group.actors.is_empty()
+        }
+        Some(pb::entity::Kind::Domain(domain)) => !domain.members.is_empty(),
+        _ => {
+            !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
+                || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
+        }
     };
     let whole_owner = matches!(
         ownership.policy,
@@ -891,7 +897,7 @@ fn native_relationships_only(
             && (current.is_some_and(has_relationships) || incoming.is_some_and(has_relationships)))
     {
         return Err(Status::invalid_argument(
-            "architectural relationships and communications support native authoring only",
+            "architectural relationships, communications, groups and domain members support native authoring only",
         ));
     }
     Ok(())
@@ -3362,4 +3368,164 @@ async fn sweep_registration(
             .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod native_authoring_tests {
+    use super::*;
+
+    fn id(slug: &str) -> pb::Id {
+        pb::Id {
+            namespace: "groups".into(),
+            slug: slug.into(),
+            version: 1,
+        }
+    }
+
+    fn group(members: usize, relationships: usize, actors: usize, title: &str) -> pb::Entity {
+        let member = pb::SystemGroupMembership {
+            member: Some(pb::SystemGroupMember {
+                target: Some(pb::system_group_member::Target::Component(
+                    pb::ComponentRef {
+                        id: Some(id("worker")),
+                    },
+                )),
+            }),
+            ..Default::default()
+        };
+        let relationship = pb::SystemGroupRelationship {
+            target: Some(pb::SystemGroupRef {
+                id: Some(id("other")),
+            }),
+            ..Default::default()
+        };
+        let actor = pb::SystemActorLink {
+            target: Some(pb::SystemActorTarget {
+                target: Some(pb::system_actor_target::Target::Persona(pb::PersonaRef {
+                    id: Some(id("operator")),
+                })),
+            }),
+            direction: pb::SystemActorDirection::Inbound as i32,
+            ..Default::default()
+        };
+        pb::Entity {
+            kind: Some(pb::entity::Kind::SystemGroup(pb::SystemGroup {
+                id: Some(id("platform")),
+                title: title.into(),
+                members: vec![member; members],
+                relationships: vec![relationship; relationships],
+                actors: vec![actor; actors],
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn domain(members: usize) -> pb::Entity {
+        let member = pb::DomainMembership {
+            member: Some(pb::DomainMember {
+                target: Some(pb::domain_member::Target::Component(pb::ComponentRef {
+                    id: Some(id("worker")),
+                })),
+            }),
+            ..Default::default()
+        };
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Domain(pb::Domain {
+                id: Some(id("commerce")),
+                members: vec![member; members],
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn policies() -> Vec<pb::SourceFieldOwnership> {
+        let policy = |value| pb::SourceFieldOwnership {
+            policy: Some(value),
+        };
+        vec![
+            policy(pb::source_field_ownership::Policy::None(
+                pb::SourceNoOwnership {},
+            )),
+            policy(pb::source_field_ownership::Policy::Fields(
+                pb::SourceOwnedFields {
+                    fields: vec![pb::SourceOwnedField::Title as i32],
+                },
+            )),
+            policy(pb::source_field_ownership::Policy::WholeOwner(
+                pb::SourceWholeOwnerOwnership {},
+            )),
+        ]
+    }
+
+    fn whole_owner() -> pb::SourceFieldOwnership {
+        pb::SourceFieldOwnership {
+            policy: Some(pb::source_field_ownership::Policy::WholeOwner(
+                pb::SourceWholeOwnerOwnership {},
+            )),
+        }
+    }
+
+    fn field_owner() -> pb::SourceFieldOwnership {
+        pb::SourceFieldOwnership {
+            policy: Some(pb::source_field_ownership::Policy::Fields(
+                pb::SourceOwnedFields {
+                    fields: vec![pb::SourceOwnedField::Title as i32],
+                },
+            )),
+        }
+    }
+
+    #[test]
+    fn initial_creation_with_native_curation_is_refused_under_every_policy() {
+        for ownership in policies() {
+            for incoming in [
+                group(1, 0, 0, "t"),
+                group(0, 1, 0, "t"),
+                group(0, 0, 1, "t"),
+                domain(1),
+            ] {
+                let refused = native_relationships_only(None, Some(&incoming), &ownership);
+                assert_eq!(refused.unwrap_err().code(), tonic::Code::InvalidArgument);
+            }
+            assert!(
+                native_relationships_only(None, Some(&group(0, 0, 0, "t")), &ownership).is_ok()
+            );
+            assert!(native_relationships_only(None, Some(&domain(0)), &ownership).is_ok());
+        }
+    }
+
+    #[test]
+    fn whole_owner_refuses_current_proposed_and_clearing_curation() {
+        let ownership = whole_owner();
+        let curated = group(2, 1, 1, "t");
+        let empty = group(0, 0, 0, "t");
+        for (current, incoming) in [
+            (Some(&curated), Some(&curated)),
+            (Some(&empty), Some(&curated)),
+            (Some(&curated), Some(&empty)),
+            (Some(&curated), None),
+        ] {
+            let refused = native_relationships_only(current, incoming, &ownership);
+            assert_eq!(refused.unwrap_err().code(), tonic::Code::InvalidArgument);
+        }
+        assert_eq!(
+            native_relationships_only(Some(&domain(1)), Some(&domain(0)), &ownership)
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        assert!(native_relationships_only(Some(&empty), Some(&empty), &ownership).is_ok());
+    }
+
+    #[test]
+    fn unrelated_field_writes_preserve_local_curation_under_field_ownership() {
+        let ownership = field_owner();
+        let curated = group(2, 1, 1, "before");
+        let retitled = group(2, 1, 1, "after");
+        assert!(native_relationships_only(Some(&curated), Some(&retitled), &ownership).is_ok());
+        assert!(native_relationships_only(Some(&domain(1)), Some(&domain(1)), &ownership).is_ok());
+    }
 }

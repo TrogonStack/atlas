@@ -2254,6 +2254,22 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.DesignGraphRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "trogonatlas.eventmodel.v1alpha1.DirectoryDisplayName": {
       "additionalProperties": false,
       "properties": {
@@ -2443,6 +2459,12 @@
         "doc": {
           "type": "string"
         },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DomainMembership"
+          },
+          "type": "array"
+        },
         "metadata": {
           "items": {
             "properties": {
@@ -2465,6 +2487,218 @@
         },
         "title": {
           "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DomainMember": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "domain",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "domain",
+              "component"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "domain",
+              "dataProduct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "domain",
+              "schema"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "domain",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "domain",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "component"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "dataProduct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "schema"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "dataProduct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "schema"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataProduct",
+              "schema"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataProduct",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataProduct",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "schema",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "schema",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "designGraph",
+              "externalSystem"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ComponentRef"
+        },
+        "dataProduct": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataProductRef"
+        },
+        "designGraph": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DesignGraphRef"
+        },
+        "domain": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DomainRef"
+        },
+        "externalSystem": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalSystemRef"
+        },
+        "schema": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaRef"
+        },
+        "systemGroup": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupRef"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DomainMembership": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "member": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DomainMember"
         }
       },
       "type": "object"
@@ -2553,6 +2787,7 @@
         "ENTITY_KIND_STORYBOARD",
         "ENTITY_KIND_SUBDOMAIN",
         "ENTITY_KIND_SWIMLANE",
+        "ENTITY_KIND_SYSTEM_GROUP",
         "ENTITY_KIND_TEAM",
         "ENTITY_KIND_TERM",
         "ENTITY_KIND_TRACKER",
@@ -2576,6 +2811,7 @@
         "Storyboard",
         "Subdomain",
         "Swimlane",
+        "SystemGroup",
         "Team",
         "Term",
         "Tracker",
@@ -2626,6 +2862,8 @@
         "storyboard",
         "subdomain",
         "swimlane",
+        "system-group",
+        "system_group",
         "team",
         "term",
         "tracker",
@@ -5817,6 +6055,363 @@
         }
       ]
     },
+    "trogonatlas.eventmodel.v1alpha1.SystemActorDirection": {
+      "enum": [
+        "SYSTEM_ACTOR_DIRECTION_INBOUND",
+        "SYSTEM_ACTOR_DIRECTION_OUTBOUND",
+        "SYSTEM_ACTOR_DIRECTION_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SystemActorLink": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "direction": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemActorDirection"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "label": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "target": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemActorTarget"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SystemActorTarget": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "persona",
+              "component"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "persona",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "persona",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "externalSystem",
+              "systemGroup"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ComponentRef"
+        },
+        "externalSystem": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalSystemRef"
+        },
+        "persona": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.PersonaRef"
+        },
+        "systemGroup": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupRef"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SystemGroup": {
+      "additionalProperties": false,
+      "properties": {
+        "actors": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemActorLink"
+          },
+          "type": "array"
+        },
+        "doc": {
+          "type": "string"
+        },
+        "members": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupMembership"
+          },
+          "type": "array"
+        },
+        "metadata": {
+          "items": {
+            "properties": {
+              "@type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "@type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupRelationship"
+          },
+          "type": "array"
+        },
+        "scope": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupScope"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SystemGroupMember": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "component"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "dataStore"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "schema"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "systemGroup",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "dataStore"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "schema"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "externalSystem",
+              "dataStore"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "externalSystem",
+              "schema"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "externalSystem",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataStore",
+              "schema"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataStore",
+              "designGraph"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "schema",
+              "designGraph"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "component": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ComponentRef"
+        },
+        "dataStore": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataStoreRef"
+        },
+        "designGraph": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DesignGraphRef"
+        },
+        "externalSystem": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalSystemRef"
+        },
+        "schema": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaRef"
+        },
+        "systemGroup": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupRef"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SystemGroupMembership": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "member": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupMember"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.SystemGroupRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.SystemGroupRelationship": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            },
+            "label": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+            },
+            "target": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.SystemGroupScope": {
+      "enum": [
+        "SYSTEM_GROUP_SCOPE_EXTERNAL",
+        "SYSTEM_GROUP_SCOPE_INTERNAL",
+        "SYSTEM_GROUP_SCOPE_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
     "trogonatlas.eventmodel.v1alpha1.Target": {
       "additionalProperties": false,
       "properties": {
@@ -7647,6 +8242,30 @@
         "properties": {
           "spec": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.Document"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "ENTITY_KIND_SYSTEM_GROUP",
+              "SystemGroup",
+              "system-group",
+              "system_group"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "spec": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroup"
           }
         }
       }

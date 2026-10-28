@@ -439,6 +439,9 @@ pub(crate) fn shorthand_ref_field(
     if matches!(
         md.full_name(),
         "trogonatlas.eventmodel.v1alpha1.ArchitecturalEndpoint"
+            | "trogonatlas.eventmodel.v1alpha1.SystemGroupMember"
+            | "trogonatlas.eventmodel.v1alpha1.DomainMember"
+            | "trogonatlas.eventmodel.v1alpha1.SystemActorTarget"
             | "trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
             | "trogonatlas.eventmodel.v1alpha1.ChannelAccess"
             | "trogonatlas.eventmodel.v1alpha1.StoreAccess"

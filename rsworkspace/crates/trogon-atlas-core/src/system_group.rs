@@ -33,7 +33,6 @@ fn require(valid: bool, message: &str) -> Result<()> {
     }
 }
 
-
 /// The Design Graph kind is owned by a parallel workstream. Until it lands the
 /// arm is typed and validated but carries no resolvable kind.
 #[must_use]
@@ -796,7 +795,10 @@ pub fn advisories(owners: &[Entity]) -> Vec<Advisory> {
         let (cycle_rule, repeat_rule) = if kind == EntityKind::Domain as i32 {
             (DOMAIN_MEMBERSHIP_CYCLE, DOMAIN_MEMBERSHIP_REPEAT)
         } else {
-            (SYSTEM_GROUP_MEMBERSHIP_CYCLE, SYSTEM_GROUP_MEMBERSHIP_REPEAT)
+            (
+                SYSTEM_GROUP_MEMBERSHIP_CYCLE,
+                SYSTEM_GROUP_MEMBERSHIP_REPEAT,
+            )
         };
         let nodes: Vec<NodeKey> = group.iter().map(|owner| owner.key.clone()).collect();
         let position: HashMap<&NodeKey, usize> = nodes
@@ -850,12 +852,15 @@ pub fn advisories(owners: &[Entity]) -> Vec<Advisory> {
             for edge in &owner.edges {
                 repeats.entry(edge.to.clone()).or_default().push(edge);
             }
-            findings.extend(repeats.into_values().filter(|edges| edges.len() > 1).map(
-                |edges| Advisory {
-                    rule: repeat_rule,
-                    path: edges.into_iter().map(|edge| edge.hop.clone()).collect(),
-                },
-            ));
+            findings.extend(
+                repeats
+                    .into_values()
+                    .filter(|edges| edges.len() > 1)
+                    .map(|edges| Advisory {
+                        rule: repeat_rule,
+                        path: edges.into_iter().map(|edge| edge.hop.clone()).collect(),
+                    }),
+            );
         }
     }
     findings

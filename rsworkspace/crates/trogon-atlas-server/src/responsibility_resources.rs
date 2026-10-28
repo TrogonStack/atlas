@@ -17,6 +17,12 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
                 .relationships
                 .len()
                 .saturating_add(value.communications.len()),
+            Some(pb::entity::Kind::SystemGroup(value)) => value
+                .members
+                .len()
+                .saturating_add(value.relationships.len())
+                .saturating_add(value.actors.len()),
+            Some(pb::entity::Kind::Domain(value)) => value.members.len(),
             _ => 0,
         })
 }

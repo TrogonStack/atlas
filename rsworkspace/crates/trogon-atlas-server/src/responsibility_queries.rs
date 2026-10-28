@@ -369,7 +369,12 @@ impl EventModelServiceImpl {
         }
         let architectural = matches!(
             row.entity.kind,
-            Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+            Some(
+                pb::entity::Kind::Component(_)
+                    | pb::entity::Kind::ExternalSystem(_)
+                    | pb::entity::Kind::SystemGroup(_)
+                    | pb::entity::Kind::Domain(_)
+            )
         );
         for (kind, id) in selected_endpoints(subject, &row.entity) {
             if !query.lens.admits(&id.namespace) {

@@ -8375,7 +8375,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let id = require_id(entity_ref.id.as_ref(), "ref")?.clone();
         if matches!(
             kind,
-            pb::EntityKind::Channel
+            pb::EntityKind::SystemGroup
+                | pb::EntityKind::Channel
                 | pb::EntityKind::DataStore
                 | pb::EntityKind::Specification
                 | pb::EntityKind::DataProduct

@@ -53,6 +53,28 @@ impl Checks {
         }
     }
 
+    fn member(
+        &mut self,
+        member: Option<pb::EntityRef>,
+        context: &ArchitectureContext<'_>,
+        field: &str,
+    ) {
+        match member.and_then(|target| Some((pb::EntityKind::try_from(target.kind).ok()?, target)))
+        {
+            Some((kind, target)) => self.target(kind, target.id.as_ref(), context, field),
+            None => self.target_missing(field),
+        }
+    }
+
+    fn target_missing(&mut self, field: &str) {
+        self.require(
+            false,
+            "ARCHITECTURE_REFERENCE_UNRESOLVED",
+            field,
+            "architecture resource target is absent or invalid",
+        );
+    }
+
     fn target(
         &mut self,
         kind: pb::EntityKind,
@@ -120,21 +142,23 @@ impl<'a> ArchitectureContext<'a> {
 }
 
 pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
-    matches!(
-        entity.kind,
-        Some(
-            pb::entity::Kind::Component(_)
-                | pb::entity::Kind::ExternalSystem(_)
-                | pb::entity::Kind::Channel(_)
-                | pb::entity::Kind::DataStore(_)
-                | pb::entity::Kind::Specification(_)
-                | pb::entity::Kind::DataProduct(_)
-                | pb::entity::Kind::Team(_)
-                | pb::entity::Kind::Person(_)
-                | pb::entity::Kind::Decision(_)
-                | pb::entity::Kind::Document(_)
+    matches!(&entity.kind, Some(pb::entity::Kind::Domain(domain)) if !domain.members.is_empty())
+        || matches!(
+            entity.kind,
+            Some(
+                pb::entity::Kind::SystemGroup(_)
+                    | pb::entity::Kind::Component(_)
+                    | pb::entity::Kind::ExternalSystem(_)
+                    | pb::entity::Kind::Channel(_)
+                    | pb::entity::Kind::DataStore(_)
+                    | pb::entity::Kind::Specification(_)
+                    | pb::entity::Kind::DataProduct(_)
+                    | pb::entity::Kind::Team(_)
+                    | pb::entity::Kind::Person(_)
+                    | pb::entity::Kind::Decision(_)
+                    | pb::entity::Kind::Document(_)
+            )
         )
-    )
 }
 
 fn parameter_name(value: &str) -> bool {
@@ -404,6 +428,62 @@ pub(super) fn validate_in_context(
                         );
                     }
                 }
+            }
+        }
+        Some(pb::entity::Kind::SystemGroup(group)) => {
+            checks.value(
+                trogon_atlas_core::system_group::validate_values(entity).is_ok(),
+                "system_group",
+            );
+            checks.supersedes(
+                pb::EntityKind::SystemGroup,
+                group.id.as_ref(),
+                group.supersedes.as_ref(),
+                context,
+            );
+            for (index, value) in group.members.iter().enumerate() {
+                checks.member(
+                    value
+                        .member
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::group_member_ref),
+                    context,
+                    &format!("members[{index}].member"),
+                );
+            }
+            for (index, value) in group.relationships.iter().enumerate() {
+                checks.target(
+                    pb::EntityKind::SystemGroup,
+                    value.target.as_ref().and_then(|target| target.id.as_ref()),
+                    context,
+                    &format!("relationships[{index}].target"),
+                );
+            }
+            for (index, value) in group.actors.iter().enumerate() {
+                checks.member(
+                    value
+                        .target
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::actor_ref),
+                    context,
+                    &format!("actors[{index}].target"),
+                );
+            }
+        }
+        Some(pb::entity::Kind::Domain(domain)) => {
+            checks.value(
+                trogon_atlas_core::system_group::validate_values(entity).is_ok(),
+                "members",
+            );
+            for (index, value) in domain.members.iter().enumerate() {
+                checks.member(
+                    value
+                        .member
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::domain_member_ref),
+                    context,
+                    &format!("members[{index}].member"),
+                );
             }
         }
         Some(pb::entity::Kind::Channel(channel)) => {

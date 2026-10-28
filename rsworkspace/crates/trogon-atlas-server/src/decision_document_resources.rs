@@ -114,7 +114,12 @@ impl CatalogBudget {
         let count = match kind {
             1 if matches!(
                 owner.kind,
-                Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+                Some(
+                    pb::entity::Kind::Component(_)
+                        | pb::entity::Kind::ExternalSystem(_)
+                        | pb::entity::Kind::SystemGroup(_)
+                        | pb::entity::Kind::Domain(_)
+                )
             ) =>
             {
                 0

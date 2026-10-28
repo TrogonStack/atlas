@@ -16,6 +16,7 @@ pub(super) struct ArchitectureProposal<'a> {
 #[derive(Clone, Copy)]
 enum ArchitectureTargetAccess<'a> {
     Required(&'a Visibility),
+    Curation(&'a Visibility),
     Diagnostic(&'a Lens),
     ExactRequired(&'a Visibility),
     ExactDiagnostic(&'a Lens),
@@ -26,14 +27,22 @@ fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::Out
         entity.kind,
         Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
     );
+    let domain = matches!(entity.kind, Some(pb::entity::Kind::Domain(_)));
     trogon_atlas_core::refs::outbound_refs(entity)
         .into_iter()
         .filter(|reference| {
+            if domain {
+                return reference.from_field.starts_with("members[");
+            }
             !architectural
                 || reference.from_field.starts_with("relationships[")
                 || reference.from_field.starts_with("communications[")
         })
         .collect()
+}
+
+fn has_domain_members(entity: &pb::Entity) -> bool {
+    matches!(&entity.kind, Some(pb::entity::Kind::Domain(domain)) if !domain.members.is_empty())
 }
 
 fn is_catalog(entity: &pb::Entity) -> bool {
@@ -104,9 +113,10 @@ impl EventModelServiceImpl {
             .iter()
             .filter(|meta| {
                 meta.is_put
-                    && matches!(
+                    && (matches!(
                         meta.kind,
-                        pb::EntityKind::Component
+                        pb::EntityKind::SystemGroup
+                            | pb::EntityKind::Component
                             | pb::EntityKind::ExternalSystem
                             | pb::EntityKind::Channel
                             | pb::EntityKind::DataStore
@@ -116,7 +126,7 @@ impl EventModelServiceImpl {
                             | pb::EntityKind::Person
                             | pb::EntityKind::Decision
                             | pb::EntityKind::Document
-                    )
+                    ) || meta.entity.as_ref().is_some_and(has_domain_members))
             })
             .filter_map(|meta| meta.entity.as_ref())
             .collect();
@@ -141,17 +151,33 @@ impl EventModelServiceImpl {
         let proposal = ArchitectureProposal { overlay, landing };
         let mut world = HashMap::new();
         let mut required = Vec::new();
+        let mut curation = Vec::new();
         for entity in &resources {
             if is_catalog(entity) {
                 continue;
             }
-            required.extend(
-                admission_references(entity)
-                    .into_iter()
-                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
-            );
+            let targets = admission_references(entity)
+                .into_iter()
+                .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)));
+            if matches!(
+                entity.kind,
+                Some(pb::entity::Kind::SystemGroup(_) | pb::entity::Kind::Domain(_))
+            ) {
+                curation.extend(targets);
+            } else {
+                required.extend(targets);
+            }
         }
         let mut loaded = HashSet::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::Curation(vis),
+            curation,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -289,21 +315,23 @@ impl EventModelServiceImpl {
             .iter()
             .map(|stored| &stored.entity)
             .filter(|entity| {
-                matches!(
-                    entity.kind,
-                    Some(
-                        pb::entity::Kind::Component(_)
-                            | pb::entity::Kind::ExternalSystem(_)
-                            | pb::entity::Kind::Channel(_)
-                            | pb::entity::Kind::DataStore(_)
-                            | pb::entity::Kind::Specification(_)
-                            | pb::entity::Kind::DataProduct(_)
-                            | pb::entity::Kind::Team(_)
-                            | pb::entity::Kind::Person(_)
-                            | pb::entity::Kind::Decision(_)
-                            | pb::entity::Kind::Document(_)
+                has_domain_members(entity)
+                    || matches!(
+                        entity.kind,
+                        Some(
+                            pb::entity::Kind::SystemGroup(_)
+                                | pb::entity::Kind::Component(_)
+                                | pb::entity::Kind::ExternalSystem(_)
+                                | pb::entity::Kind::Channel(_)
+                                | pb::entity::Kind::DataStore(_)
+                                | pb::entity::Kind::Specification(_)
+                                | pb::entity::Kind::DataProduct(_)
+                                | pb::entity::Kind::Team(_)
+                                | pb::entity::Kind::Person(_)
+                                | pb::entity::Kind::Decision(_)
+                                | pb::entity::Kind::Document(_)
+                        )
                     )
-                )
             })
             .collect();
         if resources.is_empty() {
@@ -486,6 +514,8 @@ impl EventModelServiceImpl {
             .list(
                 super::ListFilter {
                     kinds: &[
+                        pb::EntityKind::SystemGroup,
+                        pb::EntityKind::Domain,
                         pb::EntityKind::Component,
                         pb::EntityKind::ExternalSystem,
                         pb::EntityKind::Channel,
@@ -546,6 +576,11 @@ impl EventModelServiceImpl {
                 ArchitectureTargetAccess::Required(vis)
                 | ArchitectureTargetAccess::ExactRequired(vis) => {
                     self.require_visible(vis, &id.namespace).await?;
+                }
+                ArchitectureTargetAccess::Curation(vis) => {
+                    if self.require_visible(vis, &id.namespace).await.is_err() {
+                        continue;
+                    }
                 }
                 ArchitectureTargetAccess::Diagnostic(lens)
                 | ArchitectureTargetAccess::ExactDiagnostic(lens) => {
@@ -815,21 +850,24 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<(), Status> {
-        if !matches!(
-            entity.kind,
-            Some(
-                pb::entity::Kind::Component(_)
-                    | pb::entity::Kind::ExternalSystem(_)
-                    | pb::entity::Kind::Channel(_)
-                    | pb::entity::Kind::DataStore(_)
-                    | pb::entity::Kind::Specification(_)
-                    | pb::entity::Kind::DataProduct(_)
-                    | pb::entity::Kind::Team(_)
-                    | pb::entity::Kind::Person(_)
-                    | pb::entity::Kind::Decision(_)
-                    | pb::entity::Kind::Document(_)
+        if !has_domain_members(entity)
+            && !matches!(
+                entity.kind,
+                Some(
+                    pb::entity::Kind::SystemGroup(_)
+                        | pb::entity::Kind::Component(_)
+                        | pb::entity::Kind::ExternalSystem(_)
+                        | pb::entity::Kind::Channel(_)
+                        | pb::entity::Kind::DataStore(_)
+                        | pb::entity::Kind::Specification(_)
+                        | pb::entity::Kind::DataProduct(_)
+                        | pb::entity::Kind::Team(_)
+                        | pb::entity::Kind::Person(_)
+                        | pb::entity::Kind::Decision(_)
+                        | pb::entity::Kind::Document(_)
+                )
             )
-        ) {
+        {
             return Ok(());
         }
         self.validate_architecture_writes(

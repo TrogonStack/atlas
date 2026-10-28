@@ -333,6 +333,7 @@ fn kind_from_short(s: &str) -> Option<EntityKind> {
         "tracker" => EntityKind::Tracker,
         "bounded_context" => EntityKind::BoundedContext,
         "domain" => EntityKind::Domain,
+        "system_group" => EntityKind::SystemGroup,
         "subdomain" => EntityKind::Subdomain,
         "schema" => EntityKind::Schema,
         "project" => EntityKind::Project,
@@ -373,6 +374,7 @@ mod tests {
     #[test]
     fn resource_keys_roundtrip_through_baseline_and_branch_keys() {
         for kind in [
+            EntityKind::SystemGroup,
             EntityKind::Channel,
             EntityKind::DataStore,
             EntityKind::DataProduct,
