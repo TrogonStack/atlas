@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { buildModel, entityKey, type Entity } from '@/lib/model';
 import {
@@ -100,6 +100,30 @@ const of = (model: ReturnType<typeof fixture>, kind: Entity['kind']) =>
   model.entities.find((entity) => entity.kind === kind)!;
 const leafIds = (items: MessageClaimLeaf[]) => items.map((item) => item.connectionId);
 afterEach(cleanup);
+
+it('groups interleaved labels within one direction without changing stored order or identities', () => {
+  const model = fixture();
+  const owner = of(model, 'component');
+  const entries = [
+    ['a', 'SEND', 'X'],
+    ['b', 'SEND', 'Y'],
+    ['c', 'SEND', 'X'],
+    ['d', 'RECEIVE', 'X'],
+  ].map(([connection, direction, group]) => ({
+    connectionId: { value: connection },
+    direction: `COMMUNICATION_DIRECTION_${direction}`,
+    group: { value: group },
+    message: message(),
+  }));
+  owner.raw.messageClaims = { claims: entries };
+  const before = JSON.stringify(owner.raw);
+  render(<MessageClaimsDetails entity={owner} model={model} onSelect={vi.fn()} />);
+  const group = within(screen.getByRole('region', { name: 'SEND group X' }));
+  expect(group.getAllByRole('heading', { level: 4 }).map((node) => node.textContent)).toEqual(['Claim a', 'Claim c']);
+  expect(within(screen.getByRole('region', { name: 'SEND group Y' })).getByText('Claim b')).toBeDefined();
+  expect(within(screen.getByRole('region', { name: 'RECEIVE group X' })).getByText('Claim d')).toBeDefined();
+  expect(JSON.stringify(owner.raw)).toBe(before);
+});
 
 it.each(['component', 'externalSystem', 'domain'] as const)(
   'projects independently authored %s claims with each leaf identity and no inference',

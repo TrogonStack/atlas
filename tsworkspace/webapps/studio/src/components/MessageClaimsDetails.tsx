@@ -192,15 +192,44 @@ export function MessageClaimsDetails({ entity, model, onSelect }: { entity: Enti
         return found ? [found] : [];
       });
   if (!owner && !target && !selected.length) return null;
-  const rows = (items: MessageClaimLeaf[]) =>
-    items.map((leaf) => (
+  const rows = (items: MessageClaimLeaf[]) => {
+    const groups = new Map<string, { label?: string; leaves: MessageClaimLeaf[] }>();
+    for (const leaf of items) {
+      const label = record(leaf.body.group).value;
+      const grouped = leaf.list === 'claims' && typeof label === 'string' && label.trim().length > 0;
+      const key = JSON.stringify([
+        leaf.owner.key,
+        leaf.owner.uid,
+        grouped ? leaf.body.direction : leaf.path,
+        grouped ? label : leaf.connectionId,
+      ]);
+      const group = groups.get(key);
+      if (group) group.leaves.push(leaf);
+      else
+        groups.set(key, {
+          label: grouped ? `${directionText(leaf.body.direction)} group ${label}` : undefined,
+          leaves: [leaf],
+        });
+    }
+    const renderLeaf = (leaf: MessageClaimLeaf) => (
       <Leaf
         key={JSON.stringify([leaf.owner.key, leaf.owner.uid, leaf.connectionId, leaf.path])}
         leaf={leaf}
         model={model}
         onSelect={onSelect}
       />
-    ));
+    );
+    return [...groups.entries()].map(([key, group]) =>
+      group.label ? (
+        <section key={key} aria-label={group.label} className="flex flex-col gap-2">
+          <h5 className="font-semibold">{group.label}</h5>
+          {group.leaves.map(renderLeaf)}
+        </section>
+      ) : (
+        group.leaves.map(renderLeaf)
+      ),
+    );
+  };
   const authored = owner ? messageClaimLeaves(entity) : [];
   const incoming = target ? incomingMessageClaims(model, entity) : [];
   return (
