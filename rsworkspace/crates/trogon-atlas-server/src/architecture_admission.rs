@@ -841,6 +841,7 @@ impl EventModelServiceImpl {
         let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
             return Ok(());
         };
+        let lens = self.lens(vis).await?;
         let mut active = HashSet::new();
         let mut done = HashSet::new();
         active.insert(pb::EntityKey::new(pb::EntityKind::Decision, &root));
@@ -860,6 +861,20 @@ impl EventModelServiceImpl {
                 .ok_or_else(|| Status::invalid_argument("amended decision required"))?;
             *index += 1;
             budget.examine(1)?;
+            super::require_id(Some(&target), "amends.decision")?;
+            if target.version == 0 {
+                return Err(Status::invalid_argument(
+                    "amended decision requires an exact positive version",
+                ));
+            }
+            let strict = owner == &root
+                || proposal
+                    .overlay
+                    .get(&pb::EntityKey::new(pb::EntityKind::Decision, owner))
+                    .is_some_and(Option::is_some);
+            if !strict && !lens.admits(&target.namespace) {
+                continue;
+            }
             let key = pb::EntityKey::new(pb::EntityKind::Decision, &target);
             if active.contains(&key) {
                 return Err(Status::invalid_argument("Decision amendment cycle"));
@@ -873,9 +888,14 @@ impl EventModelServiceImpl {
                 world,
             )
             .await?;
-            let row = world.get(&key).ok_or_else(|| {
-                Status::invalid_argument("Amended decision is absent, stale or unavailable")
-            })?;
+            let Some(row) = world.get(&key) else {
+                if strict {
+                    return Err(Status::invalid_argument(
+                        "Amended decision is absent, stale or unavailable",
+                    ));
+                }
+                continue;
+            };
             budget.owner(&row.entity)?;
             let Some(pb::entity::Kind::Decision(value)) = &row.entity.kind else {
                 return Err(Status::invalid_argument(
