@@ -499,19 +499,7 @@ impl Drop for StreamChangesGuard {
 // None when the entity has no annotation. The returned string is already
 // lowercased and trimmed. Malformed Any payloads are treated as absent.
 fn entity_lifecycle_status(entity: &pb::Entity) -> Option<String> {
-    let metadata: &[prost_types::Any] = match entity.kind.as_ref() {
-        Some(pb::entity::Kind::Event(x)) => &x.metadata,
-        Some(pb::entity::Kind::Command(x)) => &x.metadata,
-        Some(pb::entity::Kind::ReadModel(x)) => &x.metadata,
-        Some(pb::entity::Kind::Processor(x)) => &x.metadata,
-        Some(pb::entity::Kind::Ui(x)) => &x.metadata,
-        Some(pb::entity::Kind::Persona(x)) => &x.metadata,
-        Some(pb::entity::Kind::Swimlane(x)) => &x.metadata,
-        Some(pb::entity::Kind::CommandSlice(x)) => &x.metadata,
-        Some(pb::entity::Kind::ReadModelSlice(x)) => &x.metadata,
-        Some(pb::entity::Kind::AutomationSlice(x)) => &x.metadata,
-        _ => &[],
-    };
+    let metadata = crate::validation::entity_metadata(entity);
     for any in metadata {
         if !any
             .type_url

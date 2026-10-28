@@ -461,6 +461,7 @@ fn lifecycle_ann_any(status: &str) -> prost_types::Any {
     let ann = pb::LifecycleAnnotation {
         status: status.into(),
         doc: String::new(),
+        ..Default::default()
     };
     prost_types::Any {
         type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation".into(),
@@ -700,42 +701,38 @@ async fn list_entities_lifecycle_status_in_filters_non_event_entity_kind() {
     );
 }
 
-/// `entity_lifecycle_status` must treat an Any payload whose `type_url`
-/// matches `LifecycleAnnotation` but whose bytes fail to decode as absent
-/// (`None`), not panic and not surface a decode error to the caller.
 #[tokio::test(flavor = "multi_thread")]
-async fn list_entities_lifecycle_filter_treats_undecodable_annotation_as_absent() {
+async fn rejected_lifecycle_annotation_does_not_publish_a_listable_entity() {
     let svc = svc().await;
 
     let malformed_any = prost_types::Any {
         type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation".into(),
         value: vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
     };
-    svc.put_entity(Request::new(pb::PutEntityRequest {
-        operation_id: String::new(),
-        entity: Some(pb::Entity {
-            system: None,
-            kind: Some(pb::entity::Kind::Event(pb::Event {
-                id: Some(id("lifecycle-malformed", "corrupt-ann", 1)),
-                title: "Corrupt".into(),
-                doc: String::new(),
-                swimlane: None,
-                metadata: vec![malformed_any],
-                supersedes: None,
-                schema: None,
-            })),
-        }),
-        create_only: true,
-        if_match: String::new(),
-        validate_only: false,
-        force: false,
-    }))
-    .await
-    .unwrap();
+    let error = svc
+        .put_entity(Request::new(pb::PutEntityRequest {
+            operation_id: String::new(),
+            entity: Some(pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Event(pb::Event {
+                    id: Some(id("lifecycle-malformed", "corrupt-ann", 1)),
+                    title: "Corrupt".into(),
+                    doc: String::new(),
+                    swimlane: None,
+                    metadata: vec![malformed_any],
+                    supersedes: None,
+                    schema: None,
+                })),
+            }),
+            create_only: true,
+            if_match: String::new(),
+            validate_only: false,
+            force: false,
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
 
-    // status_not_in: [""] means "exclude entities with no annotation at
-    // all"; an undecodable annotation must be treated the same as absent,
-    // so this entity must be excluded.
     let resp = svc
         .list_entities(Request::new(pb::ListEntitiesRequest {
             namespaces: vec!["lifecycle-malformed".into()],
@@ -752,7 +749,7 @@ async fn list_entities_lifecycle_filter_treats_undecodable_annotation_as_absent(
 
     assert!(
         resp.entities.is_empty(),
-        "an entity with an undecodable LifecycleAnnotation must be treated as unannotated"
+        "rejected lifecycle metadata must not publish an entity"
     );
 }
 

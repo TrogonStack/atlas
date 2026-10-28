@@ -176,7 +176,7 @@ async fn lifecycle_filters_include_implementation_and_external_boundaries()
             assert_eq!(result.entities.len(), 1, "lifecycle filter for {kind:?}");
             let selected = trogon_atlas_core::entity_id(&result.entities[0]);
             assert!(selected.is_some_and(|id| id.slug.ends_with(expected_suffix)));
-            assert!(result.next_page_token.is_empty());
+            assert_eq!(result.next_page_token, "");
         }
     }
     Ok(())

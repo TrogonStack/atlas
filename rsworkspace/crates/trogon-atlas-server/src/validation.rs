@@ -1122,7 +1122,7 @@ fn decode_personal_data_annotation(
 
 /// Metadata bag on every top-level entity kind. Exhaustive so a new kind
 /// that forgets metadata cannot silently skip CODE_REF / annotation walks.
-fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
+pub(crate) fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
     match entity.kind.as_ref() {
         Some(pb::entity::Kind::Event(x)) => &x.metadata,
         Some(pb::entity::Kind::Command(x)) => &x.metadata,
@@ -10228,6 +10228,7 @@ mod slice_stale_ref_tests {
         let ann = pb::LifecycleAnnotation {
             status: status.into(),
             doc: String::new(),
+            ..Default::default()
         };
         prost_types::Any {
             type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation"
