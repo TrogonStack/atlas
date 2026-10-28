@@ -436,6 +436,18 @@ pub struct PersonaEdge {
     #[prost(message, optional, tag="4")]
     pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
 }
+/// Shared catalog strings. They live in their own file so Schema business
+/// declarations can use them without importing the decision-document graph.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogTitle {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
 /// Generic reference to any type definition. Used by FieldSpec when a payload
 /// field references another type and the kind is unknown ahead of time.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -594,6 +606,81 @@ pub struct Schema {
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// Unset, true, and false are distinct. Unset is not false.
+    #[prost(bool, optional, tag="7")]
+    pub aggregate_root: ::core::option::Option<bool>,
+    #[prost(message, repeated, tag="8")]
+    pub identifiers: ::prost::alloc::vec::Vec<BusinessIdentifier>,
+    #[prost(message, repeated, tag="9")]
+    pub property_relationships: ::prost::alloc::vec::Vec<BusinessPropertyRelationship>,
+}
+/// One step of a property path. `repeated` must match the FieldSpec it names.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PropertySegment {
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(bool, tag="2")]
+    pub repeated: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PropertyPath {
+    #[prost(message, repeated, tag="1")]
+    pub segments: ::prost::alloc::vec::Vec<PropertySegment>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BusinessIdentifier {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub property: ::core::option::Option<PropertyPath>,
+    #[prost(enumeration="BusinessIdentifierRole", tag="3")]
+    pub role: i32,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BusinessPropertyRelationship {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub source: ::core::option::Option<PropertyPath>,
+    #[prost(message, optional, tag="3")]
+    pub target_entity: ::core::option::Option<SchemaRef>,
+    #[prost(message, optional, tag="4")]
+    pub target_property: ::core::option::Option<PropertyPath>,
+    #[prost(message, optional, tag="5")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="6")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum BusinessIdentifierRole {
+    Unspecified = 0,
+    Primary = 1,
+    Alternate = 2,
+}
+impl BusinessIdentifierRole {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "BUSINESS_IDENTIFIER_ROLE_UNSPECIFIED",
+            Self::Primary => "BUSINESS_IDENTIFIER_ROLE_PRIMARY",
+            Self::Alternate => "BUSINESS_IDENTIFIER_ROLE_ALTERNATE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BUSINESS_IDENTIFIER_ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+            "BUSINESS_IDENTIFIER_ROLE_PRIMARY" => Some(Self::Primary),
+            "BUSINESS_IDENTIFIER_ROLE_ALTERNATE" => Some(Self::Alternate),
+            _ => None,
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -3787,16 +3874,6 @@ pub mod subdomain {
             }
         }
     }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CatalogTitle {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CatalogText {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LocalValueId {

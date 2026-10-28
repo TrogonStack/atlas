@@ -553,6 +553,63 @@
       ],
       "type": "string"
     },
+    "trogonatlas.eventmodel.v1alpha1.BusinessIdentifier": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "property": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.PropertyPath"
+        },
+        "role": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.BusinessIdentifierRole"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.BusinessIdentifierRole": {
+      "enum": [
+        "BUSINESS_IDENTIFIER_ROLE_ALTERNATE",
+        "BUSINESS_IDENTIFIER_ROLE_PRIMARY",
+        "BUSINESS_IDENTIFIER_ROLE_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.BusinessPropertyRelationship": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            },
+            "label": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+            },
+            "source": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.PropertyPath"
+            },
+            "targetEntity": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SchemaRef"
+            },
+            "targetProperty": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.PropertyPath"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "trogonatlas.eventmodel.v1alpha1.CalendarPeriod": {
       "enum": [
         "CALENDAR_PERIOD_MONTH",
@@ -4216,6 +4273,30 @@
       ],
       "type": "string"
     },
+    "trogonatlas.eventmodel.v1alpha1.PropertyPath": {
+      "additionalProperties": false,
+      "properties": {
+        "segments": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.PropertySegment"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.PropertySegment": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "repeated": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.ProtoSourceFile": {
       "additionalProperties": false,
       "properties": {
@@ -4767,12 +4848,21 @@
     "trogonatlas.eventmodel.v1alpha1.Schema": {
       "additionalProperties": false,
       "properties": {
+        "aggregateRoot": {
+          "type": "boolean"
+        },
         "doc": {
           "type": "string"
         },
         "fields": {
           "items": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.FieldSpec"
+          },
+          "type": "array"
+        },
+        "identifiers": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.BusinessIdentifier"
           },
           "type": "array"
         },
@@ -4787,6 +4877,12 @@
               "@type"
             ],
             "type": "object"
+          },
+          "type": "array"
+        },
+        "propertyRelationships": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.BusinessPropertyRelationship"
           },
           "type": "array"
         },

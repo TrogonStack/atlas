@@ -62,6 +62,10 @@ struct Context {
     branch: Option<String>,
     metadata: tonic::metadata::MetadataMap,
 }
+/// Marks a batch whose local business paths were already gated by source preview.
+#[derive(Clone, Copy)]
+pub(super) struct SourceBusinessBypass;
+
 #[derive(Clone)]
 pub(super) struct SourceExecution {
     pub(super) publication: SourcePublication,
@@ -896,6 +900,27 @@ fn native_relationships_only(
     }
     Ok(())
 }
+fn native_business_data_only(
+    current: Option<&pb::Entity>,
+    incoming: Option<&pb::Entity>,
+    ownership: &pb::SourceFieldOwnership,
+) -> Result<(), Status> {
+    let whole_owner = matches!(
+        ownership.policy,
+        Some(pb::source_field_ownership::Policy::WholeOwner(_))
+    );
+    if (current.is_none()
+        && incoming.is_some_and(trogon_atlas_core::business_data::declares_business))
+        || (whole_owner
+            && (current.is_some_and(trogon_atlas_core::business_data::declares_business)
+                || incoming.is_some_and(trogon_atlas_core::business_data::declares_business)))
+    {
+        return Err(Status::invalid_argument(
+            "business declarations support native authoring only",
+        ));
+    }
+    Ok(())
+}
 
 fn resolve_selection(selection: &pb::SourceSelection, entity: &pb::Entity) -> Result<(), Status> {
     use pb::source_selection::Selection;
@@ -1077,6 +1102,7 @@ async fn prepare_mapping(
     match checked_selection(service, ctx, selection).await {
         Ok(current) => {
             native_relationships_only(Some(&current.entity), None, policy)?;
+            native_business_data_only(Some(&current.entity), None, policy)?;
             bounded(core::validate_ownership(&current.entity, policy))?;
             let observation = observed(&owner, &current);
             let adoption = value.adoption.as_ref().ok_or_else(|| {
@@ -1894,6 +1920,11 @@ async fn preview_source_run_attempt(
                 Some(incoming),
                 ownership,
             )?;
+            native_business_data_only(
+                current.as_ref().map(|value| &value.entity),
+                Some(incoming),
+                ownership,
+            )?;
             let guard = native_guard(&owner, current.as_ref());
             if !plan.native_guards.contains(&guard) {
                 plan.native_guards.push(guard.clone());
@@ -2069,6 +2100,8 @@ async fn preview_source_run_attempt(
                 deleted: false,
             });
             if let Some(entity) = proposed {
+                trogon_atlas_core::business_data::reject_source_local_paths(&entity)
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
                 plan.operations.push(pb::SourceNativeOperation {
                     mapping_id: mapping.id.clone(),
                     source: Some(source.clone()),
@@ -2157,6 +2190,11 @@ async fn preview_source_run_attempt(
                     .await
                     .map_err(store_err)?;
                 native_relationships_only(
+                    Some(&current.entity),
+                    None,
+                    mapping.ownership.as_ref().ok_or_else(invalid)?,
+                )?;
+                native_business_data_only(
                     Some(&current.entity),
                     None,
                     mapping.ownership.as_ref().ok_or_else(invalid)?,
@@ -2296,10 +2334,9 @@ async fn preview_source_run_attempt(
         ))?;
         drop(lock);
         if !conflicts && !req.overlay_only {
-            let validation = service
-                .batch_mutate(ctx.request(batch_request(&plan, true)?))
-                .await?
-                .into_inner();
+            let mut preview = ctx.request(batch_request(&plan, true)?);
+            preview.extensions_mut().insert(SourceBusinessBypass);
+            let validation = service.batch_mutate(preview).await?.into_inner();
             if validation.status != pb::batch_mutate_response::Status::Validated as i32 {
                 return Err(Status::failed_precondition(
                     "native source plan does not pass admission",
@@ -2826,6 +2863,7 @@ async fn apply_source_run_attempt(
     drop(lock);
     let mut native = ctx.request(batch_request(&plan, false)?);
     native.extensions_mut().insert(execution.clone());
+    native.extensions_mut().insert(SourceBusinessBypass);
     let result = tokio::time::timeout_at(deadline, service.batch_mutate(native)).await;
     let _lock = service.lock_mutations().await;
     let mut doc = load(service, &ctx, &req.registration_id, true).await?;

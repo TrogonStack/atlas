@@ -80,6 +80,7 @@ impl ReverseIndex {
                         catalog_subject,
                         document_selection,
                         connection_id,
+                        business_property_status: None,
                     });
                 }
             }
@@ -363,6 +364,7 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
                 catalog_subject,
                 document_selection,
                 connection_id,
+                business_property_status: None,
             });
         }
     }
@@ -902,6 +904,7 @@ pub fn impact(
             if !visited.insert(okey.clone()) {
                 continue;
             }
+            let business_edge = !is_incoming && r.from_field.contains("property_relationships[");
             let mut new_path = path.clone();
             new_path.push(r);
             out.push(pb::ImpactNode {
@@ -912,7 +915,9 @@ pub fn impact(
                 depth: depth + 1,
                 path: new_path.clone(),
             });
-            queue.push_back((ok, oid.clone(), depth + 1, new_path));
+            if !business_edge {
+                queue.push_back((ok, oid.clone(), depth + 1, new_path));
+            }
         }
     }
     out
@@ -985,6 +990,19 @@ fn catalog_provenance(
         reference.connection_id = trogon_atlas_core::communication_intent::declarations(entity)
             .get(index)
             .and_then(|declaration| declaration.connection_id.clone());
+    }
+    if let Some(index) = field
+        .strip_prefix("property_relationships[")
+        .and_then(|rest| rest.split_once(']'))
+        .and_then(|(index, suffix)| (suffix == ".target_entity").then_some(index))
+        .and_then(|index| index.parse::<usize>().ok())
+    {
+        if let Some(pb::entity::Kind::Schema(schema)) = &entity.kind {
+            reference.connection_id = schema
+                .property_relationships
+                .get(index)
+                .and_then(|relationship| relationship.connection_id.clone());
+        }
     }
     (
         reference.catalog_subject,

@@ -103,6 +103,8 @@ pub enum ConnectionError {
     Port(String),
     #[error("connection encoding error: {0}")]
     Encoding(String),
+    #[error("business declaration error: {0}")]
+    Business(String),
 }
 
 fn dynamic(entity: &Entity) -> Result<DynamicMessage, ConnectionError> {
@@ -301,6 +303,20 @@ fn visit(
                     })
                     .as_ref()
                     .and_then(crate::architectural_relationships::endpoint_ref)
+            } else if descriptor.full_name()
+                == "trogonatlas.eventmodel.v1alpha1.BusinessPropertyRelationship"
+            {
+                message
+                    .get_field_by_name("target_entity")
+                    .as_deref()
+                    .and_then(Value::as_message)
+                    .map(Message::encode_to_vec)
+                    .and_then(|bytes| trogon_atlas_proto::SchemaRef::decode(bytes.as_slice()).ok())
+                    .and_then(|schema_ref| schema_ref.id)
+                    .map(|id| EntityRef {
+                        kind: trogon_atlas_proto::EntityKind::Schema as i32,
+                        id: Some(id),
+                    })
             } else {
                 None
             },

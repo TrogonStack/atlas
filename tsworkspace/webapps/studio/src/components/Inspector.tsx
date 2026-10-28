@@ -6,6 +6,7 @@ import { ResponsibilityInspector } from '@/components/ResponsibilityInspector';
 import { DataProductInspector } from '@/components/DataProductInspector';
 import { CommunicationIntentDetails } from '@/components/CommunicationIntentDetails';
 import { ArchitecturalRelationshipDetails } from '@/components/ArchitecturalRelationshipDetails';
+import { SchemaBusinessDetails } from '@/components/SchemaBusinessDetails';
 import { ArchitectureResourceDetails } from '@/components/ArchitectureResourceDetails';
 import { SpecificationDetails } from '@/components/SpecificationDetails';
 import { CopyContextButton } from '@/components/CopyContextButton';
@@ -642,6 +643,7 @@ export function Inspector({
           <SourceIntegrationReview namespace={entity.id.namespace} asOf={asOf} />
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <ArchitecturalRelationshipDetails entity={entity} model={model} onSelect={onSelect} />
+          <SchemaBusinessDetails entity={entity} model={model} />
           <CommunicationIntentDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />
           {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} asOf={asOf} />}

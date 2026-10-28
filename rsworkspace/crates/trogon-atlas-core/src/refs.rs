@@ -199,6 +199,19 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
             for (i, f) in x.fields.iter().enumerate() {
                 collect_field_refs(f, &format!("fields[{i}]"), &mut out, 0);
             }
+            for (i, relationship) in x.property_relationships.iter().enumerate() {
+                if let Some(id) = relationship
+                    .target_entity
+                    .as_ref()
+                    .and_then(|target| target.id.clone())
+                {
+                    out.push(OutboundRef {
+                        to_kind: Some(EntityKind::Schema),
+                        to_id: id,
+                        from_field: format!("property_relationships[{i}].target_entity"),
+                    });
+                }
+            }
         }
         EntityOneof::Swimlane(x) => {
             for (i, f) in x.state.iter().enumerate() {
@@ -1362,6 +1375,21 @@ pub fn retarget_refs(
                     &mut rewritten,
                     0,
                 );
+            }
+            if from_kind == EntityKind::Schema {
+                for (i, relationship) in x.property_relationships.iter_mut().enumerate() {
+                    if relationship
+                        .target_entity
+                        .as_ref()
+                        .and_then(|target| target.id.as_ref())
+                        == Some(from_id)
+                    {
+                        if let Some(target) = relationship.target_entity.as_mut() {
+                            target.id = Some(to_id.clone());
+                            rewritten.push(format!("property_relationships[{i}].target_entity"));
+                        }
+                    }
+                }
             }
         }
         EntityOneof::Swimlane(x) => {

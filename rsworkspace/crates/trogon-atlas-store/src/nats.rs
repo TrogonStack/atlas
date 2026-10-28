@@ -3405,7 +3405,7 @@ impl Store for NatsStore {
                         }
                     }
                 }
-                let references = |entity: &Entity| {
+                let references = |owner_key: &EntityKey, entity: &Entity| {
                     trogon_atlas_core::refs::outbound_refs(entity)
                         .iter()
                         .filter_map(|reference| {
@@ -3413,13 +3413,18 @@ impl Store for NatsStore {
                                 untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
                             })?;
                             let target = EntityKey::new(kind, &reference.to_id);
+                            if &target == owner_key {
+                                return None;
+                            }
                             targets.contains(&target).then_some(target)
                         })
                         .collect::<Vec<_>>()
                 };
                 let mut referenced = HashSet::new();
-                for entity in replacements.values().flatten() {
-                    referenced.extend(references(entity));
+                for (owner_key, entity) in &replacements {
+                    if let Some(entity) = entity {
+                        referenced.extend(references(owner_key, entity));
+                    }
                 }
 
                 for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
@@ -3449,7 +3454,8 @@ impl Store for NatsStore {
                             let Some((owner_kind, owner_id)) = owner else {
                                 return Ok(Vec::new());
                             };
-                            if replacements.contains_key(&EntityKey::new(owner_kind, &owner_id)) {
+                            let owner_key = EntityKey::new(owner_kind, &owner_id);
+                            if replacements.contains_key(&owner_key) {
                                 return Ok(Vec::new());
                             }
                             // Merged gets suppress tombstones and replaced baseline references.
@@ -3458,7 +3464,7 @@ impl Store for NatsStore {
                                 Err(StoreError::NotFound) => return Ok(Vec::new()),
                                 Err(error) => return Err(error),
                             };
-                            Ok(references(&stored.entity))
+                            Ok(references(&owner_key, &stored.entity))
                         })
                         .buffer_unordered(LIST_FETCH_CONCURRENCY);
                     while let Some(found) = checks.next().await {
