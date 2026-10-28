@@ -349,6 +349,60 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
     assert!(associations
         .iter()
         .all(|reference| !reference.from_uid.is_empty() && reference.connection_id.is_some()));
+    let topology = pb::DesignGraph {
+        id: Some(id("catalog-diagram")),
+        title: Some(pb::CatalogTitle {
+            value: "Catalog diagram".into(),
+        }),
+        profile: pb::DesignGraphProfile::Diagram as i32,
+        steps: vec![pb::TopologyStep {
+            title: Some(pb::CatalogTitle {
+                value: "Offering".into(),
+            }),
+            target: Some(pb::TopologyStepTarget {
+                selection: Some(pb::topology_step_target::Selection::DataProduct(
+                    pb::EntityRef {
+                        kind: pb::EntityKind::DataProduct as i32,
+                        id: Some(id("offering")),
+                    },
+                )),
+            }),
+            ..Default::default()
+        }],
+        subjects: vec![pb::SubjectAssociation {
+            subject: Some(subject()),
+            ..Default::default()
+        }],
+        layout_document: Some(pb::DocumentRef {
+            id: Some(id("hub")),
+        }),
+        ..Default::default()
+    };
+    graph.push(put(&mut client, wrap(pb::entity::Kind::DesignGraph(topology))).await);
+    let incoming = client
+        .get_incoming_references(request(
+            pb::GetReferencesRequest {
+                kind: pb::EntityKind::DataProduct as i32,
+                id: Some(id("offering")),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let step = incoming
+        .references
+        .iter()
+        .find(|reference| {
+            reference
+                .from
+                .as_ref()
+                .is_some_and(|owner| owner.kind == pb::EntityKind::DesignGraph as i32)
+        })
+        .unwrap();
+    assert!(!step.from_uid.is_empty());
+    assert!(step.step_id.as_ref().is_some_and(|id| !id.value.is_empty()));
     let component_index = graph
         .iter()
         .position(|entity| matches!(entity.kind, Some(pb::entity::Kind::Component(_))))
