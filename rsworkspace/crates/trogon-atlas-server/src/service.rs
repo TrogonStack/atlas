@@ -4922,16 +4922,41 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             );
         }
 
+        // Dry runs share the mutation lock with apply so `create_only` /
+        // `if_match` see a stable view and report the same typed refusal as a
+        // real write. The lock is released when this call returns; a preview
+        // is never a reservation.
+        let _guard = self.lock_mutations().await;
+
         if req.validate_only {
             self.validate_architecture_write(&entity, branch.as_deref(), &vis)
                 .await?;
-            let previous = match self.store.get(kind, &id, branch.as_deref()).await {
-                Ok(stored) => Some(stored.entity),
+            let stored = match self.store.get(kind, &id, branch.as_deref()).await {
+                Ok(stored) => Some(stored),
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
                 Err(error) => return Err(store_err(error)),
             };
+            if req.create_only {
+                if let Some(current) = &stored {
+                    return Err(crate::conv::already_exists_at(current.etag.clone()));
+                }
+            } else if !req.if_match.is_empty() {
+                match &stored {
+                    Some(current) if current.etag == req.if_match => {}
+                    Some(current) => {
+                        return Err(crate::conv::stale_precondition(
+                            req.if_match.clone(),
+                            current.etag.clone(),
+                        ));
+                    }
+                    None => {
+                        return Err(crate::conv::not_found_for_if_match(req.if_match.clone()));
+                    }
+                }
+            }
+            let previous = stored.as_ref().map(|s| &s.entity);
             let prepared = trogon_atlas_core::connection_persistence::prepare_entity(
-                previous.as_ref(),
+                previous,
                 &entity,
             )
             .map_err(|error| Status::invalid_argument(error.to_string()))?;
@@ -4943,8 +4968,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 operation_receipt: None,
             }));
         }
-
-        let _guard = self.lock_mutations().await;
 
         for admission in type_library.iter().chain(&schema_types) {
             self.type_libraries
@@ -5053,7 +5076,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let written = match write_result {
             Ok(w) => w,
             Err(e) => {
-                let status = store_err(e);
+                let status = match &e {
+                    trogon_atlas_store::error::StoreError::AlreadyExists if create_only => {
+                        match self.store.get(kind, &id, branch.as_deref()).await {
+                            Ok(current) => crate::conv::already_exists_at(current.etag),
+                            Err(_) => store_err(e),
+                        }
+                    }
+                    trogon_atlas_store::error::StoreError::NotFound
+                        if !create_only && !req.if_match.is_empty() =>
+                    {
+                        crate::conv::not_found_for_if_match(req.if_match.clone())
+                    }
+                    _ => store_err(e),
+                };
                 if let Some(key) = &claim_key {
                     operation_receipts::settle_for_status(&*self.store, key, &status).await;
                 }
