@@ -235,6 +235,7 @@ pub fn resolve_connection_context(
     owner: &Entity,
     reference: &pb::ConnectionRef,
 ) -> Result<EntityRef> {
+    validate_values(owner)?;
     let occurrence =
         connections::resolve_connection(owner, reference).map_err(|e| ClaimError(e.to_string()))?;
     check(
@@ -316,5 +317,14 @@ pub(crate) fn retarget(
             r.connection_id = None;
             out.push(format!("message_claims.routes[{i}].channel"));
         }
+    }
+}
+
+pub(crate) fn rewrite_local_selections(previous: &Entity, proposed: &mut Entity) {
+    let Some(old) = declarations(previous) else { return };
+    let Some(new) = declarations_mut(proposed) else { return };
+    let changed: std::collections::HashMap<_, _> = old.claims.iter().zip(&new.claims).filter_map(|(a,b)| Some((a.connection_id.as_ref()?.value.clone(), b.connection_id.clone()?))).collect();
+    for id in new.routes.iter_mut().map(|v|&mut v.claim_id).chain(new.triggers.iter_mut().map(|v|&mut v.claim_id)).chain(new.field_selections.iter_mut().map(|v|&mut v.claim_id)) {
+        if let Some(replacement)=id.as_ref().and_then(|v|changed.get(&v.value)) { *id=Some(replacement.clone()); }
     }
 }

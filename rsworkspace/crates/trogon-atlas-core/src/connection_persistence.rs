@@ -108,6 +108,7 @@ pub fn prepare_resolution(
     crate::connections::renew_retargeted_connection_ids(selected, &mut resolved)?;
     crate::connections::assign_connection_ids(&mut resolved)?;
     specification::rewrite_exposure_selections(selected, &mut resolved);
+    crate::message_claims::rewrite_local_selections(selected, &mut resolved);
     crate::connections::renew_retargeted_connection_ids(selected, &mut resolved)?;
     crate::connections::assign_connection_ids(&mut resolved)?;
     prepare_landing(base, discarded, &resolved)
