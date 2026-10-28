@@ -195,6 +195,56 @@ pub fn not_found_with_suggestions(suggestions: &[String]) -> Status {
     )
 }
 
+/// `STALE_PRECONDITION` for a single-entity write planned against `expected_etag`
+/// when the store holds `actual_etag` (empty when the entity is absent). Field
+/// names match `BatchMutateResponse.precondition_failure`.
+pub fn stale_precondition(
+    expected_etag: impl Into<String>,
+    actual_etag: impl Into<String>,
+) -> Status {
+    let expected_etag = expected_etag.into();
+    let actual_etag = actual_etag.into();
+    tracing::debug!(expected = %expected_etag, found = %actual_etag, "etag mismatch");
+    with_reason_and_metadata(
+        Code::Aborted,
+        "etag mismatch",
+        reason::STALE_PRECONDITION,
+        HashMap::from([
+            ("expected_etag".to_string(), expected_etag),
+            ("actual_etag".to_string(), actual_etag),
+        ]),
+    )
+}
+
+/// `ALREADY_EXISTS` for `create_only` when the entity is already present.
+/// `expected_etag` is empty (the plan expected absence); `actual_etag` is the
+/// revision the store holds, matching batch precondition_failure.
+pub fn already_exists_at(actual_etag: impl Into<String>) -> Status {
+    with_reason_and_metadata(
+        Code::AlreadyExists,
+        "entity already exists",
+        reason::ALREADY_EXISTS,
+        HashMap::from([
+            ("expected_etag".to_string(), String::new()),
+            ("actual_etag".to_string(), actual_etag.into()),
+        ]),
+    )
+}
+
+/// `NOT_FOUND` for an `if_match` write whose target is gone. Carries the
+/// planned revision so a caller can tell "absent now" from a generic miss.
+pub fn not_found_for_if_match(expected_etag: impl Into<String>) -> Status {
+    with_reason_and_metadata(
+        Code::NotFound,
+        "entity not found",
+        reason::NOT_FOUND,
+        HashMap::from([
+            ("expected_etag".to_string(), expected_etag.into()),
+            ("actual_etag".to_string(), String::new()),
+        ]),
+    )
+}
+
 pub fn store_err(err: StoreError) -> Status {
     match err {
         StoreError::NotFound => with_reason(Code::NotFound, "entity not found", reason::NOT_FOUND),
@@ -203,10 +253,7 @@ pub fn store_err(err: StoreError) -> Status {
             "entity already exists",
             reason::ALREADY_EXISTS,
         ),
-        StoreError::EtagMismatch { expected, found } => {
-            tracing::debug!(expected = %expected, found = %found, "etag mismatch");
-            with_reason(Code::Aborted, "etag mismatch", reason::STALE_PRECONDITION)
-        }
+        StoreError::EtagMismatch { expected, found } => stale_precondition(expected, found),
         StoreError::InvalidArgument(msg) => {
             with_reason(Code::InvalidArgument, msg, reason::VALIDATION_FAILED)
         }
@@ -703,6 +750,14 @@ mod validate_id_component_tests {
         });
         let info = status.get_details_error_info().unwrap();
         assert_eq!(info.reason, super::reason::STALE_PRECONDITION);
+        assert_eq!(
+            info.metadata.get("expected_etag").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            info.metadata.get("actual_etag").map(String::as_str),
+            Some("2")
+        );
     }
 
     #[test]

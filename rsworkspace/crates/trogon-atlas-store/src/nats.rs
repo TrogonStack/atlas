@@ -2986,12 +2986,25 @@ impl Store for NatsStore {
                 return Ok(wrote.written);
             }
             let key = entity_key(kind, &id);
-            let expected: u64 = expected_etag
-                .parse()
-                .map_err(|_| StoreError::EtagMismatch {
-                    expected: expected_etag.into(),
-                    found: String::new(),
-                })?;
+            // A non-numeric `if_match` can never match a baseline revision.
+            // When the key is gone, report NotFound (same as a numeric miss)
+            // so Put dry-run and apply share one wire shape. When it is still
+            // present, report the live etag so callers do not treat it as gone.
+            let expected: u64 = if let Ok(revision) = expected_etag.parse() {
+                revision
+            } else {
+                // Propagate KV read errors; do not treat a failed re-read as
+                // absence the way `live_found_etag` does for CAS races.
+                return Err(
+                    match live_entry(kv_entry_timeout(&self.kv, key.clone()).await?) {
+                        Some(entry) => StoreError::EtagMismatch {
+                            expected: expected_etag.into(),
+                            found: entry.revision.to_string(),
+                        },
+                        None => StoreError::NotFound,
+                    },
+                );
+            };
             // Capture the revision we saw at decode time for no-op detection and
             // system stamping. CAS failures re-read via `live_found_etag` so
             // `EtagMismatch.found` is not this stale pre-CAS value.

@@ -2464,6 +2464,23 @@ fn sanitize_author_field(s: &str) -> String {
         .collect()
 }
 
+/// Whether a Put `if_match` holds against the live etag for a dry-run preview.
+///
+/// Baseline apply parses `if_match` as `u64`, so `"01"` matches live `"1"`.
+/// Branch overlay etags stay opaque and compare as exact strings.
+fn put_if_match_holds(branch: Option<&str>, live: &str, if_match: &str) -> bool {
+    if branch.is_some() {
+        return live == if_match;
+    }
+    if live == if_match {
+        return true;
+    }
+    match (live.parse::<u64>(), if_match.parse::<u64>()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Advisory strategic findings a merge leaves behind, at every severity: what
 /// the landed contexts, domains and subdomains (and the entities they affect)
 /// report in the post-merge world, plus what the landed deletions leave
@@ -4922,19 +4939,43 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             );
         }
 
+        // Dry runs share the mutation lock with apply so `create_only` /
+        // `if_match` see a stable view and report the same typed refusal as a
+        // real write. The lock is released when this call returns; a preview
+        // is never a reservation.
+        let _guard = self.lock_mutations().await;
+
         if req.validate_only {
             self.validate_architecture_write(&entity, branch.as_deref(), &vis)
                 .await?;
-            let previous = match self.store.get(kind, &id, branch.as_deref()).await {
-                Ok(stored) => Some(stored.entity),
+            let stored = match self.store.get(kind, &id, branch.as_deref()).await {
+                Ok(stored) => Some(stored),
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
                 Err(error) => return Err(store_err(error)),
             };
-            let prepared = trogon_atlas_core::connection_persistence::prepare_entity(
-                previous.as_ref(),
-                &entity,
-            )
-            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if req.create_only {
+                if let Some(current) = &stored {
+                    return Err(crate::conv::already_exists_at(current.etag.clone()));
+                }
+            } else if !req.if_match.is_empty() {
+                match &stored {
+                    Some(current)
+                        if put_if_match_holds(branch.as_deref(), &current.etag, &req.if_match) => {}
+                    Some(current) => {
+                        return Err(crate::conv::stale_precondition(
+                            req.if_match.clone(),
+                            current.etag.clone(),
+                        ));
+                    }
+                    None => {
+                        return Err(crate::conv::not_found_for_if_match(req.if_match.clone()));
+                    }
+                }
+            }
+            let previous = stored.as_ref().map(|s| &s.entity);
+            let prepared =
+                trogon_atlas_core::connection_persistence::prepare_entity(previous, &entity)
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
             return Ok(Response::new(pb::PutEntityResponse {
                 entity: Some(prepared),
                 etag: String::new(),
@@ -4943,8 +4984,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 operation_receipt: None,
             }));
         }
-
-        let _guard = self.lock_mutations().await;
 
         for admission in type_library.iter().chain(&schema_types) {
             self.type_libraries
@@ -5053,7 +5092,47 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let written = match write_result {
             Ok(w) => w,
             Err(e) => {
-                let status = store_err(e);
+                let status = match &e {
+                    trogon_atlas_store::error::StoreError::AlreadyExists if create_only => {
+                        match self.store.get(kind, &id, branch.as_deref()).await {
+                            Ok(current) => crate::conv::already_exists_at(current.etag),
+                            Err(_) => store_err(e),
+                        }
+                    }
+                    trogon_atlas_store::error::StoreError::NotFound
+                        if !create_only && !req.if_match.is_empty() =>
+                    {
+                        crate::conv::not_found_for_if_match(req.if_match.clone())
+                    }
+                    trogon_atlas_store::error::StoreError::EtagMismatch { expected, found }
+                        if !create_only && !req.if_match.is_empty() =>
+                    {
+                        // Match dry-run: name the live revision when present.
+                        // An empty `found` must re-read; NotFound → the same
+                        // NOT_FOUND shape as dry-run. Other get errors must
+                        // not look like absence (they would settle an
+                        // operation_id as rejected).
+                        let re_read = if found.is_empty() {
+                            match self.store.get(kind, &id, branch.as_deref()).await {
+                                Ok(current) => Ok(current.etag),
+                                Err(trogon_atlas_store::error::StoreError::NotFound) => {
+                                    Ok(String::new())
+                                }
+                                Err(error) => Err(error),
+                            }
+                        } else {
+                            Ok(found.clone())
+                        };
+                        match re_read {
+                            Ok(actual) if actual.is_empty() => {
+                                crate::conv::not_found_for_if_match(expected.clone())
+                            }
+                            Ok(actual) => crate::conv::stale_precondition(expected.clone(), actual),
+                            Err(error) => store_err(error),
+                        }
+                    }
+                    _ => store_err(e),
+                };
                 if let Some(key) = &claim_key {
                     operation_receipts::settle_for_status(&*self.store, key, &status).await;
                 }
@@ -5255,8 +5334,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
         if let Some(exp) = if_match {
             if _stored.etag != exp {
-                tracing::debug!(expected = %exp, found = %_stored.etag, "etag mismatch on delete_entity");
-                let status = Status::aborted("etag mismatch");
+                let status = crate::conv::stale_precondition(exp, _stored.etag.clone());
                 if let Some(key) = &claim_key {
                     operation_receipts::settle_for_status(&*self.store, key, &status).await;
                 }
@@ -8923,6 +9001,26 @@ fn walk_json_diff(
                 prefix
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod put_if_match_holds_tests {
+    use super::put_if_match_holds;
+
+    #[test]
+    fn baseline_accepts_equivalent_decimal_forms() {
+        assert!(put_if_match_holds(None, "1", "1"));
+        assert!(put_if_match_holds(None, "1", "01"));
+        assert!(put_if_match_holds(None, "10", "010"));
+        assert!(!put_if_match_holds(None, "1", "2"));
+        assert!(!put_if_match_holds(None, "1", "not-a-revision"));
+    }
+
+    #[test]
+    fn branch_compares_etags_exactly() {
+        assert!(put_if_match_holds(Some("feat"), "1", "1"));
+        assert!(!put_if_match_holds(Some("feat"), "1", "01"));
     }
 }
 
