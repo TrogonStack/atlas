@@ -112,7 +112,7 @@ impl ReferenceIndexPurpose {
     fn build(self, all: &[StoredEntity]) -> Result<Arc<graph::ReverseIndex>, Status> {
         Ok(Arc::new(match self {
             Self::Discovery => graph::ReverseIndex::build_discovery(all)?,
-            Self::CompleteReferrers => graph::ReverseIndex::build(all),
+            Self::CompleteReferrers => graph::ReverseIndex::build(all)?,
         }))
     }
 }
@@ -714,6 +714,42 @@ impl EventModelServiceImpl {
             .map_err(|e| Status::internal(format!("building type pool: {e}")))
     }
 
+    /// The built-in types plus the live type libraries of every namespace
+    /// `entities` belong to, so an operation digest renders tenant payloads
+    /// instead of failing on them.
+    async fn digest_pool<'a>(
+        &self,
+        entities: impl IntoIterator<Item = &'a pb::Entity>,
+        branch: Option<&str>,
+    ) -> Result<trogon_atlas_core::transcode::TranscodePool, Status> {
+        let namespaces: std::collections::BTreeSet<&str> = entities
+            .into_iter()
+            .filter_map(trogon_atlas_core::refs::entity_id)
+            .map(|id| id.namespace.as_str())
+            .collect();
+        let mut files: Vec<prost_types::FileDescriptorProto> = Vec::new();
+        for namespace in namespaces {
+            for file in self
+                .type_libraries
+                .tenant_files(&*self.store, namespace, branch)
+                .await?
+            {
+                match files.iter().find(|known| known.name == file.name) {
+                    Some(known) if *known == file => {}
+                    Some(_) => {
+                        return Err(Status::failed_precondition(
+                            "type libraries of the written namespaces declare conflicting files",
+                        ))
+                    }
+                    None => files.push(file),
+                }
+            }
+        }
+        trogon_atlas_core::transcode::TranscodePool::builtin()
+            .and_then(|pool| pool.with_files(files))
+            .map_err(|e| Status::internal(format!("building type pool: {e}")))
+    }
+
     /// Branch-aware variant of `snapshot()`. When `branch` is `None`,
     /// delegates to the cached baseline `snapshot()` unchanged. When
     /// `branch` is `Some`, always issues a fresh `graph::load_all` scoped to
@@ -844,7 +880,7 @@ impl EventModelServiceImpl {
             });
             if let Some(members) = root_members {
                 wanted.extend(
-                    graph::closure(&rewound, &members, MAX_PROJECTION_ENTITIES, &self.metrics)
+                    graph::closure(&rewound, &members, MAX_PROJECTION_ENTITIES, &self.metrics)?
                         .missing,
                 );
             }
@@ -1118,7 +1154,7 @@ impl EventModelServiceImpl {
             {
                 let snapshot = self.snapshot_for(branch, vis).await?;
                 Ok(DeleteReportingIndex {
-                    index: Arc::new(graph::ReverseIndex::build(&snapshot)),
+                    index: Arc::new(graph::ReverseIndex::build(&snapshot)?),
                     coverage: DeleteReportCoverage::VisibleResourceBudget,
                     emitted: 0,
                 })
@@ -4111,7 +4147,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 Some(pb::EntityKey::new(k, i))
             })
             .collect();
-        let mut refs = graph::outgoing_of_resolved(&stored.entity, &known);
+        let mut refs = graph::outgoing_of_resolved(&stored.entity, &known)?;
         refs.extend(graph::TypeOwners::build(&snap).schema_ref(&stored.entity));
         // Outgoing refs have the queried entity in `from`; the target kind
         // lives in `to`.
@@ -4164,7 +4200,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
             .await?;
         graph::validate_responsibility_discovery_budget(&all)?;
-        let mut all_nodes = graph::impact(&all, kind, &id, max_depth, true);
+        let mut all_nodes = graph::impact(&all, kind, &id, max_depth, true)?;
 
         if !req.filter_kinds.is_empty() {
             let allowed: std::collections::HashSet<i32> =
@@ -4399,8 +4435,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 return Err(Status::failed_precondition("Catalog local selectors require an explicit guarded replacement using returned owner and local identities"));
             }
             let mut entity = stored.entity.clone();
-            let fields =
-                trogon_atlas_core::refs::retarget_refs(&mut entity, from_kind, &from_id, &to_id);
+            let fields = trogon_atlas_core::refs::try_retarget_refs(
+                &mut entity,
+                from_kind,
+                &from_id,
+                &to_id,
+            )
+            .map_err(|_| graph::malformed_metadata())?;
             trogon_atlas_core::connections::renew_retargeted_connection_ids(
                 &stored.entity,
                 &mut entity,
@@ -4531,7 +4572,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             mut entities,
             truncated,
             ..
-        } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics);
+        } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics)?;
         // The closure includes the slice itself; the projection ships the
         // slice separately on `slice`.
         entities.remove(&trogon_atlas_proto::canonical::id_string(kind, id));
@@ -4596,7 +4637,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             mut entities,
             truncated,
             ..
-        } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics);
+        } = graph::closure(&all, &[root], MAX_PROJECTION_ENTITIES, &self.metrics)?;
         entities.remove(&trogon_atlas_proto::canonical::id_string(
             pb::EntityKind::Storyboard,
             id,
@@ -4668,7 +4709,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             mut entities,
             truncated,
             ..
-        } = graph::closure(&all, &root_refs, MAX_PROJECTION_ENTITIES, &self.metrics);
+        } = graph::closure(&all, &root_refs, MAX_PROJECTION_ENTITIES, &self.metrics)?;
         if !req.include_cross_model {
             let own_ns = id.namespace.clone();
             entities.retain(|_, e| {
@@ -4730,7 +4771,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             std::slice::from_ref(&root_ref),
             MAX_PROJECTION_ENTITIES,
             &self.metrics,
-        );
+        )?;
         let own_ns = root_ref
             .id
             .as_ref()
@@ -4816,7 +4857,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             MAX_PROJECTION_ENTITIES,
             &self.metrics,
             &root_types,
-        );
+        )?;
         let namespaces: std::collections::BTreeSet<&str> = board
             .own
             .iter()
@@ -4996,7 +5037,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 force: req.force,
                 operation_id: String::new(),
             };
-            Some(operation_receipts::OperationAttempt::new(
+            let pool = self
+                .digest_pool(digest_req.entity.iter(), branch.as_deref())
+                .await?;
+            Some(operation_receipts::OperationAttempt::in_pool(
+                &pool,
                 principal_name,
                 &req.operation_id,
                 "PutEntity",
@@ -6027,7 +6072,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     validate_only: false,
                     operation_id: String::new(),
                 };
-                Some(operation_receipts::OperationAttempt::new(
+                let pool = self
+                    .digest_pool(
+                        digest_req.ops.iter().filter_map(|op| match &op.op {
+                            Some(pb::batch_mutate_op::Op::Put(put)) => put.entity.as_ref(),
+                            _ => None,
+                        }),
+                        branch.as_deref(),
+                    )
+                    .await?;
+                Some(operation_receipts::OperationAttempt::in_pool(
+                    &pool,
                     principal_name,
                     &req.operation_id,
                     "BatchMutate",
@@ -7431,7 +7486,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .iter()
                 .map(|(k, id)| (*k as i32, id.namespace.clone(), id.slug.clone()))
                 .collect();
-            let index = graph::ReverseIndex::build(&all);
+            let index = graph::ReverseIndex::build(&all)?;
             let mut external_referrers: Vec<String> = Vec::new();
             for (k, id) in &victims {
                 for r in index.incoming(*k, id) {
@@ -9387,7 +9442,7 @@ pub fn resolve_scope_closure(
         roots.push(root_ref.clone());
     }
     let graph::Closure { entities, .. } =
-        graph::closure(all, &roots, MAX_PROJECTION_ENTITIES, metrics);
+        graph::closure(all, &roots, MAX_PROJECTION_ENTITIES, metrics)?;
     Ok(entities.into_keys().collect())
 }
 

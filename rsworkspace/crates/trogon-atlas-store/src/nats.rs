@@ -3405,8 +3405,19 @@ impl Store for NatsStore {
                         }
                     }
                 }
-                let references = |entity: &Entity| {
-                    trogon_atlas_core::refs::outbound_refs(entity)
+                let references = |entity: &Entity| -> StoreResult<Vec<EntityKey>> {
+                    let refs =
+                        trogon_atlas_core::refs::try_outbound_refs(entity).map_err(|error| {
+                            StoreError::CorruptEntry {
+                                key: trogon_atlas_core::refs::entity_kind(entity)
+                                    .zip(trogon_atlas_core::refs::entity_id(entity))
+                                    .map_or_else(String::new, |(kind, id)| {
+                                        crate::key::entity_key(kind, id)
+                                    }),
+                                reason: error.to_string(),
+                            }
+                        })?;
+                    Ok(refs
                         .iter()
                         .filter_map(|reference| {
                             let kind = reference.to_kind.or_else(|| {
@@ -3415,11 +3426,11 @@ impl Store for NatsStore {
                             let target = EntityKey::new(kind, &reference.to_id);
                             targets.contains(&target).then_some(target)
                         })
-                        .collect::<Vec<_>>()
+                        .collect())
                 };
                 let mut referenced = HashSet::new();
                 for entity in replacements.values().flatten() {
-                    referenced.extend(references(entity));
+                    referenced.extend(references(entity)?);
                 }
 
                 for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
@@ -3458,7 +3469,7 @@ impl Store for NatsStore {
                                 Err(StoreError::NotFound) => return Ok(Vec::new()),
                                 Err(error) => return Err(error),
                             };
-                            Ok(references(&stored.entity))
+                            references(&stored.entity)
                         })
                         .buffer_unordered(LIST_FETCH_CONCURRENCY);
                     while let Some(found) = checks.next().await {

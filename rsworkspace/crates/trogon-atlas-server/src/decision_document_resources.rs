@@ -40,6 +40,19 @@ pub(crate) fn responsibility_subject(subject: &pb::CatalogSubject) -> pb::Respon
 }
 
 pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
+    kind_occurrence_count(entity).saturating_add(group_occurrence_count(entity))
+}
+
+fn group_occurrence_count(entity: &pb::Entity) -> usize {
+    const MARKER: &[u8] = b"ResourceGroupsAnnotation";
+    let bytes = prost::Message::encode_to_vec(entity);
+    if !bytes.windows(MARKER.len()).any(|window| window == MARKER) {
+        return 0;
+    }
+    trogon_atlas_core::agent_metadata::group_refs(entity).map_or(0, |refs| refs.len())
+}
+
+fn kind_occurrence_count(entity: &pb::Entity) -> usize {
     match &entity.kind {
         Some(pb::entity::Kind::Decision(value)) => {
             value.subjects.len()
@@ -224,7 +237,11 @@ pub(crate) fn validate_in_context(
             );
         }
     }
-    for reference in trogon_atlas_core::refs::outbound_refs(entity) {
+    let references = trogon_atlas_core::refs::try_outbound_refs(entity).unwrap_or_else(|_| {
+        issue("metadata", "Native metadata is malformed");
+        Vec::new()
+    });
+    for reference in references {
         if has_dedicated_check(&reference.from_field) {
             continue;
         }

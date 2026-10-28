@@ -1,11 +1,11 @@
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 
 use tonic::Code;
 use trogon_atlas_store::store::BranchLandOp;
 
 use super::{
-    EventModelServiceImpl, Lens, OpMetaLike, Status, StoredEntity, Visibility, entity_id,
-    entity_kind, pb, store_err, validation,
+    entity_id, entity_kind, pb, store_err, validation, EventModelServiceImpl, Lens, OpMetaLike,
+    Status, StoredEntity, Visibility,
 };
 
 pub(super) struct ArchitectureProposal<'a> {
@@ -27,12 +27,14 @@ enum ArchitectureTargetAccess<'a> {
     ExactDiagnostic(&'a Lens),
 }
 
-fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::OutboundRef> {
+fn admission_references(
+    entity: &pb::Entity,
+) -> Result<Vec<trogon_atlas_core::refs::OutboundRef>, Status> {
     let architectural = matches!(
         entity.kind,
         Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
     );
-    trogon_atlas_core::refs::outbound_refs(entity)
+    Ok(crate::graph::checked_refs(entity)?
         .into_iter()
         .filter(|reference| {
             if matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
@@ -41,6 +43,32 @@ fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::Out
             !architectural
                 || reference.from_field.starts_with("relationships[")
                 || reference.from_field.starts_with("communications[")
+        })
+        .collect())
+}
+
+fn catalog_reference_targets(
+    resources: &[&pb::Entity],
+) -> Result<Vec<(pb::EntityKind, pb::Id)>, Status> {
+    let mut targets = Vec::new();
+    for entity in resources.iter().filter(|entity| is_catalog(entity)) {
+        targets.extend(
+            crate::graph::checked_refs(entity)?
+                .into_iter()
+                .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+        );
+    }
+    Ok(targets)
+}
+
+fn overlay_of(metas: &[OpMetaLike]) -> HashMap<pb::EntityKey, Option<&pb::Entity>> {
+    metas
+        .iter()
+        .map(|meta| {
+            (
+                pb::EntityKey::new(meta.kind, &meta.id),
+                meta.entity.as_ref().filter(|_| meta.is_put),
+            )
         })
         .collect()
 }
@@ -102,6 +130,55 @@ impl EventModelServiceImpl {
             .await
     }
 
+    async fn validate_native_group_targets(
+        &self,
+        metas: &[OpMetaLike],
+        branch: Option<&str>,
+        vis: &Visibility,
+        landing: Option<&[BranchLandOp]>,
+    ) -> Result<(), Status> {
+        let mut targets = Vec::new();
+        for entity in metas
+            .iter()
+            .filter(|meta| meta.is_put)
+            .filter_map(|meta| meta.entity.as_ref())
+        {
+            let refs = trogon_atlas_core::agent_metadata::group_refs(entity)
+                .map_err(|_| Status::invalid_argument("native metadata is invalid"))?;
+            targets.extend(
+                refs.into_iter()
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
+        if targets.is_empty() {
+            return Ok(());
+        }
+        let proposal = ArchitectureProposal {
+            overlay: overlay_of(metas),
+            landing,
+        };
+        let mut loaded = HashSet::new();
+        let mut world = HashMap::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            targets.clone(),
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        if targets
+            .iter()
+            .any(|(kind, id)| !world.contains_key(&pb::EntityKey::new(*kind, id)))
+        {
+            return Err(Status::invalid_argument(
+                "resource group target is absent or unavailable",
+            ));
+        }
+        Ok(())
+    }
+
     async fn validate_architecture_proposal(
         &self,
         metas: &[OpMetaLike],
@@ -109,6 +186,8 @@ impl EventModelServiceImpl {
         vis: &Visibility,
         landing: Option<&[BranchLandOp]>,
     ) -> Result<(), Status> {
+        self.validate_native_group_targets(metas, branch, vis, landing)
+            .await?;
         let resources: Vec<_> = metas
             .iter()
             .filter(|meta| {
@@ -139,16 +218,10 @@ impl EventModelServiceImpl {
                 catalog_budget.owner(entity)?;
             }
         }
-        let overlay: HashMap<_, _> = metas
-            .iter()
-            .map(|meta| {
-                (
-                    pb::EntityKey::new(meta.kind, &meta.id),
-                    meta.entity.as_ref().filter(|_| meta.is_put),
-                )
-            })
-            .collect();
-        let proposal = ArchitectureProposal { overlay, landing };
+        let proposal = ArchitectureProposal {
+            overlay: overlay_of(metas),
+            landing,
+        };
         let mut world = HashMap::new();
         let mut required = Vec::new();
         for entity in &resources {
@@ -156,7 +229,7 @@ impl EventModelServiceImpl {
                 continue;
             }
             required.extend(
-                admission_references(entity)
+                admission_references(entity)?
                     .into_iter()
                     .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
             );
@@ -171,12 +244,17 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let term_targets = resources
+        let mut term_targets = Vec::new();
+        for entity in resources
             .iter()
             .filter(|entity| matches!(entity.kind, Some(pb::entity::Kind::Term(_))))
-            .flat_map(|entity| admission_references(entity))
-            .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
-            .collect();
+        {
+            term_targets.extend(
+                admission_references(entity)?
+                    .into_iter()
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
         let term_lens = self.lens(vis).await?;
         self.load_architecture_targets(
             &proposal,
@@ -187,12 +265,7 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let catalog_targets = resources
-            .iter()
-            .filter(|entity| is_catalog(entity))
-            .flat_map(|entity| trogon_atlas_core::refs::outbound_refs(entity))
-            .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
-            .collect();
+        let catalog_targets = catalog_reference_targets(&resources)?;
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -342,15 +415,14 @@ impl EventModelServiceImpl {
         };
         let lens = self.lens(vis).await?;
         let access = ArchitectureTargetAccess::Diagnostic(&lens);
-        let required = resources
-            .iter()
-            .filter(|entity| !is_catalog(entity))
-            .flat_map(|entity| {
-                admission_references(entity)
+        let mut required = Vec::new();
+        for entity in resources.iter().filter(|entity| !is_catalog(entity)) {
+            required.extend(
+                admission_references(entity)?
                     .into_iter()
-                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
-            })
-            .collect();
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
         let mut loaded = HashSet::new();
         let mut world = HashMap::new();
         self.load_architecture_targets(
@@ -362,12 +434,7 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let catalog_targets = resources
-            .iter()
-            .filter(|entity| is_catalog(entity))
-            .flat_map(|entity| trogon_atlas_core::refs::outbound_refs(entity))
-            .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
-            .collect();
+        let catalog_targets = catalog_reference_targets(&resources)?;
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -959,7 +1026,15 @@ impl EventModelServiceImpl {
                     | pb::entity::Kind::Document(_)
             )
         ) {
-            return Ok(());
+            let meta = OpMetaLike {
+                kind: entity_kind(entity)?,
+                id: entity_id(entity)?.clone(),
+                is_put: true,
+                entity: Some(entity.clone()),
+            };
+            return self
+                .validate_native_group_targets(&[meta], branch, vis, None)
+                .await;
         }
         self.validate_architecture_writes(
             &[OpMetaLike {

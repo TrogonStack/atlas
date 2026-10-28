@@ -113,7 +113,11 @@ pub(crate) fn validate_in_context(
             issue("RESPONSIBILITY_VALUE_INVALID", "supersedes");
         }
     }
-    for reference in trogon_atlas_core::refs::outbound_refs(entity) {
+    let references = trogon_atlas_core::refs::try_outbound_refs(entity).unwrap_or_else(|_| {
+        issue("RESPONSIBILITY_VALUE_INVALID", "metadata");
+        Vec::new()
+    });
+    for reference in references {
         if !reference.to_kind.is_some_and(|kind| {
             reference.to_id.version > 0 && context.find(kind, &reference.to_id).is_some()
         }) {
@@ -198,7 +202,10 @@ pub(crate) fn selected_endpoints(
         }
         _ => {}
     }
-    let mut targets: Vec<_> = trogon_atlas_core::refs::outbound_refs(owner)
+    let Ok(references) = trogon_atlas_core::refs::try_outbound_refs(owner) else {
+        return Vec::new();
+    };
+    let mut targets: Vec<_> = references
         .into_iter()
         .filter(|reference| {
             prefixes.iter().any(|prefix| {

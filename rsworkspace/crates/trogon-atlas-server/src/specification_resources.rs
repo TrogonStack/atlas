@@ -31,7 +31,16 @@ pub(crate) fn validate_in_context(
             ));
         }
     }
-    for reference in trogon_atlas_core::refs::outbound_refs(entity) {
+    let references = trogon_atlas_core::refs::try_outbound_refs(entity).unwrap_or_else(|_| {
+        issues.push(crate::validation::issue_error(
+            "SPECIFICATION_VALUE_INVALID",
+            "Native metadata is malformed".into(),
+            subject.clone(),
+            "metadata",
+        ));
+        Vec::new()
+    });
+    for reference in references {
         let resolved = reference.to_kind.is_some_and(|kind| {
             reference.to_id.version > 0 && context.find(kind, &reference.to_id).is_some()
         });

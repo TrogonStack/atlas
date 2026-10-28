@@ -231,7 +231,7 @@ impl EventModelServiceImpl {
                 }
                 Err(status) => return Err(status),
             }
-            for target in trogon_atlas_core::refs::outbound_refs(&row.entity) {
+            for target in crate::graph::checked_refs(&row.entity)? {
                 if let Some(kind) = target.to_kind {
                     pending.push_back(pb::EntityRef {
                         kind: kind as i32,

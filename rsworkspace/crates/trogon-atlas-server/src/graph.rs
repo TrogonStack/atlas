@@ -9,12 +9,22 @@ use tonic::Status;
 use trogon_atlas_core::transcode::TranscodePool;
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
-    refs::{entity_id as ref_entity_id, entity_kind as ref_entity_kind, outbound_refs},
+    refs::{
+        entity_id as ref_entity_id, entity_kind as ref_entity_kind, try_outbound_refs, OutboundRef,
+    },
     store::ListFilter,
     Store, StoredEntity,
 };
 
 use crate::{conv::store_err, metrics::ServerMetrics};
+
+pub(crate) fn malformed_metadata() -> Status {
+    Status::data_loss("stored entity metadata is malformed")
+}
+
+pub(crate) fn checked_refs(entity: &pb::Entity) -> Result<Vec<OutboundRef>, Status> {
+    try_outbound_refs(entity).map_err(|_| malformed_metadata())
+}
 
 #[derive(Debug, Clone)]
 pub struct ReverseIndex {
@@ -23,22 +33,24 @@ pub struct ReverseIndex {
 }
 
 impl ReverseIndex {
-    #[must_use]
-    pub fn build(all: &[StoredEntity]) -> Self {
+    pub fn build(all: &[StoredEntity]) -> Result<Self, Status> {
         Self::build_counted(all, responsibility_occurrence_count(all))
     }
 
     pub(crate) fn build_discovery(all: &[StoredEntity]) -> Result<Self, Status> {
         let occurrences = responsibility_occurrence_count(all);
         check_responsibility_occurrence_count(occurrences)?;
-        Ok(Self::build_counted(all, occurrences))
+        Self::build_counted(all, occurrences)
     }
 
     pub(crate) fn check_discovery_budget(&self) -> Result<(), Status> {
         check_responsibility_occurrence_count(self.responsibility_occurrences)
     }
 
-    fn build_counted(all: &[StoredEntity], responsibility_occurrences: usize) -> Self {
+    fn build_counted(
+        all: &[StoredEntity],
+        responsibility_occurrences: usize,
+    ) -> Result<Self, Status> {
         // Known keys let untyped Storyboard slice refs resolve the same way
         // `closure()` does: probe CommandSlice / ReadModelSlice / AutomationSlice.
         let known: HashSet<pb::EntityKey> = all
@@ -60,13 +72,15 @@ impl ReverseIndex {
                 kind: from_kind as i32,
                 id: Some(from_id.clone()),
             };
-            for o in outbound_refs(&se.entity) {
+            let refs = checked_refs(&se.entity)?;
+            let group_ids = group_connection_ids(&se.entity, &refs)?;
+            for o in refs {
                 for to_kind in resolve_to_kinds(o.to_kind, &o.to_id, &known) {
                     let key = pb::EntityKey::new(to_kind, &o.to_id);
                     let (responsibility, membership) =
                         responsibility_provenance(&se.entity, &o.from_field);
                     let (catalog_subject, document_selection, connection_id) =
-                        catalog_provenance(&se.entity, &o.from_field);
+                        catalog_provenance(&se.entity, &o.from_field, &group_ids);
                     by_target.entry(key).or_default().push(pb::Reference {
                         from: Some(from_ref.clone()),
                         from_field: o.from_field.clone(),
@@ -93,10 +107,10 @@ impl ReverseIndex {
                     .push(r);
             }
         }
-        Self {
+        Ok(Self {
             by_target,
             responsibility_occurrences,
-        }
+        })
     }
 
     #[must_use]
@@ -113,19 +127,6 @@ fn responsibility_occurrence_count(all: &[StoredEntity]) -> usize {
     all.iter()
         .filter_map(|stored| {
             let entity = &stored.entity;
-            if !matches!(
-                entity.kind,
-                Some(
-                    pb::entity::Kind::Component(_)
-                        | pb::entity::Kind::ExternalSystem(_)
-                        | pb::entity::Kind::Team(_)
-                        | pb::entity::Kind::Person(_)
-                        | pb::entity::Kind::Decision(_)
-                        | pb::entity::Kind::Document(_)
-                )
-            ) {
-                return None;
-            }
             let key = pb::EntityKey::new(ref_entity_kind(entity)?, ref_entity_id(entity)?);
             seen.insert(key)
                 .then(|| crate::decision_document_resources::occurrence_count(entity))
@@ -325,31 +326,31 @@ fn resolve_to_kinds<S: std::hash::BuildHasher>(
     }
 }
 
-#[must_use]
-pub fn outgoing_of(entity: &pb::Entity) -> Vec<pb::Reference> {
+pub fn outgoing_of(entity: &pb::Entity) -> Result<Vec<pb::Reference>, Status> {
     outgoing_of_resolved(entity, &HashSet::new())
 }
 
 /// Like [`outgoing_of`], but resolves intentionally-untyped slice refs against
 /// `known` (same probe order as [`closure`]).
-#[must_use]
 pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
     entity: &pb::Entity,
     known: &HashSet<pb::EntityKey, S>,
-) -> Vec<pb::Reference> {
+) -> Result<Vec<pb::Reference>, Status> {
     let (Some(from_kind), Some(from_id)) = (ref_entity_kind(entity), ref_entity_id(entity)) else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let from_ref = pb::EntityRef {
         kind: from_kind as i32,
         id: Some(from_id.clone()),
     };
     let mut out = Vec::new();
-    for o in outbound_refs(entity) {
+    let refs = checked_refs(entity)?;
+    let group_ids = group_connection_ids(entity, &refs)?;
+    for o in refs {
         for to_kind in resolve_to_kinds(o.to_kind, &o.to_id, known) {
             let (responsibility, membership) = responsibility_provenance(entity, &o.from_field);
             let (catalog_subject, document_selection, connection_id) =
-                catalog_provenance(entity, &o.from_field);
+                catalog_provenance(entity, &o.from_field, &group_ids);
             out.push(pb::Reference {
                 from: Some(from_ref.clone()),
                 from_field: o.from_field.clone(),
@@ -366,7 +367,7 @@ pub fn outgoing_of_resolved<S: std::hash::BuildHasher>(
             });
         }
     }
-    out
+    Ok(out)
 }
 
 /// Which end of a `pb::Reference` is the "other entity" relative to the
@@ -526,7 +527,7 @@ pub fn closure(
     roots: &[pb::EntityRef],
     max_entities: usize,
     metrics: &ServerMetrics,
-) -> Closure {
+) -> Result<Closure, Status> {
     let by_key = entity_lookup(all);
     let mut out: HashMap<String, pb::Entity> = HashMap::new();
     let mut truncated = false;
@@ -564,7 +565,7 @@ pub fn closure(
             break;
         }
         out.insert(canon, entity.clone());
-        for o in outbound_refs(entity) {
+        for o in checked_refs(entity)? {
             match o.to_kind {
                 None => {
                     // Intentionally-untyped slice ref: probe each concrete slice kind.
@@ -601,11 +602,11 @@ pub fn closure(
         tracing::warn!(cap = max_entities, "graph closure truncated");
         metrics.record_graph_closure_truncation();
     }
-    Closure {
+    Ok(Closure {
         entities: out,
         truncated,
         missing,
-    }
+    })
 }
 
 /// What a shared board carries: the root and everything it reaches in its
@@ -626,7 +627,7 @@ pub fn board_closure(
     max_entities: usize,
     metrics: &ServerMetrics,
     types: &TranscodePool,
-) -> BoardClosure {
+) -> Result<BoardClosure, Status> {
     // Borrowed, so a request copies only the entities the board returns.
     let by_key: HashMap<pb::EntityKey, &pb::Entity> = all
         .iter()
@@ -638,14 +639,14 @@ pub fn board_closure(
     let known: HashSet<pb::EntityKey> = by_key.keys().cloned().collect();
     let owners = TypeOwners::build(all);
     let (Some(root_kind), Some(root_id)) = (ref_entity_kind(root), ref_entity_id(root)) else {
-        return BoardClosure::default();
+        return Ok(BoardClosure::default());
     };
     let mut board = BoardClosure {
         own: vec![root.clone()],
         ..BoardClosure::default()
     };
     let mut seen: HashSet<pb::EntityKey> = HashSet::from([pb::EntityKey::new(root_kind, root_id)]);
-    let mut queue: VecDeque<pb::EntityKey> = board_targets(root, &known, &owners, types).into();
+    let mut queue: VecDeque<pb::EntityKey> = board_targets(root, &known, &owners, types)?.into();
     while let Some(key) = queue.pop_front() {
         if !seen.insert(key.clone()) {
             continue;
@@ -662,13 +663,13 @@ pub fn board_closure(
             continue;
         }
         board.own.push(entity.clone());
-        queue.extend(board_targets(entity, &known, &owners, types));
+        queue.extend(board_targets(entity, &known, &owners, types)?);
     }
     if board.truncated {
         tracing::warn!(cap = max_entities, "board closure truncated");
         metrics.record_graph_closure_truncation();
     }
-    board
+    Ok(board)
 }
 
 /// Every entity `entity` needs to load elsewhere: its references, the type
@@ -678,8 +679,8 @@ fn board_targets(
     known: &HashSet<pb::EntityKey>,
     owners: &TypeOwners,
     types: &TranscodePool,
-) -> Vec<pb::EntityKey> {
-    let mut refs = outgoing_of_resolved(entity, known);
+) -> Result<Vec<pb::EntityKey>, Status> {
+    let mut refs = outgoing_of_resolved(entity, known)?;
     refs.extend(owners.schema_ref(entity));
     let mut out: Vec<pb::EntityKey> = refs
         .into_iter()
@@ -696,7 +697,7 @@ fn board_targets(
             .map(|id| pb::EntityKey::new(pb::EntityKind::Schema, &id)),
     );
     out.extend(board_type_libraries(entity, owners, types));
-    out
+    Ok(out)
 }
 
 fn board_type_libraries(
@@ -821,7 +822,7 @@ pub fn impact(
     root_id: &pb::Id,
     max_depth: u32,
     follow_incoming: bool,
-) -> Vec<pb::ImpactNode> {
+) -> Result<Vec<pb::ImpactNode>, Status> {
     let known: HashSet<pb::EntityKey> = all
         .iter()
         .filter_map(|se| {
@@ -831,17 +832,16 @@ pub fn impact(
         })
         .collect();
     let owners = TypeOwners::build(all);
-    let outbound: HashMap<pb::EntityKey, Vec<pb::Reference>> = all
-        .iter()
-        .filter_map(|se| {
-            let k = ref_entity_kind(&se.entity)?;
-            let i = ref_entity_id(&se.entity)?;
-            let mut refs = outgoing_of_resolved(&se.entity, &known);
-            refs.extend(owners.schema_ref(&se.entity));
-            Some((pb::EntityKey::new(k, i), refs))
-        })
-        .collect();
-    let reverse = ReverseIndex::build(all);
+    let mut outbound: HashMap<pb::EntityKey, Vec<pb::Reference>> = HashMap::new();
+    for se in all {
+        let (Some(k), Some(i)) = (ref_entity_kind(&se.entity), ref_entity_id(&se.entity)) else {
+            continue;
+        };
+        let mut refs = outgoing_of_resolved(&se.entity, &known)?;
+        refs.extend(owners.schema_ref(&se.entity));
+        outbound.insert(pb::EntityKey::new(k, i), refs);
+    }
+    let reverse = ReverseIndex::build(all)?;
 
     let root_ref = pb::EntityRef {
         kind: root_kind as i32,
@@ -915,7 +915,7 @@ pub fn impact(
             queue.push_back((ok, oid.clone(), depth + 1, new_path));
         }
     }
-    out
+    Ok(out)
 }
 
 fn entity_uid(entity: &pb::Entity) -> String {
@@ -950,9 +950,25 @@ fn responsibility_provenance(
     (assignment, membership)
 }
 
+fn group_connection_ids(
+    entity: &pb::Entity,
+    refs: &[OutboundRef],
+) -> Result<HashMap<String, pb::ConnectionId>, Status> {
+    if refs
+        .iter()
+        .any(|reference| reference.from_field.contains(".groups["))
+    {
+        trogon_atlas_core::agent_metadata::group_item_connection_ids(entity)
+            .map_err(|_| malformed_metadata())
+    } else {
+        Ok(HashMap::new())
+    }
+}
+
 fn catalog_provenance(
     entity: &pb::Entity,
     field: &str,
+    group_ids: &HashMap<String, pb::ConnectionId>,
 ) -> (
     Option<pb::CatalogSubject>,
     Option<pb::DocumentSelection>,
@@ -986,6 +1002,9 @@ fn catalog_provenance(
             .get(index)
             .and_then(|declaration| declaration.connection_id.clone());
     }
+    if let Some(id) = group_ids.get(field) {
+        reference.connection_id = Some(id.clone());
+    }
     (
         reference.catalog_subject,
         reference.document_selection,
@@ -995,6 +1014,8 @@ fn catalog_provenance(
 
 #[cfg(test)]
 mod impact_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use trogon_atlas_store::store::StoredEntity;
 
     use super::*;
@@ -1064,7 +1085,8 @@ mod impact_tests {
             &id("orders", "place-slice"),
             3,
             /*follow_incoming=*/ true,
-        );
+        )
+        .unwrap();
         let entity_ids: Vec<String> = nodes
             .iter()
             .filter_map(|n| {
@@ -1134,7 +1156,7 @@ mod impact_tests {
             etag: String::new(),
         };
         let slice = stored_command_slice("orders", "place-slice", None);
-        let index = ReverseIndex::build(&[board, slice]);
+        let index = ReverseIndex::build(&[board, slice]).unwrap();
         let incoming = index.incoming(pb::EntityKind::CommandSlice, &slice_id);
         assert!(
             !incoming.is_empty(),
@@ -1228,7 +1250,7 @@ mod impact_tests {
         let screen_id = id("app", "checkout");
         let ui = stored_ui("checkout", "order-panel", Some(("app", "checkout")));
         let screen = stored_screen("app", "checkout");
-        let index = ReverseIndex::build(&[ui, screen]);
+        let index = ReverseIndex::build(&[ui, screen]).unwrap();
         let incoming = index.incoming(pb::EntityKind::Screen, &screen_id);
         assert!(
             !incoming.is_empty(),
@@ -1248,7 +1270,8 @@ mod impact_tests {
             &id("app", "checkout"),
             2,
             true,
-        );
+        )
+        .unwrap();
         let has_ui = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1270,7 +1293,7 @@ mod impact_tests {
             kind: pb::EntityKind::Ui as i32,
             id: Some(id("checkout", "order-panel")),
         };
-        let c = closure(&all, &[root], 100, &ServerMetrics::default());
+        let c = closure(&all, &[root], 100, &ServerMetrics::default()).unwrap();
         let has_screen = c
             .entities
             .values()
@@ -1292,7 +1315,7 @@ mod impact_tests {
         );
         let t1 = stored_term("checkout", "review", None);
         let t2 = stored_term("payments", "review", None);
-        let index = ReverseIndex::build(&[amb, t1, t2]);
+        let index = ReverseIndex::build(&[amb, t1, t2]).unwrap();
         let incoming = index.incoming(pb::EntityKind::Term, &term_id);
         assert!(
             !incoming.is_empty(),
@@ -1317,7 +1340,8 @@ mod impact_tests {
             &id("checkout", "review"),
             2,
             true,
-        );
+        )
+        .unwrap();
         let has_amb = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1344,7 +1368,7 @@ mod impact_tests {
             kind: pb::EntityKind::Ambiguity as i32,
             id: Some(id("marketplace", "review-collision")),
         };
-        let c = closure(&all, &[root], 100, &ServerMetrics::default());
+        let c = closure(&all, &[root], 100, &ServerMetrics::default()).unwrap();
         assert_eq!(
             c.entities.len(),
             3,
@@ -1362,7 +1386,7 @@ mod impact_tests {
             Some((pb::EntityKind::Event, "checkout", "placed")),
         );
         let event = stored_event("checkout", "placed");
-        let index = ReverseIndex::build(&[term, event]);
+        let index = ReverseIndex::build(&[term, event]).unwrap();
         let incoming = index.incoming(pb::EntityKind::Event, &event_id);
         assert!(
             incoming.iter().any(|r| r
@@ -1388,7 +1412,8 @@ mod impact_tests {
             &id("orders", "place-slice"),
             3,
             true,
-        );
+        )
+        .unwrap();
         let has_sibling = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1412,6 +1437,8 @@ mod impact_tests {
 
 #[cfg(test)]
 mod board_closure_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use trogon_atlas_store::store::StoredEntity;
 
     use super::*;
@@ -1479,7 +1506,7 @@ mod board_closure_tests {
         let Ok(types) = TranscodePool::builtin() else {
             panic!("built-in descriptors must be available");
         };
-        board_closure(all, &root.entity, max, &ServerMetrics::default(), &types)
+        board_closure(all, &root.entity, max, &ServerMetrics::default(), &types).unwrap()
     }
 
     #[test]

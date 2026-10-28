@@ -8,7 +8,7 @@ use std::{
 
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
-    refs::{entity_id, entity_kind, outbound_refs},
+    refs::{entity_id, entity_kind, try_outbound_refs},
     StoredEntity,
 };
 
@@ -5993,7 +5993,20 @@ pub fn validate_model_content(
                 continue;
             }
         }
-        for o in outbound_refs(&se.entity) {
+        let Ok(outbound) = try_outbound_refs(&se.entity) else {
+            issues.push(pb::ValidationIssue {
+                severity: pb::validation_issue::Severity::Error as i32,
+                code: "ENTITY_METADATA_INVALID".into(),
+                message: "Native metadata is malformed".into(),
+                subject: Some(pb::EntityRef {
+                    kind: k as i32,
+                    id: Some(id.clone()),
+                }),
+                ..Default::default()
+            });
+            continue;
+        };
+        for o in outbound {
             // Bounded contexts touch at exactly ONE seam: an upstream EVENT
             // flowing into a downstream subscription READ MODEL (the
             // translation pattern). Any other cross-namespace structural

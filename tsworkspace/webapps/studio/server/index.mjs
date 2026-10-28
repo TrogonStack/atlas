@@ -486,7 +486,10 @@ protoBundleRoot.resolvePath = (/** @type {string} */ _origin, /** @type {string}
 /** @type {protobuf.Root} */
 let protoRoot;
 try {
-  protoRoot = await protoBundleRoot.load(PROTO_PATH);
+  protoRoot = await protoBundleRoot.load([
+    PROTO_PATH,
+    path.resolve(PROTO_INCLUDES[0], "trogonatlas/annotation/v1alpha1/annotations.proto"),
+  ]);
 } catch (err) {
   logEvent("error", "protobufjs_load_failed", {
     path: PROTO_PATH,
@@ -577,6 +580,13 @@ function valueToJs(v) {
   return null;
 }
 
+const NATIVE_METADATA_TYPES = new Set([
+  "trogonatlas.eventmodel.v1alpha1.AgentAnnotation",
+  "trogonatlas.annotation.v1alpha1.LifecycleAnnotation",
+  "trogonatlas.annotation.v1alpha1.BadgesAnnotation",
+  "trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",
+]);
+
 /** @param {string} typeUrl @param {unknown} value @param {number} [depth] */
 function decodeAnyValue(typeUrl, value, depth = 0) {
   try {
@@ -596,6 +606,9 @@ function decodeAnyValue(typeUrl, value, depth = 0) {
       typeUrl,
       error: String(/** @type {any} */ (err)?.message ?? err).slice(0, 200),
     });
+    if (NATIVE_METADATA_TYPES.has(typeUrl.split("/").pop() ?? "")) {
+      return { "@type": typeUrl, "@decodeError": "Malformed native annotation" };
+    }
     return null;
   }
 }
