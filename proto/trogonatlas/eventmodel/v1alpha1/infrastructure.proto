@@ -9,6 +9,8 @@ import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
 import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
 import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
 
 message ArchitecturalEndpoint {
   oneof target {
@@ -57,6 +59,7 @@ message Component {
   trogonatlas.type.v1alpha1.Id supersedes = 7;
   repeated ArchitecturalRelationship relationships = 8;
   repeated CommunicationDeclaration communications = 9;
+  repeated StorageAccessClaim storage_claims = 12;
 }
 
 // An ExternalSystem is a living third-party boundary: the APIs and webhooks
@@ -72,6 +75,7 @@ message ExternalSystem {
   trogonatlas.type.v1alpha1.Id supersedes = 6;
   repeated ArchitecturalRelationship relationships = 7;
   repeated CommunicationDeclaration communications = 8;
+  repeated StorageAccessClaim storage_claims = 10;
 }
 
 // Delivery status of a tracked item. Lives ONLY in Trackers -- design

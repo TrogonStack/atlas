@@ -2423,6 +2423,16 @@ impl Severity {
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogTitle {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CatalogText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProtocolName {
     #[prost(string, tag="1")]
     pub value: ::prost::alloc::string::String,
@@ -2494,6 +2504,19 @@ pub struct ChannelBinding {
     pub doc: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChannelLink {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(enumeration="ChannelLinkKind", tag="2")]
+    pub kind: i32,
+    #[prost(message, optional, tag="3")]
+    pub target: ::core::option::Option<ChannelRef>,
+    #[prost(map="string, string", tag="4")]
+    pub parameter_values: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Channel {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -2513,6 +2536,8 @@ pub struct Channel {
     pub delivery_guarantee: ::core::option::Option<i32>,
     #[prost(message, repeated, tag="11")]
     pub bindings: ::prost::alloc::vec::Vec<ChannelBinding>,
+    #[prost(message, repeated, tag="12")]
+    pub links: ::prost::alloc::vec::Vec<ChannelLink>,
     #[prost(oneof="channel::Broker", tags="9, 10")]
     pub broker: ::core::option::Option<channel::Broker>,
 }
@@ -2738,6 +2763,35 @@ pub mod data_store {
                 "CLASSIFICATION_REGULATED" => Some(Self::Regulated),
                 _ => None,
             }
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ChannelLinkKind {
+    Unspecified = 0,
+    Composes = 1,
+    RoutesTo = 2,
+}
+impl ChannelLinkKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CHANNEL_LINK_KIND_UNSPECIFIED",
+            Self::Composes => "CHANNEL_LINK_KIND_COMPOSES",
+            Self::RoutesTo => "CHANNEL_LINK_KIND_ROUTES_TO",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CHANNEL_LINK_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "CHANNEL_LINK_KIND_COMPOSES" => Some(Self::Composes),
+            "CHANNEL_LINK_KIND_ROUTES_TO" => Some(Self::RoutesTo),
+            _ => None,
         }
     }
 }
@@ -3428,6 +3482,21 @@ pub struct DataOutputPort {
     #[prost(message, optional, tag="7")]
     pub derived_from: ::core::option::Option<DeclaredLineage>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StorageAccessClaim {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub store: ::core::option::Option<DataStoreRef>,
+    #[prost(enumeration="StorageDirection", tag="3")]
+    pub direction: i32,
+    #[prost(message, optional, tag="4")]
+    pub attachment: ::core::option::Option<ConnectionRef>,
+    #[prost(message, optional, tag="5")]
+    pub port_id: ::core::option::Option<DataPortId>,
+    #[prost(message, optional, tag="6")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DataProduct {
     #[prost(message, optional, tag="1")]
@@ -3446,6 +3515,8 @@ pub struct DataProduct {
     pub inputs: ::prost::alloc::vec::Vec<DataInputPort>,
     #[prost(message, repeated, tag="8")]
     pub outputs: ::prost::alloc::vec::Vec<DataOutputPort>,
+    #[prost(message, repeated, tag="9")]
+    pub storage_claims: ::prost::alloc::vec::Vec<StorageAccessClaim>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -3472,6 +3543,35 @@ impl DataPortDirection {
             "DATA_PORT_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
             "DATA_PORT_DIRECTION_INPUT" => Some(Self::Input),
             "DATA_PORT_DIRECTION_OUTPUT" => Some(Self::Output),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StorageDirection {
+    Unspecified = 0,
+    Read = 1,
+    Write = 2,
+}
+impl StorageDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STORAGE_DIRECTION_UNSPECIFIED",
+            Self::Read => "STORAGE_DIRECTION_READ",
+            Self::Write => "STORAGE_DIRECTION_WRITE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STORAGE_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "STORAGE_DIRECTION_READ" => Some(Self::Read),
+            "STORAGE_DIRECTION_WRITE" => Some(Self::Write),
             _ => None,
         }
     }
@@ -3787,16 +3887,6 @@ pub mod subdomain {
             }
         }
     }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CatalogTitle {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CatalogText {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LocalValueId {
@@ -4145,6 +4235,8 @@ pub struct Component {
     pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
     #[prost(message, repeated, tag="9")]
     pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
+    #[prost(message, repeated, tag="12")]
+    pub storage_claims: ::prost::alloc::vec::Vec<StorageAccessClaim>,
 }
 /// An ExternalSystem is a living third-party boundary: the APIs and webhooks
 /// it exposes, the tech used to integrate with it. ReadModels with an
@@ -4170,6 +4262,8 @@ pub struct ExternalSystem {
     pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
     #[prost(message, repeated, tag="8")]
     pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
+    #[prost(message, repeated, tag="10")]
+    pub storage_claims: ::prost::alloc::vec::Vec<StorageAccessClaim>,
 }
 /// A Tracker is a project-management overlay: a denormalized list of
 /// pointers into the model, each carrying delivery status. It integrates
