@@ -2169,3 +2169,161 @@ async fn communication_mcp_native_authoring_queries_and_export_preserve_occurren
     );
     service.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn association_mcp_native_authoring_inspect_diff_export_and_reapply_preserve_identity() {
+    use serde_json::json;
+    let (client, service, _) = start_mcp_client().await;
+    let ns = "mcp-association";
+    let max = "18446744073709551615";
+    let id = |slug: &str, version: &str| json!({"namespace":ns,"slug":slug,"version":version});
+    let put = |value: serde_json::Value| {
+        let client = &client;
+        async move {
+            call_ok(
+                client,
+                "put_entity_json",
+                put_entity_json_args(&value.to_string()),
+            )
+            .await
+        }
+    };
+    let get = |kind: &'static str, slug: &'static str, version: u64| {
+        let client = &client;
+        async move {
+            call_tool_result_text(
+                &call_ok(
+                    client,
+                    "get_entity_json",
+                    args_obj(&[
+                        ("kind", json!(kind)),
+                        ("namespace", json!(ns)),
+                        ("slug", json!(slug)),
+                        ("version", json!(version)),
+                    ]),
+                )
+                .await,
+            )
+        }
+    };
+    put(json!({"readModel":{"id":id("result","1"),"title":"Result"}})).await;
+    put(json!({"processor":{"id":id("worker","1"),"title":"Worker"}})).await;
+    put(json!({"automationSlice":{"id":id("observe","1"),"title":"Observe","sourceReadModels":[{"readModel":{"id":id("result","1")}}],"processor":{"processor":{"id":id("worker","1")}}}})).await;
+    let slice = get("automation_slice", "observe", 1).await;
+    let observation = json!({"owner":{"kind":"ENTITY_KIND_AUTOMATION_SLICE","id":id("observe","1")},"ownerUid":slice["json"]["system"]["uid"],"id":slice["json"]["automationSlice"]["sourceReadModels"][0]["connectionId"]});
+    let channel = |slug: &str, version: &str, links: serde_json::Value| json!({"channel":{"id":id(slug,version),"title":slug,"bindings":[{"observation":observation}],"links":links}});
+    put(channel("inner", max, json!([]))).await;
+    let link = |kind: &str| json!({"kind":kind,"target":{"id":id("inner",max)}});
+    let hub = channel(
+        "hub",
+        "1",
+        json!([
+            link("CHANNEL_LINK_KIND_COMPOSES"),
+            link("CHANNEL_LINK_KIND_COMPOSES"),
+            link("CHANNEL_LINK_KIND_ROUTES_TO")
+        ]),
+    );
+    let mut preview = put_entity_json_args(&hub.to_string());
+    preview.insert("validate_only".into(), json!(true));
+    call_ok(&client, "put_entity_json", preview).await;
+    put(hub).await;
+    let self_link = channel(
+        "loop",
+        "1",
+        json!([{"kind":"CHANNEL_LINK_KIND_COMPOSES","target":{"id":id("loop","2")}}]),
+    );
+    let error = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("put_entity_json")
+                .with_arguments(put_entity_json_args(&self_link.to_string())),
+        )
+        .await;
+    assert!(
+        matches!(&error, Err(rmcp::ServiceError::McpError(error)) if error.code == ErrorCode::INVALID_PARAMS)
+            || error.is_ok_and(|result| result.is_error.unwrap_or(false))
+    );
+
+    put(json!({"dataStore":{"id":id("warehouse","1"),"title":"Warehouse","storeClass":{"known":"KNOWN_CACHE"},"accessMode":"ACCESS_MODE_READ_WRITE","attachments":[{"readModel":{"id":id("result","1")}}]}})).await;
+    let store = json!({"id":id("warehouse","1")});
+    let claims = json!([
+        {"store":store,"direction":"STORAGE_DIRECTION_READ"},
+        {"store":store,"direction":"STORAGE_DIRECTION_WRITE"},
+        {"store":store,"direction":"STORAGE_DIRECTION_WRITE"}
+    ]);
+    put(json!({"component":{"id":id("app","1"),"title":"App","storageClaims":claims}})).await;
+    put(json!({"externalSystem":{"id":id("vendor","1"),"title":"Vendor","storageClaims":claims}}))
+        .await;
+    let port = "01930000-0000-7000-8000-0000000000aa";
+    put(json!({"dataProduct":{"id":id("offering","1"),"title":"Offering","outputs":[{"portId":{"value":port},"name":{"value":"Result"}}],"storageClaims":[
+        {"store":store,"direction":"STORAGE_DIRECTION_READ","portId":{"value":port}},
+        {"store":store,"direction":"STORAGE_DIRECTION_WRITE"},
+        {"store":store,"direction":"STORAGE_DIRECTION_WRITE"}]}})).await;
+
+    let subjects: [(&str, &str, &str, &str); 4] = [
+        ("channel", "hub", "channel", "links"),
+        ("component", "app", "component", "storageClaims"),
+        (
+            "external_system",
+            "vendor",
+            "externalSystem",
+            "storageClaims",
+        ),
+        ("data_product", "offering", "dataProduct", "storageClaims"),
+    ];
+    let mut before = Vec::new();
+    for (kind, slug, field, collection) in subjects {
+        let body = get(kind, slug, 1).await;
+        let items = body["json"][field][collection].as_array().unwrap().clone();
+        assert_eq!(items.len(), 3, "{slug}");
+        let ids: Vec<_> = items
+            .iter()
+            .map(|item| item["connectionId"]["value"].clone())
+            .collect();
+        assert!(ids.iter().all(|value| value.is_string()), "{slug}");
+        assert!(ids[0] != ids[1] && ids[1] != ids[2], "{slug}: {ids:?}");
+        before.push((kind, slug, body));
+    }
+    let hub = &before[0].2["json"]["channel"]["links"];
+    assert_eq!(hub[0]["target"]["id"]["version"], max);
+    assert_eq!(hub[2]["kind"], "CHANNEL_LINK_KIND_ROUTES_TO");
+
+    let exported = call_tool_result_text(
+        &call_ok(
+            &client,
+            "export_namespace",
+            args_obj(&[("namespace", json!(ns))]),
+        )
+        .await,
+    );
+    assert_eq!(exported["skipped"], json!([]));
+    let yaml = exported["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    let diff = call_tool_result_text(
+        &call_ok(
+            &client,
+            "diff_manifests",
+            args_obj(&[("manifests_yaml", json!(yaml))]),
+        )
+        .await,
+    );
+    assert_eq!(diff["changed"], false, "{diff}");
+    call_ok(
+        &client,
+        "apply_manifests",
+        args_obj(&[("manifests_yaml", json!(yaml))]),
+    )
+    .await;
+    for (kind, slug, body) in before {
+        assert_eq!(
+            body,
+            get(kind, slug, 1).await,
+            "{slug}: no-op reapply keeps uid, etag and ids"
+        );
+    }
+    service.cancel().await.unwrap();
+}
