@@ -23,9 +23,9 @@ cover partial models, nested scope, singletons, drafts and dates, groups,
 responsibility, malformed and native-looking Any, budgets, atomic rejection,
 stale incarnation and post-preview revocation.
 These additional core, backend and MCP fixtures pass in the combined parent
-checkout. The aggregate encoded-size
-boundary has core coverage; public backend atomic rejection still requires
-verification.
+checkout. The aggregate encoded-size boundary also passes through the public
+backend after server identity assignment: exactly 65,536 bytes persist, while
+65,537 bytes reject with unchanged owner, etag and reference indexes.
 
 Preview has no token. `validate_only` on put and batch binds no revision, owner
 UID or principal, so apply re-evaluates the etag (the store revision, new for a

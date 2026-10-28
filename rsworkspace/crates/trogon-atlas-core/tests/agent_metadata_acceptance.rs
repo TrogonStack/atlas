@@ -62,25 +62,25 @@ fn agent(annotation: &AgentAnnotation) -> prost_types::Any {
     any(AGENT, annotation.encode_to_vec())
 }
 
-fn lifecycle(value: LifecycleAnnotation) -> prost_types::Any {
+fn lifecycle(value: &LifecycleAnnotation) -> prost_types::Any {
     any(LIFECYCLE, value.encode_to_vec())
 }
 
-fn target(version: u64) -> Option<EntityRef> {
-    Some(EntityRef {
+fn target(version: u64) -> EntityRef {
+    EntityRef {
         kind: EntityKind::Component as i32,
         id: Some(Id {
             namespace: "example".into(),
             slug: "target".into(),
             version,
         }),
-    })
+    }
 }
 
 fn item() -> ResourceGroupItem {
     ResourceGroupItem {
         connection_id: None,
-        target: target(1),
+        target: Some(target(1)),
     }
 }
 
@@ -113,8 +113,8 @@ fn tool(name: &str) -> AgentTool {
     }
 }
 
-fn description(value: String) -> Option<AgentDescription> {
-    Some(AgentDescription { value })
+fn description(value: String) -> AgentDescription {
+    AgentDescription { value }
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn proposed_annotations_are_refused_below_top_level_native_metadata() {
         agent(&AgentAnnotation::default()),
         any(BADGES, BadgesAnnotation::default().encode_to_vec()),
         groups(vec![]),
-        lifecycle(LifecycleAnnotation {
+        lifecycle(&LifecycleAnnotation {
             status: "draft".into(),
             ..Default::default()
         }),
@@ -241,11 +241,11 @@ fn every_known_singleton_rejects_identical_and_conflicting_duplicates() {
             agent(&model(Some("b"), None, None)),
         ),
         (
-            lifecycle(LifecycleAnnotation {
+            lifecycle(&LifecycleAnnotation {
                 status: "draft".into(),
                 ..Default::default()
             }),
-            lifecycle(LifecycleAnnotation {
+            lifecycle(&LifecycleAnnotation {
                 status: "accepted".into(),
                 ..Default::default()
             }),
@@ -296,7 +296,7 @@ fn every_known_singleton_rejects_identical_and_conflicting_duplicates() {
 #[test]
 fn draft_notice_rules_and_calendar_dates() {
     let draft = |title: Option<&str>, message: Option<&str>, status: &str| {
-        lifecycle(LifecycleAnnotation {
+        lifecycle(&LifecycleAnnotation {
             status: status.into(),
             draft: Some(DraftNotice {
                 title: title.map(|value| MetadataTitle {
@@ -315,7 +315,7 @@ fn draft_notice_rules_and_calendar_dates() {
         " DrAfT "
     )]));
     assert!(accepted(vec![draft(None, Some("Review"), "draft")]));
-    assert!(accepted(vec![lifecycle(LifecycleAnnotation {
+    assert!(accepted(vec![lifecycle(&LifecycleAnnotation {
         status: "draft".into(),
         ..Default::default()
     })]));
@@ -336,7 +336,7 @@ fn draft_notice_rules_and_calendar_dates() {
     );
 
     let dated = |status: &str, date: &str| {
-        lifecycle(LifecycleAnnotation {
+        lifecycle(&LifecycleAnnotation {
             status: status.into(),
             deprecated_on: Some(CalendarDate { value: date.into() }),
             ..Default::default()
@@ -377,7 +377,7 @@ fn invalid_groups_are_refused_with_exact_selectors_only() {
     zero.display_limit = Some(PositiveDisplayLimit { value: 0 });
     assert!(!accepted(vec![one(zero)]));
     let mut latest = good.clone();
-    latest.items[0].target = target(0);
+    latest.items[0].target = Some(target(0));
     assert!(!accepted(vec![one(latest)]));
     let mut missing = good.clone();
     missing.items[0].target = None;
@@ -404,7 +404,7 @@ fn invalid_groups_are_refused_with_exact_selectors_only() {
                     connection_id: Some(trogon_atlas_proto::ConnectionId {
                         value: (*value).into(),
                     }),
-                    target: target(1),
+                    target: Some(target(1)),
                 })
                 .collect(),
             ..Default::default()
@@ -547,7 +547,7 @@ fn collection_value_and_display_ceilings_accept_the_bound_and_refuse_one_more() 
 
     let with_description = |value: String| {
         let mut one = tool("lookup");
-        one.description = description(value);
+        one.description = Some(description(value));
         agent_with(vec![one])
     };
     assert!(accepted(vec![with_description("é".repeat(2048))]));
@@ -614,7 +614,7 @@ fn sized_agent(others: usize, target: usize, filler: &str) -> Option<prost_types
     let mut tools: Vec<AgentTool> = (0..15)
         .map(|i| {
             let mut one = tool(&format!("tool{i}"));
-            one.description = description(filler.repeat(4096 / filler.len()));
+            one.description = Some(description(filler.repeat(4096 / filler.len())));
             one
         })
         .collect();
@@ -625,7 +625,7 @@ fn sized_agent(others: usize, target: usize, filler: &str) -> Option<prost_types
                 continue;
             }
             let mut last = tool("last");
-            last.description = description(text);
+            last.description = Some(description(text));
             tools.push(last);
             let candidate = agent(&AgentAnnotation {
                 tools: tools.clone(),
@@ -642,7 +642,7 @@ fn sized_agent(others: usize, target: usize, filler: &str) -> Option<prost_types
 
 #[test]
 fn aggregate_encoded_ceiling_is_inclusive_and_counts_utf8_bytes() {
-    let lifecycle_any = lifecycle(LifecycleAnnotation {
+    let lifecycle_any = lifecycle(&LifecycleAnnotation {
         status: "draft".into(),
         ..Default::default()
     });
