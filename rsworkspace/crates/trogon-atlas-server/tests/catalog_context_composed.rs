@@ -406,6 +406,13 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
         .await
         .unwrap_err();
     assert_eq!(missing.code(), Code::NotFound);
+    let mut occurrence_ids = std::collections::HashSet::new();
+    for entity in &graph {
+        for occurrence in trogon_atlas_core::connections::connection_occurrences(entity).unwrap() {
+            let returned = occurrence.id.unwrap();
+            assert!(occurrence_ids.insert(returned.value));
+        }
+    }
     let pool = trogon_atlas_core::transcode::TranscodePool::builtin().unwrap();
     let rendered = trogon_atlas_client::export::render_board(&graph, &[], &pool).unwrap();
     let loaded =
