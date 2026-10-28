@@ -12,8 +12,10 @@ and [Term ownership](../../rsworkspace/crates/trogon-atlas-server/tests/term_dom
 [Storage-fault acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_fault_backend.rs)
 checks that unreadable persisted catalog bytes cause an operational error during
 incoming discovery and that restoring readable bytes recovers the exact declaration
-identity under a new etag. Timeout and authorization-service failures remain
-separate acceptance obligations.
+identity under a new etag. The Decision backend fixture also verifies that an
+authorization-service outage remains an operational error during Document
+discovery and a guarded update, with unchanged owner content, etag and change
+sequence. Timeout failures remain a separate acceptance obligation.
 The [composed fixture](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_composed.rs)
 passes in the parent checkout. Decision transitive safety, exact provenance and
 branch-landing controls also have independent passing runs. These checks prove

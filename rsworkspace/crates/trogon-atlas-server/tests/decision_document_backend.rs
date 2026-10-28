@@ -3268,6 +3268,117 @@ struct AmendmentFaultAuthorizer {
     fail_lens: std::sync::atomic::AtomicBool,
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn document_authorization_outage_is_not_empty_discovery_or_a_model_error() {
+    let store: Arc<dyn trogon_atlas_store::Store> =
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let authorizer = Arc::new(AmendmentFaultAuthorizer {
+        inner: trogon_atlas_server::ownership::RegistryAuthorizer::new(
+            service.directory(),
+            store.clone(),
+        ),
+        target: std::sync::Mutex::new(None),
+        fail_lens: std::sync::atomic::AtomicBool::new(false),
+    });
+    let mut client = client_with_service(service.with_authorizer(authorizer.clone())).await;
+    let target = put(&mut client, read_model("outage-subject"), None)
+        .await
+        .entity
+        .unwrap();
+    let selected = subject(reference(&target));
+    let hub = put(&mut client, document("outage-hub", selected.clone()), None)
+        .await
+        .entity
+        .unwrap();
+    let selection = pb::DocumentSelection {
+        selection: Some(pb::document_selection::Selection::Document(
+            pb::DocumentRef {
+                id: reference(&hub).id,
+            },
+        )),
+    };
+    let mut owner = document("outage-referrer", selected);
+    let Some(pb::entity::Kind::Document(body)) = owner.kind.as_mut() else {
+        panic!("expected document");
+    };
+    body.related_content.push(pb::RelatedContent {
+        role: pb::RelatedContentRole::Example as i32,
+        document: Some(selection.clone()),
+        ..Default::default()
+    });
+    let owner = put(&mut client, owner, None).await.entity.unwrap();
+    let query = || pb::ListIncomingDocumentDeclarationsRequest {
+        document: Some(selection.clone()),
+        page_size: 1,
+        ..Default::default()
+    };
+    let healthy = client
+        .list_incoming_document_declarations(request(query(), ADMIN, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(healthy.declarations.len(), 1);
+    assert!(!healthy.incomplete);
+    let before = store
+        .get(
+            pb::EntityKind::Document,
+            reference(&owner).id.as_ref().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    let sequence = store.current_change_seq().await.unwrap();
+    authorizer
+        .fail_lens
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let failure = client
+        .list_incoming_document_declarations(request(query(), ADMIN, None))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code(), Code::Unavailable);
+    assert_eq!(failure.message(), "authorized scope outage");
+    let mut changed = owner.clone();
+    if let Some(pb::entity::Kind::Document(body)) = changed.kind.as_mut() {
+        body.title = Some(title("Must not publish during outage"));
+    }
+    let failure = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(changed),
+                if_match: before.etag.clone(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(failure.code(), Code::Unavailable);
+    assert_eq!(failure.message(), "authorized scope outage");
+    let after = store
+        .get(
+            pb::EntityKind::Document,
+            reference(&owner).id.as_ref().unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(after.entity, before.entity);
+    assert_eq!(after.etag, before.etag);
+    assert_eq!(store.current_change_seq().await.unwrap(), sequence);
+    authorizer
+        .fail_lens
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    let recovered = client
+        .list_incoming_document_declarations(request(query(), ADMIN, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(recovered.declarations, healthy.declarations);
+    assert!(!recovered.incomplete);
+}
+
 #[async_trait::async_trait]
 impl trogon_atlas_server::ownership::NamespaceAuthorizer for AmendmentFaultAuthorizer {
     async fn admits(
