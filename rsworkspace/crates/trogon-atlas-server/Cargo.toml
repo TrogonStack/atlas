@@ -45,7 +45,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true, features = ["v7"] }
-parking_lot = "0.12"
+parking_lot = "0.13"
 toml = "1.1"
 tower = { version = "0.5", features = ["timeout", "util"] }
 http = "1"
