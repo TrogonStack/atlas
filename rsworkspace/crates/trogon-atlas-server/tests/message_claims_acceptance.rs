@@ -1922,11 +1922,21 @@ async fn independent_domain_routes_support_exact_references_impact_and_guarded_r
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_native_owner_inventory_cannot_authorize_safe_delete() {
     use prost::Message;
-    let nats = trogon_atlas_testsupport::TestNats::start().await;
-    let config = trogon_atlas_store::NatsStoreConfig::new(
+    let nats = trogon_atlas_testsupport::shared().await;
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let mut config = trogon_atlas_store::NatsStoreConfig::new(
         &nats.url,
         trogon_atlas_store::StoreMetrics::default(),
     );
+    config.bucket = format!("claims-corrupt-{suffix}");
+    config.branches_bucket = format!("claims-corrupt-branches-{suffix}");
+    config.changesets_bucket = format!("claims-corrupt-changesets-{suffix}");
+    config.revisions_bucket = format!("claims-corrupt-revisions-{suffix}");
+    config.batches_bucket = format!("claims-corrupt-batches-{suffix}");
+    config.namespaces_bucket = format!("claims-corrupt-namespaces-{suffix}");
+    config.lease_bucket = format!("claims-corrupt-lease-{suffix}");
+    config.stream = format!("CLAIMS_CORRUPT_{}", suffix.to_uppercase());
+    config.subject_root = format!("claims.corrupt.{suffix}");
     let bucket = config.bucket.clone();
     let store = Arc::new(
         trogon_atlas_store::NatsStore::connect_with(config)

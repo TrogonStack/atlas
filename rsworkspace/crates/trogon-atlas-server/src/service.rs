@@ -8467,6 +8467,21 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         };
 
+        if !matches!(
+            resolution,
+            pb::resolve_branch_entry_request::Resolution::TakeMerged
+        ) {
+            if let Err(status) = self
+                .validate_claim_resolution(&req.name, kind, &id, take_theirs, &vis)
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        }
+
         // Taking the merge is "keep ours" with a different `ours`: write the
         // merged entity onto the branch first, then let the existing rebase
         // carry `base`/`base_etag` forward so the conflict clears. Both steps

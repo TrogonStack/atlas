@@ -99,6 +99,59 @@ fn is_catalog(entity: &pb::Entity) -> bool {
 }
 
 impl EventModelServiceImpl {
+    pub(super) async fn validate_claim_resolution(
+        &self,
+        branch: &str,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        take_theirs: bool,
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        if !matches!(
+            kind,
+            pb::EntityKind::Component | pb::EntityKind::ExternalSystem | pb::EntityKind::Domain
+        ) {
+            return Ok(());
+        }
+        let delta = self
+            .store
+            .list_branch_deltas(branch)
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .find(|d| d.kind == kind && &d.id == id)
+            .ok_or_else(|| Status::not_found("branch entry not found"))?;
+        let baseline = match self.store.get(kind, id, None).await {
+            Ok(row) => Some(row.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(error) => return Err(store_err(error)),
+        };
+        let (selected, discarded) = if take_theirs {
+            (baseline.as_ref(), delta.ours.as_ref())
+        } else {
+            (delta.ours.as_ref(), baseline.as_ref())
+        };
+        let Some(selected) = selected else {
+            return Ok(());
+        };
+        if trogon_atlas_core::message_claims::declarations(selected).is_none() {
+            return Ok(());
+        }
+        let restored = trogon_atlas_core::connection_persistence::prepare_resolution(
+            delta.base.as_ref(),
+            discarded,
+            selected,
+        )
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        self.validate_architecture_selection(
+            &restored,
+            delta.ours.as_ref().unwrap_or(selected),
+            branch,
+            vis,
+        )
+        .await
+    }
+
     pub(super) async fn validate_architecture_selection(
         &self,
         entity: &pb::Entity,

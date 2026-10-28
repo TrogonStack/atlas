@@ -157,7 +157,7 @@ impl EventModelServiceImpl {
         let mut world = HashMap::new();
         let mut budget = CatalogBudget::default();
         for row in &rows {
-            budget.row(&row.entity)?;
+            budget.directory_owner(&row.entity)?;
             world.insert(
                 pb::EntityKey::new(entity_kind(&row.entity)?, entity_id(&row.entity)?),
                 Some(row.clone()),

@@ -65,14 +65,7 @@ pub(crate) fn native_targets(
         if let Some(schema) =
             claims::native_schema_target(owner, s, spec).map_err(|_| unavailable())?
         {
-            if s.selectors.iter().any(|s| {
-                matches!(
-                    s.selector,
-                    Some(pb::claim_field_selector::Selector::Path(_))
-                )
-            }) {
-                targets.push((pb::EntityKind::Schema, schema.id.ok_or_else(unavailable)?));
-            }
+            targets.push((pb::EntityKind::Schema, schema.id.ok_or_else(unavailable)?));
         }
     }
     Ok(targets)
@@ -111,10 +104,18 @@ pub(crate) fn validate(
             .and_then(|o| o.id.as_ref())
             .and_then(|id| context.find(pb::EntityKind::Specification, id))
             .ok_or_else(unavailable)?;
-        let schema = claims::native_schema_target(owner, s, spec)
-            .map_err(|_| unavailable())?
-            .and_then(|s| s.id)
-            .and_then(|id| context.find(pb::EntityKind::Schema, &id));
+        let schema =
+            match claims::native_schema_target(owner, s, spec).map_err(|_| unavailable())? {
+                Some(target) => Some(
+                    context
+                        .find(
+                            pb::EntityKind::Schema,
+                            target.id.as_ref().ok_or_else(unavailable)?,
+                        )
+                        .ok_or_else(unavailable)?,
+                ),
+                None => None,
+            };
         claims::validate_field_selection(owner, s, spec, schema).map_err(|_| unavailable())?;
     }
     Ok(())

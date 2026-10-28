@@ -20,25 +20,36 @@ use crate::{conv::store_err, metrics::ServerMetrics};
 pub struct ReverseIndex {
     pub by_target: HashMap<pb::EntityKey, Vec<pb::Reference>>,
     responsibility_occurrences: usize,
+    inventory_error: Option<Status>,
 }
 
 impl ReverseIndex {
     #[must_use]
     pub fn build(all: &[StoredEntity]) -> Self {
-        Self::build_counted(all, responsibility_occurrence_count(all))
+        match responsibility_occurrence_count(all) {
+            Ok(count) => Self::build_counted(all, count, None),
+            Err(error) => Self::build_counted(all, 0, Some(error)),
+        }
     }
 
     pub(crate) fn build_discovery(all: &[StoredEntity]) -> Result<Self, Status> {
-        let occurrences = responsibility_occurrence_count(all);
+        let occurrences = responsibility_occurrence_count(all)?;
         check_responsibility_occurrence_count(occurrences)?;
-        Ok(Self::build_counted(all, occurrences))
+        Ok(Self::build_counted(all, occurrences, None))
     }
 
     pub(crate) fn check_discovery_budget(&self) -> Result<(), Status> {
+        if let Some(error) = &self.inventory_error {
+            return Err(error.clone());
+        }
         check_responsibility_occurrence_count(self.responsibility_occurrences)
     }
 
-    fn build_counted(all: &[StoredEntity], responsibility_occurrences: usize) -> Self {
+    fn build_counted(
+        all: &[StoredEntity],
+        responsibility_occurrences: usize,
+        inventory_error: Option<Status>,
+    ) -> Self {
         // Known keys let untyped Storyboard slice refs resolve the same way
         // `closure()` does: probe CommandSlice / ReadModelSlice / AutomationSlice.
         let known: HashSet<pb::EntityKey> = all
@@ -96,6 +107,7 @@ impl ReverseIndex {
         Self {
             by_target,
             responsibility_occurrences,
+            inventory_error,
         }
     }
 
@@ -108,7 +120,7 @@ impl ReverseIndex {
     }
 }
 
-fn responsibility_occurrence_count(all: &[StoredEntity]) -> usize {
+fn responsibility_occurrence_count(all: &[StoredEntity]) -> Result<usize, Status> {
     let mut seen = HashSet::new();
     all.iter()
         .filter_map(|stored| {
@@ -129,9 +141,9 @@ fn responsibility_occurrence_count(all: &[StoredEntity]) -> usize {
             }
             let key = pb::EntityKey::new(ref_entity_kind(entity)?, ref_entity_id(entity)?);
             seen.insert(key)
-                .then(|| crate::decision_document_resources::occurrence_count(entity))
+                .then(|| crate::decision_document_resources::checked_occurrence_count(entity))
         })
-        .fold(0, usize::saturating_add)
+        .try_fold(0_usize, |total, count| Ok(total.saturating_add(count?)))
 }
 
 fn check_responsibility_occurrence_count(count: usize) -> Result<(), Status> {
@@ -144,7 +156,7 @@ fn check_responsibility_occurrence_count(count: usize) -> Result<(), Status> {
 }
 
 pub(crate) fn validate_responsibility_discovery_budget(all: &[StoredEntity]) -> Result<(), Status> {
-    check_responsibility_occurrence_count(responsibility_occurrence_count(all))
+    check_responsibility_occurrence_count(responsibility_occurrence_count(all)?)
 }
 
 /// The live type library that owns each tenant message, so an Event,
@@ -558,8 +570,11 @@ pub fn closure(
             }
             continue;
         };
-        responsibility_occurrences = responsibility_occurrences
-            .saturating_add(crate::decision_document_resources::occurrence_count(entity));
+        let Ok(count) = crate::decision_document_resources::checked_occurrence_count(entity) else {
+            truncated = true;
+            break;
+        };
+        responsibility_occurrences = responsibility_occurrences.saturating_add(count);
         if check_responsibility_occurrence_count(responsibility_occurrences).is_err() {
             truncated = true;
             break;

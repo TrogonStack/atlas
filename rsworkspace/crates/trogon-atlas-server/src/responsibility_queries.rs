@@ -9,7 +9,7 @@ use super::{
     entity_id, entity_kind, pb, store_err, EventModelServiceImpl, Lens, StoredEntity, Visibility,
 };
 use crate::{
-    decision_document_resources::occurrence_count as occurrences,
+    decision_document_resources::checked_occurrence_count as occurrences,
     responsibility_resources::{
         assignments, selected_endpoints, subject_owner, MAX_RESPONSIBILITY_OCCURRENCES,
     },
@@ -57,7 +57,7 @@ impl ResponsibilityQuery {
             ));
         }
         if self.examined_owners.insert(key) {
-            self.examine(occurrences(entity))?;
+            self.examine(occurrences(entity)?)?;
         }
         Ok(())
     }
@@ -291,11 +291,20 @@ impl EventModelServiceImpl {
         };
         rows.sort_by_key(|row| row.entity.encode_to_vec());
         let mut world = World::new();
+        let mut resource_rows = HashSet::new();
         for row in &rows {
-            world.insert(
-                pb::EntityKey::new(entity_kind(&row.entity)?, entity_id(&row.entity)?),
-                Some(row.clone()),
-            );
+            let key = pb::EntityKey::new(entity_kind(&row.entity)?, entity_id(&row.entity)?);
+            if crate::validation::architecture_resources::is_resource(&row.entity)
+                || matches!(row.entity.kind, Some(pb::entity::Kind::Schema(_)))
+            {
+                resource_rows.insert(key.clone());
+            }
+            world.insert(key, Some(row.clone()));
+        }
+        if resource_rows.len() > 5_000 {
+            return Err(Status::resource_exhausted(
+                "responsibility resource budget exceeded",
+            ));
         }
         Ok(ResponsibilityQuery {
             world,
@@ -304,7 +313,7 @@ impl EventModelServiceImpl {
             branch: branch.map(str::to_owned),
             examined: 0,
             examined_owners: HashSet::new(),
-            resource_rows: HashSet::new(),
+            resource_rows,
             output: 0,
             subjects: Vec::new(),
             claim_budget: crate::decision_document_resources::CatalogBudget::default(),
