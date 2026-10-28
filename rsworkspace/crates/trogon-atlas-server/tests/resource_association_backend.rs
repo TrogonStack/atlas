@@ -731,3 +731,298 @@ async fn hidden_and_missing_storage_targets_fail_identically() {
     assert_eq!(hidden.message(), missing.message());
     assert_ne!(hidden.code(), Code::Ok);
 }
+
+async fn outgoing(client: &mut Client, kind: pb::EntityKind, slug: &str) -> Vec<pb::Reference> {
+    client
+        .get_outgoing_references(request(
+            pb::GetReferencesRequest {
+                kind: kind as i32,
+                id: Some(id(slug)),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .references
+}
+async fn incoming(client: &mut Client, kind: pb::EntityKind, slug: &str) -> Vec<pb::Reference> {
+    client
+        .get_incoming_references(request(
+            pb::GetReferencesRequest {
+                kind: kind as i32,
+                id: Some(id(slug)),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .references
+}
+async fn delete_if_unreferenced(
+    client: &mut Client,
+    kind: pb::EntityKind,
+    slug: &str,
+) -> Result<(), tonic::Status> {
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: kind as i32,
+                id: Some(id(slug)),
+                mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .map(|_| ())
+}
+async fn retarget(
+    client: &mut Client,
+    kind: pb::EntityKind,
+    from: &str,
+    to: &str,
+    filter: pb::EntityKind,
+) -> u32 {
+    client
+        .retarget_references(request(
+            pb::RetargetReferencesRequest {
+                from: Some(pb::EntityRef {
+                    kind: kind as i32,
+                    id: Some(id(from)),
+                }),
+                to: Some(pb::EntityRef {
+                    kind: kind as i32,
+                    id: Some(id(to)),
+                }),
+                filter_kinds: vec![filter as i32],
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .rewritten
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn references_carry_occurrence_ids_and_guard_delete_and_retarget() {
+    let mut client = client().await;
+    let (_, _, auto) = anchors(&mut client).await;
+    let pb::entity::Kind::AutomationSlice(slice) = auto.kind.as_ref().unwrap() else {
+        panic!()
+    };
+    let observation = connection(&auto, slice.source_read_models[0].connection_id.clone());
+    channel(&mut client, "plain", &observation, None, &[], vec![]).await;
+    channel(&mut client, "plain-two", &observation, None, &[], vec![]).await;
+    let routes = pb::ChannelLinkKind::RoutesTo;
+    let hub = channel(
+        &mut client,
+        "hub",
+        &observation,
+        None,
+        &[],
+        vec![
+            link(pb::ChannelLinkKind::Composes, "plain", &[]),
+            link(routes, "plain", &[]),
+        ],
+    )
+    .await;
+    let links = channel_value(&hub).links;
+    let refs = outgoing(&mut client, pb::EntityKind::Channel, "hub").await;
+    for (index, stored) in links.iter().enumerate() {
+        let field = format!("links[{index}].target");
+        let hits: Vec<_> = refs.iter().filter(|r| r.from_field == field).collect();
+        assert_eq!(hits.len(), 1, "{field}");
+        assert_eq!(hits[0].connection_id, stored.connection_id, "{field}");
+        assert_eq!(hits[0].to.as_ref().unwrap().id, Some(id("plain")));
+    }
+    let seen = incoming(&mut client, pb::EntityKind::Channel, "plain").await;
+    let from_hub: Vec<_> = seen
+        .iter()
+        .filter(|r| r.from.as_ref().and_then(|f| f.id.as_ref()) == Some(&id("hub")))
+        .collect();
+    assert_eq!(from_hub.len(), 2);
+    assert!(from_hub
+        .iter()
+        .all(|r| links.iter().any(|l| l.connection_id == r.connection_id)));
+    assert_eq!(
+        delete_if_unreferenced(&mut client, pb::EntityKind::Channel, "plain")
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(
+        retarget(
+            &mut client,
+            pb::EntityKind::Channel,
+            "plain",
+            "plain-two",
+            pb::EntityKind::Channel
+        )
+        .await,
+        1
+    );
+    let moved = channel_value(&saved_target(&mut client, "hub").await).links;
+    for (before, after) in links.iter().zip(&moved) {
+        assert_eq!(after.target.as_ref().unwrap().id, Some(id("plain-two")));
+        assert_ne!(after.connection_id, before.connection_id);
+    }
+    delete_if_unreferenced(&mut client, pb::EntityKind::Channel, "plain")
+        .await
+        .unwrap();
+
+    let storage = data_store(
+        &mut client,
+        "storage",
+        pb::data_store::AccessMode::Read,
+        &["result"],
+    )
+    .await;
+    data_store(
+        &mut client,
+        "other-store",
+        pb::data_store::AccessMode::Read,
+        &["other"],
+    )
+    .await;
+    let read = pb::StorageDirection::Read;
+    let saved = put(
+        &mut client,
+        owner_kind(
+            pb::EntityKind::Component,
+            "svc",
+            vec![claim(&storage, read, None), claim(&storage, read, Some(0))],
+        ),
+    )
+    .await;
+    let claims = claims_of(&saved);
+    let refs = outgoing(&mut client, pb::EntityKind::Component, "svc").await;
+    for (index, field) in [
+        (0, "storage_claims[0].store"),
+        (1, "storage_claims[1].store"),
+        (1, "storage_claims[1].attachment.owner"),
+    ] {
+        let hits: Vec<_> = refs.iter().filter(|r| r.from_field == field).collect();
+        assert_eq!(hits.len(), 1, "{field}");
+        assert_eq!(
+            hits[0].connection_id, claims[index].connection_id,
+            "{field}"
+        );
+    }
+    assert_eq!(
+        delete_if_unreferenced(&mut client, pb::EntityKind::DataStore, "storage")
+            .await
+            .unwrap_err()
+            .code(),
+        Code::FailedPrecondition
+    );
+    assert_eq!(
+        retarget(
+            &mut client,
+            pb::EntityKind::DataStore,
+            "storage",
+            "other-store",
+            pb::EntityKind::Component
+        )
+        .await,
+        1
+    );
+    let after = claims_of(&put_get(&mut client, pb::EntityKind::Component, "svc").await);
+    assert_eq!(after[0].store.as_ref().unwrap().id, Some(id("other-store")));
+    assert_ne!(after[0].connection_id, claims[0].connection_id);
+    assert_eq!(after[1], claims[1], "attachment claim stays pinned");
+}
+async fn put_get(client: &mut Client, kind: pb::EntityKind, slug: &str) -> pb::Entity {
+    client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(id(slug)),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mixed_owner_inventories_share_the_occurrence_budget_across_links_and_claims() {
+    let mut client = client().await;
+    let (_, _, auto) = anchors(&mut client).await;
+    let pb::entity::Kind::AutomationSlice(slice) = auto.kind.as_ref().unwrap() else {
+        panic!()
+    };
+    let observation = connection(&auto, slice.source_read_models[0].connection_id.clone());
+    channel(&mut client, "plain", &observation, None, &[], vec![]).await;
+    let storage = data_store(
+        &mut client,
+        "storage",
+        pb::data_store::AccessMode::Read,
+        &["result"],
+    )
+    .await;
+    let links = vec![link(pb::ChannelLinkKind::RoutesTo, "plain", &[]); 1024];
+    let claims = vec![claim(&storage, pb::StorageDirection::Read, None); 1000];
+    for index in 0..9 {
+        if index % 2 == 0 {
+            channel(
+                &mut client,
+                &format!("bulk-{index}"),
+                &observation,
+                None,
+                &[],
+                links.clone(),
+            )
+            .await;
+        } else {
+            put(
+                &mut client,
+                owner_kind(
+                    pb::EntityKind::DataProduct,
+                    &format!("bulk-{index}"),
+                    claims.clone(),
+                ),
+            )
+            .await;
+        }
+    }
+    let within = incoming(&mut client, pb::EntityKind::DataStore, "storage").await;
+    assert_eq!(within.len(), 4 * 1000);
+    put(
+        &mut client,
+        owner_kind(pb::EntityKind::Component, "bulk-last", claims.clone()),
+    )
+    .await;
+    for (kind, slug) in [
+        (pb::EntityKind::DataStore, "storage"),
+        (pb::EntityKind::Channel, "plain"),
+    ] {
+        let error = client
+            .get_incoming_references(request(
+                pb::GetReferencesRequest {
+                    kind: kind as i32,
+                    id: Some(id(slug)),
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::ResourceExhausted, "{slug}: {error}");
+    }
+}
