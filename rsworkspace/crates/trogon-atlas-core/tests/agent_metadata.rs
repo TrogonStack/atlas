@@ -25,3 +25,17 @@ fn lifecycle_calendar_date_and_known_wire_are_validated() {
     }
     assert!(validate(&owner(vec![255])).is_err());
 }
+
+#[test]
+fn values_and_resource_occurrences_are_native() {
+    use trogon_atlas_proto::{AgentAnnotation, AgentModel, ResourceGroupsAnnotation, ResourceGroup, ResourceGroupItem};
+    use trogon_atlas_core::connections::{assign_connection_ids, connection_occurrences};
+    let owner = |name, bytes| Entity { kind: Some(entity::Kind::Component(Component { metadata: vec![annotation(name, bytes)], ..Default::default() })), ..Default::default() };
+    let empty_model = AgentAnnotation { model: Some(AgentModel::default()), ..Default::default() };
+    assert!(validate(&owner("trogonatlas.eventmodel.v1alpha1.AgentAnnotation", empty_model.encode_to_vec())).is_err());
+    let groups = ResourceGroupsAnnotation { groups: vec![ResourceGroup { items: vec![ResourceGroupItem::default()], ..Default::default() }] };
+    let mut entity = owner("trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",groups.encode_to_vec());
+    assert!(validate(&entity).is_err());
+    assert_eq!(assign_connection_ids(&mut entity).unwrap(),2);
+    assert_eq!(connection_occurrences(&entity).unwrap().len(),2);
+}
