@@ -40,6 +40,7 @@ Look up exact behavior:
 Resource contracts and acceptance:
 
 - [Architecture resource coverage](reference/architecture-resource-coverage.md)
+- [EventCatalog coverage and gaps](reference/eventcatalog-coverage.md)
 - [Domain-scoped listing](reference/domain-scoped-listing.md)
 - [System relationship contracts](reference/system-relationship-contracts.md)
 - [System relationship acceptance requirements](reference/system-relationship-acceptance.md)

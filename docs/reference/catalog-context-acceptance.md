@@ -1,9 +1,6 @@
 # Catalog context acceptance specification
 
-Status: partial implementation. Decision calendar dates have executable core,
-manifest and real Store/authenticated gRPC evidence. All other proposed
-extensions below remain unimplemented in this worktree. The complete native
-slice is not ready for integration. The associated
+Status: proposed tests, not execution evidence. The associated
 [contract](catalog-context-contracts.md) is not implemented by this document.
 Existing Decision/Document support has executable coverage in
 [core tests](../../rsworkspace/crates/trogon-atlas-core/tests/decision_document.rs),
@@ -67,33 +64,3 @@ Unresolved design decisions are the contract's calendar-date precision, binary
 transport, category representation and amendment-check cost objections. Typed
 diagram topology and richer selectors require their separate contracts. No test
 here proves topology, source-file fidelity, approval authority or execution.
-
-## Calendar-date implementation evidence
-
-Decision fields authored_on (16) and decided_on (17) preserve presence and use
-the shared core AuthoredDate validator. Invalid Gregorian dates and reversed
-ordering reject. Future dates do not infer status. The generic CalendarDate
-wrapper lives in the leaf type package to avoid a package cycle; its descriptor
-move from annotation is acknowledged against the prepared unpublished baseline.
-Field numbers and encoded nested message shape remain stable. Parent integration
-must reconcile this relocation with concurrent metadata work. Revision 18 remains
-unchanged because the combined contract is unpublished.
-
-Executable coverage:
-
-- Core decision_document: decision_calendar_dates_are_optional_gregorian_and_ordered
-  and decision_dates_remain_native_under_source_ownership.
-- Client decision_document_manifest: native_catalog_manifests_preserve_bytes_pins_local_ids_and_authored_order
-  includes authoredOn and decidedOn through schema validation and export/reapply.
-- Server decision_document_backend: catalog_dates_persist_and_invalid_dates_cannot_create_an_owner
-  uses authenticated gRPC and the real NATS Store, asserts exact dates on read,
-  and verifies invalid writes leave no owner.
-
-The public core date test failed before implementation because an empty date
-was accepted. It passed after admission used AuthoredDate. Source initial-create
-guards reject either date under every policy; WholeOwner extraction rejects
-current or proposed dates including clears. TITLE updates preserve native dates.
-
-Remaining acceptance obligations are the other proposed rows and their required
-transport, lifecycle, authorization, paging, budget, race and atomicity evidence.
-CLI/MCP/Studio date-specific acceptance has not been established.
