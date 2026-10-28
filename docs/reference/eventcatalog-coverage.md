@@ -38,7 +38,7 @@ kind. Existing representations and proposed extensions remain distinct.
 | Events, commands and queries | **Native analogue.** Native behavioral primitives and selectable Specification messages exist. | **Contract pending.** A message kind alone does not establish a domain Event, local Command or ReadModel. Query messages are requests, not implicit response schemas. |
 | Services | **Partial.** Component represents a deployable implementation unit, curated members, directed relationships and communication intent. | Define authored entities, storage access, flows and domain/system memberships explicitly. Do not derive every source association from namespace placement. |
 | Systems and containers of resources | **Partial.** Component membership and Component/ExternalSystem relationships exist. | Higher-level system grouping, source system membership, internal/external scope mapping and system-level actor declarations need explicit disposition. ExternalSystem has no members field. |
-| Agents | **Partial.** Component-only AgentAnnotation retains independently optional model provider/name/version and ordered descriptive tools; presence marks a declared agent. | Complete native admission, reference authorization, Source isolation and connected-client acceptance. The annotation grants no execution privileges or provider connectivity. |
+| Agents | **Native analogue.** Component-only AgentAnnotation retains independently optional model provider/name/version and ordered descriptive tools; presence marks a declared agent. | [Native acceptance](agent-metadata-acceptance.md) covers admission, reference authorization, Source isolation and connected clients. The annotation grants no execution privileges or provider connectivity. |
 | Domains and subdomains | **Partial.** Domain, Subdomain, BoundedContext realizations and exact domain-scoped queries exist. | Arbitrary authored domain nesting and shared versioned resource memberships are not equivalent to the native strategic hierarchy or namespace-derived membership. |
 | Sends, receives and triggers | **Partial.** Owner-local SEND/RECEIVE intent selects exact Specification messages and descriptive conditions. | Source domain-level claims, field selections, groups, channel bindings and trigger targets still require native contracts. Native declarations do not establish trigger execution or message-to-behavior equivalence. |
 | Channels | **Native analogue.** Channel has protocols, address parameters, delivery declarations and bindings to actual observations. | **Contract pending.** Account for source nested/composed channel references, routes and message-pointer parameter bindings. Do not silently substitute observation bindings for every source relationship. |
@@ -63,7 +63,7 @@ the item can be closed.
 
 - [ ] Define higher-level system grouping, authored domain/system/service
   memberships and system-level actor relationships.
-- [ ] Complete agent model and tool metadata across native admission, Source
+- [x] Complete agent model and tool metadata across native admission, Source
   isolation and connected-client acceptance.
 - [ ] Define business identifiers, aggregate intent and entity/property
   relationships.
@@ -72,7 +72,7 @@ the item can be closed.
 - [ ] Define communication relationships for domain claims, triggers, fields, groups
   and channel bindings without inferring execution.
 - [ ] Complete channel composition, storage access and DataProduct relationships.
-- [ ] Define remaining shared metadata, including lifecycle dates, draft messages,
+- [x] Define remaining shared metadata, including lifecycle dates, draft messages,
   badges, resource groups and reference semantics.
 - [ ] Define remaining ADR, vocabulary, documentation, diagram and example fields.
 
@@ -82,12 +82,13 @@ Person, Decision or Document kinds.
 
 ## Delivery status
 
-Implementation work is active. Proposed contracts below define acceptance
-obligations; they do not close the checklist above.
+Implementation work is active. Each completed entry is supported by its native
+contract and acceptance evidence. Proposed or isolated work does not close the
+remaining entries.
 
 | Workstream | Contract and acceptance | Verified boundary and remaining work |
 | --- | --- | --- |
-| Agents and shared metadata | [Contract](agent-metadata-contracts.md), [acceptance](agent-metadata-acceptance.md) | Schema/core validation, checked backend references, group occurrence provenance and Source guards are implemented. Studio, manifest and MCP regressions pass. The same-batch tenant-type digest repair is integrated; the unchanged [CLI branch tenant-metadata regression](../../rsworkspace/crates/trogon-atlas-cli/tests/agent_metadata_cli_integration.rs) passes independently on the repair revision. Authenticated lifecycle acceptance passes there. Combined parent manifest, CLI and MCP targets pass after integration; requirement-by-requirement closure remains open. |
+| Agents and shared metadata | [Contract](agent-metadata-contracts.md), [acceptance](agent-metadata-acceptance.md) | **Complete within the native contract.** Parent verification and requirement review cover schema/core admission, nested scope, exact limits, references and provenance, identity and branch lifecycle, authorization, Source isolation, tenant descriptors, CLI/MCP roundtrips and Studio codec/component inspection. The public aggregate boundary includes stored occurrence IDs and verifies atomic refusal with unchanged reference indexes. No deployed-browser or execution capability is claimed. |
 | Business data | [Contract](business-data-contracts.md), [acceptance](business-data-acceptance.md) | A local implementation checkpoint covers Schema declarations, property paths, references and Source preservation. Integration, writer-floor verification and complete authenticated lifecycle acceptance remain pending. |
 | Flow and design topology | [Contract](design-topology-contracts.md), [acceptance](design-topology-acceptance.md) | An isolated implementation covers schema, core, server and client surfaces. Independent identity/admission review, integration and the remaining Source, restoration and budget acceptance remain pending. |
 | Communication and resource associations | [Contract](resource-association-contracts.md), [acceptance](resource-association-acceptance.md) | Isolated implementation is active for message claims, channel/storage relationships and product/Specification associations. Authored Domain claims and independent declarations must not be replaced by derived views. Integration and complete acceptance remain pending. |
