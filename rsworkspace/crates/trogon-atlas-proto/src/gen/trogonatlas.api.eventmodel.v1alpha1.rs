@@ -495,7 +495,7 @@ pub struct CatalogDeclaration {
     pub field: ::prost::alloc::string::String,
     #[prost(enumeration="CatalogResolutionState", tag="3")]
     pub state: i32,
-    #[prost(oneof="catalog_declaration::Declaration", tags="4, 5, 6, 7, 8")]
+    #[prost(oneof="catalog_declaration::Declaration", tags="4, 5, 6, 7, 8, 9, 10")]
     pub declaration: ::core::option::Option<catalog_declaration::Declaration>,
 }
 /// Nested message and enum types in `CatalogDeclaration`.
@@ -512,6 +512,10 @@ pub mod catalog_declaration {
         Supporting(super::super::super::super::eventmodel::v1alpha1::SupportingDocument),
         #[prost(message, tag="8")]
         Navigation(super::super::super::super::eventmodel::v1alpha1::DocumentNavigation),
+        #[prost(message, tag="9")]
+        Maker(super::super::super::super::eventmodel::v1alpha1::DecisionMaker),
+        #[prost(message, tag="10")]
+        Amendment(super::super::super::super::eventmodel::v1alpha1::DecisionAmendment),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -632,6 +636,30 @@ pub struct ListIncomingDocumentDeclarationsResponse {
     #[prost(message, repeated, tag="4")]
     pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListDecisionAmendmentsRequest {
+    #[prost(message, optional, tag="1")]
+    pub decision: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DecisionRef>,
+    #[prost(enumeration="DecisionAmendmentDirection", tag="2")]
+    pub direction: i32,
+    #[prost(uint32, tag="3")]
+    pub page_size: u32,
+    #[prost(string, tag="4")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListDecisionAmendmentsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(string, tag="3")]
+    pub next_page_token: ::prost::alloc::string::String,
+    #[prost(bool, tag="4")]
+    pub incomplete: bool,
+    #[prost(enumeration="CatalogResolutionState", tag="5")]
+    pub decision_state: i32,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum CatalogResolutionState {
@@ -660,6 +688,35 @@ impl CatalogResolutionState {
             "CATALOG_RESOLUTION_STATE_RESOLVED" => Some(Self::Resolved),
             "CATALOG_RESOLUTION_STATE_UNAVAILABLE" => Some(Self::Unavailable),
             "CATALOG_RESOLUTION_STATE_UNRESOLVED" => Some(Self::Unresolved),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DecisionAmendmentDirection {
+    Unspecified = 0,
+    Outgoing = 1,
+    Incoming = 2,
+}
+impl DecisionAmendmentDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DECISION_AMENDMENT_DIRECTION_UNSPECIFIED",
+            Self::Outgoing => "DECISION_AMENDMENT_DIRECTION_OUTGOING",
+            Self::Incoming => "DECISION_AMENDMENT_DIRECTION_INCOMING",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DECISION_AMENDMENT_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "DECISION_AMENDMENT_DIRECTION_OUTGOING" => Some(Self::Outgoing),
+            "DECISION_AMENDMENT_DIRECTION_INCOMING" => Some(Self::Incoming),
             _ => None,
         }
     }

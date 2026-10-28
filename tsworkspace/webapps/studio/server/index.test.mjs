@@ -189,7 +189,7 @@ vi.mock('protobufjs', async (importOriginal) => {
     load: () => Promise.resolve(fakeRoot),
     lookupType: (name) => {
       if (/\.(GetSource|ListSource)/.test(name)) return responsibilityRoot.lookupType(name);
-      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations)Request$/.test(name)) return responsibilityRoot.lookupType(name);
+      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|ListDecisionAmendments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations)Request$/.test(name)) return responsibilityRoot.lookupType(name);
       return { decode: () => ({}), toObject: () => ({}) };
     },
     lookupEnum: (name) => {
@@ -2624,6 +2624,7 @@ describe('catalog strict gateway serializer boundary', () => {
   const document = { anchor: { document: { id }, ownerUid: 'incarnation', anchorId: { value: 'anchor-b' }, expectedDigest: { sha256: 'a'.repeat(64) } } };
   const subject = { entity: { kind: 'ENTITY_KIND_EVENT', id } };
   it.each([
+    ...[null, '1', -1, 1.5, 4294967296].map((pageSize) => ['decision-amendments', 'ListDecisionAmendments', { decision: { id }, direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING', pageSize }]),
     ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'TYPO' }],
     ['subject-decisions', 'ListSubjectDecisions', { subject, status: 991 }],
     ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: 'false' }],
@@ -2644,6 +2645,7 @@ describe('catalog strict gateway serializer boundary', () => {
   });
   it.each([
     ...['ENTITY_KIND_COMPONENT', 'ENTITY_KIND_EXTERNAL_SYSTEM'].flatMap((kind) => ['subject-decisions', 'subject-documents'].map((route) => [route, route === 'subject-decisions' ? 'ListSubjectDecisions' : 'ListSubjectDocuments', { subject: { connection: { owner: { kind, id }, ownerUid: 'opaque-owner-UID', id: { value: 'occurrence-b' } } } }])),
+    ['decision-amendments', 'ListDecisionAmendments', { decision: { id }, direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING', pageSize: 1, pageToken: 'opaque-token' }],
     ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'DECISION_STATUS_ACCEPTED' }],
     ['subject-documents', 'ListSubjectDocuments', { subject }],
     ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: false }],

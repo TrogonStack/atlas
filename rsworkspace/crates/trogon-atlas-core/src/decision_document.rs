@@ -386,6 +386,36 @@ fn validate_decision(value: &pb::Decision) -> Result<()> {
             validate_catalog_text(related.doc.as_ref())?;
         }
     }
+    require(
+        value.decision_makers.len() <= 128 && value.amends.len() <= 128,
+        "decision relationship limit exceeded",
+    )?;
+    seen.clear();
+    for maker in &value.decision_makers {
+        let reference = decision_maker_ref(maker)?;
+        require(
+            seen.insert(reference.encode_to_vec()),
+            "duplicate decision maker",
+        )?;
+        if maker.doc.is_some() {
+            validate_catalog_text(maker.doc.as_ref())?;
+        }
+    }
+    seen.clear();
+    for amendment in &value.amends {
+        let target = amendment
+            .decision
+            .as_ref()
+            .ok_or_else(|| CatalogError("amended decision required".into()))?;
+        exact(target.id.as_ref())?;
+        require(
+            target.id != value.id && seen.insert(target.encode_to_vec()),
+            "self or duplicate amendment",
+        )?;
+        if amendment.doc.is_some() {
+            validate_catalog_text(amendment.doc.as_ref())?;
+        }
+    }
     validate_selection_list(
         value
             .documents
@@ -396,6 +426,8 @@ fn validate_decision(value: &pb::Decision) -> Result<()> {
     )?;
     require(
         value.subjects.len()
+            + value.decision_makers.len()
+            + value.amends.len()
             + value.related_decisions.len()
             + value.documents.len()
             + usize::from(value.replaced_by.is_some())
@@ -727,4 +759,19 @@ pub(crate) fn restore_values(
 
 pub fn decorate_reference(entity: &Entity, reference: &mut pb::Reference) {
     crate::decision_document_refs::decorate_reference(entity, reference);
+}
+
+pub fn decision_maker_ref(maker: &pb::DecisionMaker) -> Result<pb::EntityRef> {
+    let (kind, id) = match &maker.assignee {
+        Some(pb::decision_maker::Assignee::Person(reference)) => {
+            (EntityKind::Person, &reference.id)
+        }
+        Some(pb::decision_maker::Assignee::Team(reference)) => (EntityKind::Team, &reference.id),
+        None => return Err(CatalogError("decision maker required".into())),
+    };
+    exact(id.as_ref())?;
+    Ok(pb::EntityRef {
+        kind: kind as i32,
+        id: id.clone(),
+    })
 }

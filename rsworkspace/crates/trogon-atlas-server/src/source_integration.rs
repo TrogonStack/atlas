@@ -879,7 +879,8 @@ fn native_relationships_only(
     ownership: &pb::SourceFieldOwnership,
 ) -> Result<(), Status> {
     let has_relationships = |entity: &pb::Entity| {
-        !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
+        matches!(&entity.kind, Some(pb::entity::Kind::Decision(value)) if value.authored_on.is_some() || value.decided_on.is_some() || !value.decision_makers.is_empty() || !value.amends.is_empty())
+            || !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
             || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
     };
     let whole_owner = matches!(
@@ -891,7 +892,7 @@ fn native_relationships_only(
             && (current.is_some_and(has_relationships) || incoming.is_some_and(has_relationships)))
     {
         return Err(Status::invalid_argument(
-            "architectural relationships and communications support native authoring only",
+            "selected extensions support native authoring only",
         ));
     }
     Ok(())
@@ -906,8 +907,14 @@ fn resolve_selection(selection: &pb::SourceSelection, entity: &pb::Entity) -> Re
             }
         }
         Selection::Connection(r) => {
-            trogon_atlas_core::connections::resolve_connection(entity, r)
+            let occurrence = trogon_atlas_core::connections::resolve_connection(entity, r)
                 .map_err(|_| conflict())?;
+            if occurrence.path.contains(".decision_makers[") || occurrence.path.contains(".amends[")
+            {
+                return Err(Status::invalid_argument(
+                    "decision makers and amendments support native authoring only",
+                ));
+            }
         }
         Selection::ContractMember(r) => {
             trogon_atlas_core::specification::resolve_member(entity, r).map_err(|_| conflict())?;

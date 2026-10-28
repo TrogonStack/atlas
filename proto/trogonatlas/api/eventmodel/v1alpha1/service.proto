@@ -1182,6 +1182,7 @@ service EventModelService {
 
   rpc ListSubjectDecisions(ListSubjectDecisionsRequest) returns (ListSubjectDecisionsResponse);
   rpc ListSubjectDocuments(ListSubjectDocumentsRequest) returns (ListSubjectDocumentsResponse);
+  rpc ListDecisionAmendments(ListDecisionAmendmentsRequest) returns (ListDecisionAmendmentsResponse);
   rpc GetDecisionDetail(GetDecisionDetailRequest) returns (GetDecisionDetailResponse);
   rpc GetDocumentDetail(GetDocumentDetailRequest) returns (GetDocumentDetailResponse);
   rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);

@@ -3250,6 +3250,28 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .map(Response::new)
     }
 
+    async fn list_decision_amendments(
+        &self,
+        req: Request<pb::ListDecisionAmendmentsRequest>,
+    ) -> Result<Response<pb::ListDecisionAmendmentsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        let caller = principal
+            .as_ref()
+            .map(|principal| format!("{principal:?}"))
+            .unwrap_or_default();
+        self.decision_amendments(req.into_inner(), branch.as_deref(), &vis, &caller)
+            .await
+            .map(Response::new)
+    }
+
     async fn get_decision_detail(
         &self,
         req: Request<pb::GetDecisionDetailRequest>,

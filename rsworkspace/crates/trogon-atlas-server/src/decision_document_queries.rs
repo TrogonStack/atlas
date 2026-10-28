@@ -370,6 +370,43 @@ impl EventModelServiceImpl {
         }
         match &row.entity.kind {
             Some(pb::entity::Kind::Decision(value)) => {
+                for (index, maker) in value.decision_makers.iter().enumerate() {
+                    let state =
+                        match trogon_atlas_core::decision_document::decision_maker_ref(maker) {
+                            Ok(reference) => {
+                                let (_, id) = exact(&reference)?;
+                                if !query.lens.admits(&id.namespace) {
+                                    State::Unavailable
+                                } else if self.catalog_read(query, &reference).await?.is_some() {
+                                    State::Resolved
+                                } else {
+                                    State::Unavailable
+                                }
+                            }
+                            Err(_) => State::Unresolved,
+                        };
+                    query.budget.output()?;
+                    declarations.push(pb::CatalogDeclaration {
+                        owner: Some(owner.clone()),
+                        field: format!("decision_makers[{index}]"),
+                        state: state as i32,
+                        declaration: Some(D::Maker(maker.clone())),
+                    });
+                }
+                for (index, amendment) in value.amends.iter().enumerate() {
+                    let state = if let Some(reference) = &amendment.decision {
+                        self.catalog_decision_state(query, reference, false).await?
+                    } else {
+                        State::Unresolved
+                    };
+                    query.budget.output()?;
+                    declarations.push(pb::CatalogDeclaration {
+                        owner: Some(owner.clone()),
+                        field: format!("amends[{index}].decision"),
+                        state: state as i32,
+                        declaration: Some(D::Amendment(amendment.clone())),
+                    });
+                }
                 if let Some(replacement) = &value.replaced_by {
                     let state = if let Some(reference) = &replacement.decision {
                         self.catalog_decision_state(query, reference, true).await?
@@ -695,6 +732,20 @@ impl EventModelServiceImpl {
                     )),
                 });
             }
+            for (index, amendment) in value.amends.iter().enumerate() {
+                if amendment.decision.as_ref() != Some(&selection) {
+                    continue;
+                }
+                query.budget.output()?;
+                declarations.push(pb::CatalogDeclaration {
+                    owner: Some(checked(&row)?),
+                    field: format!("amends[{index}].decision"),
+                    state: state as i32,
+                    declaration: Some(pb::catalog_declaration::Declaration::Amendment(
+                        amendment.clone(),
+                    )),
+                });
+            }
             for (index, related) in value.related_decisions.iter().enumerate() {
                 if related.decision.as_ref() != Some(&selection) {
                     continue;
@@ -778,6 +829,146 @@ impl EventModelServiceImpl {
             scope: Some(query.scope()?),
             incomplete: false,
             failures: Vec::new(),
+        })
+    }
+}
+
+impl EventModelServiceImpl {
+    pub(super) async fn decision_amendments(
+        &self,
+        req: pb::ListDecisionAmendmentsRequest,
+        branch: Option<&str>,
+        vis: &Visibility,
+        caller: &str,
+    ) -> Result<pb::ListDecisionAmendmentsResponse, Status> {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+        let _guard = self.lock_mutations().await;
+        let selection = req
+            .decision
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("decision required"))?;
+        let reference = decision_ref(selection)?;
+        let direction = pb::DecisionAmendmentDirection::try_from(req.direction)
+            .map_err(|_| Status::invalid_argument("unknown amendment direction"))?;
+        if direction == pb::DecisionAmendmentDirection::Unspecified || req.page_size > 500 {
+            return Err(Status::invalid_argument(
+                "direction and page_size outside bounds",
+            ));
+        }
+        let size = if req.page_size == 0 {
+            100
+        } else {
+            req.page_size as usize
+        };
+        if req.page_token.len() > 4096 {
+            return Err(Status::invalid_argument("invalid catalog page token"));
+        }
+        let mut query = self.catalog_query(branch, vis, true).await?;
+        let state = self
+            .catalog_decision_state(&mut query, selection, false)
+            .await?;
+        let mut matches = Vec::new();
+        if direction == pb::DecisionAmendmentDirection::Incoming || state == State::Resolved {
+            for row in query.rows.clone() {
+                let Some(pb::entity::Kind::Decision(value)) = &row.entity.kind else {
+                    continue;
+                };
+                if direction == pb::DecisionAmendmentDirection::Outgoing && value.id != reference.id
+                {
+                    continue;
+                }
+                for (index, amendment) in value.amends.iter().enumerate() {
+                    if direction == pb::DecisionAmendmentDirection::Incoming
+                        && amendment.decision.as_ref() != Some(selection)
+                    {
+                        continue;
+                    }
+                    let state = if let Some(target) = &amendment.decision {
+                        self.catalog_decision_state(&mut query, target, false)
+                            .await?
+                    } else {
+                        State::Unresolved
+                    };
+                    matches.push(pb::CatalogDeclaration {
+                        owner: Some(checked(&row)?),
+                        field: format!("amends[{index}].decision"),
+                        state: state as i32,
+                        declaration: Some(pb::catalog_declaration::Declaration::Amendment(
+                            amendment.clone(),
+                        )),
+                    });
+                }
+            }
+        }
+        matches.sort_by_key(|declaration| {
+            let owner = declaration.owner.as_ref().and_then(|o| o.owner.as_ref());
+            let id = owner.and_then(|r| r.id.as_ref());
+            let connection = match &declaration.declaration {
+                Some(pb::catalog_declaration::Declaration::Amendment(a)) => a
+                    .connection_id
+                    .as_ref()
+                    .map(|id| id.value.clone())
+                    .unwrap_or_default(),
+                _ => String::new(),
+            };
+            (
+                owner.map_or(0, |r| r.kind),
+                id.map(|id| id.namespace.clone()),
+                id.map(|id| id.slug.clone()),
+                id.map(|id| id.version),
+                connection,
+            )
+        });
+        let scope = query.scope()?;
+        let binding = (
+            caller,
+            branch,
+            req.direction,
+            selection.encode_to_vec(),
+            &scope.revision,
+        );
+        let digest = Sha256::digest(
+            serde_json::to_vec(&binding)
+                .map_err(|_| Status::internal("cannot encode page context"))?,
+        );
+        let context = URL_SAFE_NO_PAD.encode(digest);
+        let offset = if req.page_token.is_empty() {
+            0
+        } else {
+            let bytes = URL_SAFE_NO_PAD
+                .decode(&req.page_token)
+                .map_err(|_| Status::invalid_argument("invalid catalog page token"))?;
+            let (bound, offset): (String, usize) = serde_json::from_slice(&bytes)
+                .map_err(|_| Status::invalid_argument("invalid catalog page token"))?;
+            if bound != context || offset > matches.len() {
+                return Err(Status::invalid_argument(
+                    "stale or mismatched catalog page context",
+                ));
+            }
+            offset
+        };
+        let end = offset.saturating_add(size).min(matches.len());
+        let next_page_token = if end < matches.len() {
+            URL_SAFE_NO_PAD.encode(
+                serde_json::to_vec(&(context, end))
+                    .map_err(|_| Status::internal("cannot encode page token"))?,
+            )
+        } else {
+            String::new()
+        };
+        let declarations = matches[offset..end].to_vec();
+        for _ in &scope.visited {
+            query.budget.output()?;
+        }
+        for _ in &declarations {
+            query.budget.output()?;
+        }
+        Ok(pb::ListDecisionAmendmentsResponse {
+            declarations,
+            scope: Some(scope),
+            next_page_token,
+            incomplete: false,
+            decision_state: state as i32,
         })
     }
 }

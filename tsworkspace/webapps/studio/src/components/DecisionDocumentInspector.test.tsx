@@ -32,6 +32,7 @@ function entity(kind = 'document') {
 }
 beforeEach(() => {
   for (const method of [
+    'listDecisionAmendments',
     'getDecisionDetail',
     'getDocumentDetail',
     'listIncomingDecisionDeclarations',
@@ -165,4 +166,34 @@ describe('native catalog inspector', () => {
       expect(api.getDecisionDetail).toHaveBeenCalledWith({ id }, false, expect.objectContaining({ branch: 'review' })),
     );
   });
+});
+
+it('shows exact dated makers and paged amendments as inert backend evidence', async () => {
+  const decision = entity('decision');
+  decision.raw.authoredOn = { value: '2024-02-29' };
+  decision.raw.decidedOn = { value: '2024-03-01' };
+  decision.raw.decisionMakers = [
+    { person: { id }, connectionId: { value: 'maker-occurrence' }, doc: { value: '<script>never()</script>' } },
+  ];
+  decision.raw.amends = [{ decision: { id }, connectionId: { value: 'amend-occurrence' } }];
+  vi.mocked(api.listDecisionAmendments).mockResolvedValue({
+    scope: { revision: 'amend-snapshot' },
+    nextPageToken: 'opaque-page',
+    declarations: [{ amendment: decision.raw.amends }],
+  });
+  render(<DecisionDocumentInspector entity={decision} />);
+  await screen.findAllByText(/amend-snapshot/);
+  expect(screen.getAllByText(/2024-02-29/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/maker-occurrence/).length).toBeGreaterThan(0);
+  expect(document.querySelector('script')).toBeNull();
+  expect(screen.getAllByRole('button', { name: 'Next amendments page' })).toHaveLength(2);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Next amendments page' })[0]);
+  await waitFor(() =>
+    expect(api.listDecisionAmendments).toHaveBeenCalledWith(
+      { id },
+      'DECISION_AMENDMENT_DIRECTION_OUTGOING',
+      'opaque-page',
+      expect.objectContaining({ branch: 'review' }),
+    ),
+  );
 });

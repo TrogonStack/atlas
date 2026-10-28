@@ -38,6 +38,8 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
         Some(pb::entity::Kind::Decision(value)) => {
             value.subjects.len()
                 + value.related_decisions.len()
+                + value.decision_makers.len()
+                + value.amends.len()
                 + value.documents.len()
                 + usize::from(value.replaced_by.is_some())
         }

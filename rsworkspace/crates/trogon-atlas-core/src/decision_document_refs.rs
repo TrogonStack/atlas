@@ -13,6 +13,33 @@ fn walk(entity: &mut Entity, visit: &mut impl FnMut(EntityKind, &mut Option<Id>,
                     false,
                 );
             }
+            for (i, maker) in v.decision_makers.iter_mut().enumerate() {
+                match &mut maker.assignee {
+                    Some(pb::decision_maker::Assignee::Person(r)) => visit(
+                        EntityKind::Person,
+                        &mut r.id,
+                        format!("decision_makers[{i}].person"),
+                        false,
+                    ),
+                    Some(pb::decision_maker::Assignee::Team(r)) => visit(
+                        EntityKind::Team,
+                        &mut r.id,
+                        format!("decision_makers[{i}].team"),
+                        false,
+                    ),
+                    None => {}
+                }
+            }
+            for (i, r) in v.amends.iter_mut().enumerate() {
+                if let Some(r) = &mut r.decision {
+                    visit(
+                        EntityKind::Decision,
+                        &mut r.id,
+                        format!("amends[{i}].decision"),
+                        false,
+                    );
+                }
+            }
             for (i, r) in v.related_decisions.iter_mut().enumerate() {
                 if let Some(r) = &mut r.decision {
                     visit(
@@ -145,6 +172,20 @@ pub(crate) fn decorate_reference(entity: &Entity, reference: &mut pb::Reference)
     }
     match &entity.kind {
         Some(entity::Kind::Decision(v)) => {
+            for (i, declaration) in v.decision_makers.iter().enumerate() {
+                if field.starts_with(&format!("decision_makers[{i}].")) {
+                    reference
+                        .connection_id
+                        .clone_from(&declaration.connection_id);
+                }
+            }
+            for (i, declaration) in v.amends.iter().enumerate() {
+                if field == format!("amends[{i}].decision") {
+                    reference
+                        .connection_id
+                        .clone_from(&declaration.connection_id);
+                }
+            }
             for (i, declaration) in v.documents.iter().enumerate() {
                 if field.starts_with(&format!("documents[{i}].document.")) {
                     reference

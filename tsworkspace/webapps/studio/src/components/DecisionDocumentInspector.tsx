@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   getDecisionDetail,
+  listDecisionAmendments,
   getDocumentDetail,
   listIncomingDecisionDeclarations,
   listIncomingDocumentDeclarations,
@@ -55,6 +56,49 @@ function Query({ title, load }: { title: string; load: (signal: AbortSignal) => 
           <Exact value={result.data} />
           {!result.data.declarations?.length && (
             <p>No declarations returned. Interpret this only within the reported checked scope and completeness.</p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+function Amendments({ entity, branch, incoming }: { entity: Entity; branch?: string; incoming: boolean }) {
+  const [decision] = useState(() => ({ id: entity.id }));
+  const [pageToken, setPageToken] = useState('');
+  const [result, setResult] = useState<CatalogInspection>();
+  const [error, setError] = useState<string>();
+  useEffect(() => {
+    const controller = new AbortController();
+    setResult(undefined);
+    setError(undefined);
+    listDecisionAmendments(
+      decision,
+      incoming ? 'DECISION_AMENDMENT_DIRECTION_INCOMING' : 'DECISION_AMENDMENT_DIRECTION_OUTGOING',
+      pageToken,
+      { branch, signal: controller.signal },
+    ).then(
+      (data) => {
+        if (!controller.signal.aborted) setResult(data);
+      },
+      (error: unknown) => {
+        if (!controller.signal.aborted) setError(error instanceof Error ? error.message : String(error));
+      },
+    );
+    return () => controller.abort();
+  }, [decision, branch, incoming, pageToken]);
+  return (
+    <section className="flex flex-col gap-2">
+      <h4 className="font-semibold">{incoming ? 'Incoming amendments' : 'Authored amendments'}</h4>
+      {error && <p role="alert">Amendments unavailable: {error}. Resolution remains unknown.</p>}
+      {!result && !error && <p>Checking amendments…</p>}
+      {result && (
+        <>
+          <Exact value={result} />
+          <p>Results describe this bounded checked scope. Missing records do not prove whole-store absence.</p>
+          {result.nextPageToken && (
+            <button type="button" onClick={() => setPageToken(result.nextPageToken ?? '')}>
+              Next amendments page
+            </button>
           )}
         </>
       )}
@@ -169,6 +213,8 @@ export function DecisionDocumentInspector({ entity, asOf: historicalAsOf }: { en
         <div key={contextKey} className="flex flex-col gap-3">
           {entity.kind === 'decision' && (
             <>
+              <Amendments entity={entity} branch={branch} incoming={false} />
+              <Amendments entity={entity} branch={branch} incoming />
               <Query
                 title="Decision detail"
                 load={(signal) => getDecisionDetail({ id: entity.id }, false, { branch, signal })}

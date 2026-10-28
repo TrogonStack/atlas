@@ -253,6 +253,12 @@ enum Cmd {
         /// or an id that `describe` prints.
         entity: String,
     },
+    /// List exact Decision amendments using proto3 JSON `ListDecisionAmendmentsRequest`.
+    ListDecisionAmendments {
+        /// Proto3 JSON `ListDecisionAmendmentsRequest`.
+        #[arg(long)]
+        request: String,
+    },
     /// List Decisions for an exact subject using proto3 JSON `ListSubjectDecisionsRequest`.
     ListSubjectDecisions {
         /// Proto3 JSON `ListSubjectDecisionsRequest`.
@@ -1613,6 +1619,28 @@ async fn run(
             let mut client =
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
             let result = trogon_atlas_client::source_integration::list_source_run_operations(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListDecisionAmendments { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListDecisionAmendmentsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::decision_document::list_decision_amendments(
                 &mut client,
                 request,
             )

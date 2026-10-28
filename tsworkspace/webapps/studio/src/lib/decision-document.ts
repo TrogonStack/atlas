@@ -30,6 +30,8 @@ export interface CatalogInspection {
     visitedSubjects?: CatalogSubject[];
     visitedDocuments?: DocumentSelection[];
   };
+  nextPageToken?: string;
+  decisionState?: string;
   incomplete?: boolean;
   failures?: { field?: string; connectionId?: { value: string }; code?: number; message?: string }[];
   selectionState?: string;

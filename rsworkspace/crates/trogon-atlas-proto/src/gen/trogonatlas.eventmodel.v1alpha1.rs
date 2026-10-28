@@ -3909,6 +3909,34 @@ pub struct RelatedDecision {
     pub doc: ::core::option::Option<CatalogText>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DecisionMaker {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+    #[prost(oneof="decision_maker::Assignee", tags="2, 3")]
+    pub assignee: ::core::option::Option<decision_maker::Assignee>,
+}
+/// Nested message and enum types in `DecisionMaker`.
+pub mod decision_maker {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Assignee {
+        #[prost(message, tag="2")]
+        Person(super::PersonRef),
+        #[prost(message, tag="3")]
+        Team(super::TeamRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DecisionAmendment {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub decision: ::core::option::Option<DecisionRef>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DocumentAnchorRef {
     #[prost(message, optional, tag="1")]
     pub document: ::core::option::Option<DocumentRef>,
@@ -3979,6 +4007,10 @@ pub struct Decision {
     pub authored_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
     #[prost(message, optional, tag="17")]
     pub decided_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, repeated, tag="18")]
+    pub decision_makers: ::prost::alloc::vec::Vec<DecisionMaker>,
+    #[prost(message, repeated, tag="19")]
+    pub amends: ::prost::alloc::vec::Vec<DecisionAmendment>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RetainedDocumentText {

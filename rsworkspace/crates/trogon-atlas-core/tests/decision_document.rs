@@ -705,3 +705,221 @@ fn anchor_resolution_checks_identity_without_hydrating_unrelated_outgoing_target
     let owner = prepare_entity(None, &proposed).unwrap();
     catalog::resolve_document_selection(&anchor_selection(&owner, false), &owner).unwrap();
 }
+
+#[test]
+fn decision_makers_and_amendments_admit_only_exact_distinct_targets() {
+    let mut value = decision();
+    let maker = pb::DecisionMaker {
+        assignee: Some(pb::decision_maker::Assignee::Person(pb::PersonRef {
+            id: Some(id("maker")),
+        })),
+        ..Default::default()
+    };
+    choice_mut(&mut value).decision_makers = vec![maker.clone(), maker.clone()];
+    assert!(
+        catalog::validate_values(&value).is_err(),
+        "duplicate makers accepted"
+    );
+    choice_mut(&mut value).decision_makers = vec![maker];
+    let amendment = pb::DecisionAmendment {
+        decision: Some(pb::DecisionRef {
+            id: Some(id("prior-choice")),
+        }),
+        ..Default::default()
+    };
+    choice_mut(&mut value).amends = vec![amendment.clone(), amendment.clone()];
+    assert!(
+        catalog::validate_values(&value).is_err(),
+        "duplicate amendments accepted"
+    );
+    choice_mut(&mut value).amends = vec![amendment];
+    catalog::validate_values(&value).unwrap();
+    let stored = prepare_entity(None, &value).unwrap();
+    assert_eq!(
+        connections::connection_occurrences(&stored).unwrap().len(),
+        3
+    );
+    assert_eq!(outbound_refs(&stored).len(), 3);
+    choice_mut(&mut value).amends[0]
+        .decision
+        .as_mut()
+        .unwrap()
+        .id = Some(id("choice"));
+    assert!(
+        catalog::validate_values(&value).is_err(),
+        "self amendment accepted"
+    );
+    choice_mut(&mut value).amends.clear();
+    choice_mut(&mut value).decision_makers[0].assignee = None;
+    assert!(
+        catalog::validate_values(&value).is_err(),
+        "absent maker accepted"
+    );
+}
+
+#[test]
+fn maker_and_amendment_identity_and_source_isolation_are_native() {
+    use trogon_atlas_core::source_integration::*;
+    let mut proposed = decision();
+    choice_mut(&mut proposed).decision_makers = vec![pb::DecisionMaker {
+        assignee: Some(pb::decision_maker::Assignee::Team(pb::TeamRef {
+            id: Some(id("makers")),
+        })),
+        ..Default::default()
+    }];
+    choice_mut(&mut proposed).amends = vec![pb::DecisionAmendment {
+        decision: Some(pb::DecisionRef {
+            id: Some(id("prior")),
+        }),
+        ..Default::default()
+    }];
+    let stored = prepare_entity(None, &proposed).unwrap();
+    let mut edited = stored.clone();
+    choice_mut(&mut edited).decision_makers[0].doc = Some(text("Historical team participation"));
+    choice_mut(&mut edited).amends[0].doc = Some(text("Clarifies the original"));
+    let edited = prepare_entity(Some(&stored), &edited).unwrap();
+    assert_eq!(
+        connections::connection_occurrences(&stored).unwrap(),
+        connections::connection_occurrences(&edited).unwrap()
+    );
+    let mut retargeted = edited.clone();
+    choice_mut(&mut retargeted).amends[0]
+        .decision
+        .as_mut()
+        .unwrap()
+        .id = Some(id("other"));
+    assert!(prepare_entity(Some(&stored), &retargeted).is_err());
+    choice_mut(&mut retargeted).amends[0].connection_id = None;
+    let retargeted = prepare_entity(Some(&stored), &retargeted).unwrap();
+    assert_ne!(
+        choice_mut(&mut stored.clone()).amends[0].connection_id,
+        choice_mut(&mut retargeted.clone()).amends[0].connection_id
+    );
+    let units = [
+        pb::SourceFieldOwnership {
+            policy: Some(pb::source_field_ownership::Policy::Fields(
+                pb::SourceOwnedFields {
+                    fields: vec![pb::SourceOwnedField::Title as i32],
+                },
+            )),
+        },
+        pb::SourceFieldOwnership {
+            policy: Some(pb::source_field_ownership::Policy::WholeOwner(
+                pb::SourceWholeOwnerOwnership {},
+            )),
+        },
+    ];
+    for policy in &units {
+        assert!(validate_create_ownership(&stored, policy).is_err());
+    }
+    assert!(validate_ownership(&stored, &units[1]).is_err());
+    let mut plain = decision();
+    choice_mut(&mut plain).title = Some(title("Source title"));
+    let base = decision();
+    let mut budget = RunBudget::new(profile_budgets()).unwrap();
+    let merged = plan_merge(&base, &base, &plain, &stored, &units[0], &mut budget).unwrap();
+    assert_eq!(
+        choice_mut(&mut merged.proposed.clone()).decision_makers,
+        choice_mut(&mut stored.clone()).decision_makers
+    );
+    assert_eq!(
+        choice_mut(&mut merged.proposed.clone()).amends,
+        choice_mut(&mut stored.clone()).amends
+    );
+    let mut invalid = proposed;
+    if let Some(pb::decision_maker::Assignee::Team(r)) =
+        &mut choice_mut(&mut invalid).decision_makers[0].assignee
+    {
+        r.id.as_mut().unwrap().version = 0;
+    }
+    assert!(catalog::validate_values(&invalid).is_err());
+}
+
+#[test]
+fn makers_and_amendments_branch_restore_and_reference_retarget_renew_occurrences() {
+    let mut proposed = decision();
+    choice_mut(&mut proposed).decision_makers = vec![pb::DecisionMaker {
+        assignee: Some(pb::decision_maker::Assignee::Person(pb::PersonRef {
+            id: Some(id("maker")),
+        })),
+        ..Default::default()
+    }];
+    choice_mut(&mut proposed).amends = vec![pb::DecisionAmendment {
+        decision: Some(pb::DecisionRef {
+            id: Some(id("original")),
+        }),
+        ..Default::default()
+    }];
+    let stored = prepare_entity(None, &proposed).unwrap();
+    let mut removed = stored.clone();
+    choice_mut(&mut removed).decision_makers.clear();
+    choice_mut(&mut removed).amends.clear();
+    let removed = prepare_entity(Some(&stored), &removed).unwrap();
+    assert!(prepare_landing(Some(&stored), Some(&removed), &stored).is_err());
+    let restored = prepare_resolution(Some(&stored), Some(&removed), &stored).unwrap();
+    let old = choice_mut(&mut stored.clone()).clone();
+    let new = choice_mut(&mut restored.clone()).clone();
+    assert_ne!(
+        old.decision_makers[0].connection_id,
+        new.decision_makers[0].connection_id
+    );
+    assert_ne!(old.amends[0].connection_id, new.amends[0].connection_id);
+    assert_eq!(
+        old.decision_makers[0].assignee,
+        new.decision_makers[0].assignee
+    );
+    assert_eq!(old.amends[0].decision, new.amends[0].decision);
+    let mut retargeted = stored.clone();
+    let paths = retarget_refs(
+        &mut retargeted,
+        EntityKind::Person,
+        &id("maker"),
+        &id("other-maker"),
+    );
+    assert!(paths.iter().any(|path| path.contains("decision_makers")));
+    connections::renew_retargeted_connection_ids(&stored, &mut retargeted).unwrap();
+    assert_ne!(
+        choice_mut(&mut retargeted).decision_makers[0].connection_id,
+        old.decision_makers[0].connection_id
+    );
+    assert_eq!(choice_mut(&mut retargeted).amends, old.amends);
+}
+
+#[test]
+fn decision_extension_collection_bounds_are_inclusive() {
+    let mut value = decision();
+    choice_mut(&mut value).decision_makers = (0..128)
+        .map(|i| pb::DecisionMaker {
+            assignee: Some(pb::decision_maker::Assignee::Person(pb::PersonRef {
+                id: Some(id(&format!("maker-{i}"))),
+            })),
+            ..Default::default()
+        })
+        .collect();
+    choice_mut(&mut value).amends = (0..128)
+        .map(|i| pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: Some(id(&format!("original-{i}"))),
+            }),
+            ..Default::default()
+        })
+        .collect();
+    catalog::validate_values(&value).unwrap();
+    let mut excessive = value.clone();
+    choice_mut(&mut excessive)
+        .decision_makers
+        .push(pb::DecisionMaker {
+            assignee: Some(pb::decision_maker::Assignee::Team(pb::TeamRef {
+                id: Some(id("extra-maker")),
+            })),
+            ..Default::default()
+        });
+    assert!(catalog::validate_values(&excessive).is_err());
+    choice_mut(&mut value).amends.push(pb::DecisionAmendment {
+        decision: Some(pb::DecisionRef {
+            id: Some(id("extra-original")),
+        }),
+        ..Default::default()
+    });
+    assert!(catalog::validate_values(&value).is_err());
+}

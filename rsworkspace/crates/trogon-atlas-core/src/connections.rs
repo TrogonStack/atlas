@@ -301,6 +301,20 @@ fn visit(
                     })
                     .as_ref()
                     .and_then(crate::architectural_relationships::endpoint_ref)
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.DecisionMaker" {
+                trogon_atlas_proto::DecisionMaker::decode(message.encode_to_vec().as_slice())
+                    .ok()
+                    .as_ref()
+                    .and_then(|maker| crate::decision_document::decision_maker_ref(maker).ok())
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.DecisionAmendment"
+            {
+                trogon_atlas_proto::DecisionAmendment::decode(message.encode_to_vec().as_slice())
+                    .ok()
+                    .and_then(|a| a.decision)
+                    .map(|r| EntityRef {
+                        kind: trogon_atlas_proto::EntityKind::Decision as i32,
+                        id: r.id,
+                    })
             } else {
                 None
             },

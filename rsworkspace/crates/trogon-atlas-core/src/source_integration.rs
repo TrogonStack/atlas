@@ -72,7 +72,7 @@ fn unit_fields(
     let descriptor = value.descriptor();
     if unit == OwnershipUnit::WholeOwner
         && descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Decision"
-        && ["authored_on", "decided_on"]
+        && ["authored_on", "decided_on", "decision_makers", "amends"]
             .iter()
             .any(|name| value.has_field_by_name(name))
     {
@@ -174,7 +174,11 @@ pub fn validate_create_ownership(
     ownership: &SourceFieldOwnership,
 ) -> Result<(), SourceError> {
     if let Some(trogon_atlas_proto::entity::Kind::Decision(value)) = &entity.kind {
-        if value.authored_on.is_some() || value.decided_on.is_some() {
+        if value.authored_on.is_some()
+            || value.decided_on.is_some()
+            || !value.decision_makers.is_empty()
+            || !value.amends.is_empty()
+        {
             return Err(SourceError::UnsupportedUnit);
         }
     }

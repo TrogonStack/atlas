@@ -42,6 +42,8 @@ message CatalogDeclaration {
     trogonatlas.eventmodel.v1alpha1.RelatedDecision related = 6;
     trogonatlas.eventmodel.v1alpha1.SupportingDocument supporting = 7;
     trogonatlas.eventmodel.v1alpha1.DocumentNavigation navigation = 8;
+    trogonatlas.eventmodel.v1alpha1.DecisionMaker maker = 9;
+    trogonatlas.eventmodel.v1alpha1.DecisionAmendment amendment = 10;
   }
 }
 message ListSubjectDecisionsRequest {
@@ -108,4 +110,23 @@ message ListIncomingDocumentDeclarationsResponse {
   CatalogCheckedScope scope = 2;
   bool incomplete = 3;
   repeated CatalogQueryFailure failures = 4;
+}
+
+enum DecisionAmendmentDirection {
+  DECISION_AMENDMENT_DIRECTION_UNSPECIFIED = 0;
+  DECISION_AMENDMENT_DIRECTION_OUTGOING = 1;
+  DECISION_AMENDMENT_DIRECTION_INCOMING = 2;
+}
+message ListDecisionAmendmentsRequest {
+  trogonatlas.eventmodel.v1alpha1.DecisionRef decision = 1;
+  DecisionAmendmentDirection direction = 2;
+  uint32 page_size = 3;
+  string page_token = 4;
+}
+message ListDecisionAmendmentsResponse {
+  repeated CatalogDeclaration declarations = 1;
+  CatalogCheckedScope scope = 2;
+  string next_page_token = 3;
+  bool incomplete = 4;
+  CatalogResolutionState decision_state = 5;
 }

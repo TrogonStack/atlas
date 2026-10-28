@@ -61,6 +61,19 @@ message RelatedDecision {
   DecisionRef decision = 2;
   CatalogText doc = 3;
 }
+message DecisionMaker {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  oneof assignee {
+    PersonRef person = 2;
+    TeamRef team = 3;
+  }
+  CatalogText doc = 4;
+}
+message DecisionAmendment {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DecisionRef decision = 2;
+  CatalogText doc = 3;
+}
 message DocumentAnchorRef {
   DocumentRef document = 1;
   string owner_uid = 2;
@@ -96,6 +109,8 @@ message Decision {
   repeated SupportingDocument documents = 15;
   trogonatlas.type.v1alpha1.CalendarDate authored_on = 16;
   trogonatlas.type.v1alpha1.CalendarDate decided_on = 17;
+  repeated DecisionMaker decision_makers = 18;
+  repeated DecisionAmendment amends = 19;
 }
 message RetainedDocumentText {
   MediaType media_type = 1;

@@ -180,6 +180,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTeamMembers"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListPersonTeams"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetTeamContacts"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListDecisionAmendments"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSubjectDecisions"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSubjectDocuments"
         | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDecisionDetail"

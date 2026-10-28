@@ -13,6 +13,12 @@ pub(super) struct ArchitectureProposal<'a> {
     pub(super) landing: Option<&'a [BranchLandOp]>,
 }
 
+struct CatalogGraphTraversal<'a> {
+    loaded: &'a mut HashSet<pb::EntityKey>,
+    world: &'a mut HashMap<pb::EntityKey, StoredEntity>,
+    budget: &'a mut crate::decision_document_resources::CatalogBudget,
+}
+
 #[derive(Clone, Copy)]
 enum ArchitectureTargetAccess<'a> {
     Required(&'a Visibility),
@@ -646,6 +652,18 @@ impl EventModelServiceImpl {
             let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
                 continue;
             };
+            self.validate_decision_amendments(
+                proposal,
+                branch,
+                vis,
+                entity,
+                CatalogGraphTraversal {
+                    loaded: &mut *loaded,
+                    world: &mut *world,
+                    budget: &mut *budget,
+                },
+            )
+            .await?;
             let Some(replacement) = &decision.replaced_by else {
                 continue;
             };
@@ -687,6 +705,16 @@ impl EventModelServiceImpl {
                         "Replacement target must be a Decision",
                     ));
                 };
+                if visited.len() == 2
+                    && target.amends.iter().any(|amendment| {
+                        amendment.decision.as_ref().and_then(|r| r.id.as_ref())
+                            == decision.id.as_ref()
+                    })
+                {
+                    return Err(Status::invalid_argument(
+                        "Decision cannot amend and replace the same target",
+                    ));
+                }
                 match pb::DecisionStatus::try_from(target.status) {
                     Ok(pb::DecisionStatus::Accepted) => break,
                     Ok(pb::DecisionStatus::Superseded) => {
@@ -703,6 +731,84 @@ impl EventModelServiceImpl {
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    async fn validate_decision_amendments(
+        &self,
+        proposal: &ArchitectureProposal<'_>,
+        branch: Option<&str>,
+        vis: &Visibility,
+        entity: &pb::Entity,
+        traversal: CatalogGraphTraversal<'_>,
+    ) -> Result<(), Status> {
+        let CatalogGraphTraversal {
+            loaded,
+            world,
+            budget,
+        } = traversal;
+        let root = entity_id(entity)?.clone();
+        let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
+            return Ok(());
+        };
+        let mut active = HashSet::new();
+        let mut done = HashSet::new();
+        active.insert(pb::EntityKey::new(pb::EntityKind::Decision, &root));
+        let mut stack = vec![(root.clone(), decision.amends.clone(), 0usize)];
+        while let Some((owner, edges, index)) = stack.last_mut() {
+            if *index == edges.len() {
+                let key = pb::EntityKey::new(pb::EntityKind::Decision, owner);
+                active.remove(&key);
+                done.insert(key);
+                stack.pop();
+                continue;
+            }
+            let target = edges[*index]
+                .decision
+                .as_ref()
+                .and_then(|r| r.id.clone())
+                .ok_or_else(|| Status::invalid_argument("amended decision required"))?;
+            *index += 1;
+            budget.examine(1)?;
+            let key = pb::EntityKey::new(pb::EntityKind::Decision, &target);
+            if active.contains(&key) {
+                return Err(Status::invalid_argument("Decision amendment cycle"));
+            }
+            self.load_architecture_targets(
+                proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                vec![(pb::EntityKind::Decision, target.clone())],
+                loaded,
+                world,
+            )
+            .await?;
+            let row = world.get(&key).ok_or_else(|| {
+                Status::invalid_argument("Amended decision is absent, stale or unavailable")
+            })?;
+            budget.owner(&row.entity)?;
+            let Some(pb::entity::Kind::Decision(value)) = &row.entity.kind else {
+                return Err(Status::invalid_argument(
+                    "amended target must be a Decision",
+                ));
+            };
+            if value
+                .replaced_by
+                .as_ref()
+                .and_then(|r| r.decision.as_ref())
+                .and_then(|r| r.id.as_ref())
+                == Some(owner)
+            {
+                return Err(Status::invalid_argument(
+                    "Decision cannot amend and replace the same target",
+                ));
+            }
+            if done.contains(&key) {
+                continue;
+            }
+            active.insert(key);
+            stack.push((target, value.amends.clone(), 0));
         }
         Ok(())
     }

@@ -28,6 +28,11 @@ function roundTrip(rpc, input) {
   return codec.deserialize(method.requestSerialize(input));
 }
 describe('catalog actual serializer boundary', () => {
+  it('preserves exact amendment page context without enum coercion', () => {
+    const input = { decision: ref, direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING', pageSize: 1, pageToken: 'opaque-context' };
+    expect(roundTrip('ListDecisionAmendments', input)).toEqual(input);
+    expect(() => roundTrip('ListDecisionAmendments', { ...input, direction: 'TYPO' })).toThrow(/known enum/);
+  });
   it('preserves exact selector alternatives, pins, optional status and explicit false', () => {
     for (const subject of subjects) {
       expect(roundTrip('ListSubjectDocuments', { subject })).toEqual({ subject });

@@ -344,6 +344,7 @@ const READ_RPCS = new Set([
   "listTeamMembers",
   "listPersonTeams",
   "getTeamContacts",
+  "listDecisionAmendments",
   "listSubjectDecisions",
   "listSubjectDocuments",
   "getDecisionDetail",
@@ -1944,6 +1945,7 @@ app.get("/api/source/:query", branchHandler((req) => {
 }));
 
 const CATALOG_QUERIES = new Map([
+  ["decision-amendments", "listDecisionAmendments"],
   ["subject-decisions", "listSubjectDecisions"],
   ["subject-documents", "listSubjectDocuments"],
   ["decision-detail", "getDecisionDetail"],
