@@ -297,6 +297,77 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
         ..Default::default()
     };
     graph.push(put(&mut client, wrap(pb::entity::Kind::Document(hub))).await);
+    let component_index = graph
+        .iter()
+        .position(|entity| matches!(entity.kind, Some(pb::entity::Kind::Component(_))))
+        .unwrap();
+    let mut agent = graph[component_index].clone();
+    if let Some(pb::entity::Kind::Component(value)) = &mut agent.kind {
+        value.metadata.push(prost_types::Any {
+            type_url: "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.AgentAnnotation".into(),
+            value: pb::AgentAnnotation {
+                model: Some(pb::AgentModel {
+                    name: Some(pb::ModelName {
+                        value: "catalog-reviewer".into(),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        });
+        value.metadata.push(prost_types::Any {
+            type_url:
+                "type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation"
+                    .into(),
+            value: pb::ResourceGroupsAnnotation {
+                groups: vec![pb::ResourceGroup {
+                    title: Some(pb::MetadataTitle {
+                        value: "Catalog context".into(),
+                    }),
+                    sidebar: Some(false),
+                    items: [
+                        (pb::EntityKind::Document, "binary"),
+                        (pb::EntityKind::Term, "word"),
+                        (pb::EntityKind::Decision, "amendment"),
+                    ]
+                    .into_iter()
+                    .map(|(kind, slug)| pb::ResourceGroupItem {
+                        target: Some(pb::EntityRef {
+                            kind: kind as i32,
+                            id: Some(id(slug)),
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                    ..Default::default()
+                }],
+            }
+            .encode_to_vec(),
+        });
+    }
+    graph[component_index] = put(&mut client, agent).await;
+    let incoming = client
+        .get_incoming_references(request(
+            pb::GetReferencesRequest {
+                kind: pb::EntityKind::Document as i32,
+                id: Some(id("binary")),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let groups: Vec<_> = incoming
+        .references
+        .iter()
+        .filter(|reference| reference.from_field.starts_with("metadata["))
+        .collect();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0].from.as_ref().unwrap().id, Some(id("agent")));
+    assert!(groups[0].connection_id.is_some());
+    assert!(!groups[0].from_uid.is_empty());
     for (kind, slug, expected) in [
         (pb::EntityKind::Person, "person", "decision_makers"),
         (pb::EntityKind::Decision, "original", "amends"),
