@@ -46,7 +46,7 @@ opentelemetry = "0.33"
 async-nats = "0.50"
 futures = "0.3"
 async-trait = "0.1"
-parking_lot = "0.12"
+parking_lot = "0.13"
 bytes = "1"
 
 tracing = "0.1"
@@ -60,7 +60,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.23"
 chacha20poly1305 = "0.11"
-jsonschema = { version = "0.58", default-features = false }
+jsonschema = { version = "0.60", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2 = "0.11"
 uuid = { version = "1", features = ["v7"] }
