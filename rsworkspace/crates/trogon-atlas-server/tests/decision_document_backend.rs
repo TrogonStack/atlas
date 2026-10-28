@@ -2702,3 +2702,160 @@ async fn opposing_amendments_started_at_a_gate_cannot_publish_a_cycle() {
     }
     assert_eq!(edge_count, 1);
 }
+
+async fn stored_decision(
+    client: &mut Client,
+    owner: &pb::Entity,
+    branch: Option<&str>,
+) -> pb::GetEntityResponse {
+    client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Decision as i32,
+                id: reference(owner).id,
+            },
+            ADMIN,
+            branch,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+async fn transitive_amendment_unavailable_case(hidden: bool) {
+    let mut client = client().await;
+    let mut namespaces = Vec::new();
+    for (name, parent) in [("amend-visible", "visible"), ("amend-hidden", "hidden")] {
+        namespaces.push(
+            client
+                .register_namespace(request(
+                    pb::RegisterNamespaceRequest {
+                        name: name.into(),
+                        parent: parent.into(),
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .namespace
+                .unwrap()
+                .id,
+        );
+    }
+    let mut subject_owner = read_model("transitive-subject");
+    if let Some(pb::entity::Kind::ReadModel(value)) = &mut subject_owner.kind {
+        value
+            .id
+            .as_mut()
+            .unwrap()
+            .namespace
+            .clone_from(&namespaces[0]);
+    }
+    let subject_owner = put(&mut client, subject_owner, None).await.entity.unwrap();
+    let selected = subject(reference(&subject_owner));
+    let scoped = |slug: &str, namespace: &str| {
+        let mut owner = decision(slug, selected.clone(), false);
+        if let Some(pb::entity::Kind::Decision(value)) = &mut owner.kind {
+            value.id.as_mut().unwrap().namespace = namespace.into();
+        }
+        owner
+    };
+    let c = put(
+        &mut client,
+        scoped(
+            "transitive-c",
+            if hidden {
+                &namespaces[1]
+            } else {
+                &namespaces[0]
+            },
+        ),
+        None,
+    )
+    .await
+    .entity
+    .unwrap();
+    let mut b = scoped("transitive-b", &namespaces[0]);
+    if let Some(pb::entity::Kind::Decision(value)) = &mut b.kind {
+        value.amends = vec![pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: reference(&c).id,
+            }),
+            ..Default::default()
+        }];
+    }
+    let b = put(&mut client, b, None).await.entity.unwrap();
+    let mut a = scoped("transitive-a", &namespaces[0]);
+    if let Some(pb::entity::Kind::Decision(value)) = &mut a.kind {
+        value.amends = vec![pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: reference(&b).id,
+            }),
+            ..Default::default()
+        }];
+    }
+    let a = put(&mut client, a, None).await.entity.unwrap();
+    let b_before = stored_decision(&mut client, &b, None).await;
+    if !hidden {
+        delete(&mut client, &c, true, None).await.unwrap();
+    }
+    let a_before = stored_decision(&mut client, &a, None).await;
+    let mut proposed = a.clone();
+    if let Some(pb::entity::Kind::Decision(value)) = &mut proposed.kind {
+        value.title = Some(title("Unrelated title revision"));
+    }
+    let updated = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(proposed),
+                ..Default::default()
+            },
+            if hidden { LIMITED } else { ADMIN },
+            None,
+        ))
+        .await;
+    assert!(
+        updated.is_ok(),
+        "unchanged transitive declaration must remain inspectable: {updated:?}"
+    );
+    let after = stored_decision(&mut client, &a, None).await;
+    assert_eq!(
+        after.entity.as_ref().unwrap().system,
+        a_before.entity.as_ref().unwrap().system
+    );
+    assert_ne!(after.etag, a_before.etag);
+    assert_eq!(stored_decision(&mut client, &b, None).await, b_before);
+    let mut strict = b.clone();
+    if let Some(pb::entity::Kind::Decision(value)) = &mut strict.kind {
+        value.title = Some(title("Direct target remains required"));
+    }
+    let error = client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(strict),
+                ..Default::default()
+            },
+            if hidden { LIMITED } else { ADMIN },
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error.code(), Code::NotFound | Code::InvalidArgument),
+        "{error}"
+    );
+    assert!(!error.message().contains("transitive-c"));
+    assert_eq!(stored_decision(&mut client, &b, None).await, b_before);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn decision_transitive_missing_amendment_does_not_block_unrelated_title_edit() {
+    transitive_amendment_unavailable_case(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn decision_transitive_hidden_amendment_does_not_block_unrelated_title_edit() {
+    transitive_amendment_unavailable_case(true).await;
+}
