@@ -855,8 +855,13 @@ pub fn impact(
         path: Vec::new(),
     }];
 
-    let mut visited: HashSet<pb::EntityKey> = HashSet::new();
-    visited.insert(pb::EntityKey::new(root_kind, root_id));
+    // Emission and expansion are separate. A business edge names its target
+    // and stops, but that target can still be expanded by a parallel type walk.
+    let mut emitted: HashSet<pb::EntityKey> = HashSet::new();
+    let mut expanded: HashSet<pb::EntityKey> = HashSet::new();
+    let root_key = pb::EntityKey::new(root_kind, root_id);
+    emitted.insert(root_key.clone());
+    expanded.insert(root_key);
 
     let mut queue: VecDeque<(pb::EntityKind, pb::Id, u32, Vec<pb::Reference>)> = VecDeque::new();
     queue.push_back((root_kind, root_id.clone(), 0, Vec::new()));
@@ -901,21 +906,33 @@ pub fn impact(
                 }
             };
             let okey = pb::EntityKey::new(ok, oid);
-            if !visited.insert(okey.clone()) {
-                continue;
-            }
             let business_edge = !is_incoming && r.from_field.contains("property_relationships[");
             let mut new_path = path.clone();
             new_path.push(r);
-            out.push(pb::ImpactNode {
-                entity: Some(pb::EntityRef {
-                    kind: ok as i32,
-                    id: Some(oid.clone()),
-                }),
-                depth: depth + 1,
-                path: new_path.clone(),
-            });
-            if !business_edge {
+            if business_edge {
+                if emitted.insert(okey) {
+                    out.push(pb::ImpactNode {
+                        entity: Some(pb::EntityRef {
+                            kind: ok as i32,
+                            id: Some(oid.clone()),
+                        }),
+                        depth: depth + 1,
+                        path: new_path,
+                    });
+                }
+                continue;
+            }
+            if emitted.insert(okey.clone()) {
+                out.push(pb::ImpactNode {
+                    entity: Some(pb::EntityRef {
+                        kind: ok as i32,
+                        id: Some(oid.clone()),
+                    }),
+                    depth: depth + 1,
+                    path: new_path.clone(),
+                });
+            }
+            if expanded.insert(okey) {
                 queue.push_back((ok, oid.clone(), depth + 1, new_path));
             }
         }

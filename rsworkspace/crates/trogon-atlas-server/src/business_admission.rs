@@ -136,6 +136,7 @@ impl EventModelServiceImpl {
         outgoing_owner: Option<&pb::Entity>,
         branch: Option<&str>,
         vis: &Visibility,
+        coherent_owners: Option<&HashMap<pb::EntityKey, pb::Entity>>,
     ) -> Result<(), Status> {
         if !references.iter().any(|reference| {
             trogon_atlas_core::business_data::relationship_index(&reference.from_field).is_some()
@@ -155,11 +156,12 @@ impl EventModelServiceImpl {
             }
         }
         for reference in references.iter_mut() {
-            let Some(index) =
-                trogon_atlas_core::business_data::relationship_index(&reference.from_field)
-            else {
+            // The index only recognizes a business site. Identity is the
+            // occurrence id: a reordered owner can put a sibling at that index.
+            if trogon_atlas_core::business_data::relationship_index(&reference.from_field).is_none()
+            {
                 continue;
-            };
+            }
             budget
                 .charge_record()
                 .map_err(|error| budget_status(&error))?;
@@ -184,15 +186,26 @@ impl EventModelServiceImpl {
                     ))
                     .map_err(|error| budget_status(&error))?;
                 if !owners.contains_key(&owner_key) {
-                    match self.store.get(kind, owner_id, branch).await {
-                        Ok(stored) => {
-                            owners.insert(owner_key.clone(), stored.entity);
-                        }
-                        Err(StoreError::NotFound) => {
+                    // A supplied snapshot is the body that stamped the reference.
+                    // Falling through to a later read can attach a sibling path.
+                    if let Some(coherent) = coherent_owners {
+                        if let Some(entity) = coherent.get(&owner_key) {
+                            owners.insert(owner_key.clone(), entity.clone());
+                        } else {
                             reference.business_property_status = Some(unavailable());
                             continue;
                         }
-                        Err(error) => return Err(store_err(error)),
+                    } else {
+                        match self.store.get(kind, owner_id, branch).await {
+                            Ok(stored) => {
+                                owners.insert(owner_key.clone(), stored.entity);
+                            }
+                            Err(StoreError::NotFound) => {
+                                reference.business_property_status = Some(unavailable());
+                                continue;
+                            }
+                            Err(error) => return Err(store_err(error)),
+                        }
                     }
                 }
                 if let Some(pb::entity::Kind::Schema(schema)) = owners
@@ -206,14 +219,9 @@ impl EventModelServiceImpl {
                         .map_err(|error| budget_status(&error))?;
                 }
             }
-            let relationship = owners
-                .get(&owner_key)
-                .and_then(|entity| match &entity.kind {
-                    Some(pb::entity::Kind::Schema(schema)) => {
-                        schema.property_relationships.get(index).cloned()
-                    }
-                    _ => None,
-                });
+            let relationship = owners.get(&owner_key).and_then(|entity| {
+                occurrence_relationship(entity, reference.connection_id.as_ref()).cloned()
+            });
             let Some(relationship) = relationship else {
                 reference.business_property_status = Some(unavailable());
                 continue;
@@ -269,6 +277,22 @@ impl EventModelServiceImpl {
         }
         Ok(())
     }
+}
+
+fn occurrence_relationship<'a>(
+    entity: &'a pb::Entity,
+    connection_id: Option<&pb::ConnectionId>,
+) -> Option<&'a pb::BusinessPropertyRelationship> {
+    let connection_id = connection_id.filter(|id| !id.value.is_empty())?;
+    let pb::entity::Kind::Schema(schema) = entity.kind.as_ref()? else {
+        return None;
+    };
+    schema.property_relationships.iter().find(|relationship| {
+        relationship
+            .connection_id
+            .as_ref()
+            .is_some_and(|id| id.value == connection_id.value)
+    })
 }
 
 fn schema_body(entity: &pb::Entity) -> Result<pb::Schema, Status> {

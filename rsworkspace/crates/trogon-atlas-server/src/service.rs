@@ -5,6 +5,9 @@ mod source_integration;
 mod architecture_admission;
 #[path = "business_admission.rs"]
 mod business_admission;
+#[cfg(test)]
+#[path = "business_reference_identity_test.rs"]
+mod business_reference_identity_test;
 #[path = "data_product_events.rs"]
 mod data_product_events;
 #[path = "data_product_inspection.rs"]
@@ -1078,19 +1081,6 @@ impl EventModelServiceImpl {
             *guard = Some(idx.clone());
         }
         Ok(idx)
-    }
-
-    /// Branch-aware variant of `reverse_index()`. When `branch` is `None`,
-    /// delegates to the cached baseline index. When `branch` is `Some`,
-    /// builds a fresh index from `snapshot_for` and never touches
-    /// `reverse_index_cache` (same rationale as `snapshot_for`).
-    async fn reverse_index_for(
-        &self,
-        branch: Option<&str>,
-        vis: &Visibility,
-    ) -> Result<Arc<graph::ReverseIndex>, Status> {
-        self.reference_index_for(branch, vis, ReferenceIndexPurpose::Discovery)
-            .await
     }
 
     async fn reference_index_for(
@@ -4043,19 +4033,40 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             ADVERTISED_MAX_PAGE_SIZE,
         );
         let offset = parse_page_token(&req.page_token)?;
-        let index = self.reverse_index_for(branch.as_deref(), &vis).await?;
+        // One snapshot stamps the reference and checks its occurrence. A page
+        // must not open a fresh budget, and a later read must not supply the path.
+        let snapshot = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let discovered = self
+            .architecture_reference_snapshot(&snapshot, branch.as_deref(), &vis)
+            .await?;
+        let index = ReferenceIndexPurpose::Discovery.build(&discovered)?;
+        let owners: HashMap<pb::EntityKey, pb::Entity> = discovered
+            .iter()
+            .filter_map(|stored| {
+                let kind = trogon_atlas_store::refs::entity_kind(&stored.entity)?;
+                let id = trogon_atlas_store::refs::entity_id(&stored.entity)?;
+                Some((pb::EntityKey::new(kind, id), stored.entity.clone()))
+            })
+            .collect();
         let refs = index.incoming(kind, &id).to_vec();
         // Incoming refs have the queried entity in `to`; the referrer kind
         // lives in `from`.
-        let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::From);
+        let mut all_references =
+            graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::From);
+        self.decorate_business_property_status(
+            &mut all_references,
+            None,
+            branch.as_deref(),
+            &vis,
+            Some(&owners),
+        )
+        .await?;
         let total = all_references.len();
-        let mut references: Vec<pb::Reference> = all_references
+        let references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
             .take(page_size)
             .collect();
-        self.decorate_business_property_status(&mut references, None, branch.as_deref(), &vis)
-            .await?;
         let next_offset = offset + references.len();
         let next_page_token = if next_offset >= total {
             String::new()
@@ -4109,20 +4120,22 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         refs.extend(graph::TypeOwners::build(&snap).schema_ref(&stored.entity));
         // Outgoing refs have the queried entity in `from`; the target kind
         // lives in `to`.
-        let all_references = graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::To);
+        let mut all_references =
+            graph::filter_refs_by_kinds(refs, &filter_kinds, graph::RefSide::To);
+        self.decorate_business_property_status(
+            &mut all_references,
+            Some(&stored.entity),
+            branch.as_deref(),
+            &vis,
+            None,
+        )
+        .await?;
         let total = all_references.len();
-        let mut references: Vec<pb::Reference> = all_references
+        let references: Vec<pb::Reference> = all_references
             .into_iter()
             .skip(offset)
             .take(page_size)
             .collect();
-        self.decorate_business_property_status(
-            &mut references,
-            Some(&stored.entity),
-            branch.as_deref(),
-            &vis,
-        )
-        .await?;
         let next_offset = offset + references.len();
         let next_page_token = if next_offset >= total {
             String::new()
@@ -8441,7 +8454,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let business_metas: Vec<OpMetaLike> = classified
             .iter()
             .filter(|(entry, _)| {
-                branch_diff_entry_status(entry.status) == pb::branch_diff_entry::Status::Changed
+                // An added schema has no baseline row to rebase, but its target
+                // may have lost the property before this call.
+                matches!(
+                    branch_diff_entry_status(entry.status),
+                    pb::branch_diff_entry::Status::Changed | pb::branch_diff_entry::Status::Added
+                )
             })
             .filter_map(|(entry, _)| {
                 let ours = entry.ours.clone()?;

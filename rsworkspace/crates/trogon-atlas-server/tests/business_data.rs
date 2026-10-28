@@ -189,6 +189,101 @@ fn connection(entity: &pb::Entity, relationship: bool) -> String {
     value.value.clone()
 }
 
+fn with_branch<T>(mut request: Request<T>, branch: &str) -> Request<T> {
+    request.metadata_mut().insert(
+        "x-trogon-atlas-branch",
+        MetadataValue::try_from(branch).unwrap(),
+    );
+    request
+}
+
+fn order_targeting_sku(namespace: &str) -> pb::Entity {
+    let mut order = schema_entity(
+        namespace,
+        "order",
+        1,
+        pb::Schema {
+            title: "Order".into(),
+            fields: vec![string_field("product_ref")],
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut order.kind {
+        schema.property_relationships.push(relationship(
+            namespace,
+            1,
+            Some(path(&[("sku", false)])),
+            Some("hasMany"),
+        ));
+    }
+    order
+}
+
+fn product_without_sku(namespace: &str) -> pb::Entity {
+    let mut product = product_schema(namespace, 1);
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut product.kind {
+        schema.fields = vec![string_field("name")];
+    }
+    product
+}
+
+fn fan_in(namespace: &str, slug: &str, count: usize) -> pb::Entity {
+    schema_entity(
+        namespace,
+        slug,
+        1,
+        pb::Schema {
+            title: slug.into(),
+            fields: vec![string_field("product_ref")],
+            property_relationships: (0..count)
+                .map(|_| pb::BusinessPropertyRelationship {
+                    source: Some(path(&[("product_ref", false)])),
+                    target_entity: Some(pb::SchemaRef {
+                        id: Some(id(namespace, "product", 1)),
+                    }),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        },
+    )
+}
+
+fn labeled_relationship(
+    namespace: &str,
+    label: &str,
+    connection_id: Option<pb::ConnectionId>,
+) -> pb::BusinessPropertyRelationship {
+    pb::BusinessPropertyRelationship {
+        connection_id,
+        source: Some(path(&[("product_ref", false)])),
+        target_entity: Some(pb::SchemaRef {
+            id: Some(id(namespace, "product", 1)),
+        }),
+        target_property: Some(path(&[("sku", false)])),
+        label: Some(pb::CatalogTitle {
+            value: label.into(),
+        }),
+        ..Default::default()
+    }
+}
+
+fn relationship_by_label<'a>(
+    schema: &'a pb::Schema,
+    label: &str,
+) -> &'a pb::BusinessPropertyRelationship {
+    schema
+        .property_relationships
+        .iter()
+        .find(|relationship| {
+            relationship
+                .label
+                .as_ref()
+                .is_some_and(|title| title.value == label)
+        })
+        .unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn native_declarations_persist_and_references_carry_occurrence_identity() {
     let namespace = "bd-persist";
@@ -2287,4 +2382,663 @@ async fn type_reuse_impact_still_walks_past_a_schema_ref() {
         .collect();
     assert!(slugs.contains(&"product".to_string()), "{slugs:?}");
     assert!(slugs.contains(&"customer-record".to_string()), "{slugs:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_red_parallel_type_walk_still_reaches_past_a_business_target() {
+    let namespace = "bd-legacy-walk";
+    let service = service().await;
+    put(
+        &service,
+        schema_entity(
+            namespace,
+            "d",
+            1,
+            pb::Schema {
+                title: "D".into(),
+                fields: vec![string_field("id")],
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    put(
+        &service,
+        schema_entity(
+            namespace,
+            "b",
+            1,
+            pb::Schema {
+                title: "B".into(),
+                fields: vec![schema_ref_field("d_ref", id(namespace, "d", 1))],
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    put(
+        &service,
+        schema_entity(
+            namespace,
+            "c",
+            1,
+            pb::Schema {
+                title: "C".into(),
+                fields: vec![schema_ref_field("b_ref", id(namespace, "b", 1))],
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    let mut root = schema_entity(
+        namespace,
+        "root",
+        1,
+        pb::Schema {
+            title: "Root".into(),
+            fields: vec![schema_ref_field("c_ref", id(namespace, "c", 1))],
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut root.kind {
+        schema
+            .property_relationships
+            .push(pb::BusinessPropertyRelationship {
+                source: Some(path(&[("c_ref", false)])),
+                target_entity: Some(pb::SchemaRef {
+                    id: Some(id(namespace, "b", 1)),
+                }),
+                ..Default::default()
+            });
+    }
+    put(&service, root).await;
+    let impact = service
+        .get_impact(Request::new(pb::GetImpactRequest {
+            root: Some(pb::EntityRef {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "root", 1)),
+            }),
+            max_depth: 5,
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let slugs: Vec<_> = impact
+        .nodes
+        .iter()
+        .filter_map(|node| node.entity.as_ref()?.id.as_ref().map(|id| id.slug.clone()))
+        .collect();
+    assert!(slugs.contains(&"b".to_string()), "{slugs:?}");
+    assert!(slugs.contains(&"c".to_string()), "{slugs:?}");
+    assert!(
+        slugs.contains(&"d".to_string()),
+        "legacy type walk did not reach d: {slugs:?}"
+    );
+    let through_business = impact.nodes.iter().any(|node| {
+        node.entity
+            .as_ref()
+            .and_then(|entity| entity.id.as_ref())
+            .is_some_and(|id| id.slug == "d")
+            && node
+                .path
+                .iter()
+                .any(|reference| reference.from_field.contains("property_relationships["))
+    });
+    assert!(
+        !through_business,
+        "d must be reached by the type walk, not the business edge"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_red_rebase_revalidates_an_added_source_when_the_target_property_is_gone() {
+    let namespace = "bd-rebase-added";
+    let branch = "bd-rebase-added";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: branch.into(),
+            doc: "added source".into(),
+        }))
+        .await
+        .unwrap();
+    let stored = service
+        .put_entity(with_branch(
+            Request::new(pb::PutEntityRequest {
+                entity: Some(order_targeting_sku(namespace)),
+                ..Default::default()
+            }),
+            branch,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let target_property = schema_of(&stored).property_relationships[0]
+        .target_property
+        .clone();
+    put(&service, product_without_sku(namespace)).await;
+    let error = service
+        .update_branch(Request::new(pb::UpdateBranchRequest {
+            name: branch.into(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument, "{error:?}");
+    let still = service
+        .get_entity(with_branch(
+            Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "order", 1)),
+            }),
+            branch,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    assert_eq!(
+        schema_of(&still).property_relationships[0].target_property,
+        target_property
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_red_small_reference_page_still_charges_the_full_scan() {
+    let namespace = "bd-ref-budget";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    for index in 0..4 {
+        put(
+            &service,
+            fan_in(namespace, &format!("owner-{index}"), 1_024),
+        )
+        .await;
+    }
+    let within = service
+        .get_incoming_references(Request::new(pb::GetReferencesRequest {
+            kind: pb::EntityKind::Schema as i32,
+            id: Some(id(namespace, "product", 1)),
+            page_size: 1,
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(within.references.len(), 1);
+    assert_ne!(within.next_page_token, "");
+    put(&service, fan_in(namespace, "owner-4", 1)).await;
+    let overflow = service
+        .get_incoming_references(Request::new(pb::GetReferencesRequest {
+            kind: pb::EntityKind::Schema as i32,
+            id: Some(id(namespace, "product", 1)),
+            page_size: 1,
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(overflow.code(), Code::ResourceExhausted, "{overflow:?}");
+    assert!(
+        overflow
+            .message()
+            .contains("business reference output budget exceeded"),
+        "{overflow:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_accept_coherent_incoming_status_follows_the_connection_id() {
+    let namespace = "bd-coherent-status";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    let mut order = schema_entity(
+        namespace,
+        "order",
+        1,
+        pb::Schema {
+            title: "Order".into(),
+            fields: vec![string_field("product_ref")],
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut order.kind {
+        schema.property_relationships.push(relationship(
+            namespace,
+            1,
+            Some(path(&[("sku", false)])),
+            Some("resolved"),
+        ));
+        schema
+            .property_relationships
+            .push(relationship(namespace, 1, None, Some("entity-only")));
+    }
+    let stored = put(&service, order).await;
+    let resolved_id = relationship_by_label(schema_of(&stored), "resolved")
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    let entity_only_id = relationship_by_label(schema_of(&stored), "entity-only")
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    let incoming = service
+        .get_incoming_references(Request::new(pb::GetReferencesRequest {
+            kind: pb::EntityKind::Schema as i32,
+            id: Some(id(namespace, "product", 1)),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .references;
+    let status = |connection_id: &str| {
+        incoming
+            .iter()
+            .find(|reference| {
+                reference
+                    .connection_id
+                    .as_ref()
+                    .is_some_and(|id| id.value == connection_id)
+            })
+            .unwrap()
+            .business_property_status
+    };
+    assert_eq!(
+        status(&resolved_id),
+        Some(pb::BusinessPropertyReferenceStatus::PropertyResolved as i32)
+    );
+    assert_eq!(
+        status(&entity_only_id),
+        Some(pb::BusinessPropertyReferenceStatus::EntityOnly as i32)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_accept_changed_source_revalidates_on_rebase_when_the_target_shape_changes() {
+    let namespace = "bd-rebase-changed";
+    let branch = "bd-rebase-changed";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    let stored = put(&service, order_targeting_sku(namespace)).await;
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: branch.into(),
+            doc: "changed source".into(),
+        }))
+        .await
+        .unwrap();
+    let mut edited = stored.clone();
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut edited.kind {
+        schema.title = "Branch title".into();
+    }
+    service
+        .put_entity(with_branch(
+            Request::new(pb::PutEntityRequest {
+                entity: Some(edited),
+                ..Default::default()
+            }),
+            branch,
+        ))
+        .await
+        .unwrap();
+    put(&service, product_without_sku(namespace)).await;
+    let error = service
+        .update_branch(Request::new(pb::UpdateBranchRequest {
+            name: branch.into(),
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument, "{error:?}");
+    let still = service
+        .get_entity(with_branch(
+            Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "order", 1)),
+            }),
+            branch,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    assert_eq!(schema_of(&still).title, "Branch title");
+    assert_eq!(
+        schema_of(&still).property_relationships[0]
+            .target_property
+            .as_ref()
+            .unwrap()
+            .segments[0]
+            .name,
+        "sku"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_accept_deleted_connection_id_is_not_revived_and_the_sibling_stays() {
+    let namespace = "bd-revive";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    let mut order = schema_entity(
+        namespace,
+        "order",
+        1,
+        pb::Schema {
+            title: "Order".into(),
+            fields: vec![string_field("product_ref")],
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut order.kind {
+        schema
+            .property_relationships
+            .push(labeled_relationship(namespace, "drop", None));
+        schema
+            .property_relationships
+            .push(labeled_relationship(namespace, "keep", None));
+    }
+    let stored = put(&service, order).await;
+    let dropped_id = relationship_by_label(schema_of(&stored), "drop")
+        .connection_id
+        .clone();
+    let kept_id = relationship_by_label(schema_of(&stored), "keep")
+        .connection_id
+        .clone();
+    let mut without = stored.clone();
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut without.kind {
+        schema.property_relationships =
+            vec![labeled_relationship(namespace, "keep", kept_id.clone())];
+    }
+    let remaining = put(&service, without).await;
+    assert_eq!(schema_of(&remaining).property_relationships.len(), 1);
+    assert_eq!(
+        schema_of(&remaining).property_relationships[0].connection_id,
+        kept_id
+    );
+    let mut revived = remaining.clone();
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut revived.kind {
+        schema
+            .property_relationships
+            .push(labeled_relationship(namespace, "drop", dropped_id));
+    }
+    let error = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(revived),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument, "{error:?}");
+    let fetched = get(&service, namespace, "order", 1).await;
+    assert_eq!(schema_of(&fetched).property_relationships.len(), 1);
+    assert_eq!(
+        schema_of(&fetched).property_relationships[0].connection_id,
+        kept_id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_accept_conflict_restore_renews_only_the_restored_occurrence() {
+    let namespace = "bd-conflict-ids";
+    let branch = "bd-conflict-ids";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    let mut order = schema_entity(
+        namespace,
+        "order",
+        1,
+        pb::Schema {
+            title: "Order".into(),
+            fields: vec![string_field("product_ref")],
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut order.kind {
+        schema
+            .property_relationships
+            .push(labeled_relationship(namespace, "restored", None));
+        schema
+            .property_relationships
+            .push(labeled_relationship(namespace, "kept", None));
+    }
+    let stored = put(&service, order).await;
+    let restored_id = relationship_by_label(schema_of(&stored), "restored")
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    let kept_id = relationship_by_label(schema_of(&stored), "kept")
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: branch.into(),
+            doc: "restore one occurrence".into(),
+        }))
+        .await
+        .unwrap();
+    let mut branched = stored.clone();
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut branched.kind {
+        schema.title = "Branch title".into();
+    }
+    service
+        .put_entity(with_branch(
+            Request::new(pb::PutEntityRequest {
+                entity: Some(branched),
+                ..Default::default()
+            }),
+            branch,
+        ))
+        .await
+        .unwrap();
+    let mut baseline = stored;
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut baseline.kind {
+        schema.title = "Baseline title".into();
+        let kept = relationship_by_label(schema, "kept").clone();
+        schema.property_relationships = vec![kept];
+    }
+    put(&service, baseline).await;
+    let merged = service
+        .merge_branch(Request::new(pb::MergeBranchRequest {
+            name: branch.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        merged.status,
+        pb::merge_branch_response::Status::Conflicts as i32,
+        "{merged:?}"
+    );
+    service
+        .resolve_branch_entry(Request::new(pb::ResolveBranchEntryRequest {
+            name: branch.into(),
+            r#ref: Some(pb::EntityRef {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "order", 1)),
+            }),
+            resolution: pb::resolve_branch_entry_request::Resolution::KeepOurs as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let resolved = service
+        .get_entity(with_branch(
+            Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "order", 1)),
+            }),
+            branch,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let resolved_schema = schema_of(&resolved);
+    assert_eq!(resolved_schema.property_relationships.len(), 2);
+    assert_eq!(
+        relationship_by_label(resolved_schema, "kept")
+            .connection_id
+            .as_ref()
+            .unwrap()
+            .value,
+        kept_id
+    );
+    let renewed = relationship_by_label(resolved_schema, "restored")
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    assert_ne!(renewed, restored_id);
+    assert_ne!(renewed, kept_id);
+    assert_ne!(renewed, "");
+    let baseline = get(&service, namespace, "order", 1).await;
+    assert_eq!(schema_of(&baseline).title, "Baseline title");
+    assert_eq!(schema_of(&baseline).property_relationships.len(), 1);
+    assert_eq!(
+        schema_of(&baseline).property_relationships[0]
+            .connection_id
+            .as_ref()
+            .unwrap()
+            .value,
+        kept_id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn review_accept_prepared_owner_rejects_the_next_identifier_relationship_and_oversized_schema(
+) {
+    let namespace = "bd-bounds";
+    let service = service().await;
+    let names: Vec<String> = (0..1_024).map(|index| format!("f{index}")).collect();
+    let mut schema = pb::Schema {
+        title: "Bounded".into(),
+        fields: names.iter().map(|name| string_field(name)).collect(),
+        ..Default::default()
+    };
+    schema.identifiers = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| pb::BusinessIdentifier {
+            property: Some(path(&[(name.as_str(), false)])),
+            role: if index == 0 {
+                pb::BusinessIdentifierRole::Primary as i32
+            } else {
+                pb::BusinessIdentifierRole::Alternate as i32
+            },
+            ..Default::default()
+        })
+        .collect();
+    let stored = put(&service, schema_entity(namespace, "bounded", 1, schema)).await;
+    assert_eq!(schema_of(&stored).identifiers.len(), 1_024);
+    assert!(schema_of(&stored).identifiers.iter().all(|identifier| {
+        identifier
+            .connection_id
+            .as_ref()
+            .is_some_and(|id| !id.value.is_empty())
+    }));
+    let mut too_many = stored.clone();
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut too_many.kind {
+        schema.fields.push(string_field("f1024"));
+        schema.identifiers.push(pb::BusinessIdentifier {
+            property: Some(path(&[("f1024", false)])),
+            role: pb::BusinessIdentifierRole::Alternate as i32,
+            ..Default::default()
+        });
+    }
+    let rejected = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(too_many),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.code(), Code::InvalidArgument, "{rejected:?}");
+    assert_eq!(
+        schema_of(&get(&service, namespace, "bounded", 1).await)
+            .identifiers
+            .len(),
+        1_024
+    );
+
+    put(&service, product_schema(namespace, 1)).await;
+    let related = put(&service, fan_in(namespace, "related", 1_024)).await;
+    assert_eq!(schema_of(&related).property_relationships.len(), 1_024);
+    assert!(schema_of(&related)
+        .property_relationships
+        .iter()
+        .all(|relationship| {
+            relationship
+                .connection_id
+                .as_ref()
+                .is_some_and(|id| !id.value.is_empty())
+        }));
+    let mut extra = related;
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut extra.kind {
+        schema
+            .property_relationships
+            .push(labeled_relationship(namespace, "extra", None));
+    }
+    let rejected = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(extra),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.code(), Code::InvalidArgument, "{rejected:?}");
+    assert_eq!(
+        schema_of(&get(&service, namespace, "related", 1).await)
+            .property_relationships
+            .len(),
+        1_024
+    );
+
+    let mut huge = schema_entity(
+        namespace,
+        "huge",
+        1,
+        pb::Schema {
+            title: "Huge".into(),
+            fields: vec![string_field("sku")],
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut huge.kind {
+        schema.fields[0].doc = "x".repeat(trogon_atlas_core::business_data::MAX_SCHEMA_BYTES);
+    }
+    let rejected = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(huge),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(rejected.code(), Code::InvalidArgument, "{rejected:?}");
+    assert_eq!(
+        service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "huge", 1)),
+            }))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
 }
