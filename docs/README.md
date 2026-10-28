@@ -57,6 +57,8 @@ Resource contracts and acceptance:
 - [Responsibility acceptance criteria](reference/responsibility-acceptance.md)
 - [Decision and Document contracts](reference/decision-and-document-contracts.md)
 - [Decision and Document acceptance requirements](reference/decision-and-document-acceptance.md)
+- [Design graph topology contracts](reference/design-topology-contracts.md)
+- [Design graph topology acceptance](reference/design-topology-acceptance.md)
 - [Supplied source bundle profile](reference/source-bundle-profile.md)
 - [Source integration contracts](reference/source-integration-contracts.md)
 - [Source control API](reference/source-control-api.md)
