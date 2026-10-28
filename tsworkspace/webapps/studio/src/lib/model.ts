@@ -59,7 +59,8 @@ export type EntityKind =
   | 'decision'
   | 'document'
   | 'dataProduct'
-  | 'specification';
+  | 'specification'
+  | 'systemGroup';
 
 export interface FieldTypeConfig {
   version?: number;
@@ -442,6 +443,7 @@ const KIND_SET: ReadonlySet<string> = new Set([
   'document',
   'dataProduct',
   'specification',
+  'systemGroup',
 ]);
 
 const WIRE_KIND: Record<string, EntityKind> = {
@@ -482,6 +484,7 @@ const WIRE_KIND: Record<string, EntityKind> = {
   ENTITY_KIND_DOCUMENT: 'document',
   ENTITY_KIND_DATA_PRODUCT: 'dataProduct',
   ENTITY_KIND_SPECIFICATION: 'specification',
+  ENTITY_KIND_SYSTEM_GROUP: 'systemGroup',
 };
 
 export function wireKind(wire: unknown): EntityKind | undefined {

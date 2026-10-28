@@ -7,6 +7,7 @@ import { DataProductInspector } from '@/components/DataProductInspector';
 import { CommunicationIntentDetails } from '@/components/CommunicationIntentDetails';
 import { ArchitecturalRelationshipDetails } from '@/components/ArchitecturalRelationshipDetails';
 import { ArchitectureResourceDetails } from '@/components/ArchitectureResourceDetails';
+import { SystemGroupDetails } from '@/components/SystemGroupDetails';
 import { SpecificationDetails } from '@/components/SpecificationDetails';
 import { CopyContextButton } from '@/components/CopyContextButton';
 import { EntityHistory } from '@/components/EntityHistory';
@@ -642,6 +643,7 @@ export function Inspector({
           <SourceIntegrationReview namespace={entity.id.namespace} asOf={asOf} />
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <ArchitecturalRelationshipDetails entity={entity} model={model} onSelect={onSelect} />
+          <SystemGroupDetails entity={entity} model={model} onSelect={onSelect} />
           <CommunicationIntentDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />
           {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} asOf={asOf} />}

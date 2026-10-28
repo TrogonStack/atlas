@@ -143,6 +143,8 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
   externalSystem: ['relationships.*', 'communications.*'],
   channel: ['bindings.*'],
   dataStore: ['attachments.*'],
+  systemGroup: ['members.*', 'relationships.*', 'actors.*'],
+  domain: ['members.*'],
   specification: [
     'schemas.*.definition',
     'messages.*.schemas.*',

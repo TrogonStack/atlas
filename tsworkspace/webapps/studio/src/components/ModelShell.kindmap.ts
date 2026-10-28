@@ -37,4 +37,5 @@ export const KIND_SHORT_TO_CAMEL: Record<string, string> = {
   specification: 'specification',
   decision: 'decision',
   document: 'document',
+  system_group: 'systemGroup',
 };
