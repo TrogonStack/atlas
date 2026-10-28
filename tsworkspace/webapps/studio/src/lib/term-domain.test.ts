@@ -19,3 +19,30 @@ it('does not infer ownership from namespace or accept an unversioned selection',
     expect(termOwningDomain(model.entities[0])).toBeUndefined();
   }
 });
+
+it.each(['01', '18446744073709551616', 9007199254740992, '1.0', '-1'])(
+  'rejects a noncanonical or inexact domain version %s',
+  (version) => {
+    const model = buildModel([
+      {
+        term: {
+          id: { namespace: 'context', slug: 'word', version: '1' },
+          owningDomain: { id: { namespace: 'business', slug: 'sales', version } },
+        },
+      },
+    ]);
+    expect(termOwningDomain(model.entities[0])).toBeUndefined();
+  },
+);
+
+it.each(['18446744073709551615', 7])('preserves exact domain version %s', (version) => {
+  const model = buildModel([
+    {
+      term: {
+        id: { namespace: 'context', slug: 'word', version: '1' },
+        owningDomain: { id: { namespace: 'business', slug: 'sales', version } },
+      },
+    },
+  ]);
+  expect(termOwningDomain(model.entities[0])?.version).toBe(String(version));
+});
