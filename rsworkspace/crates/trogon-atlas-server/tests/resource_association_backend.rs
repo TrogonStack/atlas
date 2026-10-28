@@ -1406,3 +1406,187 @@ async fn channel_links_select_another_exact_version_of_the_same_slug_but_never_t
     )
     .await;
 }
+
+async fn force_delete(client: &mut Client, kind: pb::EntityKind, slug: &str) {
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: kind as i32,
+                id: Some(id(slug)),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+}
+fn retitled(value: &pb::Entity, title: &str) -> pb::entity::Kind {
+    let mut kind = kind_entity(value);
+    match &mut kind {
+        pb::entity::Kind::Channel(v) => v.title = title.into(),
+        pb::entity::Kind::Component(v) => v.title = title.into(),
+        pb::entity::Kind::ExternalSystem(v) => v.title = title.into(),
+        pb::entity::Kind::DataProduct(v) => v.title = title.into(),
+        _ => panic!("owner"),
+    }
+    kind
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unchanged_dangling_channel_links_stay_editable_while_new_or_edited_unresolved_links_reject(
+) {
+    let mut client = client().await;
+    let (_, _, auto) = anchors(&mut client).await;
+    let pb::entity::Kind::AutomationSlice(slice) = auto.kind.as_ref().unwrap() else {
+        panic!()
+    };
+    let observation = connection(&auto, slice.source_read_models[0].connection_id.clone());
+    channel(&mut client, "gone", &observation, None, &[], vec![]).await;
+    channel(&mut client, "kept", &observation, None, &[], vec![]).await;
+    let routes = pb::ChannelLinkKind::RoutesTo;
+    let hub = channel(
+        &mut client,
+        "hub",
+        &observation,
+        None,
+        &[],
+        vec![link(routes, "gone", &[]), link(routes, "kept", &[])],
+    )
+    .await;
+    force_delete(&mut client, pb::EntityKind::Channel, "gone").await;
+
+    let edited = put(&mut client, retitled(&hub, "renamed hub")).await;
+    assert_eq!(
+        channel_value(&edited).links,
+        channel_value(&hub).links,
+        "dangling link keeps its identity and bytes"
+    );
+    let mut grown = channel_value(&edited);
+    grown.links.push(link(routes, "kept", &[]));
+    let grown = put(&mut client, pb::entity::Kind::Channel(grown)).await;
+    assert_eq!(channel_value(&grown).links.len(), 3);
+
+    let base = channel_value(&grown);
+    let mut new_missing = base.clone();
+    new_missing.links.push(link(routes, "absent", &[]));
+    reject_all(
+        &mut client,
+        "new unresolved link",
+        pb::entity::Kind::Channel(new_missing),
+    )
+    .await;
+    let mut retargeted = base.clone();
+    retargeted.links[0] = pb::ChannelLink {
+        connection_id: retargeted.links[0].connection_id.clone(),
+        ..link(routes, "absent", &[])
+    };
+    reject_all(
+        &mut client,
+        "dangling link retargeted to another missing channel",
+        pb::entity::Kind::Channel(retargeted),
+    )
+    .await;
+    let mut edited_kind = base;
+    edited_kind.links[0].doc = Some(pb::CatalogText {
+        value: "edited".into(),
+    });
+    reject_all(
+        &mut client,
+        "dangling link edited in place",
+        pb::entity::Kind::Channel(edited_kind),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unchanged_dangling_storage_claims_stay_editable_for_every_owner_kind() {
+    let mut client = client().await;
+    anchors(&mut client).await;
+    let doomed = data_store(
+        &mut client,
+        "doomed",
+        pb::data_store::AccessMode::Read,
+        &["result"],
+    )
+    .await;
+    let kept = data_store(
+        &mut client,
+        "survivor",
+        pb::data_store::AccessMode::ReadWrite,
+        &["other"],
+    )
+    .await;
+    let read = pb::StorageDirection::Read;
+    let write = pb::StorageDirection::Write;
+    let mut saved = Vec::new();
+    for owner in [
+        pb::EntityKind::Component,
+        pb::EntityKind::ExternalSystem,
+        pb::EntityKind::DataProduct,
+    ] {
+        let slug = format!("holder-{}", owner as i32);
+        let claims = vec![
+            claim(&doomed, read, Some(0)),
+            claim(&doomed, write, None),
+            claim(&kept, read, None),
+        ];
+        saved.push((
+            owner,
+            slug.clone(),
+            put(&mut client, owner_kind(owner, &slug, claims)).await,
+        ));
+    }
+    force_delete(&mut client, pb::EntityKind::DataStore, "doomed").await;
+
+    for (owner, slug, original) in saved {
+        let edited = put(&mut client, retitled(&original, "renamed")).await;
+        assert_eq!(
+            claims_of(&edited),
+            claims_of(&original),
+            "{owner:?}: dangling claims keep identity and bytes"
+        );
+        let mut grown = claims_of(&edited);
+        grown.push(claim(&kept, write, Some(0)));
+        let mut kind = owner_kind(owner, &slug, grown);
+        if let pb::entity::Kind::DataProduct(v) = &mut kind {
+            v.title = "renamed".into();
+        }
+        let grown = put(&mut client, kind).await;
+        assert_eq!(claims_of(&grown).len(), 4, "{owner:?}");
+
+        let base = claims_of(&grown);
+        let rebuilt = |claims: Vec<pb::StorageAccessClaim>| owner_kind(owner, &slug, claims);
+        let mut new_missing = base.clone();
+        let mut absent = claim(&kept, read, None);
+        absent.store = Some(pb::DataStoreRef {
+            id: Some(id("absent-store")),
+        });
+        new_missing.push(absent);
+        reject_all(
+            &mut client,
+            &format!("{owner:?} new unresolved claim"),
+            rebuilt(new_missing),
+        )
+        .await;
+        let mut flipped = base.clone();
+        flipped[1].direction = read as i32;
+        reject_all(
+            &mut client,
+            &format!("{owner:?} dangling claim edited in place"),
+            rebuilt(flipped),
+        )
+        .await;
+        let mut retargeted = base;
+        retargeted[0].store = Some(pb::DataStoreRef {
+            id: Some(id("absent-store")),
+        });
+        reject_all(
+            &mut client,
+            &format!("{owner:?} dangling claim retargeted to another missing store"),
+            rebuilt(retargeted),
+        )
+        .await;
+    }
+}
