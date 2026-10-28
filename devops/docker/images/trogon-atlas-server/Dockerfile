@@ -3,7 +3,7 @@
 # Compile on the build platform and cross-link for the target: rustc and
 # cargo under QEMU arm64 emulation hang the image job for hours.
 FROM --platform=$BUILDPLATFORM bufbuild/buf:1.75.0@sha256:adf82c7170be6629ec81dc907921ac1699407cd11c4f7fd7521b13c74152f849 AS buf
-FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:e12566d5abc17a0da741628782cdb504b68b8961f5bfcf677936bf3e8b32de29 AS builder
+FROM --platform=$BUILDPLATFORM rust:1.99-bookworm@sha256:48b7f435b8fc6378ce43b44f15e3a47fd8919b2825f835c39bd4bd3da50af5b8 AS builder
 COPY --from=buf /usr/local/bin/buf /usr/local/bin/buf
 ARG TARGETARCH
 ARG BUILDARCH
@@ -40,7 +40,7 @@ RUN --mount=type=bind,source=rsworkspace,target=/src/rsworkspace \
  && mkdir -p /out \
  && cp "/target/$(cat /target.txt)/release/trogon-atlas-server" /out/trogon-atlas-server
 
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS runtime
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS runtime
 RUN apk upgrade --no-cache \
  && apk add --no-cache git ca-certificates tini wget \
  && addgroup -g 101 -S trogon-atlas \
