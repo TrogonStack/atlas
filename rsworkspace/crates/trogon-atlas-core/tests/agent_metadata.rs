@@ -148,3 +148,12 @@ fn known_annotations_cannot_hide_behind_unknown_wire_fields() {
     assert!(validate(&owner).is_err());
     assert!(trogon_atlas_core::refs::try_outbound_refs(&owner).is_err());
 }
+
+#[test]
+fn groups_share_identity_domain_with_native_members() {
+    use trogon_atlas_proto::{Specification, ContractArtifact, ContractMemberId, ResourceGroup, ResourceGroupsAnnotation};
+    let id=trogon_atlas_core::connections::ConnectionId::new().to_string();
+    let groups=ResourceGroupsAnnotation { groups: vec![ResourceGroup { group_id: Some(trogon_atlas_proto::ConnectionId {value:id.clone()}), ..Default::default() }] };
+    let owner=Entity { kind:Some(entity::Kind::Specification(Specification { artifacts:vec![ContractArtifact {member_id:Some(ContractMemberId{value:id}),..Default::default()}],metadata:vec![annotation("trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",groups.encode_to_vec())],..Default::default()})),..Default::default()};
+    assert!(validate(&owner).is_err());
+}
