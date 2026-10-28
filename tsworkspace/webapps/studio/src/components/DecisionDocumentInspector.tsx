@@ -121,7 +121,7 @@ function Authored({ entity }: { entity: Entity }) {
       for (const revoke of revokers) revoke();
       revokers.clear();
     };
-  }, []);
+  }, [entity.kind, entity.id.namespace, entity.id.slug, entity.id.version, entity.uid, rawContent, rawFilename]);
   const authored = {
     id: entity.id,
     uid: entity.uid,
