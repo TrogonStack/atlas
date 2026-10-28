@@ -1,7 +1,8 @@
-use trogon_atlas_core::authored_date::AuthoredDate;
+use trogon_atlas_core::authored_date::{AuthoredDate, InvalidAuthoredDate};
 
 #[test]
-fn authored_dates_preserve_calendar_values_without_inventing_instants() {
+fn authored_dates_preserve_calendar_values_without_inventing_instants()
+-> Result<(), InvalidAuthoredDate> {
     for value in [
         "0001-01-01",
         "1900-02-28",
@@ -10,10 +11,11 @@ fn authored_dates_preserve_calendar_values_without_inventing_instants() {
         "2026-10-28",
         "9999-12-31",
     ] {
-        let date = value.parse::<AuthoredDate>().expect("valid calendar date");
+        let date = value.parse::<AuthoredDate>()?;
         assert_eq!(date.as_str(), value);
         assert_eq!(date.to_string(), value);
     }
+    Ok(())
 }
 
 #[test]
@@ -46,11 +48,13 @@ fn authored_dates_reject_invalid_days_and_noncanonical_dates() {
 }
 
 #[test]
-fn authored_date_order_is_chronological_across_months_and_years() {
-    let before = "2024-02-29".parse::<AuthoredDate>().expect("valid date");
-    let next_month = "2024-03-01".parse::<AuthoredDate>().expect("valid date");
-    let next_year = "2025-01-01".parse::<AuthoredDate>().expect("valid date");
+fn authored_date_order_is_chronological_across_months_and_years() -> Result<(), InvalidAuthoredDate>
+{
+    let before = "2024-02-29".parse::<AuthoredDate>()?;
+    let next_month = "2024-03-01".parse::<AuthoredDate>()?;
+    let next_year = "2025-01-01".parse::<AuthoredDate>()?;
     assert!(before < next_month);
     assert!(next_month < next_year);
     assert_eq!(before.clone(), before);
+    Ok(())
 }

@@ -10,8 +10,21 @@ pub struct InvalidAuthoredDate;
 impl FromStr for AuthoredDate {
     type Err = InvalidAuthoredDate;
 
-    fn from_str(_value: &str) -> Result<Self, Self::Err> {
-        Err(InvalidAuthoredDate)
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() != 10
+            || value.starts_with("0000")
+            || !value.bytes().enumerate().all(|(index, byte)| {
+                if index == 4 || index == 7 {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_digit()
+                }
+            })
+        {
+            return Err(InvalidAuthoredDate);
+        }
+        chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").map_err(|_| InvalidAuthoredDate)?;
+        Ok(Self(value.to_owned()))
     }
 }
 
