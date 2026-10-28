@@ -157,3 +157,11 @@ fn groups_share_identity_domain_with_native_members() {
     let owner=Entity { kind:Some(entity::Kind::Specification(Specification { artifacts:vec![ContractArtifact {member_id:Some(ContractMemberId{value:id}),..Default::default()}],metadata:vec![annotation("trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",groups.encode_to_vec())],..Default::default()})),..Default::default()};
     assert!(validate(&owner).is_err());
 }
+
+#[test]
+fn source_metadata_ownership_cannot_claim_native_additions() {
+    use trogon_atlas_proto::{SourceFieldOwnership,SourceOwnedFields,SourceOwnedField,source_field_ownership::Policy};
+    let owner=Entity {kind:Some(entity::Kind::Component(Component{metadata:vec![annotation("trogonatlas.eventmodel.v1alpha1.AgentAnnotation",vec![])],..Default::default()})),..Default::default()};
+    let policy=SourceFieldOwnership{policy:Some(Policy::Fields(SourceOwnedFields{fields:vec![SourceOwnedField::Metadata as i32]}))};
+    assert!(trogon_atlas_core::source_integration::validate_ownership(&owner,&policy).is_err());
+}
