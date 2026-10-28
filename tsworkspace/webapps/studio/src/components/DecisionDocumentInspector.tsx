@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   getDecisionDetail,
   listDecisionAmendments,
@@ -10,7 +10,9 @@ import {
 } from '@/lib/api';
 import { readAsOfFromUrl, readBranchFromUrl } from '@/lib/branch';
 import type { CatalogInspection, CatalogSubject, DocumentSelection } from '@/lib/decision-document';
+import { downloadBytes } from '@/lib/download';
 import type { Entity } from '@/lib/model';
+import { projectRetainedContent } from '@/lib/retained-content';
 import { responsibilitySubjects } from '@/lib/responsibility';
 
 function record(value: unknown): Record<string, unknown> {
@@ -107,18 +109,37 @@ function Amendments({ entity, branch, incoming }: { entity: Entity; branch?: str
 }
 function Authored({ entity }: { entity: Entity }) {
   const retained = record(entity.raw.retained);
-  const retainedContent = record(entity.raw.retainedContent);
+  const rawContent = entity.raw.retainedContent;
+  const rawFilename = entity.raw.filename;
   const link = record(entity.raw.link).value;
-  const binary =
-    typeof retainedContent.content === 'string'
-      ? retainedContent.content
-      : retainedContent.content instanceof Uint8Array
-        ? `[${retainedContent.content.length} retained bytes]`
-        : undefined;
+  // Derived from the current owner and declaration, so nothing survives an incarnation or content change.
+  const content = useMemo(() => projectRetainedContent(rawContent, rawFilename), [rawContent, rawFilename]);
+  const pending = useRef(new Set<() => void>());
+  useEffect(() => {
+    const revokers = pending.current;
+    return () => {
+      for (const revoke of revokers) revoke();
+      revokers.clear();
+    };
+  }, [entity.kind, entity.id.namespace, entity.id.slug, entity.id.version, entity.uid, rawContent, rawFilename]);
+  const authored = {
+    id: entity.id,
+    uid: entity.uid,
+    ...entity.raw,
+    ...(content?.ok && {
+      retainedContent: { ...record(rawContent), content: `[${content.bytes.length} retained bytes]` },
+    }),
+  };
+  const save = () => {
+    if (!content?.ok) return;
+    const revoke = downloadBytes(content.downloadName, content.bytes);
+    pending.current.add(revoke);
+    setTimeout(() => pending.current.delete(revoke), 0);
+  };
   return (
     <section className="flex flex-col gap-2">
       <h4 className="font-semibold">Loaded authored declarations</h4>
-      <Exact value={{ id: entity.id, uid: entity.uid, ...entity.raw }} />
+      <Exact value={authored} />
       {typeof retained.content === 'string' && (
         <>
           <p>
@@ -128,13 +149,25 @@ function Authored({ entity }: { entity: Entity }) {
           <pre className="whitespace-pre-wrap break-words">{retained.content}</pre>
         </>
       )}
-      {binary !== undefined && (
+      {content && !content.ok && (
+        <p role="alert">Retained content cannot be presented: {content.error}. No bytes are offered for download.</p>
+      )}
+      {content?.ok && (
         <>
           <p>
-            Retained binary content is shown inertly. HTML, SVG and other media are not rendered or executed; use
-            authorized download paths for exact bytes.
+            Retained content, {content.bytes.length} retained bytes of {content.mediaType}, digest sha256:
+            {content.digest}.{' '}
+            {content.text !== undefined
+              ? 'Recognized text is displayed inertly as strict UTF-8; HTML, SVG and other markup are never rendered or executed.'
+              : 'Download only: this media is not recognized text or is not valid UTF-8. HTML, SVG and other media are never rendered or executed.'}
           </p>
-          <pre className="whitespace-pre-wrap break-words">{binary}</pre>
+          {content.text !== undefined && <pre className="whitespace-pre-wrap break-words">{content.text}</pre>}
+          {content.filenameRejected && (
+            <p>Declared filename is not a valid logical filename; downloading as {content.downloadName}.</p>
+          )}
+          <button type="button" onClick={save}>
+            Download exact bytes ({content.downloadName})
+          </button>
         </>
       )}
       {typeof link === 'string' && (
