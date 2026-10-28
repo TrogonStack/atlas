@@ -142,6 +142,54 @@ fn identity_field(message: &DynamicMessage) -> &'static str {
     }
 }
 
+fn is_claim_descriptor(name: &str) -> bool {
+    matches!(
+        name,
+        "trogonatlas.eventmodel.v1alpha1.MessageClaim"
+            | "trogonatlas.eventmodel.v1alpha1.ClaimRoute"
+            | "trogonatlas.eventmodel.v1alpha1.ClaimTrigger"
+            | "trogonatlas.eventmodel.v1alpha1.ClaimFieldSelection"
+    )
+}
+fn claim_target(message: &DynamicMessage) -> Option<EntityRef> {
+    let bytes = message.encode_to_vec();
+    let (kind, id) = match message.descriptor().name() {
+        "MessageClaim" => (
+            trogon_atlas_proto::EntityKind::Specification,
+            trogon_atlas_proto::MessageClaim::decode(bytes.as_slice())
+                .ok()?
+                .message?
+                .specification?
+                .id,
+        ),
+        "ClaimTrigger" => (
+            trogon_atlas_proto::EntityKind::Specification,
+            trogon_atlas_proto::ClaimTrigger::decode(bytes.as_slice())
+                .ok()?
+                .message?
+                .specification?
+                .id,
+        ),
+        "ClaimRoute" => (
+            trogon_atlas_proto::EntityKind::Channel,
+            trogon_atlas_proto::ClaimRoute::decode(bytes.as_slice())
+                .ok()?
+                .channel?
+                .id,
+        ),
+        "ClaimFieldSelection" => {
+            return trogon_atlas_proto::ClaimFieldSelection::decode(bytes.as_slice())
+                .ok()?
+                .binding?
+                .owner
+        }
+        _ => return None,
+    };
+    Some(EntityRef {
+        kind: kind as i32,
+        id,
+    })
+}
 fn read_id(message: &DynamicMessage) -> Result<Option<ConnectionId>, ConnectionError> {
     if !message.has_field_by_name(identity_field(message)) {
         return Ok(None);
@@ -151,7 +199,11 @@ fn read_id(message: &DynamicMessage) -> Result<Option<ConnectionId>, ConnectionE
         .as_deref()
     {
         Some(Value::Message(id)) => match id.get_field_by_name("value").as_deref() {
-            Some(Value::String(value)) if value.is_empty() => Ok(None),
+            Some(Value::String(value))
+                if value.is_empty() && !is_claim_descriptor(message.descriptor().full_name()) =>
+            {
+                Ok(None)
+            }
             Some(Value::String(value)) => value.parse().map(Some),
             _ => Err(ConnectionError::InvalidId(String::new())),
         },
@@ -253,7 +305,20 @@ fn visit(
         && wrapper_target(descriptor.full_name()).is_none()
     {
         let mut endpoint = message.clone();
-        for name in ["connection_id", "doc", "label", "condition"] {
+        let descriptive: &[&str] = match descriptor.full_name() {
+            "trogonatlas.eventmodel.v1alpha1.MessageClaim" => &["connection_id", "group", "doc"],
+            "trogonatlas.eventmodel.v1alpha1.ClaimRoute" => {
+                &["connection_id", "parameter_values", "delivery_mode", "doc"]
+            }
+            "trogonatlas.eventmodel.v1alpha1.ClaimTrigger" => {
+                &["connection_id", "condition", "doc"]
+            }
+            "trogonatlas.eventmodel.v1alpha1.ClaimFieldSelection" => {
+                &["connection_id", "selectors", "doc"]
+            }
+            _ => &["connection_id", "doc", "label", "condition"],
+        };
+        for name in descriptive {
             if let Some(field) = descriptor.get_field_by_name(name) {
                 endpoint.clear_field(&field);
             }
@@ -265,7 +330,9 @@ fn visit(
         let occurrence = ConnectionOccurrence {
             id: read_id(message)?,
             path: path.to_owned(),
-            target: if descriptor.full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroupItem"
+            target: if is_claim_descriptor(descriptor.full_name()) {
+                claim_target(message)
+            } else if descriptor.full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroupItem"
             {
                 message
                     .get_field_by_name("target")

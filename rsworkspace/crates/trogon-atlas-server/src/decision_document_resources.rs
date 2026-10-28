@@ -103,10 +103,30 @@ fn kind_occurrence_count(entity: &pb::Entity) -> usize {
     }
 }
 
+pub(crate) fn checked_occurrence_count(entity: &pb::Entity) -> Result<usize, Status> {
+    if trogon_atlas_core::message_claims::declarations(entity).is_some() {
+        return trogon_atlas_core::connections::connection_occurrences(entity)
+            .map(|inventory| inventory.len())
+            .map_err(|_| Status::internal("stored occurrence inventory is invalid"));
+    }
+    Ok(occurrence_count(entity))
+}
+
+fn shipped_occurrence_count(entity: &pb::Entity) -> usize {
+    let native = trogon_atlas_core::message_claims::declarations(entity).map_or(0, |value| {
+        value.claims.len()
+            + value.routes.len()
+            + value.triggers.len()
+            + value.field_selections.len()
+    });
+    occurrence_count(entity).saturating_sub(native)
+}
+
 #[derive(Default)]
 pub(crate) struct CatalogBudget {
     rows: HashSet<pb::EntityKey>,
     inventoried: HashSet<pb::EntityKey>,
+    directory_inventoried: HashSet<pb::EntityKey>,
     selections: HashSet<(pb::EntityKey, u8)>,
     examined: usize,
     output: usize,
@@ -121,12 +141,13 @@ impl CatalogBudget {
         Ok(())
     }
 
-    pub(crate) fn owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+    pub(crate) fn row(&mut self, entity: &pb::Entity) -> Result<(), Status> {
         let key = pb::EntityKey::new(
             crate::conv::entity_kind(entity)?,
             crate::conv::entity_id(entity)?,
         );
-        if crate::validation::architecture_resources::is_resource(entity)
+        if (crate::validation::architecture_resources::is_resource(entity)
+            || matches!(entity.kind, Some(pb::entity::Kind::Schema(_))))
             && self.rows.insert(key.clone())
             && self.rows.len() > 5_000
         {
@@ -134,10 +155,42 @@ impl CatalogBudget {
                 "catalog resource budget exceeded",
             ));
         }
-        if self.inventoried.insert(key) {
-            self.examine(occurrence_count(entity))?;
+        Ok(())
+    }
+
+    pub(crate) fn directory_owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+        if trogon_atlas_core::message_claims::declarations(entity).is_none() {
+            return self.owner(entity);
+        }
+        self.row(entity)?;
+        let key = pb::EntityKey::new(
+            crate::conv::entity_kind(entity)?,
+            crate::conv::entity_id(entity)?,
+        );
+        if !self.inventoried.contains(&key) && self.directory_inventoried.insert(key) {
+            self.examine(shipped_occurrence_count(entity))?;
         }
         Ok(())
+    }
+
+    pub(crate) fn owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+        self.row(entity)?;
+        let key = pb::EntityKey::new(
+            crate::conv::entity_kind(entity)?,
+            crate::conv::entity_id(entity)?,
+        );
+        if self.inventoried.insert(key.clone()) {
+            let mut count = checked_occurrence_count(entity)?;
+            if self.directory_inventoried.contains(&key) {
+                count = count.saturating_sub(shipped_occurrence_count(entity));
+            }
+            self.examine(count)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn examined(&self) -> usize {
+        self.examined
     }
 
     pub(crate) fn output(&mut self) -> Result<(), Status> {
@@ -169,7 +222,11 @@ impl CatalogBudget {
         let count = match kind {
             1 if matches!(
                 owner.kind,
-                Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+                Some(
+                    pb::entity::Kind::Component(_)
+                        | pb::entity::Kind::ExternalSystem(_)
+                        | pb::entity::Kind::Domain(_)
+                )
             ) =>
             {
                 0

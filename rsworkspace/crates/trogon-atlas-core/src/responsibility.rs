@@ -144,6 +144,7 @@ pub fn connection_subject_owner(kind: EntityKind) -> bool {
             | EntityKind::DataProduct
             | EntityKind::Component
             | EntityKind::ExternalSystem
+            | EntityKind::Domain
     )
 }
 
@@ -265,6 +266,13 @@ pub fn resolve_subject(subject: &pb::ResponsibilitySubject, owner: &Entity) -> R
     match subject.selection.as_ref() {
         Some(Selection::Entity(_)) => Ok(()),
         Some(Selection::Connection(reference)) => {
+            let occurrence = connections::resolve_connection(owner, reference)
+                .map_err(|e| ResponsibilityError(e.to_string()))?;
+            if occurrence.path.contains(".message_claims.") {
+                return crate::message_claims::resolve_connection_context(owner, reference)
+                    .map(|_| ())
+                    .map_err(|e| ResponsibilityError(e.to_string()));
+            }
             if matches!(
                 entity_kind(owner),
                 Some(EntityKind::Component | EntityKind::ExternalSystem)

@@ -6654,3 +6654,503 @@ async fn decision_source_title_update_preserves_local_dates_makers_and_amendment
         Code::InvalidArgument
     );
 }
+
+#[tokio::test]
+async fn message_claims_source_rpc_isolation_covers_every_owner_and_supported_policy() {
+    for kind in [
+        pb::EntityKind::Component,
+        pb::EntityKind::ExternalSystem,
+        pb::EntityKind::Domain,
+    ] {
+        let bare = pb::Entity {
+            kind: Some(match kind {
+                pb::EntityKind::Component => pb::entity::Kind::Component(pb::Component::default()),
+                pb::EntityKind::ExternalSystem => {
+                    pb::entity::Kind::ExternalSystem(pb::ExternalSystem::default())
+                }
+                _ => pb::entity::Kind::Domain(pb::Domain::default()),
+            }),
+            ..Default::default()
+        };
+        let descriptors =
+            <prost_types::FileDescriptorSet as prost::Message>::decode(pb::FILE_DESCRIPTOR_SET)
+                .unwrap();
+        let values = descriptors
+            .file
+            .into_iter()
+            .flat_map(|f| f.enum_type)
+            .find(|e| e.name.as_deref() == Some("SourceOwnedField"))
+            .unwrap()
+            .value;
+        let mut policies = vec![None, Some(pb::SourceOwnedField::Unspecified)];
+        policies.extend(
+            values
+                .into_iter()
+                .filter_map(|v| pb::SourceOwnedField::try_from(v.number?).ok())
+                .filter(|v| *v != pb::SourceOwnedField::Unspecified)
+                .filter(|field| {
+                    trogon_atlas_core::source_integration::validate_ownership(
+                        &bare,
+                        &pb::SourceFieldOwnership {
+                            policy: Some(pb::source_field_ownership::Policy::Fields(
+                                pb::SourceOwnedFields {
+                                    fields: vec![*field as i32],
+                                },
+                            )),
+                        },
+                    )
+                    .is_ok()
+                })
+                .map(Some),
+        );
+        for policy in policies {
+            let nats = trogon_atlas_testsupport::shared().await;
+            let mut server = server(nats.store().await).await;
+            let namespace =
+                namespace(&mut server.client, "source-communication", "visible-owner").await;
+            let registration = registration(
+                &mut server.client,
+                "communication-source",
+                &namespace,
+                None,
+                None,
+            )
+            .await;
+            let target_id = pb::Id {
+                namespace: namespace.clone(),
+                slug: "target".into(),
+                version: 1,
+            };
+            server
+                .client
+                .put_entity(req(
+                    ADMIN,
+                    pb::PutEntityRequest {
+                        entity: Some(pb::Entity {
+                            kind: Some(pb::entity::Kind::Component(pb::Component {
+                                id: Some(target_id.clone()),
+                                title: "Target".into(),
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    None,
+                ))
+                .await
+                .unwrap();
+            let owner_id = pb::Id {
+                namespace: namespace.clone(),
+                slug: "source-owner".into(),
+                version: 1,
+            };
+            let selection = pb::SourceSelection {
+                selection: Some(pb::source_selection::Selection::Entity(pb::EntityRef {
+                    kind: kind as i32,
+                    id: Some(owner_id.clone()),
+                })),
+            };
+            let mapping = server
+                .client
+                .create_source_mapping(req(
+                    ADMIN,
+                    pb::CreateSourceMappingRequest {
+                        registration_revision: registration.revision.clone(),
+                        mapping: Some(pb::SourceMapping {
+                            id: "communication-mapping".into(),
+                            source: Some(source(&registration.id)),
+                            selection: Some(selection),
+                            ownership: Some(pb::SourceFieldOwnership {
+                                policy: Some(match policy {
+                                    None => pb::source_field_ownership::Policy::None(
+                                        pb::SourceNoOwnership {},
+                                    ),
+                                    Some(pb::SourceOwnedField::Unspecified) => {
+                                        pb::source_field_ownership::Policy::WholeOwner(
+                                            pb::SourceWholeOwnerOwnership {},
+                                        )
+                                    }
+                                    Some(field) => pb::source_field_ownership::Policy::Fields(
+                                        pb::SourceOwnedFields {
+                                            fields: vec![field as i32],
+                                        },
+                                    ),
+                                }),
+                            }),
+                            ..Default::default()
+                        }),
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .mapping
+                .unwrap();
+            assert!(mapping.base.is_none());
+            let snapshot = server
+                .client
+                .accept_source_snapshot(req(
+                    ADMIN,
+                    pb::AcceptSourceSnapshotRequest {
+                        registration_id: registration.id.clone(),
+                        registration_revision: registration.revision.clone(),
+                        inventory_bytes: inventory(&registration.id, "v1"),
+                        files: vec![pb::SourceFile {
+                            logical_name: "native/model".into(),
+                            media_type: "application/octet-stream".into(),
+                            content: b"native supplied content".to_vec(),
+                            ..Default::default()
+                        }],
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .snapshot
+                .unwrap();
+            let specification = server
+                .client
+                .put_entity(req(
+                    ADMIN,
+                    pb::PutEntityRequest {
+                        entity: Some(pb::Entity {
+                            kind: Some(pb::entity::Kind::Specification(pb::Specification {
+                                id: Some(pb::Id {
+                                    namespace: namespace.clone(),
+                                    slug: "notification-contract".into(),
+                                    version: 1,
+                                }),
+                                title: "Notification contract".into(),
+                                messages: vec![pb::ContractMessage {
+                                    name: Some(pb::MemberName {
+                                        value: "Notification".into(),
+                                    }),
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            })),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .entity
+                .unwrap();
+            let Some(pb::entity::Kind::Specification(spec)) = &specification.kind else {
+                panic!("specification")
+            };
+            let message_claims = Some(pb::MessageClaims {
+                claims: vec![pb::MessageClaim {
+                    direction: pb::CommunicationDirection::Receive as i32,
+                    message: Some(pb::ContractMemberRef {
+                        specification: Some(pb::SpecificationRef {
+                            id: spec.id.clone(),
+                        }),
+                        owner_uid: specification.system.as_ref().unwrap().uid.clone(),
+                        kind: pb::ContractMemberKind::Message as i32,
+                        member_id: spec.messages[0].member_id.clone(),
+                        expected_digest: None,
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+            let incoming = pb::Entity {
+                kind: Some(match kind {
+                    pb::EntityKind::Component => pb::entity::Kind::Component(pb::Component {
+                        id: Some(owner_id.clone()),
+                        title: "Imported".into(),
+                        message_claims,
+                        ..Default::default()
+                    }),
+                    pb::EntityKind::ExternalSystem => {
+                        pb::entity::Kind::ExternalSystem(pb::ExternalSystem {
+                            id: Some(owner_id.clone()),
+                            title: "Imported".into(),
+                            message_claims,
+                            ..Default::default()
+                        })
+                    }
+                    _ => pb::entity::Kind::Domain(pb::Domain {
+                        id: Some(owner_id.clone()),
+                        title: "Imported".into(),
+                        message_claims,
+                        ..Default::default()
+                    }),
+                }),
+                ..Default::default()
+            };
+            let error = server
+                .client
+                .preview_source_run(req(
+                    ADMIN,
+                    pb::PreviewSourceRunRequest {
+                        registration_id: registration.id.clone(),
+                        registration_revision: registration.revision.clone(),
+                        snapshot_id: snapshot.id.clone(),
+                        run_id: "communication-create".into(),
+                        native_payloads: vec![pb::SourceNativePayload {
+                            source: Some(source(&registration.id)),
+                            entity: Some(incoming.clone()),
+                        }],
+                        ..Default::default()
+                    },
+                    None,
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+            assert_eq!(
+                server
+                    .client
+                    .get_entity(req(
+                        ADMIN,
+                        pb::GetEntityRequest {
+                            kind: kind as i32,
+                            id: Some(owner_id.clone())
+                        },
+                        None
+                    ))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::NotFound
+            );
+            let after = server
+                .client
+                .get_source_mapping(req(
+                    ADMIN,
+                    pb::GetSourceMappingRequest {
+                        registration_id: registration.id.clone(),
+                        mapping_id: mapping.id.clone(),
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .mapping
+                .unwrap();
+            assert_eq!(after, mapping);
+            if policy == Some(pb::SourceOwnedField::Unspecified) {
+                let native = server
+                    .client
+                    .put_entity(req(
+                        ADMIN,
+                        pb::PutEntityRequest {
+                            entity: Some(incoming.clone()),
+                            ..Default::default()
+                        },
+                        None,
+                    ))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                let mut cleared = native.entity.clone().unwrap();
+                match cleared.kind.as_mut().unwrap() {
+                    pb::entity::Kind::Component(v) => v.message_claims = None,
+                    pb::entity::Kind::ExternalSystem(v) => v.message_claims = None,
+                    pb::entity::Kind::Domain(v) => v.message_claims = None,
+                    _ => panic!("claim owner"),
+                }
+                let error = server
+                    .client
+                    .preview_source_run(req(
+                        ADMIN,
+                        pb::PreviewSourceRunRequest {
+                            registration_id: registration.id.clone(),
+                            registration_revision: registration.revision.clone(),
+                            snapshot_id: snapshot.id.clone(),
+                            run_id: "claim-clear".into(),
+                            native_payloads: vec![pb::SourceNativePayload {
+                                source: Some(source(&registration.id)),
+                                entity: Some(cleared),
+                            }],
+                            ..Default::default()
+                        },
+                        None,
+                    ))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code(), Code::InvalidArgument);
+                let after = server
+                    .client
+                    .get_entity(req(
+                        ADMIN,
+                        pb::GetEntityRequest {
+                            kind: kind as i32,
+                            id: Some(owner_id.clone()),
+                        },
+                        None,
+                    ))
+                    .await
+                    .unwrap()
+                    .into_inner();
+                assert_eq!(after.entity, native.entity);
+                assert_eq!(after.etag, native.etag);
+                let after_mapping = server
+                    .client
+                    .get_source_mapping(req(
+                        ADMIN,
+                        pb::GetSourceMappingRequest {
+                            registration_id: registration.id.clone(),
+                            mapping_id: mapping.id.clone(),
+                        },
+                        None,
+                    ))
+                    .await
+                    .unwrap()
+                    .into_inner()
+                    .mapping
+                    .unwrap();
+                assert_eq!(after_mapping, mapping);
+            }
+            if policy != Some(pb::SourceOwnedField::Title) {
+                continue;
+            }
+            let native = server
+                .client
+                .put_entity(req(
+                    ADMIN,
+                    pb::PutEntityRequest {
+                        entity: Some(incoming),
+                        ..Default::default()
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+            let native_entity = native.entity.unwrap();
+            let mut adoption = mapping.clone();
+            adoption.adoption = Some(pb::SourceAdoption {
+                authorized_adoption: true,
+                observed: Some(pb::SourceObservedOwner {
+                    owner: Some(pb::EntityRef {
+                        kind: kind as i32,
+                        id: Some(owner_id.clone()),
+                    }),
+                    uid: native_entity.system.as_ref().unwrap().uid.clone(),
+                    etag: native.etag.clone(),
+                }),
+            });
+            let adopted = server
+                .client
+                .update_source_mapping(req(
+                    ADMIN,
+                    pb::UpdateSourceMappingRequest {
+                        registration_revision: registration.revision.clone(),
+                        if_match: mapping.revision,
+                        mapping: Some(adoption),
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .mapping
+                .unwrap();
+            let mut unrelated = native_entity.clone();
+            match unrelated.kind.as_mut().unwrap() {
+                pb::entity::Kind::Component(value) => {
+                    value.title = "Source title".into();
+                    value.message_claims = None;
+                }
+                pb::entity::Kind::ExternalSystem(value) => {
+                    value.title = "Source title".into();
+                    value.message_claims = None;
+                }
+                pb::entity::Kind::Domain(value) => {
+                    value.title = "Source title".into();
+                    value.message_claims = None;
+                }
+                _ => panic!("claim owner"),
+            }
+            let run = server
+                .client
+                .preview_source_run(req(
+                    ADMIN,
+                    pb::PreviewSourceRunRequest {
+                        registration_id: registration.id.clone(),
+                        registration_revision: registration.revision.clone(),
+                        snapshot_id: snapshot.id,
+                        run_id: "communication-title-update".into(),
+                        native_payloads: vec![pb::SourceNativePayload {
+                            source: Some(source(&registration.id)),
+                            entity: Some(unrelated),
+                        }],
+                        ..Default::default()
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .run
+                .unwrap();
+            let applied = apply(&mut server.client, &run).await;
+            assert_eq!(applied.status, pb::SourceRunStatus::Applied as i32);
+            let persisted = server
+                .client
+                .get_entity(req(
+                    ADMIN,
+                    pb::GetEntityRequest {
+                        kind: kind as i32,
+                        id: Some(owner_id),
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .entity
+                .unwrap();
+            assert_eq!(
+                trogon_atlas_core::message_claims::declarations(&persisted),
+                trogon_atlas_core::message_claims::declarations(&native_entity)
+            );
+            let current_mapping = server
+                .client
+                .get_source_mapping(req(
+                    ADMIN,
+                    pb::GetSourceMappingRequest {
+                        registration_id: registration.id.clone(),
+                        mapping_id: adopted.id.clone(),
+                    },
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner()
+                .mapping
+                .unwrap();
+            let mut whole_owner = current_mapping.clone();
+            whole_owner.ownership = Some(pb::SourceFieldOwnership {
+                policy: Some(pb::source_field_ownership::Policy::WholeOwner(
+                    pb::SourceWholeOwnerOwnership {},
+                )),
+            });
+            let error = server
+                .client
+                .update_source_mapping(req(
+                    ADMIN,
+                    pb::UpdateSourceMappingRequest {
+                        registration_revision: registration.revision,
+                        if_match: current_mapping.revision,
+                        mapping: Some(whole_owner),
+                    },
+                    None,
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+        }
+    }
+}

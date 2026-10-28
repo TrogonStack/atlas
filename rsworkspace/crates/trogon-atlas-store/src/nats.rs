@@ -2115,12 +2115,24 @@ fn encode_entity(entity: &Entity) -> Bytes {
     Bytes::from(entity.encode_to_vec())
 }
 
+fn validate_native_owner_metadata(entity: &Entity) -> StoreResult<()> {
+    if trogon_atlas_core::message_claims::declarations(entity).is_some() {
+        trogon_atlas_core::agent_metadata::group_refs(entity).map_err(|error| {
+            StoreError::Backend(format!("native owner metadata decode: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
 fn decode_entity(bytes: &[u8]) -> StoreResult<Entity> {
-    Entity::decode(bytes).map_err(|e| StoreError::Backend(format!("entity decode: {e}")))
+    let entity =
+        Entity::decode(bytes).map_err(|e| StoreError::Backend(format!("entity decode: {e}")))?;
+    validate_native_owner_metadata(&entity)?;
+    Ok(entity)
 }
 
 fn decode_entity_logged(bytes: &[u8], key: &str) -> StoreResult<Entity> {
-    Entity::decode(bytes).map_err(|e| {
+    let entity = Entity::decode(bytes).map_err(|e| {
         tracing::error!(
             key = %key,
             error = %e,
@@ -2130,7 +2142,9 @@ fn decode_entity_logged(bytes: &[u8], key: &str) -> StoreResult<Entity> {
             key: key.to_string(),
             reason: e.to_string(),
         }
-    })
+    })?;
+    validate_native_owner_metadata(&entity)?;
+    Ok(entity)
 }
 
 fn kind_of(entity: &Entity) -> Option<EntityKind> {
@@ -2233,8 +2247,12 @@ fn encode_branch_delta(delta: &trogon_atlas_proto::BranchDelta) -> Bytes {
 }
 
 fn decode_branch_delta(bytes: &[u8]) -> StoreResult<trogon_atlas_proto::BranchDelta> {
-    trogon_atlas_proto::BranchDelta::decode(bytes)
-        .map_err(|e| StoreError::Backend(format!("branch delta decode: {e}")))
+    let delta = trogon_atlas_proto::BranchDelta::decode(bytes)
+        .map_err(|e| StoreError::Backend(format!("branch delta decode: {e}")))?;
+    for entity in delta.base.iter().chain(delta.ours.iter()) {
+        validate_native_owner_metadata(entity)?;
+    }
+    Ok(delta)
 }
 
 /// Merged-view read for a single key on a branch: the branch's delta wins

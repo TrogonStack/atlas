@@ -50,6 +50,7 @@ impl OutboundRef {
 /// warning rather than emitting an `Unspecified` ref.
 pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
     let mut out = Vec::new();
+    crate::message_claims::outbound(entity, &mut out);
     let Some(kind) = entity.kind.as_ref() else {
         return out;
     };
@@ -1185,6 +1186,7 @@ pub fn retarget_refs(
 ) -> Vec<String> {
     let mut rewritten = crate::agent_metadata::retarget_groups(entity, from_kind, from_id, to_id)
         .unwrap_or_else(|e| panic!("{e}"));
+    crate::message_claims::retarget(entity, from_kind, from_id, to_id, &mut rewritten);
     let Some(kind) = entity.kind.as_mut() else {
         return rewritten;
     };

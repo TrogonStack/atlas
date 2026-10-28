@@ -21,6 +21,7 @@ pub mod metrics;
 pub mod operation_receipts;
 pub mod ownership;
 mod responsibility_resources;
+mod message_claims_resources;
 pub mod scope;
 pub mod search;
 pub mod service;

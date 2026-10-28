@@ -958,6 +958,27 @@ fn native_relationships_only(
     incoming: Option<&pb::Entity>,
     ownership: &pb::SourceFieldOwnership,
 ) -> Result<(), Status> {
+    if let Some(incoming) = incoming {
+        let unit = if matches!(
+            ownership.policy,
+            Some(pb::source_field_ownership::Policy::WholeOwner(_))
+        ) {
+            core::OwnershipUnit::WholeOwner
+        } else {
+            core::OwnershipUnit::Field(pb::SourceOwnedField::Title)
+        };
+        trogon_atlas_core::message_claims::validate_source_write(current, incoming, unit).map_err(
+            |_| Status::invalid_argument("message claims support native authoring only"),
+        )?;
+    } else if matches!(
+        ownership.policy,
+        Some(pb::source_field_ownership::Policy::WholeOwner(_))
+    ) && current.is_some_and(trogon_atlas_core::message_claims::has_content)
+    {
+        return Err(Status::invalid_argument(
+            "message claims support native authoring only",
+        ));
+    }
     let has_native_authoring = |entity: &pb::Entity| -> Result<bool, Status> {
         Ok(
             matches!(&entity.kind, Some(pb::entity::Kind::Decision(value)) if value.authored_on.is_some() || value.decided_on.is_some() || !value.decision_makers.is_empty() || !value.amends.is_empty())
@@ -1983,6 +2004,27 @@ async fn preview_source_run_attempt(
                 return Err(invalid());
             }
             crate::conv::validate_entity_content(incoming)?;
+            if trogon_atlas_core::message_claims::has_content(incoming) {
+                let id = entity_id(incoming)?;
+                service.require_visible(&ctx.vis, &id.namespace).await?;
+                let previous = match service
+                    .store
+                    .get(entity_kind(incoming)?, id, ctx.branch.as_deref())
+                    .await
+                {
+                    Ok(row) => Some(row.entity),
+                    Err(StoreError::NotFound) => None,
+                    Err(e) => return Err(store_err(e)),
+                };
+                trogon_atlas_core::message_claims::validate_source_write(
+                    previous.as_ref(),
+                    incoming,
+                    core::OwnershipUnit::Field(pb::SourceOwnedField::Title),
+                )
+                .map_err(|_| {
+                    Status::invalid_argument("message claims support native authoring only")
+                })?;
+            }
             let Some(mapping) = doc.state.mappings.iter().find(|m| {
                 !m.detached && m.source.as_ref() == Some(source) && m.branch == ctx.branch
             }) else {

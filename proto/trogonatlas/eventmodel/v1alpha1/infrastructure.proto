@@ -1,6 +1,7 @@
 syntax = "proto3";
 
 package trogonatlas.eventmodel.v1alpha1;
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
 
 import "google/protobuf/any.proto";
 import "trogonatlas/type/v1alpha1/id.proto";
@@ -9,6 +10,8 @@ import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
 import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
 import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+
+import "trogonatlas/eventmodel/v1alpha1/message_claims.proto";
 
 message ArchitecturalEndpoint {
   oneof target {
@@ -22,12 +25,6 @@ message ArchitecturalRelationship {
   ArchitecturalEndpoint target = 2;
   CatalogTitle label = 3;
   CatalogText doc = 4;
-}
-
-enum CommunicationDirection {
-  COMMUNICATION_DIRECTION_UNSPECIFIED = 0;
-  COMMUNICATION_DIRECTION_SEND = 1;
-  COMMUNICATION_DIRECTION_RECEIVE = 2;
 }
 
 message CommunicationDeclaration {
@@ -57,6 +54,7 @@ message Component {
   trogonatlas.type.v1alpha1.Id supersedes = 7;
   repeated ArchitecturalRelationship relationships = 8;
   repeated CommunicationDeclaration communications = 9;
+  MessageClaims message_claims = 11;
 }
 
 // An ExternalSystem is a living third-party boundary: the APIs and webhooks
@@ -72,6 +70,7 @@ message ExternalSystem {
   trogonatlas.type.v1alpha1.Id supersedes = 6;
   repeated ArchitecturalRelationship relationships = 7;
   repeated CommunicationDeclaration communications = 8;
+  MessageClaims message_claims = 9;
 }
 
 // Delivery status of a tracked item. Lives ONLY in Trackers -- design

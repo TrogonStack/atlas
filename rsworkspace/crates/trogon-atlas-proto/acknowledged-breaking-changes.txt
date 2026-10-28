@@ -9,3 +9,6 @@
 # the baseline contains the change and the check reports it as stale.
 MESSAGE_NO_DELETE proto/trogonatlas/annotation/v1alpha1/annotations.proto: Previously present message "CalendarDate" was deleted from file.
 FIELD_SAME_TYPE proto/trogonatlas/annotation/v1alpha1/annotations.proto: Field "4" with name "deprecated_on" on message "LifecycleAnnotation" changed type from "trogonatlas.annotation.v1alpha1.CalendarDate" to "trogonatlas.type.v1alpha1.CalendarDate".
+MESSAGE_NO_DELETE proto/trogonatlas/eventmodel/v1alpha1/decision_document.proto: Previously present message "CatalogText" was deleted from file.
+MESSAGE_NO_DELETE proto/trogonatlas/eventmodel/v1alpha1/decision_document.proto: Previously present message "CatalogTitle" was deleted from file.
+ENUM_NO_DELETE proto/trogonatlas/eventmodel/v1alpha1/infrastructure.proto: Previously present enum "CommunicationDirection" was deleted from file.

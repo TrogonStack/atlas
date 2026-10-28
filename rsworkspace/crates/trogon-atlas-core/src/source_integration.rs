@@ -122,6 +122,23 @@ fn unit_fields(
         && ["authored_on", "decided_on", "decision_makers", "amends"]
             .iter()
             .any(|name| value.has_field_by_name(name))
+
+    { return Err(SourceError::UnsupportedUnit); }
+    if unit == OwnershipUnit::WholeOwner
+        && value
+            .get_field_by_name("message_claims")
+            .as_deref()
+            .and_then(Value::as_message)
+            .is_some_and(|v| {
+                ["claims", "routes", "triggers", "field_selections"]
+                    .iter()
+                    .any(|name| {
+                        v.get_field_by_name(name)
+                            .as_deref()
+                            .and_then(Value::as_list)
+                            .is_some_and(|v| !v.is_empty())
+                    })
+            })
     {
         return Err(SourceError::UnsupportedUnit);
     }
@@ -293,7 +310,8 @@ pub fn validate_selection_ownership(
                 trogon_atlas_proto::EntityKind::try_from(owner.kind),
                 Ok(trogon_atlas_proto::EntityKind::Component
                     | trogon_atlas_proto::EntityKind::ExternalSystem
-                    | trogon_atlas_proto::EntityKind::DesignGraph)
+                    | trogon_atlas_proto::EntityKind::DesignGraph
+                    | trogon_atlas_proto::EntityKind::Domain)
             )
         }) {
             return Err(SourceError::UnsupportedUnit);
@@ -331,6 +349,7 @@ pub fn replace_unit(
     if selected.unit != unit || value.descriptor() != selected.value.descriptor() {
         return Err(SourceError::UnsupportedUnit);
     }
+    unit_fields(&selected.value, unit)?;
     let fields = unit_fields(&value, unit)?;
     for field in &fields {
         value.clear_field(field);

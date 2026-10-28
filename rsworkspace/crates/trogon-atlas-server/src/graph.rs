@@ -30,6 +30,7 @@ pub(crate) fn checked_refs(entity: &pb::Entity) -> Result<Vec<OutboundRef>, Stat
 pub struct ReverseIndex {
     pub by_target: HashMap<pb::EntityKey, Vec<pb::Reference>>,
     responsibility_occurrences: usize,
+    inventory_error: Option<Status>,
 }
 
 impl ReverseIndex {
@@ -38,12 +39,15 @@ impl ReverseIndex {
     }
 
     pub(crate) fn build_discovery(all: &[StoredEntity]) -> Result<Self, Status> {
-        let occurrences = responsibility_occurrence_count(all);
+        let occurrences = responsibility_occurrence_count(all)?;
         check_responsibility_occurrence_count(occurrences)?;
         Self::build_counted(all, occurrences)
     }
 
     pub(crate) fn check_discovery_budget(&self) -> Result<(), Status> {
+        if let Some(error) = &self.inventory_error {
+            return Err(error.clone());
+        }
         check_responsibility_occurrence_count(self.responsibility_occurrences)
     }
 
@@ -126,6 +130,7 @@ impl ReverseIndex {
         Ok(Self {
             by_target,
             responsibility_occurrences,
+            inventory_error: None,
         })
     }
 
@@ -138,16 +143,16 @@ impl ReverseIndex {
     }
 }
 
-fn responsibility_occurrence_count(all: &[StoredEntity]) -> usize {
+fn responsibility_occurrence_count(all: &[StoredEntity]) -> Result<usize, Status> {
     let mut seen = HashSet::new();
     all.iter()
         .filter_map(|stored| {
             let entity = &stored.entity;
             let key = pb::EntityKey::new(ref_entity_kind(entity)?, ref_entity_id(entity)?);
             seen.insert(key)
-                .then(|| crate::decision_document_resources::occurrence_count(entity))
+                .then(|| crate::decision_document_resources::checked_occurrence_count(entity))
         })
-        .fold(0, usize::saturating_add)
+        .try_fold(0_usize, |total, count| Ok(total.saturating_add(count?)))
 }
 
 fn check_responsibility_occurrence_count(count: usize) -> Result<(), Status> {
@@ -160,7 +165,7 @@ fn check_responsibility_occurrence_count(count: usize) -> Result<(), Status> {
 }
 
 pub(crate) fn validate_responsibility_discovery_budget(all: &[StoredEntity]) -> Result<(), Status> {
-    check_responsibility_occurrence_count(responsibility_occurrence_count(all))
+    check_responsibility_occurrence_count(responsibility_occurrence_count(all)?)
 }
 
 /// The live type library that owns each tenant message, so an Event,
@@ -610,8 +615,11 @@ pub fn closure(
             }
             continue;
         };
-        responsibility_occurrences = responsibility_occurrences
-            .saturating_add(crate::decision_document_resources::occurrence_count(entity));
+        let Ok(count) = crate::decision_document_resources::checked_occurrence_count(entity) else {
+            truncated = true;
+            break;
+        };
+        responsibility_occurrences = responsibility_occurrences.saturating_add(count);
         if check_responsibility_occurrence_count(responsibility_occurrences).is_err() {
             truncated = true;
             break;
@@ -1101,6 +1109,11 @@ fn catalog_provenance(
                 .and_then(|message| message.schemas.get(binding))
                 .and_then(|binding| binding.connection_id.clone());
         }
+    }
+    if let Ok(Some(occurrence)) =
+        trogon_atlas_core::message_claims::reference_occurrence(entity, field)
+    {
+        reference.connection_id = occurrence.id.map(Into::into);
     }
     (
         reference.catalog_subject,

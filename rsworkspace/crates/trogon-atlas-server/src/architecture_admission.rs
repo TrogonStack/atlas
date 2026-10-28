@@ -40,9 +40,9 @@ fn admission_references(
             if matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
                 return reference.from_field == "owning_domain";
             }
-            !architectural
+            !reference.from_field.starts_with("message_claims.") && (!architectural
                 || reference.from_field.starts_with("relationships[")
-                || reference.from_field.starts_with("communications[")
+                || reference.from_field.starts_with("communications["))
         })
         .collect())
 }
@@ -73,6 +73,60 @@ fn overlay_of(metas: &[OpMetaLike]) -> HashMap<pb::EntityKey, Option<&pb::Entity
         .collect()
 }
 
+fn claim_access_error(status: Status) -> Status {
+    if matches!(status.code(), Code::PermissionDenied | Code::NotFound) {
+        crate::message_claims_resources::unavailable()
+    } else {
+        status
+    }
+}
+fn charge_claim_selections(
+    owner: &pb::Entity,
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+    budget: &mut crate::decision_document_resources::CatalogBudget,
+) -> Result<(), Status> {
+    let Some(v) = trogon_atlas_core::message_claims::declarations(owner) else {
+        return Ok(());
+    };
+    for m in v
+        .claims
+        .iter()
+        .filter_map(|v| v.message.as_ref())
+        .chain(v.triggers.iter().filter_map(|v| v.message.as_ref()))
+    {
+        if let Some(spec) = m
+            .specification
+            .as_ref()
+            .and_then(|s| s.id.as_ref())
+            .and_then(|id| world.get(&pb::EntityKey::new(pb::EntityKind::Specification, id)))
+        {
+            budget.selection(
+                &pb::CatalogSubject {
+                    selection: Some(pb::catalog_subject::Selection::Member(m.clone())),
+                },
+                &spec.entity,
+            )?;
+        }
+    }
+    for s in &v.field_selections {
+        if let Some(b) = &s.binding {
+            if let Some(spec) =
+                b.owner.as_ref().and_then(|o| o.id.as_ref()).and_then(|id| {
+                    world.get(&pb::EntityKey::new(pb::EntityKind::Specification, id))
+                })
+            {
+                budget.selection(
+                    &pb::CatalogSubject {
+                        selection: Some(pb::catalog_subject::Selection::Connection(b.clone())),
+                    },
+                    &spec.entity,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn is_catalog(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
@@ -85,6 +139,59 @@ fn is_catalog(entity: &pb::Entity) -> bool {
 }
 
 impl EventModelServiceImpl {
+    pub(super) async fn validate_claim_resolution(
+        &self,
+        branch: &str,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        take_theirs: bool,
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        if !matches!(
+            kind,
+            pb::EntityKind::Component | pb::EntityKind::ExternalSystem | pb::EntityKind::Domain
+        ) {
+            return Ok(());
+        }
+        let delta = self
+            .store
+            .list_branch_deltas(branch)
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .find(|d| d.kind == kind && &d.id == id)
+            .ok_or_else(|| Status::not_found("branch entry not found"))?;
+        let baseline = match self.store.get(kind, id, None).await {
+            Ok(row) => Some(row.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(error) => return Err(store_err(error)),
+        };
+        let (selected, discarded) = if take_theirs {
+            (baseline.as_ref(), delta.ours.as_ref())
+        } else {
+            (delta.ours.as_ref(), baseline.as_ref())
+        };
+        let Some(selected) = selected else {
+            return Ok(());
+        };
+        if trogon_atlas_core::message_claims::declarations(selected).is_none() {
+            return Ok(());
+        }
+        let restored = trogon_atlas_core::connection_persistence::prepare_resolution(
+            delta.base.as_ref(),
+            discarded,
+            selected,
+        )
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        self.validate_architecture_selection(
+            &restored,
+            delta.ours.as_ref().unwrap_or(selected),
+            branch,
+            vis,
+        )
+        .await
+    }
+
     pub(super) async fn validate_architecture_selection(
         &self,
         entity: &pb::Entity,
@@ -202,6 +309,7 @@ impl EventModelServiceImpl {
                     && matches!(
                         meta.kind,
                         pb::EntityKind::Component
+                            | pb::EntityKind::Domain
                             | pb::EntityKind::ExternalSystem
                             | pb::EntityKind::Channel
                             | pb::EntityKind::DataStore
@@ -221,7 +329,9 @@ impl EventModelServiceImpl {
             return Ok(());
         }
         let mut catalog_budget = crate::decision_document_resources::CatalogBudget::default();
-        if resources.iter().any(|entity| is_catalog(entity)) {
+        if resources.iter().any(|entity| {
+            is_catalog(entity) || trogon_atlas_core::message_claims::has_content(entity)
+        }) {
             for entity in &resources {
                 catalog_budget.owner(entity)?;
             }
@@ -307,6 +417,44 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
+        let selected_subjects = selected_claim_subjects(&resources, &world);
+        if !selected_subjects.is_empty() {
+            for resource in &resources {
+                catalog_budget.owner(resource)?;
+            }
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+        }
+        for (key, subject) in selected_subjects {
+            let Some(selected) = world.get(&key).and_then(|owner| {
+                crate::message_claims_resources::selected(&subject, &owner.entity)
+            }) else {
+                continue;
+            };
+            let targets = crate::message_claims_resources::native_targets(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+            charge_claim_selections(&selected, &world, &mut catalog_budget)?;
+            crate::message_claims_resources::validate(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+        }
         self.validate_catalog_replacements(
             &proposal,
             branch,
@@ -316,6 +464,61 @@ impl EventModelServiceImpl {
             &mut catalog_budget,
         )
         .await?;
+        let mut claim_prepared = HashMap::new();
+        for resource in &resources {
+            if trogon_atlas_core::message_claims::declarations(resource).is_none() {
+                continue;
+            }
+            let kind = entity_kind(resource)?;
+            let id = entity_id(resource)?;
+            let previous = match self.store.get(kind, id, branch).await {
+                Ok(row) => Some(row.entity),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let prepared =
+                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
+            catalog_budget.owner(&prepared)?;
+            let changed = crate::message_claims_resources::changed(previous.as_ref(), &prepared);
+            let targets = trogon_atlas_core::outbound_refs(&changed)
+                .into_iter()
+                .filter(|r| r.from_field.starts_with("message_claims."))
+                .filter_map(|r| Some((r.to_kind?, r.to_id)))
+                .collect();
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            let targets = crate::message_claims_resources::native_targets(
+                &changed,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+            charge_claim_selections(&changed, &world, &mut catalog_budget)?;
+            crate::message_claims_resources::validate(
+                &changed,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            claim_prepared.insert(pb::EntityKey::new(kind, id), prepared);
+        }
         let context: Vec<_> = world.into_values().collect();
         let event_products: Vec<_> = resources
             .iter()
@@ -347,15 +550,19 @@ impl EventModelServiceImpl {
         for resource in resources {
             let kind = entity_kind(resource)?;
             let id = entity_id(resource)?;
-            let previous = match self.store.get(kind, id, branch).await {
-                Ok(stored) => Some(stored.entity),
-                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
-                Err(error) => return Err(store_err(error)),
-            };
             let prepared =
-                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
+                if let Some(prepared) = claim_prepared.remove(&pb::EntityKey::new(kind, id)) {
+                    prepared
+                } else {
+                    let previous = match self.store.get(kind, id, branch).await {
+                        Ok(stored) => Some(stored.entity),
+                        Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                        Err(error) => return Err(store_err(error)),
+                    };
+                    prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
+                };
             super::validate_entity_content(&prepared)?;
-            let issues = validation::architecture_resources::validate_with_previous(
+            let issues = validation::architecture_resources::validate_admission_with_previous(
                 &prepared,
                 &context,
                 previous.as_ref(),
@@ -404,6 +611,7 @@ impl EventModelServiceImpl {
                     entity.kind,
                     Some(
                         pb::entity::Kind::Component(_)
+                            | pb::entity::Kind::Domain(_)
                             | pb::entity::Kind::ExternalSystem(_)
                             | pb::entity::Kind::Channel(_)
                             | pb::entity::Kind::DataStore(_)
@@ -481,6 +689,38 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
+        let mut claim_budget = crate::decision_document_resources::CatalogBudget::default();
+        let selected_subjects = selected_claim_subjects(&resources, &world);
+        if !selected_subjects.is_empty() {
+            for resource in &resources {
+                claim_budget.owner(resource)?;
+            }
+        }
+        for (key, subject) in selected_subjects {
+            let Some(owner) = world.get(&key) else {
+                continue;
+            };
+            claim_budget.owner(&owner.entity)?;
+            let Some(selected) = crate::message_claims_resources::selected(&subject, &owner.entity)
+            else {
+                continue;
+            };
+            if let Ok(targets) = crate::message_claims_resources::native_targets(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            ) {
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    ArchitectureTargetAccess::ExactDiagnostic(&lens),
+                    targets,
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+            }
+            charge_claim_selections(&selected, &world, &mut claim_budget)?;
+        }
         let mut budget = crate::decision_document_resources::CatalogBudget::default();
         for entity in &resources {
             let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
@@ -524,6 +764,44 @@ impl EventModelServiceImpl {
                     .and_then(|replacement| replacement.decision.as_ref())
                     .and_then(|reference| reference.id.clone());
             }
+        }
+        for resource in &resources {
+            if !trogon_atlas_core::message_claims::has_content(resource) {
+                continue;
+            }
+            claim_budget.owner(resource)?;
+            let references = trogon_atlas_core::outbound_refs(resource)
+                .into_iter()
+                .filter(|r| r.from_field.starts_with("message_claims."))
+                .filter_map(|r| Some((r.to_kind?, r.to_id)))
+                .collect();
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                access,
+                references,
+                &mut loaded,
+                &mut world,
+            )
+            .await?;
+            if let Ok(targets) = crate::message_claims_resources::native_targets(
+                resource,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            ) {
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    access,
+                    targets,
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+            }
+            charge_claim_selections(resource, &world, &mut claim_budget)?;
+        }
+        for row in world.values() {
+            claim_budget.row(&row.entity)?;
         }
         Ok(world.into_values().collect())
     }
@@ -594,6 +872,7 @@ impl EventModelServiceImpl {
                 super::ListFilter {
                     kinds: &[
                         pb::EntityKind::Component,
+                        pb::EntityKind::Domain,
                         pb::EntityKind::ExternalSystem,
                         pb::EntityKind::Channel,
                         pb::EntityKind::DataStore,
@@ -673,6 +952,11 @@ impl EventModelServiceImpl {
             let key = pb::EntityKey::new(kind, &id);
             if !loaded.insert(key.clone()) {
                 continue;
+            }
+            if loaded.len() > 5_000 {
+                return Err(Status::resource_exhausted(
+                    "architecture row budget exceeded",
+                ));
             }
             let stored = match self.store.get(kind, &id, branch).await {
                 Ok(stored) => Some(stored),
@@ -1049,6 +1333,7 @@ impl EventModelServiceImpl {
             entity.kind,
             Some(
                 pb::entity::Kind::Component(_)
+                    | pb::entity::Kind::Domain(_)
                     | pb::entity::Kind::ExternalSystem(_)
                     | pb::entity::Kind::Channel(_)
                     | pb::entity::Kind::DataStore(_)
@@ -1161,6 +1446,50 @@ fn observation_endpoints(
         }
     }
     endpoints
+}
+
+fn selected_claim_subjects(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> Vec<(pb::EntityKey, pb::ResponsibilitySubject)> {
+    let mut seen = HashSet::new();
+    resources
+        .iter()
+        .flat_map(|entity| {
+            crate::responsibility_resources::assignments(entity)
+                .iter()
+                .filter_map(|assignment| assignment.subject.clone())
+                .chain(
+                    crate::decision_document_resources::subjects(entity)
+                        .iter()
+                        .filter_map(|association| association.subject.as_ref())
+                        .map(crate::decision_document_resources::responsibility_subject),
+                )
+        })
+        .filter_map(|subject| {
+            let Some(pb::responsibility_subject::Selection::Connection(reference)) =
+                &subject.selection
+            else {
+                return None;
+            };
+            let owner = reference.owner.as_ref()?;
+            let key = pb::EntityKey::new(
+                pb::EntityKind::try_from(owner.kind).ok()?,
+                owner.id.as_ref()?,
+            );
+            let row = world.get(&key)?;
+            if trogon_atlas_core::message_claims::declarations(&row.entity).is_none()
+                || !seen.insert((
+                    key.clone(),
+                    reference.owner_uid.clone(),
+                    reference.id.clone(),
+                ))
+            {
+                return None;
+            }
+            Some((key, subject))
+        })
+        .collect()
 }
 
 fn responsibility_endpoints(
