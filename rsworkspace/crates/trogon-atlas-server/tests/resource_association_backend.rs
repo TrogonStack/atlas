@@ -682,6 +682,7 @@ async fn storage_claims_admit_exact_stores_attachments_and_ports_for_every_owner
 #[tokio::test(flavor = "multi_thread")]
 async fn hidden_and_missing_storage_targets_fail_identically() {
     let mut client = client().await;
+    claim_visible_namespace(&mut client).await;
     anchors(&mut client).await;
     let storage = data_store(
         &mut client,
@@ -730,6 +731,7 @@ async fn hidden_and_missing_storage_targets_fail_identically() {
     assert_eq!(hidden.code(), missing.code());
     assert_eq!(hidden.message(), missing.message());
     assert_ne!(hidden.code(), Code::Ok);
+    assert_ne!(hidden.code(), Code::PermissionDenied, "{hidden}");
 }
 
 async fn outgoing(client: &mut Client, kind: pb::EntityKind, slug: &str) -> Vec<pb::Reference> {
@@ -1035,4 +1037,311 @@ async fn mixed_owner_inventories_share_the_occurrence_budget_across_links_and_cl
             .unwrap_err();
         assert_eq!(error.code(), Code::ResourceExhausted, "{slug}: {error}");
     }
+}
+
+async fn claim_visible_namespace(client: &mut Client) {
+    client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(entity(pb::entity::Kind::Event(pb::Event {
+                    id: Some(visible_id("claim")),
+                    title: "Claim".into(),
+                    ..Default::default()
+                }))),
+                ..Default::default()
+            },
+            LIMITED,
+            None,
+        ))
+        .await
+        .unwrap();
+}
+fn visible_id(slug: &str) -> pb::Id {
+    pb::Id {
+        namespace: "visible".into(),
+        slug: slug.into(),
+        version: 1,
+    }
+}
+fn delete_op(kind: pb::EntityKind, id: pb::Id) -> pb::BatchMutateOp {
+    pb::BatchMutateOp {
+        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+            kind: kind as i32,
+            id: Some(id),
+            mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+            ..Default::default()
+        })),
+    }
+}
+fn put_op(value: pb::entity::Kind) -> pb::BatchMutateOp {
+    pb::BatchMutateOp {
+        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+            entity: Some(entity(value)),
+            ..Default::default()
+        })),
+    }
+}
+async fn batch(
+    client: &mut Client,
+    token: &str,
+    ops: Vec<pb::BatchMutateOp>,
+) -> Result<pb::BatchMutateResponse, tonic::Status> {
+    client
+        .batch_mutate(request(
+            pb::BatchMutateRequest {
+                ops,
+                ..Default::default()
+            },
+            token,
+            None,
+        ))
+        .await
+        .map(tonic::Response::into_inner)
+}
+async fn exists(client: &mut Client, kind: pb::EntityKind, id: pb::Id) -> bool {
+    client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(id),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .is_ok()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hidden_referrers_block_safe_delete_without_leaking_and_batch_overlay_is_final() {
+    let mut client = client().await;
+    claim_visible_namespace(&mut client).await;
+    let (_, _, auto) = anchors(&mut client).await;
+    let pb::entity::Kind::AutomationSlice(slice) = auto.kind.as_ref().unwrap() else {
+        panic!("slice")
+    };
+    let observation = connection(&auto, slice.source_read_models[0].connection_id.clone());
+    let shared_channel = put(
+        &mut client,
+        pb::entity::Kind::Channel(pb::Channel {
+            id: Some(visible_id("shared")),
+            title: "Shared".into(),
+            bindings: vec![pb::ChannelBinding {
+                observation: Some(observation.clone()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await;
+    let shared_store = put(
+        &mut client,
+        pb::entity::Kind::DataStore(pb::DataStore {
+            id: Some(visible_id("shared-store")),
+            title: "Shared store".into(),
+            store_class: Some(pb::StoreClass {
+                kind: Some(pb::store_class::Kind::Known(
+                    pb::store_class::Known::Cache as i32,
+                )),
+            }),
+            attachments: vec![pb::ReadModelAttachment {
+                read_model: Some(pb::ReadModelRef {
+                    id: Some(id("result")),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await;
+    let hidden_channel = |links: Vec<pb::ChannelLink>| {
+        pb::entity::Kind::Channel(pb::Channel {
+            id: Some(id("hidden-hub")),
+            title: "Hidden hub".into(),
+            bindings: vec![pb::ChannelBinding {
+                observation: Some(observation.clone()),
+                ..Default::default()
+            }],
+            links,
+            ..Default::default()
+        })
+    };
+    let hidden_component = |claims: Vec<pb::StorageAccessClaim>| {
+        pb::entity::Kind::Component(pb::Component {
+            id: Some(id("hidden-app")),
+            title: "Hidden app".into(),
+            storage_claims: claims,
+            ..Default::default()
+        })
+    };
+    let link_to_shared = pb::ChannelLink {
+        kind: pb::ChannelLinkKind::Composes as i32,
+        target: Some(pb::ChannelRef {
+            id: Some(visible_id("shared")),
+        }),
+        ..Default::default()
+    };
+    let claim_on_shared = claim(&shared_store, pb::StorageDirection::Read, None);
+    let hub = put(&mut client, hidden_channel(vec![link_to_shared.clone()])).await;
+    put(&mut client, hidden_component(vec![claim_on_shared.clone()])).await;
+    assert!(shared_channel.system.is_some());
+
+    for (kind, target) in [
+        (pb::EntityKind::Channel, visible_id("shared")),
+        (pb::EntityKind::DataStore, visible_id("shared-store")),
+    ] {
+        let error = client
+            .delete_entity(request(
+                pb::DeleteEntityRequest {
+                    kind: kind as i32,
+                    id: Some(target.clone()),
+                    mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+                    ..Default::default()
+                },
+                LIMITED,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::FailedPrecondition, "{kind:?}: {error}");
+        assert!(!error.message().contains("hidden"), "{kind:?}: {error}");
+        assert!(exists(&mut client, kind, target.clone()).await);
+        let refused = batch(&mut client, LIMITED, vec![delete_op(kind, target.clone())])
+            .await
+            .map_or_else(
+                |status| status.code() != Code::Ok,
+                |r| r.status != pb::batch_mutate_response::Status::Applied as i32,
+            );
+        assert!(refused, "{kind:?}");
+        assert!(exists(&mut client, kind, target).await);
+    }
+
+    let removed = batch(
+        &mut client,
+        ADMIN,
+        vec![
+            delete_op(pb::EntityKind::Channel, visible_id("shared")),
+            put_op(pb::entity::Kind::Channel(pb::Channel {
+                links: vec![],
+                ..channel_value(&hub)
+            })),
+            delete_op(pb::EntityKind::DataStore, visible_id("shared-store")),
+            delete_op(pb::EntityKind::Component, id("hidden-app")),
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        removed.status,
+        pb::batch_mutate_response::Status::Applied as i32,
+        "{removed:?}"
+    );
+    assert!(!exists(&mut client, pb::EntityKind::Channel, visible_id("shared")).await);
+    assert!(
+        !exists(
+            &mut client,
+            pb::EntityKind::DataStore,
+            visible_id("shared-store")
+        )
+        .await
+    );
+    assert!(!exists(&mut client, pb::EntityKind::Component, id("hidden-app")).await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn port_removal_must_carry_its_dependent_claim_in_the_same_guarded_mutation() {
+    let mut client = client().await;
+    anchors(&mut client).await;
+    let storage = data_store(
+        &mut client,
+        "storage",
+        pb::data_store::AccessMode::Read,
+        &["result"],
+    )
+    .await;
+    let seeded = put(
+        &mut client,
+        pb::entity::Kind::DataProduct(pb::DataProduct {
+            outputs: vec![output("Result"), output("Other")],
+            ..product("offering")
+        }),
+    )
+    .await;
+    let pb::entity::Kind::DataProduct(stored) = seeded.kind.clone().unwrap() else {
+        panic!("product")
+    };
+    let kept = stored.outputs[0].port_id.clone();
+    let dropped = stored.outputs[1].port_id.clone();
+    let with_claim = |port: Option<pb::DataPortId>| {
+        let mut value = claim(&storage, pb::StorageDirection::Read, None);
+        value.port_id = port;
+        value
+    };
+    let revise = |outputs: Vec<pb::DataOutputPort>, claims: Vec<pb::StorageAccessClaim>| {
+        pb::entity::Kind::DataProduct(pb::DataProduct {
+            outputs,
+            storage_claims: claims,
+            ..stored.clone()
+        })
+    };
+    put(
+        &mut client,
+        revise(stored.outputs.clone(), vec![with_claim(dropped.clone())]),
+    )
+    .await;
+    let before = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::DataProduct as i32,
+                id: Some(id("offering")),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+
+    reject_all(
+        &mut client,
+        "port removed, claim kept",
+        revise(
+            vec![stored.outputs[0].clone()],
+            vec![with_claim(dropped.clone())],
+        ),
+    )
+    .await;
+    let unchanged = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::DataProduct as i32,
+                id: Some(id("offering")),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(unchanged, before, "a rejected removal publishes nothing");
+
+    let replaced = put(
+        &mut client,
+        revise(
+            vec![stored.outputs[0].clone()],
+            vec![with_claim(kept.clone())],
+        ),
+    )
+    .await;
+    let pb::entity::Kind::DataProduct(replaced) = replaced.kind.unwrap() else {
+        panic!("product")
+    };
+    assert_eq!(replaced.outputs.len(), 1);
+    assert_eq!(replaced.storage_claims[0].port_id, kept);
+
+    let removed = put(&mut client, revise(vec![stored.outputs[0].clone()], vec![])).await;
+    let pb::entity::Kind::DataProduct(removed) = removed.kind.unwrap() else {
+        panic!("product")
+    };
+    assert!(removed.storage_claims.is_empty());
 }

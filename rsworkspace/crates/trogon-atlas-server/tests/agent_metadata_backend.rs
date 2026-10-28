@@ -37,8 +37,8 @@ async fn assert_metadata_rejected(entity: pb::Entity) -> Result<(), Box<dyn std:
 }
 
 #[tokio::test]
-async fn agent_annotation_rejects_a_behavioral_owner_without_publication()
--> Result<(), Box<dyn std::error::Error>> {
+async fn agent_annotation_rejects_a_behavioral_owner_without_publication(
+) -> Result<(), Box<dyn std::error::Error>> {
     assert_metadata_rejected(pb::Entity {
         kind: Some(pb::entity::Kind::Event(pb::Event {
             id: Some(pb::Id {
@@ -60,8 +60,8 @@ async fn agent_annotation_rejects_a_behavioral_owner_without_publication()
 }
 
 #[tokio::test]
-async fn malformed_lifecycle_annotation_rejects_without_publication()
--> Result<(), Box<dyn std::error::Error>> {
+async fn malformed_lifecycle_annotation_rejects_without_publication(
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut entity = boundary("malformed-lifecycle", false, None);
     if let Some(pb::entity::Kind::Component(value)) = entity.kind.as_mut() {
         value.metadata.push(prost_types::Any {
@@ -74,8 +74,8 @@ async fn malformed_lifecycle_annotation_rejects_without_publication()
 }
 
 #[tokio::test]
-async fn duplicate_lifecycle_annotations_reject_without_publication()
--> Result<(), Box<dyn std::error::Error>> {
+async fn duplicate_lifecycle_annotations_reject_without_publication(
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut entity = boundary("duplicate-lifecycle", false, Some("draft"));
     if let Some(pb::entity::Kind::Component(value)) = entity.kind.as_mut() {
         value.metadata.push(lifecycle("draft"));
@@ -122,8 +122,8 @@ fn boundary(slug: &str, external: bool, status: Option<&str>) -> pb::Entity {
 }
 
 #[tokio::test]
-async fn lifecycle_filters_include_implementation_and_external_boundaries()
--> Result<(), Box<dyn std::error::Error>> {
+async fn lifecycle_filters_include_implementation_and_external_boundaries(
+) -> Result<(), Box<dyn std::error::Error>> {
     let service = EventModelServiceImpl::try_new(
         Arc::new(trogon_atlas_testsupport::shared().await.store().await),
         ServerMetrics::default(),
