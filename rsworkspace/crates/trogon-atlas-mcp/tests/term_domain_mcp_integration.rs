@@ -55,7 +55,7 @@ fn call_tool_result_text(result: &rmcp::model::CallToolResult) -> serde_json::Va
     serde_json::from_str(&result.content[0].as_text().unwrap().text).unwrap()
 }
 
-const MANIFEST: &str = r#"apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+const MANIFEST: &str = r"apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
 kind: Domain
 metadata: {namespace: vocabulary, name: sales}
 spec: {title: Sales}
@@ -66,7 +66,7 @@ metadata: {namespace: vocabulary, name: order}
 spec:
   title: Order
   owningDomain: {id: {namespace: vocabulary, slug: sales, version: '1'}}
-"#;
+";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn term_domain_mcp_typed_query_roundtrip() {
@@ -88,4 +88,196 @@ async fn term_domain_mcp_typed_query_roundtrip() {
     assert_eq!(body["declarations"][0]["domain"]["id"]["slug"], "sales");
     client.cancel().await.unwrap();
     mcp_service.cancel().await.unwrap();
+}
+
+fn complete_model_manifest() -> String {
+    let version = u64::MAX.to_string();
+    let native = |kind: &str, name: &str, version: &str, spec: serde_json::Value| serde_json::json!({"apiVersion":trogon_atlas_client::manifest::API_VERSION,"kind":kind,"metadata":{"namespace":"term-export","name":name,"version":version},"spec":spec});
+    let reference = |kind: &str, slug: &str| serde_json::json!({"kind":kind,"id":{"namespace":"term-export","slug":slug,"version":version}});
+    [native("Domain", "domain", &version, serde_json::json!({"title":"Domain"})),
+     native("Term", "declared", &version, serde_json::json!({"title":"Word","doc":"Exact definition","owningDomain":{"id":{"namespace":"term-export","slug":"domain","version":version}}})),
+     native("Term", "undeclared", &version, serde_json::json!({"title":"Word","doc":"Exact definition"})),
+     native("EventModel", "model", "1", serde_json::json!({"title":"Vocabulary model","members":[reference("ENTITY_KIND_TERM","declared"),reference("ENTITY_KIND_TERM","undeclared")]}))]
+        .iter().map(ToString::to_string).collect::<Vec<_>>().join("\n---\n")
+}
+
+async fn native_tool(
+    client: &McpClient,
+    name: &'static str,
+    arguments: serde_json::Value,
+) -> serde_json::Value {
+    let result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new(name)
+                .with_arguments(arguments.as_object().unwrap().clone()),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error.unwrap_or(false), "{name}: {result:?}");
+    call_tool_result_text(&result)
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_model_export_diff_and_reapply_preserve_full_native_identity_at_u64_max() {
+    use trogon_atlas_proto as pb;
+    let (client, running, endpoint) = start_mcp_client().await;
+    let mut authoritative =
+        pb::event_model_service_client::EventModelServiceClient::connect(endpoint)
+            .await
+            .unwrap();
+    native_tool(
+        &client,
+        "apply_manifests",
+        serde_json::json!({"manifests_yaml":complete_model_manifest()}),
+    )
+    .await;
+    let keys = [
+        (pb::EntityKind::Domain, "domain", u64::MAX),
+        (pb::EntityKind::Term, "declared", u64::MAX),
+        (pb::EntityKind::Term, "undeclared", u64::MAX),
+        (pb::EntityKind::EventModel, "model", 1),
+    ];
+    let mut before = Vec::new();
+    for (kind, slug, version) in keys {
+        before.push(
+            authoritative
+                .get_entity(pb::GetEntityRequest {
+                    kind: kind as i32,
+                    id: Some(pb::Id {
+                        namespace: "term-export".into(),
+                        slug: slug.into(),
+                        version,
+                    }),
+                })
+                .await
+                .unwrap()
+                .into_inner(),
+        );
+    }
+    let exported = native_tool(
+        &client,
+        "export_namespace",
+        serde_json::json!({"namespace":"term-export"}),
+    )
+    .await;
+    assert_eq!(exported["skipped"].as_array().unwrap().len(), 0);
+    let yaml = exported["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|v| v.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    let parsed = trogon_atlas_client::manifest::parse_str(&yaml, "export.yaml").unwrap();
+    assert_eq!(parsed.len(), 4);
+    for entry in &parsed {
+        assert!(
+            before
+                .iter()
+                .any(|native| trogon_atlas_core::semantically_equal(
+                    native.entity.as_ref().unwrap(),
+                    &entry.entity
+                ))
+        );
+    }
+    let diff = native_tool(
+        &client,
+        "diff_manifests",
+        serde_json::json!({"manifests_yaml":yaml}),
+    )
+    .await;
+    assert_eq!(diff["changed"], false);
+    native_tool(
+        &client,
+        "apply_manifests",
+        serde_json::json!({"manifests_yaml":yaml}),
+    )
+    .await;
+    let model = authoritative
+        .export_event_model_manifests(pb::ExportEventModelManifestsRequest {
+            id: Some(pb::Id {
+                namespace: "term-export".into(),
+                slug: "model".into(),
+                version: 1,
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!model.truncated);
+    assert_eq!(model.skipped.len(), 0);
+    assert_eq!(
+        native_tool(
+            &client,
+            "diff_manifests",
+            serde_json::json!({"manifests_yaml":model.manifests})
+        )
+        .await["changed"],
+        false
+    );
+    native_tool(
+        &client,
+        "apply_manifests",
+        serde_json::json!({"manifests_yaml":model.manifests}),
+    )
+    .await;
+    let changed = serde_json::json!({"apiVersion":trogon_atlas_client::manifest::API_VERSION,"kind":"Term","metadata":{"namespace":"term-export","name":"declared","version":u64::MAX.to_string()},"spec":{"title":"Word","doc":"Exact definition"}});
+    let changed_diff = native_tool(
+        &client,
+        "diff_manifests",
+        serde_json::json!({"manifests_yaml":changed.to_string()}),
+    )
+    .await;
+    assert_eq!(changed_diff["changed"], true);
+    assert!(
+        changed_diff["diff"]
+            .as_str()
+            .unwrap()
+            .contains("owningDomain")
+    );
+    let selection = |slug: &str| serde_json::json!({"kind":"term","namespace":"term-export","slug":slug,"version":u64::MAX});
+    let diff = native_tool(
+        &client,
+        "diff_entities",
+        serde_json::json!({"a":selection("declared"),"b":selection("undeclared")}),
+    )
+    .await;
+    use base64::Engine as _;
+    use prost::Message as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(diff["binpb_base64"].as_str().unwrap())
+        .unwrap();
+    let diff = pb::DiffEntitiesResponse::decode(bytes.as_slice()).unwrap();
+    assert!(
+        diff.ops.iter().any(|op| op.path == "owning_domain"),
+        "{diff:?}"
+    );
+    let change = diff
+        .ops
+        .iter()
+        .find(|op| op.path == "owning_domain")
+        .unwrap();
+    assert_eq!(change.before, format!("term-export/domain@{}", u64::MAX));
+    assert_eq!(change.after, "");
+    for ((kind, slug, version), expected) in keys.into_iter().zip(before) {
+        let actual = authoritative
+            .get_entity(pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(pb::Id {
+                    namespace: "term-export".into(),
+                    slug: slug.into(),
+                    version,
+                }),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_ne!(actual.etag, "");
+        assert_ne!(
+            actual.entity.as_ref().unwrap().system.as_ref().unwrap().uid,
+            ""
+        );
+        assert_eq!(actual, expected);
+    }
+    client.cancel().await.unwrap();
+    running.cancel().await.unwrap();
 }

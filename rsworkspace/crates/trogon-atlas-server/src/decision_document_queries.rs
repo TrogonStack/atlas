@@ -53,7 +53,7 @@ fn decision_ref(reference: &pb::DecisionRef) -> Result<pb::EntityRef, Status> {
 }
 
 impl CatalogQuery {
-    fn scope(&self) -> Result<pb::CatalogCheckedScope, Status> {
+    fn scope(&mut self) -> Result<pb::CatalogCheckedScope, Status> {
         let namespaces: BTreeSet<_> = match &self.lens {
             Lens::Everything => self.world.keys().map(|key| key.namespace.clone()).collect(),
             Lens::Only(namespaces) => namespaces
@@ -78,6 +78,7 @@ impl CatalogQuery {
         );
         let mut visited = Vec::new();
         for (key, row) in rows {
+            self.budget.output()?;
             let reference = pb::EntityRef {
                 kind: key.kind as i32,
                 id: Some(key.id()),
@@ -107,9 +108,11 @@ impl CatalogQuery {
         documents.sort_by_key(prost::Message::encode_to_vec);
         documents.dedup();
         for subject in &subjects {
+            self.budget.output()?;
             feed(&subject.encode_to_vec());
         }
         for document in &documents {
+            self.budget.output()?;
             feed(&document.encode_to_vec());
         }
         let digest = hash

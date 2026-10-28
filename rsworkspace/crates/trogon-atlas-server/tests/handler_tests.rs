@@ -810,6 +810,7 @@ struct FailingBatchStore {
     failure: fn() -> StoreError,
     fail_batches: bool,
     get_failure: Option<(pb::Id, Arc<std::sync::atomic::AtomicBool>)>,
+    term_read_fault: Arc<std::sync::atomic::AtomicU8>,
     resource_scan_overflow: Arc<std::sync::atomic::AtomicBool>,
     resource_scan_gate: Option<Arc<ResourceScanGate>>,
     reference_scans: std::sync::atomic::AtomicUsize,
@@ -834,6 +835,7 @@ impl FailingBatchStore {
             failure,
             fail_batches: true,
             get_failure: None,
+            term_read_fault: Arc::default(),
             resource_scan_overflow: Arc::default(),
             resource_scan_gate: None,
             reference_scans: std::sync::atomic::AtomicUsize::new(0),
@@ -902,6 +904,15 @@ impl Store for FailingBatchStore {
     async fn list_namespaces(
         &self,
     ) -> trogon_atlas_store::StoreResult<Vec<trogon_atlas_store::NamespaceRecord>> {
+        if self
+            .term_read_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 2
+        {
+            return Err(StoreError::Backend(
+                "injected namespace authority failure".into(),
+            ));
+        }
         self.inner.list_namespaces().await
     }
 
@@ -919,6 +930,16 @@ impl Store for FailingBatchStore {
         id: &pb::Id,
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<StoredEntity> {
+        if kind == pb::EntityKind::Domain
+            && self
+                .term_read_fault
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == 4
+        {
+            return Err(StoreError::Backend(
+                "injected exact Domain hydration failure".into(),
+            ));
+        }
         if self.get_failure.as_ref().is_some_and(|(target, armed)| {
             target == id && armed.load(std::sync::atomic::Ordering::SeqCst)
         }) {
@@ -984,6 +1005,15 @@ impl Store for FailingBatchStore {
     ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
         self.reference_scans
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .term_read_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 3
+        {
+            return Err(StoreError::Backend(
+                "injected complete reference guard failure".into(),
+            ));
+        }
         self.inner.referenced_targets(targets, branch).await
     }
 
@@ -995,6 +1025,15 @@ impl Store for FailingBatchStore {
     ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
         self.reference_scans
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .term_read_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 3
+        {
+            return Err(StoreError::Backend(
+                "injected complete reference guard failure".into(),
+            ));
+        }
         self.inner
             .referenced_targets_with_overlay(targets, branch, overlay)
             .await
@@ -1006,6 +1045,13 @@ impl Store for FailingBatchStore {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<Vec<StoredEntity>> {
+        if self
+            .term_read_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
+            return Err(StoreError::Backend("injected resource list failure".into()));
+        }
         let resource_scan = filter.kinds.contains(&pb::EntityKind::Channel)
             || filter.kinds.contains(&pb::EntityKind::DataStore)
             || filter.kinds.contains(&pb::EntityKind::Specification);
@@ -4506,4 +4552,249 @@ async fn retarget_references_rejects_incomplete_resource_scan_before_preview_or_
             );
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_public_faults_preserve_operational_errors_and_never_publish() {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    use trogon_atlas_server::{
+        auth::{BearerAuth, TokenRegistry},
+        ownership::{NamespaceDirectory, RegistryAuthorizer},
+    };
+    let fault = Arc::new(AtomicU8::new(0));
+    let target = id("fault-fixture", "domain", 1);
+    let mut backend = FailingBatchStore::new().await;
+    backend.fail_batches = false;
+    backend.term_read_fault = fault.clone();
+    let store = Arc::new(backend);
+    let directory = Arc::new(NamespaceDirectory::new());
+    let implementation = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(10_000)
+        .with_authorizer(Arc::new(RegistryAuthorizer::new(
+            directory.clone(),
+            store.clone(),
+        )));
+    let registry = TokenRegistry::from_file_contents(
+        toml::from_str(
+            r#"
+[principals.admin]
+role="admin"
+tokens=["term-fault-admin"]
+[principals.writer]
+role="writer"
+parent="visible"
+tokens=["term-fault-writer"]
+"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let grpc = trogon_atlas_server::mcp::data_plane(
+        pb::event_model_service_server::EventModelServiceServer::new(implementation),
+        BearerAuth::new(Arc::new(registry)),
+    );
+    let running = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(grpc)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let mut client = pb::event_model_service_client::EventModelServiceClient::connect(format!(
+        "http://{address}"
+    ))
+    .await
+    .unwrap();
+    fn authenticated<T>(value: T, token: &str) -> Request<T> {
+        let mut r = Request::new(value);
+        r.metadata_mut()
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        r
+    }
+    let namespace = client
+        .register_namespace(authenticated(
+            pb::RegisterNamespaceRequest {
+                name: "term-fault".into(),
+                parent: "visible".into(),
+            },
+            "term-fault-admin",
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let target = pb::Id {
+        namespace: namespace.clone(),
+        ..target
+    };
+    let domain = pb::Entity {
+        kind: Some(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(target.clone()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let word = pb::Entity {
+        kind: Some(pb::entity::Kind::Term(pb::Term {
+            id: Some(id(&namespace, "word", 1)),
+            owning_domain: Some(pb::DomainRef {
+                id: Some(target.clone()),
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    client
+        .put_entity(authenticated(
+            pb::PutEntityRequest {
+                entity: Some(domain),
+                ..Default::default()
+            },
+            "term-fault-admin",
+        ))
+        .await
+        .unwrap();
+    client
+        .put_entity(authenticated(
+            pb::PutEntityRequest {
+                entity: Some(word.clone()),
+                ..Default::default()
+            },
+            "term-fault-admin",
+        ))
+        .await
+        .unwrap();
+    let before = store
+        .inner
+        .get(pb::EntityKind::Domain, &target, None)
+        .await
+        .unwrap();
+    let word_before = store
+        .inner
+        .get(pb::EntityKind::Term, &id(&namespace, "word", 1), None)
+        .await
+        .unwrap();
+    let sequence = store.inner.current_change_seq().await.unwrap();
+    let query = pb::ListTermDomainDeclarationsRequest {
+        domain: Some(pb::DomainRef {
+            id: Some(target.clone()),
+        }),
+        ..Default::default()
+    };
+    for mode in [1, 2, 3, 4] {
+        let guard_scans = store.reference_scans.load(Ordering::SeqCst);
+        directory.invalidate().await;
+        fault.store(mode, Ordering::SeqCst);
+        if mode != 3 {
+            let error = client
+                .list_term_domain_declarations(authenticated(query.clone(), "term-fault-writer"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error.code(),
+                    tonic::Code::Unavailable | tonic::Code::Internal
+                ),
+                "{error}"
+            );
+        }
+        if mode == 4 {
+            let mut edited = word.clone();
+            if let Some(pb::entity::Kind::Term(value)) = &mut edited.kind {
+                value.title = "Must not publish".into();
+            }
+            let error = client
+                .put_entity(authenticated(
+                    pb::PutEntityRequest {
+                        entity: Some(edited),
+                        ..Default::default()
+                    },
+                    "term-fault-writer",
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Internal);
+        }
+        let error = client
+            .delete_entity(authenticated(
+                pb::DeleteEntityRequest {
+                    kind: pb::EntityKind::Domain as i32,
+                    id: Some(target.clone()),
+                    mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+                    ..Default::default()
+                },
+                "term-fault-writer",
+            ))
+            .await
+            .unwrap_err();
+        if mode == 1 {
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        } else {
+            assert!(
+                matches!(
+                    error.code(),
+                    tonic::Code::Unavailable | tonic::Code::Internal
+                ),
+                "mode={mode}: {error}"
+            );
+        }
+        if mode == 3 {
+            assert!(store.reference_scans.load(Ordering::SeqCst) > guard_scans);
+        }
+        fault.store(0, Ordering::SeqCst);
+        assert_eq!(
+            store
+                .inner
+                .get(pb::EntityKind::Domain, &target, None)
+                .await
+                .unwrap()
+                .entity,
+            before.entity
+        );
+        assert_eq!(
+            store
+                .inner
+                .get(pb::EntityKind::Domain, &target, None)
+                .await
+                .unwrap()
+                .etag,
+            before.etag
+        );
+        assert_eq!(
+            store
+                .inner
+                .get(pb::EntityKind::Term, &id(&namespace, "word", 1), None)
+                .await
+                .unwrap()
+                .entity,
+            word_before.entity
+        );
+        assert_eq!(
+            store
+                .inner
+                .get(pb::EntityKind::Term, &id(&namespace, "word", 1), None)
+                .await
+                .unwrap()
+                .etag,
+            word_before.etag
+        );
+        assert_eq!(store.inner.current_change_seq().await.unwrap(), sequence);
+    }
+    assert_eq!(
+        client
+            .list_term_domain_declarations(authenticated(query, "term-fault-writer"))
+            .await
+            .unwrap()
+            .into_inner()
+            .declarations
+            .len(),
+        1
+    );
+    running.abort();
 }
