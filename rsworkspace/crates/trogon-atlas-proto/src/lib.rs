@@ -231,6 +231,7 @@ pub mod canonical {
             EntityKind::Person => "person",
             EntityKind::Decision => "decision",
             EntityKind::Document => "document",
+            EntityKind::DesignGraph => "design_graph",
         }
     }
 
@@ -276,6 +277,7 @@ pub mod canonical {
         EntityKind::Person,
         EntityKind::Decision,
         EntityKind::Document,
+        EntityKind::DesignGraph,
     ];
 
     /// Parse a kind string into an `EntityKind`. Accepts the canonical

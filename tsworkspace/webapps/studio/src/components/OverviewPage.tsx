@@ -86,6 +86,7 @@ const KIND_SHORT: Record<Entity['kind'], string> = {
   team: 'team',
   decision: 'decision',
   document: 'document',
+  designGraph: 'design_graph',
   person: 'person',
   dataProduct: 'data_product',
   specification: 'specification',

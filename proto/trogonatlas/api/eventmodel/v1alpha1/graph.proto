@@ -20,6 +20,8 @@ message Reference {
   trogonatlas.eventmodel.v1alpha1.CatalogSubject catalog_subject = 7;
   trogonatlas.eventmodel.v1alpha1.DocumentSelection document_selection = 8;
   trogonatlas.type.v1alpha1.ConnectionId connection_id = 9;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId step_id = 10;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId target_step_id = 11;
 }
 
 message ImpactNode {

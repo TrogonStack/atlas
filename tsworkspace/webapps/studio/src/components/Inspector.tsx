@@ -1,5 +1,6 @@
 import { SourceIntegrationReview } from '@/components/SourceIntegrationReview';
 import { DecisionDocumentInspector } from '@/components/DecisionDocumentInspector';
+import { DesignGraphInspector } from '@/components/DesignGraphInspector';
 import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ResponsibilityInspector } from '@/components/ResponsibilityInspector';
@@ -639,6 +640,7 @@ export function Inspector({
           ) : null}
           <ResponsibilityInspector entity={entity} asOf={asOf} />
           <DecisionDocumentInspector entity={entity} asOf={asOf} />
+          <DesignGraphInspector entity={entity} asOf={asOf} />
           <SourceIntegrationReview namespace={entity.id.namespace} asOf={asOf} />
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <ArchitecturalRelationshipDetails entity={entity} model={model} onSelect={onSelect} />

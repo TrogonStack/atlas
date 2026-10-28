@@ -664,6 +664,288 @@ impl CatalogResolutionState {
         }
     }
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyTargetState {
+    #[prost(message, optional, tag="1")]
+    pub step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    #[prost(string, tag="2")]
+    pub field: ::prost::alloc::string::String,
+    #[prost(enumeration="CatalogResolutionState", tag="3")]
+    pub state: i32,
+    #[prost(message, optional, tag="4")]
+    pub target: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TopologyStepTarget>,
+    #[prost(message, optional, tag="5")]
+    pub owner: ::core::option::Option<CatalogCheckedOwner>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetDesignGraphDetailRequest {
+    #[prost(message, optional, tag="1")]
+    pub graph: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DesignGraphRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetDesignGraphDetailResponse {
+    #[prost(message, optional, tag="1")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::Entity>,
+    #[prost(string, tag="2")]
+    pub etag: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub targets: ::prost::alloc::vec::Vec<TopologyTargetState>,
+    #[prost(message, repeated, tag="4")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(enumeration="CatalogResolutionState", tag="5")]
+    pub layout_state: i32,
+    #[prost(message, optional, tag="6")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="7")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="8")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListSubjectDesignGraphsRequest {
+    #[prost(message, optional, tag="1")]
+    pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::CatalogSubject>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSubjectDesignGraphsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub declarations: ::prost::alloc::vec::Vec<CatalogDeclaration>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="4")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+    #[prost(enumeration="CatalogResolutionState", tag="5")]
+    pub subject_state: i32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TraverseDesignGraphTopologyRequest {
+    #[prost(message, optional, tag="1")]
+    pub root: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DesignGraphRef>,
+    #[prost(bool, tag="2")]
+    pub follow_subflows: bool,
+    #[prost(uint32, tag="3")]
+    pub max_depth: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyTraversalNode {
+    #[prost(message, optional, tag="1")]
+    pub graph: ::core::option::Option<CatalogCheckedOwner>,
+    #[prost(message, optional, tag="2")]
+    pub step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    #[prost(uint32, tag="3")]
+    pub depth: u32,
+    #[prost(message, optional, tag="4")]
+    pub title: ::core::option::Option<super::super::super::eventmodel::v1alpha1::CatalogTitle>,
+    #[prost(message, optional, tag="5")]
+    pub summary: ::core::option::Option<super::super::super::eventmodel::v1alpha1::CatalogText>,
+    #[prost(message, optional, tag="6")]
+    pub target: ::core::option::Option<super::super::super::eventmodel::v1alpha1::TopologyStepTarget>,
+    #[prost(enumeration="CatalogResolutionState", tag="7")]
+    pub target_state: i32,
+    #[prost(bool, tag="8")]
+    pub authored_entry: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TopologyTraversalEdge {
+    #[prost(enumeration="topology_traversal_edge::Kind", tag="1")]
+    pub kind: i32,
+    #[prost(message, optional, tag="2")]
+    pub graph: ::core::option::Option<CatalogCheckedOwner>,
+    #[prost(message, optional, tag="3")]
+    pub from_step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    #[prost(message, optional, tag="4")]
+    pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="5")]
+    pub label: ::core::option::Option<super::super::super::eventmodel::v1alpha1::CatalogTitle>,
+    #[prost(message, optional, tag="6")]
+    pub to_step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    #[prost(message, optional, tag="7")]
+    pub to_graph: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DesignGraphRef>,
+}
+/// Nested message and enum types in `TopologyTraversalEdge`.
+pub mod topology_traversal_edge {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        Transition = 1,
+        Subflow = 2,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Transition => "KIND_TRANSITION",
+                Self::Subflow => "KIND_SUBFLOW",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "KIND_TRANSITION" => Some(Self::Transition),
+                "KIND_SUBFLOW" => Some(Self::Subflow),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TopologySubflowMarker {
+    #[prost(message, optional, tag="1")]
+    pub graph: ::core::option::Option<CatalogCheckedOwner>,
+    #[prost(message, optional, tag="2")]
+    pub step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    #[prost(message, optional, tag="3")]
+    pub subflow: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DesignGraphRef>,
+    #[prost(enumeration="TopologySubflowState", tag="4")]
+    pub state: i32,
+    #[prost(uint32, tag="5")]
+    pub depth: u32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopologyCycle {
+    #[prost(enumeration="topology_cycle::Scope", tag="1")]
+    pub scope: i32,
+    #[prost(message, optional, tag="2")]
+    pub graph: ::core::option::Option<CatalogCheckedOwner>,
+    #[prost(message, repeated, tag="3")]
+    pub step_path: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    #[prost(message, repeated, tag="4")]
+    pub graph_path: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::DesignGraphRef>,
+    #[prost(message, optional, tag="5")]
+    pub closing_connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
+}
+/// Nested message and enum types in `TopologyCycle`.
+pub mod topology_cycle {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Scope {
+        Unspecified = 0,
+        Transition = 1,
+        Subflow = 2,
+    }
+    impl Scope {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "SCOPE_UNSPECIFIED",
+                Self::Transition => "SCOPE_TRANSITION",
+                Self::Subflow => "SCOPE_SUBFLOW",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "SCOPE_UNSPECIFIED" => Some(Self::Unspecified),
+                "SCOPE_TRANSITION" => Some(Self::Transition),
+                "SCOPE_SUBFLOW" => Some(Self::Subflow),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TraverseDesignGraphTopologyResponse {
+    #[prost(message, repeated, tag="1")]
+    pub nodes: ::prost::alloc::vec::Vec<TopologyTraversalNode>,
+    #[prost(message, repeated, tag="2")]
+    pub edges: ::prost::alloc::vec::Vec<TopologyTraversalEdge>,
+    #[prost(message, repeated, tag="3")]
+    pub subflows: ::prost::alloc::vec::Vec<TopologySubflowMarker>,
+    #[prost(message, repeated, tag="4")]
+    pub cycles: ::prost::alloc::vec::Vec<TopologyCycle>,
+    #[prost(message, optional, tag="5")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="6")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="7")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+    #[prost(uint32, tag="8")]
+    pub applied_max_depth: u32,
+    #[prost(bool, tag="9")]
+    pub follow_subflows: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DesignGraphSubflowReference {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<CatalogCheckedOwner>,
+    #[prost(string, tag="2")]
+    pub field: ::prost::alloc::string::String,
+    #[prost(enumeration="CatalogResolutionState", tag="3")]
+    pub state: i32,
+    #[prost(message, optional, tag="4")]
+    pub step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    #[prost(message, optional, tag="5")]
+    pub subflow: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DesignGraphRef>,
+    #[prost(message, repeated, tag="6")]
+    pub transitions: ::prost::alloc::vec::Vec<TopologyTraversalEdge>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListIncomingDesignGraphSubflowsRequest {
+    #[prost(message, optional, tag="1")]
+    pub graph: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DesignGraphRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListIncomingDesignGraphSubflowsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub references: ::prost::alloc::vec::Vec<DesignGraphSubflowReference>,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(bool, tag="3")]
+    pub incomplete: bool,
+    #[prost(message, repeated, tag="4")]
+    pub failures: ::prost::alloc::vec::Vec<CatalogQueryFailure>,
+    #[prost(enumeration="CatalogResolutionState", tag="5")]
+    pub graph_state: i32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum TopologySubflowState {
+    Unspecified = 0,
+    Expanded = 1,
+    Unfollowed = 2,
+    DepthLimit = 3,
+    Cycle = 4,
+    Unavailable = 5,
+}
+impl TopologySubflowState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "TOPOLOGY_SUBFLOW_STATE_UNSPECIFIED",
+            Self::Expanded => "TOPOLOGY_SUBFLOW_STATE_EXPANDED",
+            Self::Unfollowed => "TOPOLOGY_SUBFLOW_STATE_UNFOLLOWED",
+            Self::DepthLimit => "TOPOLOGY_SUBFLOW_STATE_DEPTH_LIMIT",
+            Self::Cycle => "TOPOLOGY_SUBFLOW_STATE_CYCLE",
+            Self::Unavailable => "TOPOLOGY_SUBFLOW_STATE_UNAVAILABLE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "TOPOLOGY_SUBFLOW_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "TOPOLOGY_SUBFLOW_STATE_EXPANDED" => Some(Self::Expanded),
+            "TOPOLOGY_SUBFLOW_STATE_UNFOLLOWED" => Some(Self::Unfollowed),
+            "TOPOLOGY_SUBFLOW_STATE_DEPTH_LIMIT" => Some(Self::DepthLimit),
+            "TOPOLOGY_SUBFLOW_STATE_CYCLE" => Some(Self::Cycle),
+            "TOPOLOGY_SUBFLOW_STATE_UNAVAILABLE" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+}
 /// Static catalog of every EntityKind the system stores. Same shape and
 /// motivation as ListValidationRules: avoids the per-client three-name
 /// map (proto enum string ENTITY_KIND_FOO, JSON discriminator `event`,
@@ -712,6 +994,10 @@ pub struct Reference {
     pub document_selection: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DocumentSelection>,
     #[prost(message, optional, tag="9")]
     pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="10")]
+    pub step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
+    #[prost(message, optional, tag="11")]
+    pub target_step_id: ::core::option::Option<super::super::super::eventmodel::v1alpha1::LocalValueId>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ImpactNode {
@@ -2345,6 +2631,10 @@ pub enum SourceOwnedField {
     Body = 106,
     Broker = 107,
     Measure = 108,
+    Profile = 109,
+    Steps = 110,
+    EntrySteps = 111,
+    LayoutDocument = 112,
 }
 impl SourceOwnedField {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2462,6 +2752,10 @@ impl SourceOwnedField {
             Self::Body => "SOURCE_OWNED_FIELD_BODY",
             Self::Broker => "SOURCE_OWNED_FIELD_BROKER",
             Self::Measure => "SOURCE_OWNED_FIELD_MEASURE",
+            Self::Profile => "SOURCE_OWNED_FIELD_PROFILE",
+            Self::Steps => "SOURCE_OWNED_FIELD_STEPS",
+            Self::EntrySteps => "SOURCE_OWNED_FIELD_ENTRY_STEPS",
+            Self::LayoutDocument => "SOURCE_OWNED_FIELD_LAYOUT_DOCUMENT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2576,6 +2870,10 @@ impl SourceOwnedField {
             "SOURCE_OWNED_FIELD_BODY" => Some(Self::Body),
             "SOURCE_OWNED_FIELD_BROKER" => Some(Self::Broker),
             "SOURCE_OWNED_FIELD_MEASURE" => Some(Self::Measure),
+            "SOURCE_OWNED_FIELD_PROFILE" => Some(Self::Profile),
+            "SOURCE_OWNED_FIELD_STEPS" => Some(Self::Steps),
+            "SOURCE_OWNED_FIELD_ENTRY_STEPS" => Some(Self::EntrySteps),
+            "SOURCE_OWNED_FIELD_LAYOUT_DOCUMENT" => Some(Self::LayoutDocument),
             _ => None,
         }
     }

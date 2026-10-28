@@ -10,7 +10,7 @@ use crate::{
         reconcile_branch_connection_ids, reconcile_connection_ids, renew_connection_ids,
         validate_stored_connection_ids, ConnectionError, ConnectionId,
     },
-    data_product, decision_document, specification, stamp_system,
+    data_product, decision_document, design_topology, specification, stamp_system,
 };
 
 /// Prepare an untrusted write against the value guarded by the store's CAS.
@@ -23,6 +23,7 @@ pub fn prepare_entity(
         if decision_document::equivalent_manifest(previous, proposed)?
             || specification::equivalent_manifest(previous, proposed)?
             || data_product::equivalent_manifest(previous, proposed)?
+            || design_topology::equivalent_manifest(previous, proposed)?
         {
             return Ok(previous.clone());
         }
@@ -30,6 +31,7 @@ pub fn prepare_entity(
     decision_document::prepare_values(previous, &mut prepared, false)?;
     specification::prepare_members(previous, &mut prepared, false)?;
     data_product::prepare_ports(previous, &mut prepared, false)?;
+    design_topology::prepare_steps(previous, &mut prepared, false)?;
     match previous {
         Some(previous) => {
             if equivalent_with_unassigned_ids(previous, &prepared)? {
@@ -57,6 +59,8 @@ pub fn prepare_landing(
     data_product::reject_removed(branch, &removed_ports)?;
     let removed_members = specification::removed_members(base, previous, branch)?;
     specification::reject_removed(branch, &removed_members)?;
+    let removed_steps = design_topology::removed_steps(base, previous, branch)?;
+    design_topology::reject_removed(branch, &removed_steps)?;
     let removed = removed_base_ids(base, previous, branch)?;
     if let Some(id) = connection_occurrences(branch)?
         .into_iter()
@@ -70,6 +74,7 @@ pub fn prepare_landing(
     decision_document::prepare_values(previous, &mut prepared, true)?;
     specification::prepare_members(previous, &mut prepared, true)?;
     data_product::prepare_ports(previous, &mut prepared, true)?;
+    design_topology::prepare_steps(previous, &mut prepared, true)?;
     if let Some(previous) = previous {
         reconcile_branch_connection_ids(previous, &mut prepared)?;
     }
@@ -101,6 +106,8 @@ pub fn prepare_resolution(
     specification::restore_members(&mut resolved, &removed_members)?;
     let removed_ports = data_product::removed_ports(base, discarded, selected)?;
     data_product::restore_ports(&mut resolved, &removed_ports)?;
+    let removed_steps = design_topology::removed_steps(base, discarded, selected)?;
+    design_topology::restore_steps(&mut resolved, &removed_steps)?;
     crate::connections::renew_retargeted_connection_ids(selected, &mut resolved)?;
     crate::connections::assign_connection_ids(&mut resolved)?;
     specification::rewrite_exposure_selections(selected, &mut resolved);

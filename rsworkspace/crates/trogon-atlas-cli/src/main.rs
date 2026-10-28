@@ -289,6 +289,30 @@ enum Cmd {
         #[arg(long)]
         request: String,
     },
+    /// Inspect a DesignGraph with exact hydrated targets using proto3 JSON `GetDesignGraphDetailRequest`.
+    GetDesignGraphDetail {
+        /// Proto3 JSON `GetDesignGraphDetailRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// List DesignGraphs associated with an exact subject using proto3 JSON `ListSubjectDesignGraphsRequest`.
+    ListSubjectDesignGraphs {
+        /// Proto3 JSON `ListSubjectDesignGraphsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Traverse flow topology across subflows with explicit depth and cycle boundaries using proto3 JSON `TraverseDesignGraphTopologyRequest`.
+    TraverseDesignGraphTopology {
+        /// Proto3 JSON `TraverseDesignGraphTopologyRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Find steps in other DesignGraphs that reference a DesignGraph as a subflow using proto3 JSON `ListIncomingDesignGraphSubflowsRequest`.
+    ListIncomingDesignGraphSubflows {
+        /// Proto3 JSON `ListIncomingDesignGraphSubflowsRequest`.
+        #[arg(long)]
+        request: String,
+    },
     /// Inspect authoritative DataProduct selections and checked model evidence.
     InspectDataProduct {
         /// Exact `data_product/<namespace>/<slug>@<version>` address.
@@ -1747,6 +1771,92 @@ async fn run(
                     request,
                 )
                 .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetDesignGraphDetail { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "GetDesignGraphDetailRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::design_topology::get_design_graph_detail(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSubjectDesignGraphs { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "ListSubjectDesignGraphsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::list_subject_design_graphs(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::TraverseDesignGraphTopology { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "TraverseDesignGraphTopologyRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::traverse_design_graph_topology(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListIncomingDesignGraphSubflows { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "ListIncomingDesignGraphSubflowsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::list_incoming_design_graph_subflows(
+                &mut client,
+                request,
+            )
+            .await?;
             if text {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }

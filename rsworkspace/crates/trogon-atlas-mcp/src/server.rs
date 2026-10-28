@@ -396,6 +396,26 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
+        tool: "get_design_graph_detail",
+        rpcs: &["GetDesignGraphDetail"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_subject_design_graphs",
+        rpcs: &["ListSubjectDesignGraphs"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "traverse_design_graph_topology",
+        rpcs: &["TraverseDesignGraphTopology"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_incoming_design_graph_subflows",
+        rpcs: &["ListIncomingDesignGraphSubflows"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
         tool: "list_subject_assignments",
         rpcs: &["ListSubjectAssignments"],
         min_role: ToolRole::Reader,
@@ -2403,6 +2423,162 @@ impl McpServer {
         )
         .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
         let result = trogon_atlas_client::source_integration::list_source_run_operations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "GetDesignGraphDetail: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_design_graph_detail(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "GetDesignGraphDetailRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::get_design_graph_detail(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSubjectDesignGraphs: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_subject_design_graphs(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "ListSubjectDesignGraphsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::list_subject_design_graphs(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "TraverseDesignGraphTopology: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn traverse_design_graph_topology(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "TraverseDesignGraphTopologyRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::traverse_design_graph_topology(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListIncomingDesignGraphSubflows: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_incoming_design_graph_subflows(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "ListIncomingDesignGraphSubflowsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::list_incoming_design_graph_subflows(
             &mut self.client(),
             request,
         )

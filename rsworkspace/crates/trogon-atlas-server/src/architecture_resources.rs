@@ -133,6 +133,7 @@ pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
                 | pb::entity::Kind::Person(_)
                 | pb::entity::Kind::Decision(_)
                 | pb::entity::Kind::Document(_)
+                | pb::entity::Kind::DesignGraph(_)
         )
     )
 }
@@ -319,6 +320,9 @@ pub(super) fn validate_in_context(
         Some(pb::entity::Kind::Decision(_) | pb::entity::Kind::Document(_))
     ) {
         return crate::decision_document_resources::validate_in_context(entity, context);
+    }
+    if matches!(entity.kind, Some(pb::entity::Kind::DesignGraph(_))) {
+        return crate::design_topology_resources::validate_in_context(entity, context);
     }
     if matches!(entity.kind, Some(pb::entity::Kind::DataProduct(_))) {
         return crate::data_product_resources::validate_in_context(entity, context);

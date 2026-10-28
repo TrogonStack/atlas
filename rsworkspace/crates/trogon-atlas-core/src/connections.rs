@@ -358,7 +358,13 @@ fn visit(
         predecessor.to_vec()
     };
     let mut after = after;
-    for identity_field in ["member_id", "port_id", "group_id"] {
+    let identity_fields: &[&str] =
+        if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.TopologyStep" {
+            &["step_id"]
+        } else {
+            &["member_id", "port_id", "group_id"]
+        };
+    for identity_field in identity_fields {
         if let Some(value) = message.get_field_by_name(identity_field) {
             if let Some(id) = value.as_message() {
                 let encoded = id.encode_to_vec();
@@ -525,9 +531,10 @@ pub fn validate_connection_ids(entity: &Entity) -> Result<(), ConnectionError> {
                     | "DataOutputPort"
                     | "DecisionOption"
                     | "DocumentAnchor"
+                    | "TopologyStep"
             ) && matches!(
                 field.name(),
-                "member_id" | "port_id" | "option_id" | "anchor_id"
+                "member_id" | "port_id" | "option_id" | "anchor_id" | "step_id"
             ) {
                 if let Some(id) = value
                     .as_message()

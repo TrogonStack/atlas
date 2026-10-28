@@ -2254,6 +2254,83 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.DesignGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "doc": {
+          "type": "string"
+        },
+        "entrySteps": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LocalValueId"
+          },
+          "type": "array"
+        },
+        "layoutDocument": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DocumentRef"
+        },
+        "metadata": {
+          "items": {
+            "properties": {
+              "@type": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "@type"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "profile": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DesignGraphProfile"
+        },
+        "steps": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyStep"
+          },
+          "type": "array"
+        },
+        "subjects": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SubjectAssociation"
+          },
+          "type": "array"
+        },
+        "supersedes": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+        },
+        "title": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DesignGraphProfile": {
+      "enum": [
+        "DESIGN_GRAPH_PROFILE_DIAGRAM",
+        "DESIGN_GRAPH_PROFILE_FLOW",
+        "DESIGN_GRAPH_PROFILE_UNSPECIFIED"
+      ],
+      "type": "string"
+    },
+    "trogonatlas.eventmodel.v1alpha1.DesignGraphRef": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
     "trogonatlas.eventmodel.v1alpha1.DirectoryDisplayName": {
       "additionalProperties": false,
       "properties": {
@@ -2520,6 +2597,7 @@
         "DataProduct",
         "DataStore",
         "Decision",
+        "DesignGraph",
         "Document",
         "Domain",
         "ENTITY_KIND_ALERT_NOTIFICATION_TARGET",
@@ -2534,6 +2612,7 @@
         "ENTITY_KIND_DATA_PRODUCT",
         "ENTITY_KIND_DATA_STORE",
         "ENTITY_KIND_DECISION",
+        "ENTITY_KIND_DESIGN_GRAPH",
         "ENTITY_KIND_DOCUMENT",
         "ENTITY_KIND_DOMAIN",
         "ENTITY_KIND_EVENT",
@@ -2601,6 +2680,8 @@
         "data_product",
         "data_store",
         "decision",
+        "design-graph",
+        "design_graph",
         "document",
         "domain",
         "event",
@@ -6010,6 +6091,426 @@
       },
       "type": "object"
     },
+    "trogonatlas.eventmodel.v1alpha1.TopologyActor": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "summary": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.TopologyCustomStep": {
+      "additionalProperties": false,
+      "properties": {
+        "icon": {
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "summary": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "title": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.TopologyExternalSystem": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "summary": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.TopologyStep": {
+      "additionalProperties": false,
+      "properties": {
+        "stepId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LocalValueId"
+        },
+        "summary": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "target": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyStepTarget"
+        },
+        "title": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "transitions": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyTransition"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.TopologyStepTarget": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "not": {
+                "required": [
+                  "catalogMessage",
+                  "component"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "catalogMessage",
+                  "channel"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "catalogMessage",
+                  "dataStore"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "catalogMessage",
+                  "dataProduct"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "catalogMessage",
+                  "subflow"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "catalogMessage",
+                  "actor"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "catalogMessage",
+                  "custom"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "catalogMessage",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "channel"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "dataStore"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "dataProduct"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "subflow"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "actor"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "custom"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "component",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "channel",
+                  "dataStore"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "channel",
+                  "dataProduct"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "channel",
+                  "subflow"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "channel",
+                  "actor"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "channel",
+                  "custom"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "channel",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataStore",
+                  "dataProduct"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataStore",
+                  "subflow"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataStore",
+                  "actor"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataStore",
+                  "custom"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataStore",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataProduct",
+                  "subflow"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataProduct",
+                  "actor"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataProduct",
+                  "custom"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "dataProduct",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "subflow",
+                  "actor"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "subflow",
+                  "custom"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "subflow",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "actor",
+                  "custom"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "actor",
+                  "externalSystem"
+                ]
+              }
+            },
+            {
+              "not": {
+                "required": [
+                  "custom",
+                  "externalSystem"
+                ]
+              }
+            }
+          ],
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyActor"
+            },
+            "catalogMessage": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogSubject"
+            },
+            "channel": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+            },
+            "component": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+            },
+            "custom": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyCustomStep"
+            },
+            "dataProduct": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+            },
+            "dataStore": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+            },
+            "externalSystem": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyExternalSystem"
+            },
+            "subflow": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DesignGraphRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.TopologyTransition": {
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "label": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "targetStepId": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.LocalValueId"
+        }
+      },
+      "type": "object"
+    },
     "trogonatlas.eventmodel.v1alpha1.TraceStep": {
       "oneOf": [
         {
@@ -7647,6 +8148,30 @@
         "properties": {
           "spec": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.Document"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "DesignGraph",
+              "ENTITY_KIND_DESIGN_GRAPH",
+              "design-graph",
+              "design_graph"
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ]
+      },
+      "then": {
+        "properties": {
+          "spec": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DesignGraph"
           }
         }
       }

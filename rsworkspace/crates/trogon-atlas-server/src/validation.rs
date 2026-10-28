@@ -176,6 +176,8 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "A catalog choice and its rationale against exact model subjects."),
         k(pb::EntityKind::Document, "ENTITY_KIND_DOCUMENT", "document", "Document", "Documents",
           "Retained authored text or an unverified external link with exact model associations."),
+        k(pb::EntityKind::DesignGraph, "ENTITY_KIND_DESIGN_GRAPH", "designGraph", "Design Graph", "Design Graphs",
+          "A native flow or diagram of steps and labeled transitions over exact catalog targets."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -787,6 +789,7 @@ mod catalog_drift_tests {
             pb::EntityKind::Person,
             pb::EntityKind::Decision,
             pb::EntityKind::Document,
+            pb::EntityKind::DesignGraph,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -1161,6 +1164,7 @@ pub(crate) fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::Person(x)) => &x.metadata,
         Some(pb::entity::Kind::Decision(x)) => &x.metadata,
         Some(pb::entity::Kind::Document(x)) => &x.metadata,
+        Some(pb::entity::Kind::DesignGraph(x)) => &x.metadata,
         None => &[],
     }
 }

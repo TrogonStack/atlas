@@ -1,8 +1,8 @@
 use trogon_atlas_core::authored_date::{AuthoredDate, InvalidAuthoredDate};
 
 #[test]
-fn authored_dates_preserve_calendar_values_without_inventing_instants()
--> Result<(), InvalidAuthoredDate> {
+fn authored_dates_preserve_calendar_values_without_inventing_instants(
+) -> Result<(), InvalidAuthoredDate> {
     for value in [
         "0001-01-01",
         "1900-02-28",

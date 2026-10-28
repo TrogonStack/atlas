@@ -14,6 +14,7 @@ pub mod client;
 pub mod compat;
 pub mod data_product;
 pub mod decision_document;
+pub mod design_topology;
 pub mod export;
 pub mod failure;
 pub mod fmt;

@@ -502,6 +502,22 @@ export function listIncomingDecisionDeclarations(decision: { id: EntityId }, opt
 export function listIncomingDocumentDeclarations(document: DocumentSelection, opts: FetchOptions = {}) {
   return catalogQuery('incoming-documents', { document }, opts);
 }
+export function getDesignGraphDetail(graph: { id: EntityId }, opts: FetchOptions = {}) {
+  return catalogQuery('design-graph-detail', { graph }, opts);
+}
+export function listSubjectDesignGraphs(subject: CatalogSubject, opts: FetchOptions = {}) {
+  return catalogQuery('subject-design-graphs', { subject }, opts);
+}
+export function traverseDesignGraphTopology(
+  root: { id: EntityId },
+  options: { followSubflows?: boolean; maxDepth?: number } = {},
+  opts: FetchOptions = {},
+) {
+  return catalogQuery('design-topology', { root, ...options }, opts);
+}
+export function listIncomingDesignGraphSubflows(graph: { id: EntityId }, opts: FetchOptions = {}) {
+  return catalogQuery('incoming-subflows', { graph }, opts);
+}
 
 export type SourceQuery =
   | 'registration'

@@ -9,8 +9,29 @@ pub(crate) fn subjects(entity: &pb::Entity) -> &[pb::SubjectAssociation] {
     match &entity.kind {
         Some(pb::entity::Kind::Decision(value)) => &value.subjects,
         Some(pb::entity::Kind::Document(value)) => &value.subjects,
+        Some(pb::entity::Kind::DesignGraph(value)) => &value.subjects,
         _ => &[],
     }
+}
+
+pub(crate) fn catalog_subjects(entity: &pb::Entity) -> Vec<&pb::CatalogSubject> {
+    let mut out: Vec<_> = subjects(entity)
+        .iter()
+        .filter_map(|association| association.subject.as_ref())
+        .collect();
+    if let Some(pb::entity::Kind::DesignGraph(graph)) = &entity.kind {
+        out.extend(graph.steps.iter().filter_map(|step| {
+            match step
+                .target
+                .as_ref()
+                .and_then(|target| target.selection.as_ref())
+            {
+                Some(pb::topology_step_target::Selection::CatalogMessage(subject)) => Some(subject),
+                _ => None,
+            }
+        }));
+    }
+    out
 }
 
 pub(crate) fn documents(entity: &pb::Entity) -> Vec<&pb::DocumentSelection> {
@@ -43,6 +64,16 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
         }
         Some(pb::entity::Kind::Document(value)) => {
             value.subjects.len() + value.navigation.len() + value.anchors.len()
+        }
+        Some(pb::entity::Kind::DesignGraph(value)) => {
+            value.subjects.len()
+                + value.steps.len()
+                + value
+                    .steps
+                    .iter()
+                    .map(|step| step.transitions.len())
+                    .sum::<usize>()
+                + usize::from(value.layout_document.is_some())
         }
         _ => crate::responsibility_resources::occurrence_count(entity),
     }

@@ -58,6 +58,7 @@ export type EntityKind =
   | 'person'
   | 'decision'
   | 'document'
+  | 'designGraph'
   | 'dataProduct'
   | 'specification';
 
@@ -440,6 +441,7 @@ const KIND_SET: ReadonlySet<string> = new Set([
   'person',
   'decision',
   'document',
+  'designGraph',
   'dataProduct',
   'specification',
 ]);
@@ -480,6 +482,7 @@ const WIRE_KIND: Record<string, EntityKind> = {
   ENTITY_KIND_PERSON: 'person',
   ENTITY_KIND_DECISION: 'decision',
   ENTITY_KIND_DOCUMENT: 'document',
+  ENTITY_KIND_DESIGN_GRAPH: 'designGraph',
   ENTITY_KIND_DATA_PRODUCT: 'dataProduct',
   ENTITY_KIND_SPECIFICATION: 'specification',
 };
@@ -645,7 +648,7 @@ function normalizeEntity(wire: WireEntity): Entity | undefined {
     id,
     key: entityKey(kind, id),
     title: String(
-      (kind === 'team' || kind === 'person' || kind === 'decision' || kind === 'document'
+      (kind === 'team' || kind === 'person' || kind === 'decision' || kind === 'document' || kind === 'designGraph'
         ? (bodyObj.title as { value?: string } | undefined)?.value
         : bodyObj.title) ?? id.slug,
     ),
