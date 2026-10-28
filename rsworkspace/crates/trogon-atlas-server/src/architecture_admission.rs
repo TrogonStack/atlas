@@ -157,6 +157,9 @@ impl EventModelServiceImpl {
         if targets.is_empty() {
             return Ok(());
         }
+        for (_, id) in &targets {
+            self.require_visible(vis, &id.namespace).await?;
+        }
         let proposal = ArchitectureProposal {
             overlay: overlay_of(metas),
             landing,
