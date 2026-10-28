@@ -306,12 +306,21 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
             );
         for name in names {
             let enum_name = format!("SOURCE_OWNED_FIELD_{}", name.to_ascii_uppercase());
-            if name == "communications"
+            if (name == "communications"
                 && matches!(
                     owner.full_name(),
                     "trogonatlas.eventmodel.v1alpha1.Component"
                         | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-                )
+                ))
+                || (name == "links"
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Channel")
+                || (name == "storage_claims"
+                    && matches!(
+                        owner.full_name(),
+                        "trogonatlas.eventmodel.v1alpha1.Component"
+                            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
+                            | "trogonatlas.eventmodel.v1alpha1.DataProduct"
+                    ))
             {
                 assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
                 continue;

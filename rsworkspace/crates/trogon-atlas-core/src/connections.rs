@@ -209,6 +209,29 @@ fn context_for(message: &DynamicMessage, field: &str) -> Vec<u8> {
     bytes
 }
 
+fn entity_target(
+    message: &DynamicMessage,
+    field: &str,
+    kind: trogon_atlas_proto::EntityKind,
+) -> Result<Option<EntityRef>, ConnectionError> {
+    let id = message
+        .get_field_by_name(field)
+        .as_deref()
+        .and_then(Value::as_message)
+        .and_then(|target| target.get_field_by_name("id"))
+        .and_then(|value| value.as_message().map(Message::encode_to_vec));
+    id.as_deref()
+        .map(trogon_atlas_proto::Id::decode)
+        .transpose()
+        .map_err(|e| ConnectionError::Encoding(e.to_string()))
+        .map(|id| {
+            id.map(|id| EntityRef {
+                kind: kind as i32,
+                id: Some(id),
+            })
+        })
+}
+
 fn visit(
     message: &mut DynamicMessage,
     path: &str,
@@ -258,6 +281,11 @@ fn visit(
                 endpoint.clear_field(&field);
             }
         }
+        if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.ChannelLink" {
+            if let Some(field) = descriptor.get_field_by_name("parameter_values") {
+                endpoint.clear_field(&field);
+            }
+        }
         let mut signature = format!("{role}:{}:", descriptor.full_name()).into_bytes();
         signature.extend_from_slice(&(predecessor.len() as u64).to_le_bytes());
         signature.extend_from_slice(predecessor);
@@ -301,6 +329,11 @@ fn visit(
                     })
                     .as_ref()
                     .and_then(crate::architectural_relationships::endpoint_ref)
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.ChannelLink" {
+                entity_target(message, "target", trogon_atlas_proto::EntityKind::Channel)?
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.StorageAccessClaim"
+            {
+                entity_target(message, "store", trogon_atlas_proto::EntityKind::DataStore)?
             } else {
                 None
             },

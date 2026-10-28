@@ -144,7 +144,12 @@ fn outbound_and_retarget_cover_every_link_target() {
     assert_eq!(refs[0].to_kind, Some(EntityKind::Channel));
     assert_eq!(refs[1].to_id, id("shipping"));
     let mut changed = stored.clone();
-    let paths = retarget_refs(&mut changed, EntityKind::Channel, &id("billing"), &id("fresh"));
+    let paths = retarget_refs(
+        &mut changed,
+        EntityKind::Channel,
+        &id("billing"),
+        &id("fresh"),
+    );
     assert_eq!(paths, ["links[0].target", "links[2].target"]);
     let links = channel_links::links(&changed);
     assert!(links[0].connection_id.is_none() && links[2].connection_id.is_none());
@@ -155,18 +160,17 @@ fn outbound_and_retarget_cover_every_link_target() {
 
 #[test]
 fn value_rules_allow_cross_key_cycles_and_reject_self_key_and_bad_shapes() {
-    validate_values(&channel(
-        "a",
-        vec![link(ChannelLinkKind::Composes, "b")],
-    ))
-    .unwrap();
-    validate_values(&channel(
-        "b",
-        vec![link(ChannelLinkKind::RoutesTo, "a")],
-    ))
-    .unwrap();
+    validate_values(&channel("a", vec![link(ChannelLinkKind::Composes, "b")])).unwrap();
+    validate_values(&channel("b", vec![link(ChannelLinkKind::RoutesTo, "a")])).unwrap();
     let mut newer = channel("a", vec![link(ChannelLinkKind::Composes, "a")]);
-    links_mut(&mut newer)[0].target.as_mut().unwrap().id.as_mut().unwrap().version = 2;
+    links_mut(&mut newer)[0]
+        .target
+        .as_mut()
+        .unwrap()
+        .id
+        .as_mut()
+        .unwrap()
+        .version = 2;
     assert!(validate_values(&newer).is_err(), "same key is a self link");
     for case in 0..8 {
         let mut invalid = channel("a", vec![link(ChannelLinkKind::Composes, "b")]);

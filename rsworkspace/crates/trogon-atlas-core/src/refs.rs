@@ -789,6 +789,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
                     from_field: field.into(),
                 });
             }
+            crate::channel_links::outbound(&x.links, &mut out);
             for (i, binding) in x.bindings.iter().enumerate() {
                 if let Some(owner) = binding.observation.as_ref().and_then(|r| r.owner.as_ref()) {
                     if let (Ok(kind), Some(id)) =
@@ -2010,6 +2011,7 @@ pub fn retarget_refs(
                 }
             }
             // An observation pins an incarnation and occurrence, so changing only its owner key cannot select a replacement.
+            crate::channel_links::retarget(&mut x.links, from_kind, from_id, to_id, &mut rewritten);
         }
         EntityOneof::Specification(x) => {
             crate::specification_refs::retarget(x, from_kind, from_id, to_id, &mut rewritten);
