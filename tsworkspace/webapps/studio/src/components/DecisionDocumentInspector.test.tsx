@@ -491,6 +491,25 @@ describe('retained native content presentation', () => {
     expect(container.textContent).not.toContain('retained bytes');
   });
 
+  it('revokes pending object URLs immediately when the owner incarnation changes', () => {
+    vi.useFakeTimers();
+    try {
+      const note = contentEntity(Uint8Array.of(1, 2));
+      const view = render(<DecisionDocumentInspector entity={note} asOf="retained-revision" />);
+      fireEvent.click(downloadButton() as HTMLElement);
+      const url = vi.mocked(URL.createObjectURL).mock.results[0].value;
+      expect(URL.revokeObjectURL).not.toHaveBeenCalled();
+      view.rerender(
+        <DecisionDocumentInspector entity={{ ...note, uid: 'replacement-incarnation' }} asOf="retained-revision" />,
+      );
+      expect(URL.revokeObjectURL).toHaveBeenCalledExactlyOnceWith(url);
+      vi.runAllTimers();
+      expect(URL.revokeObjectURL).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('revokes pending object URLs after use and when unmounted', async () => {
     vi.useFakeTimers();
     try {
