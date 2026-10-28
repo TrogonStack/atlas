@@ -16,6 +16,7 @@
 pub mod agent_metadata;
 pub mod architectural_relationships;
 pub mod authored_date;
+pub mod channel_links;
 pub mod communication_intent;
 pub mod connection_persistence;
 pub mod connections;
