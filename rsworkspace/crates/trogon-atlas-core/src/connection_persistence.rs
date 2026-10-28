@@ -57,7 +57,15 @@ pub fn prepare_landing(
     data_product::reject_removed(branch, &removed_ports)?;
     let removed_members = specification::removed_members(base, previous, branch)?;
     specification::reject_removed(branch, &removed_members)?;
-    let removed = removed_base_ids(base, previous, branch)?;
+    let mut removed = removed_base_ids(base, previous, branch)?;
+    let full_restore = base.is_some_and(|base| base == branch);
+    if !full_restore {
+        let retained = connection_occurrences(branch)?
+            .into_iter()
+            .filter_map(|item| item.id)
+            .collect::<HashSet<_>>();
+        removed.retain(|id| !retained.contains(id));
+    }
     if let Some(id) = connection_occurrences(branch)?
         .into_iter()
         .filter_map(|item| item.id)
@@ -92,7 +100,15 @@ pub fn prepare_resolution(
     discarded: Option<&Entity>,
     selected: &Entity,
 ) -> Result<Entity, ConnectionError> {
-    let removed = removed_base_ids(base, discarded, selected)?;
+    let mut removed = removed_base_ids(base, discarded, selected)?;
+    let full_restore = base.is_some_and(|base| base == selected);
+    if !full_restore {
+        let retained = connection_occurrences(selected)?
+            .into_iter()
+            .filter_map(|item| item.id)
+            .collect::<HashSet<_>>();
+        removed.retain(|id| !retained.contains(id));
+    }
     let mut resolved = selected.clone();
     renew_connection_ids(&mut resolved, &removed)?;
     let removed_values = decision_document::removed_values(base, discarded, selected)?;
