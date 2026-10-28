@@ -1,7 +1,7 @@
 //! Native flow and design topology: step identity, bounded validation and
 //! intra-owner transition structure. Execution semantics are never implied.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use prost::Message;
 use trogon_atlas_proto::{self as pb, entity, DesignGraph, Entity, EntityKind};
@@ -148,7 +148,7 @@ fn validate_target(target: &pb::TopologyStepTarget, owner: Option<&pb::Id>) -> R
                 _ => {
                     return Err(CatalogError(
                         "catalog message must select a MESSAGE member, Event or Command".into(),
-                    ))
+                    ));
                 }
             }
             Ok(())
@@ -275,11 +275,31 @@ pub fn validate_values(entity: &Entity) -> Result<()> {
     connections::validate_connection_ids(entity).map_err(|e| CatalogError(e.to_string()))
 }
 
-fn value_signature(step: &pb::TopologyStep) -> Vec<u8> {
+#[derive(Eq, Hash, PartialEq)]
+struct StepSignature {
+    value: Vec<u8>,
+    properties: BTreeMap<String, String>,
+}
+
+fn value_signature(step: &pb::TopologyStep) -> StepSignature {
     let mut value = step.clone();
     value.step_id = None;
     value.transitions.clear();
-    value.encode_to_vec()
+    // Protobuf map encoding order does not define value identity.
+    let properties = match value
+        .target
+        .as_mut()
+        .and_then(|target| target.selection.as_mut())
+    {
+        Some(pb::topology_step_target::Selection::Custom(custom)) => {
+            std::mem::take(&mut custom.properties).into_iter().collect()
+        }
+        _ => BTreeMap::new(),
+    };
+    StepSignature {
+        value: value.encode_to_vec(),
+        properties,
+    }
 }
 
 pub(crate) fn prepare_steps(

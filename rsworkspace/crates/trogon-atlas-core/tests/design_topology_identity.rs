@@ -59,11 +59,9 @@ fn equal_custom_properties_cannot_hide_stripped_step_identity() {
         Some(pb::topology_step_target::Selection::Custom(reordered));
 
     let error = prepare_entity(Some(&previous), &proposed).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("removed step reintroduced without its ID")
-    );
+    assert!(error
+        .to_string()
+        .contains("removed step reintroduced without its ID"));
 
     let Some(pb::entity::Kind::DesignGraph(graph)) = proposed.kind.as_mut() else {
         panic!("expected design graph");
