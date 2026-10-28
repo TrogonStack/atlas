@@ -209,3 +209,192 @@ fn source_metadata_ownership_cannot_claim_native_additions() {
     };
     assert!(trogon_atlas_core::source_integration::validate_ownership(&owner, &policy).is_err());
 }
+
+#[test]
+fn public_admission_enforces_tool_and_badge_values_and_budgets() {
+    use trogon_atlas_proto::{
+        AgentAnnotation, AgentDescription, AgentIcon, AgentTool, AgentUrl, Badge, BadgeText,
+        BadgesAnnotation, HexColor, ToolKindText, ToolName,
+    };
+    let tool = AgentTool {
+        name: Some(ToolName {
+            value: "lookup".into(),
+        }),
+        r#type: Some(ToolKindText {
+            value: "descriptive".into(),
+        }),
+        description: Some(AgentDescription {
+            value: "line\n\ttext".into(),
+        }),
+        icon: Some(AgentIcon {
+            value: "unknown:token".into(),
+        }),
+        url: Some(AgentUrl {
+            value: "https://example.com/docs".into(),
+        }),
+    };
+    let owner = |name, bytes| Entity {
+        kind: Some(entity::Kind::Component(Component {
+            metadata: vec![annotation(name, bytes)],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let agent = |tools| {
+        owner(
+            "trogonatlas.eventmodel.v1alpha1.AgentAnnotation",
+            AgentAnnotation {
+                tools,
+                ..Default::default()
+            }
+            .encode_to_vec(),
+        )
+    };
+    assert!(validate(&agent(vec![tool.clone()])).is_ok());
+    assert!(validate(&agent(vec![tool.clone(); 2])).is_err());
+    let mut tools = Vec::new();
+    for i in 0..64 {
+        let mut t = tool.clone();
+        t.name = Some(ToolName {
+            value: format!("tool{i}"),
+        });
+        tools.push(t);
+    }
+    assert!(validate(&agent(tools.clone())).is_ok());
+    let mut extra = tool.clone();
+    extra.name = Some(ToolName {
+        value: "extra".into(),
+    });
+    tools.push(extra);
+    assert!(validate(&agent(tools)).is_err());
+    for value in [
+        "http://example.com",
+        "https://user@example.com",
+        "https://@example.com",
+        "relative",
+    ] {
+        let mut t = tool.clone();
+        t.url = Some(AgentUrl {
+            value: value.into(),
+        });
+        assert!(validate(&agent(vec![t])).is_err());
+    }
+    for value in ["", " ", "bad\u{0007}"] {
+        let mut t = tool.clone();
+        t.name = Some(ToolName {
+            value: value.into(),
+        });
+        assert!(validate(&agent(vec![t])).is_err());
+    }
+    let mut t = tool.clone();
+    t.name = Some(ToolName {
+        value: "é".repeat(128),
+    });
+    assert!(validate(&agent(vec![t.clone()])).is_ok());
+    t.name.as_mut().unwrap().value.push('x');
+    assert!(validate(&agent(vec![t])).is_err());
+    let badge = Badge {
+        content: Some(BadgeText {
+            value: "label".into(),
+        }),
+        background_color: Some(HexColor {
+            value: "#aAbBcC".into(),
+        }),
+        text_color: Some(HexColor {
+            value: "#000000".into(),
+        }),
+        ..Default::default()
+    };
+    let badges = |badges| {
+        owner(
+            "trogonatlas.annotation.v1alpha1.BadgesAnnotation",
+            BadgesAnnotation { badges }.encode_to_vec(),
+        )
+    };
+    assert!(validate(&badges(vec![badge.clone()])).is_ok());
+    assert!(validate(&badges(vec![badge.clone(); 2])).is_err());
+    let mut changed = badge.clone();
+    changed.background_color = Some(HexColor {
+        value: "red".into(),
+    });
+    assert!(validate(&badges(vec![changed])).is_err());
+    let mut changed = badge.clone();
+    changed.background_color = Some(HexColor {
+        value: "#FFFFFF".into(),
+    });
+    assert!(validate(&badges(vec![badge, changed])).is_ok());
+}
+
+#[test]
+fn resource_group_identity_survives_presentation_edits_and_json_roundtrip() {
+    use trogon_atlas_core::connections::{assign_connection_ids, reconcile_connection_ids};
+    use trogon_atlas_proto::{
+        EntityKind, EntityRef, Id, MetadataTitle, ResourceGroup, ResourceGroupItem,
+        ResourceGroupsAnnotation,
+    };
+    let groups = ResourceGroupsAnnotation {
+        groups: vec![ResourceGroup {
+            items: vec![
+                ResourceGroupItem {
+                    target: Some(EntityRef {
+                        kind: EntityKind::Component as i32,
+                        id: Some(Id {
+                            namespace: "example".into(),
+                            slug: "b".into(),
+                            version: 1
+                        })
+                    }),
+                    ..Default::default()
+                };
+                2
+            ],
+            ..Default::default()
+        }],
+    };
+    let mut previous = Entity {
+        kind: Some(entity::Kind::Component(Component {
+            metadata: vec![annotation(
+                "trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",
+                groups.encode_to_vec(),
+            )],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    assert_eq!(assign_connection_ids(&mut previous).unwrap(), 3);
+    let json = trogon_atlas_core::transcode::entity_to_json(&previous).unwrap();
+    let roundtrip: Entity = trogon_atlas_core::transcode::message_from_json(
+        "trogonatlas.eventmodel.v1alpha1.Entity",
+        &json,
+    )
+    .unwrap();
+    assert!(trogon_atlas_core::semantically_equal(&previous, &roundtrip));
+    let mut proposed = previous.clone();
+    let Some(entity::Kind::Component(owner)) = &mut proposed.kind else {
+        unreachable!()
+    };
+    let mut groups = ResourceGroupsAnnotation::decode(owner.metadata[0].value.as_slice()).unwrap();
+    groups.groups[0].title = Some(MetadataTitle {
+        value: "title".into(),
+    });
+    groups.groups[0].items.reverse();
+    owner.metadata[0].value = groups.encode_to_vec();
+    assert_eq!(
+        reconcile_connection_ids(&previous, &mut proposed).unwrap(),
+        0
+    );
+    assert!(!trogon_atlas_core::semantically_equal(&previous, &proposed));
+    let Some(entity::Kind::Component(owner)) = &mut proposed.kind else {
+        unreachable!()
+    };
+    groups.groups[0].items[0]
+        .target
+        .as_mut()
+        .unwrap()
+        .id
+        .as_mut()
+        .unwrap()
+        .slug = "changed".into();
+    owner.metadata[0].value = groups.encode_to_vec();
+    assert!(reconcile_connection_ids(&previous, &mut proposed).is_err());
+}
