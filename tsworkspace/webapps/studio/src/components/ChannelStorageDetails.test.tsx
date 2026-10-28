@@ -101,10 +101,26 @@ it.each([
 
 it.each([
   ['input selection', { inputs: [{ portId: { value: 'input' }, data: { connectionId: { value: 'product-claim' } } }] }],
-  ['output selection', { outputs: [{ portId: { value: 'output' }, data: { connectionId: { value: 'product-claim' } } }] }],
-  ['output contract', { outputs: [{ portId: { value: 'output' }, contract: { connectionId: { value: 'product-claim' } } }] }],
-  ['output access', { outputs: [{ portId: { value: 'output' }, access: [{ connectionId: { value: 'product-claim' } }] }] }],
-  ['output lineage', { outputs: [{ portId: { value: 'output' }, derivedFrom: { inputs: [{ connectionId: { value: 'product-claim' } }] } }] }],
+  [
+    'output selection',
+    { outputs: [{ portId: { value: 'output' }, data: { connectionId: { value: 'product-claim' } } }] },
+  ],
+  [
+    'output contract',
+    { outputs: [{ portId: { value: 'output' }, contract: { connectionId: { value: 'product-claim' } } }] },
+  ],
+  [
+    'output access',
+    { outputs: [{ portId: { value: 'output' }, access: [{ connectionId: { value: 'product-claim' } }] }] },
+  ],
+  [
+    'output lineage',
+    {
+      outputs: [
+        { portId: { value: 'output' }, derivedFrom: { inputs: [{ connectionId: { value: 'product-claim' } }] } },
+      ],
+    },
+  ],
   ['input port', { inputs: [{ portId: { value: 'product-claim' } }] }],
   ['output port', { outputs: [{ portId: { value: 'product-claim' } }] }],
   ['missing selection identity', { inputs: [{ portId: { value: 'input' }, data: {} }] }],
@@ -121,7 +137,9 @@ it.each([
 it('uses the shared storage inventory when resolving architecture and communication subjects', () => {
   const model = fixture();
   const owner = model.entities[3];
-  owner.raw.relationships = [{ connectionId: { value: 'relationship' }, target: { externalSystem: { id: id('peer') } } }];
+  owner.raw.relationships = [
+    { connectionId: { value: 'relationship' }, target: { externalSystem: { id: id('peer') } } },
+  ];
   owner.raw.communications = [{ connectionId: { value: 'communication' }, direction: 'COMMUNICATION_DIRECTION_SEND' }];
   expect(resolveArchitecturalSubject(model, selection(owner, 'relationship'))?.connectionId).toBe('relationship');
   expect(resolveCommunicationSubject(model, selection(owner, 'communication'))?.connectionId).toBe('communication');
@@ -135,10 +153,12 @@ it('includes ResourceGroups occurrence identities without counting target select
   const owner = model.entities[3];
   const subject = selection(owner, 'claim-a');
   expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('claim-a');
-  owner.raw.metadata = [{
-    '@type': 'type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation',
-    groups: [{ groupId: { value: 'claim-a' }, items: [] }],
-  }];
+  owner.raw.metadata = [
+    {
+      '@type': 'type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation',
+      groups: [{ groupId: { value: 'claim-a' }, items: [] }],
+    },
+  ];
   expect(resolveAssociationSubject(model, subject)).toBeUndefined();
 });
 

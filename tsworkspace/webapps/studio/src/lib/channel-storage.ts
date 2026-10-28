@@ -1,5 +1,6 @@
 import { asId, entityKey, type Entity, type EntityId, type Model, wireKind } from './model';
 import { contractRecord as record } from './specification';
+import { hasUnambiguousOwnerIdentities } from './responsibility';
 
 export interface ChannelLinkView {
   owner: Entity;
@@ -97,10 +98,7 @@ export function resolveAssociationSubject(model: Model, subject: unknown): Assoc
   if (!kind || !id || typeof connection.ownerUid !== 'string' || !connection.ownerUid) return undefined;
   const entity = model.byKey.get(entityKey(kind, asId(owner.id)));
   if (!entity || entity.uid !== connection.ownerUid) return undefined;
-  const inventory = ['relationships', 'communications', 'links', 'storageClaims'].flatMap((field) =>
-    Array.isArray(entity.raw[field]) ? entity.raw[field].map((item) => text(record(item).connectionId)) : [],
-  );
-  if (inventory.some((value) => !value) || new Set(inventory).size !== inventory.length) return undefined;
+  if (!hasUnambiguousOwnerIdentities(entity)) return undefined;
   return [...channelLinks(entity), ...storageClaims(entity)].find((item) => item.connectionId === id);
 }
 export function resolvedAttachment(model: Model, item: StorageClaimView): Entity | undefined {

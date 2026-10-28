@@ -1,5 +1,5 @@
 import { asId, entityKey, type Entity, type EntityId, type Model, wireKind } from './model';
-import type { ResponsibilitySubject } from './responsibility';
+import { hasUnambiguousOwnerIdentities, type ResponsibilitySubject } from './responsibility';
 
 export interface ArchitecturalDeclaration {
   owner: Entity;
@@ -54,12 +54,6 @@ export function resolveArchitecturalSubject(
   const entity = kind ? model.byKey.get(entityKey(kind, asId(owner.id))) : undefined;
   if (!entity || entity.uid !== ownerUid) return undefined;
   const declarations = architecturalDeclarations(entity);
-  const ids = [
-    ...declarations.map((item) => item.connectionId),
-    ...(Array.isArray(entity.raw.communications)
-      ? entity.raw.communications.map((item) => text(record(item).connectionId))
-      : []),
-  ];
-  if (ids.some((value) => !value) || new Set(ids).size !== ids.length) return undefined;
+  if (!hasUnambiguousOwnerIdentities(entity)) return undefined;
   return declarations.find((item) => item.connectionId === id);
 }
