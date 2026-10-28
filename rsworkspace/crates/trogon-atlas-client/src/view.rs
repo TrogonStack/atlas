@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 use prost::Message as _;
-use prost_reflect::DynamicMessage;
+use prost_reflect::{DynamicMessage, ReflectMessage as _};
 use serde::Serialize;
 use serde_json::{json, Value};
 use trogon_atlas_core::{
@@ -157,6 +157,7 @@ pub struct Description {
     /// distinguishable from "this kind has no fields".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<FieldLine>>,
+    pub metadata: Vec<Value>,
     pub outgoing: Vec<RefLine>,
     pub incoming: Vec<RefLine>,
 }
@@ -231,11 +232,36 @@ pub fn describe(
         .map(|r| line(r, r.from.as_ref()))
         .collect::<Result<Vec<_>>>()?;
     incoming.sort_by(|a, b| (&a.entity, &a.field).cmp(&(&b.entity, &b.field)));
+    let dynamic = DynamicMessage::decode(
+        types.entity_descriptor()?,
+        entity.encode_to_vec().as_slice(),
+    )?;
+    let mut metadata = Vec::new();
+    for (_, value) in dynamic.fields() {
+        if let prost_reflect::Value::Message(body) = value {
+            if let Some(field) = body.descriptor().get_field_by_name("metadata") {
+                if let prost_reflect::Value::List(items) = body.get_field(&field).as_ref() {
+                    for item in items {
+                        if let prost_reflect::Value::Message(annotation) = item {
+                            let any =
+                                prost_types::Any::decode(annotation.encode_to_vec().as_slice())?;
+                            metadata.push(
+                                types
+                                    .message_json_value("google.protobuf.Any", &any)
+                                    .context("decode entity metadata")?,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     Ok(Description {
         id: export::entity_label(entity),
         title: text_field(entity, "title"),
         doc: text_field(entity, "doc"),
         fields,
+        metadata,
         outgoing: outgoing
             .iter()
             .map(|r| line(r, r.to.as_ref()))
@@ -249,6 +275,9 @@ pub fn render_description(d: &Description) -> String {
     let _ = writeln!(out, "Id:     {}", d.id);
     let _ = writeln!(out, "Title:  {}", d.title);
     let _ = writeln!(out, "Doc:    {}", d.doc.replace('\n', "\n        "));
+    for annotation in &d.metadata {
+        let _ = writeln!(out, "Metadata: {annotation}");
+    }
     if let Some(fields) = &d.fields {
         let rows = fields
             .iter()
