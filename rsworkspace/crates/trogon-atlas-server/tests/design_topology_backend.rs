@@ -689,6 +689,71 @@ async fn equal_sibling_steps_keep_distinct_ids_across_resubmission() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn incoming_subflows_charge_transition_index_work_once_per_owner() {
+    let mut client = client().await;
+    put(
+        &mut client,
+        graph("budget-target", vec![step("Target", None)]),
+    )
+    .await;
+    for owner in 0..3 {
+        let mut steps: Vec<_> = (0..400)
+            .map(|index| {
+                step(
+                    &format!("Subflow {index}"),
+                    Some(pb::topology_step_target::Selection::Subflow(graph_ref(
+                        "budget-target",
+                    ))),
+                )
+            })
+            .collect();
+        steps.extend((0..25).map(|index| step(&format!("Generic {index}"), None)));
+        let created = put(&mut client, graph(&format!("budget-owner-{owner}"), steps)).await;
+        let mut value = created.entity.unwrap();
+        let body = graph_mut(&mut value);
+        let destination = body.steps[400].step_id.clone().unwrap();
+        for generic in &mut body.steps[400..] {
+            generic.transitions = (0..64)
+                .map(|_| transition(&destination, "Generic transition"))
+                .collect();
+        }
+        try_put(&mut client, value, created.etag, ADMIN)
+            .await
+            .unwrap();
+        if owner == 1 {
+            let within_budget = client
+                .list_incoming_design_graph_subflows(request(
+                    pb::ListIncomingDesignGraphSubflowsRequest {
+                        graph: Some(graph_ref("budget-target")),
+                    },
+                    READER,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(within_budget.references.len(), 800);
+            assert!(within_budget
+                .references
+                .iter()
+                .all(|reference| reference.transitions.is_empty()));
+        }
+    }
+    let exhausted = client
+        .list_incoming_design_graph_subflows(request(
+            pb::ListIncomingDesignGraphSubflowsRequest {
+                graph: Some(graph_ref("budget-target")),
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(exhausted.code(), Code::ResourceExhausted);
+    assert_eq!(exhausted.message(), "catalog work budget exceeded");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn owner_limits_reject_oversized_step_and_transition_collections() {
     let mut client = client().await;
     let many = (0..513).map(|i| step(&format!("s{i}"), None)).collect();
