@@ -464,12 +464,14 @@ pub fn native_schema_target(
             let Some(entity::Kind::Specification(s)) = &specification.kind else {
                 return Err(ClaimError("Specification required".into()));
             };
-            let d = s
+            let Some(d) = s
                 .schemas
                 .iter()
                 .find(|s| s.member_id.as_ref() == Some(id))
                 .and_then(|s| s.definition.as_ref())
-                .ok_or_else(|| ClaimError("local schema unavailable".into()))?;
+            else {
+                return Ok(None);
+            };
             if d.selector.is_some() {
                 return Ok(None);
             }

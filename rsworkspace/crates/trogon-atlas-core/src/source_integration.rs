@@ -187,7 +187,8 @@ pub fn validate_selection_ownership(
             matches!(
                 trogon_atlas_proto::EntityKind::try_from(owner.kind),
                 Ok(trogon_atlas_proto::EntityKind::Component
-                    | trogon_atlas_proto::EntityKind::ExternalSystem)
+                    | trogon_atlas_proto::EntityKind::ExternalSystem
+                    | trogon_atlas_proto::EntityKind::Domain)
             )
         }) {
             return Err(SourceError::UnsupportedUnit);
