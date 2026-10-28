@@ -36,7 +36,11 @@ const claim = (value: string, direction = 'STORAGE_DIRECTION_WRITE', extra: Reco
 function fixture() {
   return buildModel([
     {
-      channel: { id: id('hub'), title: 'Hub', links: [link('link-a'), link('link-b'), link('link-c', 'CHANNEL_LINK_KIND_ROUTES_TO')] },
+      channel: {
+        id: id('hub'),
+        title: 'Hub',
+        links: [link('link-a'), link('link-b'), link('link-c', 'CHANNEL_LINK_KIND_ROUTES_TO')],
+      },
       system: { uid: 'hub-uid' },
     },
     { channel: { id: id('inner'), title: 'Inner' } },
