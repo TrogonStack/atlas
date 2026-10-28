@@ -411,6 +411,49 @@ async fn single_put_dry_run_and_apply_agree_on_malformed_if_match_actual_etag() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn single_put_dry_run_and_apply_agree_on_padded_numeric_if_match() {
+    // Baseline apply parses if_match as u64, so "01" matches live "1". Dry-run
+    // must use the same rule or a preview can refuse a write apply would accept.
+    let mut c = client().await;
+    let ns = "stale-put-padded";
+    let actual = put_etag(&mut c, event(ns, "e", "Base")).await;
+    let padded = format!("0{actual}");
+    assert_ne!(
+        padded, actual,
+        "fixture must yield a pad-able baseline etag"
+    );
+
+    let preview = c
+        .put_entity(put_with_validate_only(
+            event(ns, "e", "Preview"),
+            false,
+            &padded,
+            true,
+        ))
+        .await
+        .expect("dry-run must accept a padded numeric if_match that apply would")
+        .into_inner();
+    assert_eq!(preview.etag, "");
+    let (etag, title) = get_event(&mut c, ns, "e", None).await.unwrap();
+    assert_eq!(etag, actual);
+    assert_eq!(title, "Base");
+
+    let written = c
+        .put_entity(put_with_validate_only(
+            event(ns, "e", "Applied"),
+            false,
+            &padded,
+            false,
+        ))
+        .await
+        .expect("apply must accept a padded numeric if_match")
+        .into_inner();
+    assert_ne!(written.etag, actual);
+    let (_, title) = get_event(&mut c, ns, "e", None).await.unwrap();
+    assert_eq!(title, "Applied");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn single_put_dry_run_and_apply_agree_when_malformed_if_match_target_is_absent() {
     // Baseline `update` rejects a non-numeric `if_match` before the existence
     // check. Apply must still report the same NOT_FOUND wire shape dry-run

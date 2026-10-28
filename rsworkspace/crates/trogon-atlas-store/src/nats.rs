@@ -2993,15 +2993,17 @@ impl Store for NatsStore {
             let expected: u64 = if let Ok(revision) = expected_etag.parse() {
                 revision
             } else {
-                let found = live_found_etag(&self.kv, &key).await;
-                return Err(if found.is_empty() {
-                    StoreError::NotFound
-                } else {
-                    StoreError::EtagMismatch {
-                        expected: expected_etag.into(),
-                        found,
-                    }
-                });
+                // Propagate KV read errors; do not treat a failed re-read as
+                // absence the way `live_found_etag` does for CAS races.
+                return Err(
+                    match live_entry(kv_entry_timeout(&self.kv, key.clone()).await?) {
+                        Some(entry) => StoreError::EtagMismatch {
+                            expected: expected_etag.into(),
+                            found: entry.revision.to_string(),
+                        },
+                        None => StoreError::NotFound,
+                    },
+                );
             };
             // Capture the revision we saw at decode time for no-op detection and
             // system stamping. CAS failures re-read via `live_found_etag` so

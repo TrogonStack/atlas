@@ -2464,6 +2464,23 @@ fn sanitize_author_field(s: &str) -> String {
         .collect()
 }
 
+/// Whether a Put `if_match` holds against the live etag for a dry-run preview.
+///
+/// Baseline apply parses `if_match` as `u64`, so `"01"` matches live `"1"`.
+/// Branch overlay etags stay opaque and compare as exact strings.
+fn put_if_match_holds(branch: Option<&str>, live: &str, if_match: &str) -> bool {
+    if branch.is_some() {
+        return live == if_match;
+    }
+    if live == if_match {
+        return true;
+    }
+    match (live.parse::<u64>(), if_match.parse::<u64>()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 /// Advisory strategic findings a merge leaves behind, at every severity: what
 /// the landed contexts, domains and subdomains (and the entities they affect)
 /// report in the post-merge world, plus what the landed deletions leave
@@ -4942,7 +4959,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             } else if !req.if_match.is_empty() {
                 match &stored {
-                    Some(current) if current.etag == req.if_match => {}
+                    Some(current)
+                        if put_if_match_holds(branch.as_deref(), &current.etag, &req.if_match) => {}
                     Some(current) => {
                         return Err(crate::conv::stale_precondition(
                             req.if_match.clone(),
@@ -5090,23 +5108,27 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         if !create_only && !req.if_match.is_empty() =>
                     {
                         // Match dry-run: name the live revision when present.
-                        // An empty `found` (race after a non-numeric if_match,
-                        // or a store that omitted it) must re-read; if the key
-                        // is gone, use the same NOT_FOUND shape as dry-run /
-                        // StoreError::NotFound — not STALE_PRECONDITION with
-                        // an empty actual_etag.
-                        let actual = if found.is_empty() {
+                        // An empty `found` must re-read; NotFound → the same
+                        // NOT_FOUND shape as dry-run. Other get errors must
+                        // not look like absence (they would settle an
+                        // operation_id as rejected).
+                        let re_read = if found.is_empty() {
                             match self.store.get(kind, &id, branch.as_deref()).await {
-                                Ok(current) => current.etag,
-                                Err(_) => String::new(),
+                                Ok(current) => Ok(current.etag),
+                                Err(trogon_atlas_store::error::StoreError::NotFound) => {
+                                    Ok(String::new())
+                                }
+                                Err(error) => Err(error),
                             }
                         } else {
-                            found.clone()
+                            Ok(found.clone())
                         };
-                        if actual.is_empty() {
-                            crate::conv::not_found_for_if_match(expected.clone())
-                        } else {
-                            crate::conv::stale_precondition(expected.clone(), actual)
+                        match re_read {
+                            Ok(actual) if actual.is_empty() => {
+                                crate::conv::not_found_for_if_match(expected.clone())
+                            }
+                            Ok(actual) => crate::conv::stale_precondition(expected.clone(), actual),
+                            Err(error) => store_err(error),
                         }
                     }
                     _ => store_err(e),
@@ -8979,6 +9001,26 @@ fn walk_json_diff(
                 prefix
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod put_if_match_holds_tests {
+    use super::put_if_match_holds;
+
+    #[test]
+    fn baseline_accepts_equivalent_decimal_forms() {
+        assert!(put_if_match_holds(None, "1", "1"));
+        assert!(put_if_match_holds(None, "1", "01"));
+        assert!(put_if_match_holds(None, "10", "010"));
+        assert!(!put_if_match_holds(None, "1", "2"));
+        assert!(!put_if_match_holds(None, "1", "not-a-revision"));
+    }
+
+    #[test]
+    fn branch_compares_etags_exactly() {
+        assert!(put_if_match_holds(Some("feat"), "1", "1"));
+        assert!(!put_if_match_holds(Some("feat"), "1", "01"));
     }
 }
 
