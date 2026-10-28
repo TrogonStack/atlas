@@ -1538,26 +1538,19 @@
       ]
     },
     "trogonatlas.eventmodel.v1alpha1.ConnectionRef": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/_ShorthandRef"
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
-            },
-            "owner": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
-            },
-            "ownerUid": {
-              "type": "string"
-            }
-          },
-          "type": "object"
+        "owner": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+        },
+        "ownerUid": {
+          "type": "string"
         }
-      ]
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.ContactPoint": {
       "additionalProperties": false,
@@ -2851,23 +2844,16 @@
       "type": "string"
     },
     "trogonatlas.eventmodel.v1alpha1.EntityRef": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/_ShorthandRef"
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
-            },
-            "kind": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityKind"
-            }
-          },
-          "type": "object"
+        "kind": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityKind"
         }
-      ]
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.EnvironmentName": {
       "additionalProperties": false,
@@ -7135,40 +7121,33 @@
       "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.Tracker.Item": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/_ShorthandRef"
+      "additionalProperties": false,
+      "properties": {
+        "doc": {
+          "type": "string"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "doc": {
-              "type": "string"
+        "metadata": {
+          "items": {
+            "properties": {
+              "@type": {
+                "type": "string"
+              }
             },
-            "metadata": {
-              "items": {
-                "properties": {
-                  "@type": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "@type"
-                ],
-                "type": "object"
-              },
-              "type": "array"
-            },
-            "status": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TrackStatus"
-            },
-            "subject": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
-            }
+            "required": [
+              "@type"
+            ],
+            "type": "object"
           },
-          "type": "object"
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TrackStatus"
+        },
+        "subject": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
         }
-      ]
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.TypeLibrary": {
       "additionalProperties": false,

@@ -1,4 +1,5 @@
 import { asId, entityKey, type Entity, type EntityId, type Model, wireKind } from './model';
+import { hasUniqueIdentities } from './message-claims';
 import type { ResponsibilitySubject } from './responsibility';
 
 export interface ArchitecturalDeclaration {
@@ -53,13 +54,7 @@ export function resolveArchitecturalSubject(
   const kind = wireKind(owner.kind);
   const entity = kind ? model.byKey.get(entityKey(kind, asId(owner.id))) : undefined;
   if (!entity || entity.uid !== ownerUid) return undefined;
+  if (!hasUniqueIdentities(entity)) return undefined;
   const declarations = architecturalDeclarations(entity);
-  const ids = [
-    ...declarations.map((item) => item.connectionId),
-    ...(Array.isArray(entity.raw.communications)
-      ? entity.raw.communications.map((item) => text(record(item).connectionId))
-      : []),
-  ];
-  if (ids.some((value) => !value) || new Set(ids).size !== ids.length) return undefined;
   return declarations.find((item) => item.connectionId === id);
 }

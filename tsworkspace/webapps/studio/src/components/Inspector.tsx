@@ -6,6 +6,7 @@ import { useMemo, useState } from 'react';
 import { ResponsibilityInspector } from '@/components/ResponsibilityInspector';
 import { DataProductInspector } from '@/components/DataProductInspector';
 import { CommunicationIntentDetails } from '@/components/CommunicationIntentDetails';
+import { MessageClaimsDetails } from '@/components/MessageClaimsDetails';
 import { ArchitecturalRelationshipDetails } from '@/components/ArchitecturalRelationshipDetails';
 import { ArchitectureResourceDetails } from '@/components/ArchitectureResourceDetails';
 import {
@@ -661,6 +662,7 @@ export function Inspector({
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <ArchitecturalRelationshipDetails entity={entity} model={model} onSelect={onSelect} />
           <CommunicationIntentDetails entity={entity} model={model} onSelect={onSelect} />
+          <MessageClaimsDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />
           {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} asOf={asOf} />}
           {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}

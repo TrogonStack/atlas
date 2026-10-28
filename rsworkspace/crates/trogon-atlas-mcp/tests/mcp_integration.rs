@@ -2169,3 +2169,283 @@ async fn communication_mcp_native_authoring_queries_and_export_preserve_occurren
     );
     service.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn message_claims_mcp_native_authoring_preserves_every_leaf_through_export_reapply() {
+    use serde_json::{json, Value};
+    let (client, service, _) = start_mcp_client().await;
+    let ns = "mcp-message-claims";
+    let spec_version = "9007199254740993";
+    let channel_version = "18446744073709551615";
+    let api = trogon_atlas_client::manifest::API_VERSION;
+    let manifest = |kind: &str, name: &str, version: Option<&str>, spec: Value| {
+        let mut metadata = json!({"namespace": ns, "name": name});
+        if let Some(version) = version {
+            metadata["version"] = json!(version);
+        }
+        json!({"apiVersion": api, "kind": kind, "metadata": metadata, "spec": spec}).to_string()
+    };
+    let apply = |documents: Vec<String>| {
+        call_ok(
+            &client,
+            "apply_manifests",
+            args_obj(&[("manifests_yaml", json!(documents.join("\n---\n")))]),
+        )
+    };
+    apply(vec![
+        manifest(
+            "Schema",
+            "order",
+            None,
+            json!({"fields":[{"name":"customer","type":{"object":{"fields":[{"name":"name","type":{"string":{}}}]}}}]}),
+        ),
+        manifest(
+            "Specification",
+            "messages",
+            Some(spec_version),
+            json!({"title":"Messages","messages":[
+                {"name":{"value":"order-placed"},"schemas":[{"role":"ROLE_PAYLOAD","schema":{"id":{"namespace":ns,"slug":"order","version":"1"}}}]},
+                {"name":{"value":"order-shipped"}}
+            ]}),
+        ),
+        manifest("ReadModel", "order-feed", Some("2"), json!({"title":"Order feed"})),
+        manifest("Processor", "order-intake", None, json!({"title":"Order intake"})),
+        manifest(
+            "AutomationSlice",
+            "observe-orders",
+            Some("3"),
+            json!({"title":"Observe orders","sourceReadModels":["order-feed@2"],"processor":"order-intake"}),
+        ),
+    ])
+    .await;
+    let fetch = |kind: &'static str, slug: &'static str, version: u64| {
+        let client = &client;
+        async move {
+            call_tool_result_text(
+                &call_ok(
+                    client,
+                    "get_entity_json",
+                    args_obj(&[
+                        ("kind", json!(kind)),
+                        ("namespace", json!(ns)),
+                        ("slug", json!(slug)),
+                        ("version", json!(version)),
+                    ]),
+                )
+                .await,
+            )
+        }
+    };
+    let slice = fetch("automation_slice", "observe-orders", 3).await;
+    let observation = json!({
+        "owner":{"kind":"ENTITY_KIND_AUTOMATION_SLICE","id":{"namespace":ns,"slug":"observe-orders","version":"3"}},
+        "ownerUid":slice["json"]["system"]["uid"],
+        "id":slice["json"]["automationSlice"]["sourceReadModels"][0]["connectionId"]
+    });
+    apply(vec![manifest(
+        "Channel",
+        "orders",
+        Some(channel_version),
+        json!({"title":"Orders",
+            "address":{"template":"orders/{tenant}","parameters":[{"name":{"value":"tenant"},"allowedValues":{"values":["","eu"]}}]},
+            "bindings":[{"observation":observation,"parameterValues":{"tenant":"eu"}}]}),
+    )])
+    .await;
+
+    let specification = fetch("specification", "messages", 9_007_199_254_740_993).await;
+    let contract = &specification["json"]["specification"];
+    let specification_ref = json!({"id":{"namespace":ns,"slug":"messages","version":spec_version}});
+    let message = |member: &Value| json!({"specification":specification_ref,"ownerUid":specification["json"]["system"]["uid"],"kind":"CONTRACT_MEMBER_KIND_MESSAGE","memberId":member});
+    let placed = &contract["messages"][0]["memberId"];
+    let shipped = &contract["messages"][1]["memberId"];
+    let binding_id = &contract["messages"][0]["schemas"][0]["connectionId"];
+    let send = json!({"direction":"COMMUNICATION_DIRECTION_SEND","message":message(placed)});
+    let receive = json!({"direction":"COMMUNICATION_DIRECTION_RECEIVE","message":message(shipped)});
+    let owner_id = json!({"namespace":ns,"slug":"checkout","version":"1"});
+    let owner = |claims: Value| json!({"component":{"id":owner_id,"title":"Checkout","messageClaims":claims}});
+    let put = |entity: &Value, validate_only: bool| {
+        let mut arguments = put_entity_json_args(&entity.to_string());
+        if validate_only {
+            arguments.insert("validate_only".into(), json!(true));
+        }
+        client.call_tool(
+            rmcp::model::CallToolRequestParams::new("put_entity_json").with_arguments(arguments),
+        )
+    };
+
+    let staged = owner(json!({"claims":[send, send, receive]}));
+    let preview = put(&staged, true).await.unwrap();
+    assert!(!preview.is_error.unwrap_or(false));
+    assert!(
+        client
+            .call_tool(
+                rmcp::model::CallToolRequestParams::new("get_entity_json").with_arguments(
+                    args_obj(&[
+                        ("kind", json!("component")),
+                        ("namespace", json!(ns)),
+                        ("slug", json!("checkout")),
+                        ("version", json!(1)),
+                    ])
+                ),
+            )
+            .await
+            .is_err(),
+        "preview created the owner"
+    );
+    put(&staged, false).await.unwrap();
+    let first = fetch("component", "checkout", 1).await;
+    let claims = first["json"]["component"]["messageClaims"]["claims"]
+        .as_array()
+        .unwrap();
+    assert_eq!(claims.len(), 3);
+    let ids: Vec<Value> = claims
+        .iter()
+        .map(|claim| claim["connectionId"].clone())
+        .collect();
+    assert!(ids
+        .iter()
+        .all(|id| id["value"].as_str().is_some_and(|value| !value.is_empty())));
+    assert_eq!(
+        ids.iter()
+            .map(Value::to_string)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3,
+        "equal claims must receive distinct returned IDs"
+    );
+
+    let with_id = |claim: &Value, index: usize| {
+        let mut claim = claim.clone();
+        claim["connectionId"] = ids[index].clone();
+        claim
+    };
+    let full_claims = json!({
+        "claims":[with_id(&send, 0), with_id(&send, 1), with_id(&receive, 2)],
+        "routes":[
+            {"claimId":ids[0],"channel":{"id":{"namespace":ns,"slug":"orders","version":channel_version}},"parameterValues":{"tenant":""}},
+            {"claimId":ids[0],"channel":{"id":{"namespace":ns,"slug":"orders","version":channel_version}},"parameterValues":{"tenant":"eu"},"deliveryMode":"CLAIM_DELIVERY_MODE_PUSH_PULL"}
+        ],
+        "triggers":[{"claimId":ids[2],"message":message(placed),"condition":{"value":"when shipped"}}],
+        "fieldSelections":[{"claimId":ids[0],
+            "binding":{"owner":{"kind":"ENTITY_KIND_SPECIFICATION","id":{"namespace":ns,"slug":"messages","version":spec_version}},"ownerUid":specification["json"]["system"]["uid"],"id":binding_id},
+            "selectors":[{"path":{"segments":["customer","name"]}},{"path":{"segments":["customer"]}}]}]
+    });
+    let full = owner(full_claims.clone());
+    put(&full, true).await.unwrap();
+    assert_eq!(
+        first,
+        fetch("component", "checkout", 1).await,
+        "preview mutated the owner"
+    );
+    put(&full, false).await.unwrap();
+    let before = fetch("component", "checkout", 1).await;
+    let stored = &before["json"]["component"]["messageClaims"];
+    assert_eq!(stored["claims"].as_array().unwrap().len(), 3);
+    assert_eq!(stored["routes"].as_array().unwrap().len(), 2);
+    assert_ne!(
+        stored["routes"][0]["connectionId"],
+        stored["routes"][1]["connectionId"]
+    );
+    assert!(stored["routes"][0].get("deliveryMode").is_none());
+    assert_eq!(
+        stored["routes"][1]["deliveryMode"],
+        "CLAIM_DELIVERY_MODE_PUSH_PULL"
+    );
+    assert_eq!(stored["routes"][0]["parameterValues"]["tenant"], "");
+    assert_eq!(
+        stored["routes"][0]["channel"]["id"]["version"],
+        channel_version
+    );
+    assert_eq!(stored["triggers"][0]["claimId"], ids[2]);
+    assert!(stored["triggers"][0]["connectionId"].is_object());
+    assert_eq!(
+        stored["fieldSelections"][0]["binding"]["ownerUid"],
+        specification["json"]["system"]["uid"]
+    );
+    assert_eq!(stored["fieldSelections"][0]["binding"]["id"], *binding_id);
+    assert_eq!(
+        stored["fieldSelections"][0]["selectors"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let exported = call_tool_result_text(
+        &call_ok(
+            &client,
+            "export_namespace",
+            args_obj(&[("namespace", json!(ns))]),
+        )
+        .await,
+    );
+    assert_eq!(exported["skipped"], json!([]));
+    let yaml = exported["files"]
+        .as_object()
+        .unwrap()
+        .values()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    call_ok(
+        &client,
+        "apply_manifests",
+        args_obj(&[("manifests_yaml", json!(yaml))]),
+    )
+    .await;
+    assert_eq!(
+        before,
+        fetch("component", "checkout", 1).await,
+        "no-op reapply changed UID, etag or IDs"
+    );
+
+    let mutate = |change: &dyn Fn(&mut Value)| {
+        let mut claims = full_claims.clone();
+        change(&mut claims);
+        owner(claims)
+    };
+    let cases = [
+        (
+            "selector with no alternative",
+            mutate(&|claims| claims["fieldSelections"][0]["selectors"] = json!([{}])),
+        ),
+        (
+            "route to an undeclared claim",
+            mutate(&|claims| claims["routes"][0]["claimId"] = json!({"value":"not-a-claim"})),
+        ),
+        (
+            "trigger on a SEND claim",
+            mutate(&|claims| claims["triggers"][0]["claimId"] = ids[0].clone()),
+        ),
+        (
+            "channel parameter outside the allowed set",
+            mutate(&|claims| claims["routes"][0]["parameterValues"]["tenant"] = json!("us")),
+        ),
+        (
+            "native path that is not a schema field",
+            mutate(&|claims| {
+                claims["fieldSelections"][0]["selectors"] =
+                    json!([{"path":{"segments":["customer","missing"]}}]);
+            }),
+        ),
+        (
+            "claims on a variant that cannot declare them",
+            json!({"team":{"id":{"namespace":ns,"slug":"claims-team","version":"1"},"title":{"value":"Team"},"messageClaims":full_claims}}),
+        ),
+    ];
+    for (name, candidate) in cases {
+        let error = put(&candidate, false)
+            .await
+            .expect_err(&format!("{name} was accepted"));
+        assert!(
+            matches!(error, rmcp::ServiceError::McpError(ref error) if error.code == ErrorCode::INVALID_PARAMS),
+            "{name}: {error:?}"
+        );
+        assert_eq!(
+            before,
+            fetch("component", "checkout", 1).await,
+            "{name} changed stored state"
+        );
+    }
+    service.cancel().await.unwrap();
+}
