@@ -1318,3 +1318,128 @@ async fn validation_reports_dangling_independent_domain_claims() {
         .flat_map(|r| &r.issues)
         .any(|i| i.code == "MESSAGE_CLAIMS_REFERENCE_UNRESOLVED"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn explicit_branch_restoration_renews_retired_claims_and_revalidates_remote_targets() {
+    use support::two_tenants::authed_branch;
+    use trogon_atlas_core::message_claims as claims;
+    for delete_target in [false, true] {
+        let (mut client, namespace) = fixture().await;
+        let (spec, message, channel) = targets(&mut client, &namespace).await;
+        let initial = put(
+            &mut client,
+            owner(&namespace, pb::EntityKind::Domain, message),
+            "",
+        )
+        .await
+        .unwrap();
+        let mut raw = initial.entity.unwrap();
+        let declarations = claims::declarations_mut(&mut raw).unwrap();
+        declarations.routes.push(pb::ClaimRoute {
+            claim_id: declarations.claims[0].connection_id.clone(),
+            channel: Some(pb::ChannelRef {
+                id: reference(&channel).id,
+            }),
+            parameter_values: [("tenant".into(), String::new())].into_iter().collect(),
+            ..Default::default()
+        });
+        let base = put(&mut client, raw, &initial.etag).await.unwrap();
+        let base_entity = base.entity.unwrap();
+        let old = claims::declarations(&base_entity).unwrap().claims[0]
+            .connection_id
+            .clone();
+        client
+            .create_branch(authed(
+                pb::CreateBranchRequest {
+                    name: "claims-restore".into(),
+                    ..Default::default()
+                },
+                ROOT_TOKEN,
+            ))
+            .await
+            .unwrap();
+        let mut branch = base_entity.clone();
+        if let Some(pb::entity::Kind::Domain(domain)) = &mut branch.kind {
+            domain.title = "Branch choice".into();
+        }
+        client
+            .put_entity(authed_branch(
+                pb::PutEntityRequest {
+                    entity: Some(branch),
+                    ..Default::default()
+                },
+                ROOT_TOKEN,
+                "claims-restore",
+            ))
+            .await
+            .unwrap();
+        let mut removed = base_entity.clone();
+        *claims::declarations_mut(&mut removed).unwrap() = pb::MessageClaims::default();
+        put(&mut client, removed, &base.etag).await.unwrap();
+        if delete_target {
+            client
+                .delete_entity(authed(
+                    pb::DeleteEntityRequest {
+                        kind: pb::EntityKind::Specification as i32,
+                        id: reference(&spec).id,
+                        mode: pb::delete_entity_request::Mode::Force as i32,
+                        ..Default::default()
+                    },
+                    ROOT_TOKEN,
+                ))
+                .await
+                .unwrap();
+        }
+        let result = client
+            .resolve_branch_entry(authed(
+                pb::ResolveBranchEntryRequest {
+                    name: "claims-restore".into(),
+                    r#ref: Some(reference(&base_entity)),
+                    resolution: pb::resolve_branch_entry_request::Resolution::KeepOurs as i32,
+                    ..Default::default()
+                },
+                ROOT_TOKEN,
+            ))
+            .await;
+        if delete_target {
+            assert_eq!(result.unwrap_err().code(), Code::InvalidArgument);
+            continue;
+        }
+        result.unwrap();
+        let restored = client
+            .get_entity(authed_branch(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::Domain as i32,
+                    id: reference(&base_entity).id,
+                },
+                ROOT_TOKEN,
+                "claims-restore",
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .entity
+            .unwrap();
+        let declarations = claims::declarations(&restored).unwrap();
+        assert_ne!(declarations.claims[0].connection_id, old);
+        assert_eq!(
+            declarations.routes[0].claim_id,
+            declarations.claims[0].connection_id
+        );
+        let merged = client
+            .merge_branch(authed(
+                pb::MergeBranchRequest {
+                    name: "claims-restore".into(),
+                    ..Default::default()
+                },
+                ROOT_TOKEN,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            merged.status,
+            pb::merge_branch_response::Status::Applied as i32
+        );
+    }
+}
