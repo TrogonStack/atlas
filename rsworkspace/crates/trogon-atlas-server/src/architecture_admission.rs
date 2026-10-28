@@ -311,6 +311,44 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
+        let selected_subjects = selected_claim_subjects(&resources, &world);
+        if !selected_subjects.is_empty() {
+            for resource in &resources {
+                catalog_budget.owner(resource)?;
+            }
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+        }
+        for (key, subject) in selected_subjects {
+            let Some(selected) = world.get(&key).and_then(|owner| {
+                crate::message_claims_resources::selected(&subject, &owner.entity)
+            }) else {
+                continue;
+            };
+            let targets = crate::message_claims_resources::native_targets(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+            charge_claim_selections(&selected, &world, &mut catalog_budget)?;
+            crate::message_claims_resources::validate(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+        }
         self.validate_catalog_replacements(
             &proposal,
             branch,
@@ -546,6 +584,38 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
+        let mut claim_budget = crate::decision_document_resources::CatalogBudget::default();
+        let selected_subjects = selected_claim_subjects(&resources, &world);
+        if !selected_subjects.is_empty() {
+            for resource in &resources {
+                claim_budget.owner(resource)?;
+            }
+        }
+        for (key, subject) in selected_subjects {
+            let Some(owner) = world.get(&key) else {
+                continue;
+            };
+            claim_budget.owner(&owner.entity)?;
+            let Some(selected) = crate::message_claims_resources::selected(&subject, &owner.entity)
+            else {
+                continue;
+            };
+            if let Ok(targets) = crate::message_claims_resources::native_targets(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            ) {
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    ArchitectureTargetAccess::ExactDiagnostic(&lens),
+                    targets,
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+            }
+            charge_claim_selections(&selected, &world, &mut claim_budget)?;
+        }
         let mut budget = crate::decision_document_resources::CatalogBudget::default();
         for entity in &resources {
             let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
@@ -590,7 +660,6 @@ impl EventModelServiceImpl {
                     .and_then(|reference| reference.id.clone());
             }
         }
-        let mut claim_budget = crate::decision_document_resources::CatalogBudget::default();
         for resource in &resources {
             if !trogon_atlas_core::message_claims::has_content(resource) {
                 continue;
@@ -1139,6 +1208,50 @@ fn observation_endpoints(
         }
     }
     endpoints
+}
+
+fn selected_claim_subjects(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> Vec<(pb::EntityKey, pb::ResponsibilitySubject)> {
+    let mut seen = HashSet::new();
+    resources
+        .iter()
+        .flat_map(|entity| {
+            crate::responsibility_resources::assignments(entity)
+                .iter()
+                .filter_map(|assignment| assignment.subject.clone())
+                .chain(
+                    crate::decision_document_resources::subjects(entity)
+                        .iter()
+                        .filter_map(|association| association.subject.as_ref())
+                        .map(crate::decision_document_resources::responsibility_subject),
+                )
+        })
+        .filter_map(|subject| {
+            let Some(pb::responsibility_subject::Selection::Connection(reference)) =
+                &subject.selection
+            else {
+                return None;
+            };
+            let owner = reference.owner.as_ref()?;
+            let key = pb::EntityKey::new(
+                pb::EntityKind::try_from(owner.kind).ok()?,
+                owner.id.as_ref()?,
+            );
+            let row = world.get(&key)?;
+            if trogon_atlas_core::message_claims::declarations(&row.entity).is_none()
+                || !seen.insert((
+                    key.clone(),
+                    reference.owner_uid.clone(),
+                    reference.id.clone(),
+                ))
+            {
+                return None;
+            }
+            Some((key, subject))
+        })
+        .collect()
 }
 
 fn responsibility_endpoints(

@@ -2194,6 +2194,23 @@ fn standalone_field_association(
     }
 }
 
+fn catalog_leaf(association: &pb::SubjectAssociation) -> &pb::ConnectionRef {
+    let Some(pb::catalog_subject::Selection::Connection(value)) =
+        association.subject.as_ref().unwrap().selection.as_ref()
+    else {
+        panic!()
+    };
+    value
+}
+fn responsibility_leaf(assignment: &pb::Responsibility) -> &pb::ConnectionRef {
+    let Some(pb::responsibility_subject::Selection::Connection(value)) =
+        assignment.subject.as_ref().unwrap().selection.as_ref()
+    else {
+        panic!()
+    };
+    value
+}
+
 async fn standalone_native_field_admission(kind: pb::EntityKind) {
     let (mut client, namespace) = fixture().await;
     let leaf = native_field_leaf(&mut client, &namespace).await;
@@ -2217,7 +2234,15 @@ async fn standalone_native_field_admission(kind: pb::EntityKind) {
         .references
         .iter()
         .any(|reference| reference.to == leaf.owner));
-    assert!(saved.entity.is_some());
+    let saved = saved.entity.unwrap();
+    let selected = match &saved.kind {
+        Some(pb::entity::Kind::Document(value)) => catalog_leaf(&value.subjects[0]),
+        Some(pb::entity::Kind::Decision(value)) => catalog_leaf(&value.subjects[0]),
+        Some(pb::entity::Kind::Team(value)) => responsibility_leaf(&value.responsibilities[0]),
+        Some(pb::entity::Kind::Person(value)) => responsibility_leaf(&value.responsibilities[0]),
+        _ => unreachable!(),
+    };
+    assert_eq!(selected, &leaf);
     let mut stale = leaf.clone();
     stale.owner_uid = "01930000-0000-7000-8000-000000009999".into();
     assert_eq!(
@@ -2242,6 +2267,97 @@ async fn standalone_native_field_admission(kind: pb::EntityKind) {
         .await
         .unwrap()
         .into_inner();
+    let batch = client
+        .batch_mutate(authed(
+            pb::BatchMutateRequest {
+                ops: vec![
+                    pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                            kind: pb::EntityKind::Schema as i32,
+                            id: Some(id(&namespace, "payload")),
+                            mode: pb::delete_entity_request::Mode::Force as i32,
+                            ..Default::default()
+                        })),
+                    },
+                    pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(standalone_field_association(
+                                &namespace,
+                                "tombstone",
+                                kind,
+                                leaf.clone(),
+                            )),
+                            ..Default::default()
+                        })),
+                    },
+                ],
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(batch.code(), Code::InvalidArgument);
+    assert!(client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(&namespace, "payload"))
+            },
+            ROOT_TOKEN
+        ))
+        .await
+        .is_ok());
+    client
+        .create_branch(authed(
+            pb::CreateBranchRequest {
+                name: "standalone-fields".into(),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap();
+    let mut branch_schema = schema.entity.clone().unwrap();
+    if let Some(pb::entity::Kind::Schema(value)) = &mut branch_schema.kind {
+        value.fields.clear();
+    }
+    client
+        .put_entity(support::two_tenants::authed_branch(
+            pb::PutEntityRequest {
+                entity: Some(branch_schema),
+                if_match: schema.etag.clone(),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+            "standalone-fields",
+        ))
+        .await
+        .unwrap();
+    let error = client
+        .put_entity(support::two_tenants::authed_branch(
+            pb::PutEntityRequest {
+                entity: Some(standalone_field_association(
+                    &namespace,
+                    "branch-invalid",
+                    kind,
+                    leaf.clone(),
+                )),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+            "standalone-fields",
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
+    put(
+        &mut client,
+        standalone_field_association(&namespace, "baseline-valid", kind, leaf.clone()),
+        "",
+    )
+    .await
+    .unwrap();
     let mut changed = schema.entity.unwrap();
     if let Some(pb::entity::Kind::Schema(value)) = &mut changed.kind {
         value.fields.clear();
@@ -2262,17 +2378,462 @@ async fn standalone_native_field_admission(kind: pb::EntityKind) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn standalone_document_native_field_admission() {
-    standalone_native_field_admission(pb::EntityKind::Document).await;
+    Box::pin(standalone_native_field_admission(pb::EntityKind::Document)).await;
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn standalone_decision_native_field_admission() {
-    standalone_native_field_admission(pb::EntityKind::Decision).await;
+    Box::pin(standalone_native_field_admission(pb::EntityKind::Decision)).await;
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn standalone_team_native_field_admission() {
-    standalone_native_field_admission(pb::EntityKind::Team).await;
+    Box::pin(standalone_native_field_admission(pb::EntityKind::Team)).await;
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn standalone_person_native_field_admission() {
-    standalone_native_field_admission(pb::EntityKind::Person).await;
+    Box::pin(standalone_native_field_admission(pb::EntityKind::Person)).await;
+}
+
+async fn foreign_native_schema_leaf(
+    client: &mut Client,
+    namespace: &str,
+) -> (pb::ConnectionRef, pb::Id) {
+    let mut leaf = native_field_leaf(client, namespace).await;
+    let foreign_namespace = client
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: "standalone-native-schema".into(),
+                parent: "other".into(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let schema = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "payload")),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let mut foreign = schema;
+    foreign.system = None;
+    let foreign_id = id(&foreign_namespace, "foreign-payload");
+    if let Some(pb::entity::Kind::Schema(value)) = &mut foreign.kind {
+        value.id = Some(foreign_id.clone());
+    }
+    put(client, foreign, "").await.unwrap();
+    let current = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Specification as i32,
+                id: Some(id(namespace, "messages")),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut spec = current.entity.unwrap();
+    if let Some(pb::entity::Kind::Specification(value)) = &mut spec.kind {
+        value.messages[0].schemas[0].r#type =
+            Some(pb::schema_binding::Type::Schema(pb::SchemaRef {
+                id: Some(foreign_id.clone()),
+            }));
+        value.messages[0].schemas[0].connection_id = None;
+    }
+    let spec = put(client, spec, &current.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let Some(pb::entity::Kind::Specification(definition)) = &spec.kind else {
+        panic!()
+    };
+    let current = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: leaf.owner.as_ref().unwrap().id.clone(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut owner = current.entity.unwrap();
+    let declarations = trogon_atlas_core::message_claims::declarations_mut(&mut owner).unwrap();
+    declarations.field_selections[0]
+        .binding
+        .as_mut()
+        .unwrap()
+        .id
+        .clone_from(&definition.messages[0].schemas[0].connection_id);
+    declarations.field_selections[0].connection_id = None;
+    let owner = put(client, owner, &current.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    leaf.id.clone_from(
+        &trogon_atlas_core::message_claims::declarations(&owner)
+            .unwrap()
+            .field_selections[0]
+            .connection_id,
+    );
+    (leaf, foreign_id)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_native_schema_hidden_and_missing_are_identical() {
+    use support::two_tenants::ACME_TOKEN;
+    let (mut client, _) = fixture().await;
+    let namespace = client
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: "standalone-acme".into(),
+                parent: "acme".into(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let (leaf, foreign_id) = foreign_native_schema_leaf(&mut client, &namespace).await;
+    let mut hidden = Vec::new();
+    for kind in [
+        pb::EntityKind::Document,
+        pb::EntityKind::Decision,
+        pb::EntityKind::Team,
+        pb::EntityKind::Person,
+    ] {
+        let error = client
+            .put_entity(authed(
+                pb::PutEntityRequest {
+                    entity: Some(standalone_field_association(
+                        &namespace,
+                        "hidden",
+                        kind,
+                        leaf.clone(),
+                    )),
+                    ..Default::default()
+                },
+                ACME_TOKEN,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        hidden.push((error.code(), error.message().to_owned()));
+    }
+    client
+        .delete_entity(authed(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(foreign_id),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap();
+    for (index, kind) in [
+        pb::EntityKind::Document,
+        pb::EntityKind::Decision,
+        pb::EntityKind::Team,
+        pb::EntityKind::Person,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let error = client
+            .put_entity(authed(
+                pb::PutEntityRequest {
+                    entity: Some(standalone_field_association(
+                        &namespace,
+                        "missing",
+                        kind,
+                        leaf.clone(),
+                    )),
+                    ..Default::default()
+                },
+                ACME_TOKEN,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!((error.code(), error.message().to_owned()), hidden[index]);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_native_schema_authorization_and_decode_faults_remain_errors() {
+    use prost::Message;
+    use support::two_tenants::ACME_TOKEN;
+    let nats = trogon_atlas_testsupport::shared().await;
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let mut config = trogon_atlas_store::NatsStoreConfig::new(
+        &nats.url,
+        trogon_atlas_store::StoreMetrics::default(),
+    );
+    config.bucket = format!("standalone-fault-{suffix}");
+    config.branches_bucket = format!("standalone-branches-{suffix}");
+    config.changesets_bucket = format!("standalone-changesets-{suffix}");
+    config.revisions_bucket = format!("standalone-revisions-{suffix}");
+    config.batches_bucket = format!("standalone-batches-{suffix}");
+    config.namespaces_bucket = format!("standalone-namespaces-{suffix}");
+    config.lease_bucket = format!("standalone-lease-{suffix}");
+    config.stream = format!("STANDALONE_{}", suffix.to_uppercase());
+    config.subject_root = format!("standalone.{suffix}");
+    let bucket = config.bucket.clone();
+    let fault = Arc::new(FaultAuthorizer::default());
+    let service = EventModelServiceImpl::try_new(
+        Arc::new(
+            trogon_atlas_store::NatsStore::connect_with(config)
+                .await
+                .unwrap(),
+        ),
+        ServerMetrics::default(),
+    )
+    .unwrap()
+    .with_authorizer(fault.clone());
+    let mut client = serve_with_registry(service, make_registry()).await;
+    let namespace = client
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: "standalone-fault-owner".into(),
+                parent: "commerce".into(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let (leaf, foreign_id) = foreign_native_schema_leaf(&mut client, &namespace).await;
+    *fault.target.lock().unwrap() = Some(foreign_id.namespace.clone());
+    for kind in [
+        pb::EntityKind::Document,
+        pb::EntityKind::Decision,
+        pb::EntityKind::Team,
+        pb::EntityKind::Person,
+    ] {
+        let error = client
+            .put_entity(authed(
+                pb::PutEntityRequest {
+                    entity: Some(standalone_field_association(
+                        &namespace,
+                        "auth-fault",
+                        kind,
+                        leaf.clone(),
+                    )),
+                    ..Default::default()
+                },
+                ACME_TOKEN,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::Unavailable);
+    }
+    assert_eq!(fault.calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    *fault.target.lock().unwrap() = None;
+    let kv = async_nats::jetstream::new(async_nats::connect(&nats.url).await.unwrap())
+        .get_key_value(bucket)
+        .await
+        .unwrap();
+    let key = trogon_atlas_store::key::entity_key(pb::EntityKind::Schema, &foreign_id);
+    let valid_schema = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(foreign_id),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    kv.put(key.clone(), vec![255, 255, 255].into())
+        .await
+        .unwrap();
+    for kind in [
+        pb::EntityKind::Document,
+        pb::EntityKind::Decision,
+        pb::EntityKind::Team,
+        pb::EntityKind::Person,
+    ] {
+        let error = put(
+            &mut client,
+            standalone_field_association(&namespace, "decode-fault", kind, leaf.clone()),
+            "",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), Code::Internal);
+    }
+    kv.put(key, valid_schema.encode_to_vec().into())
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_native_associations_share_request_work_budget() {
+    let (mut client, namespace) = fixture().await;
+    let leaf = native_field_leaf(&mut client, &namespace).await;
+    let ops = (0..10)
+        .map(|index| pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                entity: Some(note(
+                    &namespace,
+                    &format!("standalone-budget-{index}"),
+                    leaf.clone(),
+                    1000,
+                )),
+                ..Default::default()
+            })),
+        })
+        .collect();
+    let error = client
+        .batch_mutate(authed(
+            pb::BatchMutateRequest {
+                ops,
+                validate_only: true,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::ResourceExhausted);
+    assert!(error.message().contains("work budget"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_retired_native_field_never_substitutes_equal_sibling() {
+    use trogon_atlas_core::message_claims as claims;
+    let (mut client, namespace) = fixture().await;
+    let leaf = native_field_leaf(&mut client, &namespace).await;
+    let current = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: leaf.owner.as_ref().unwrap().id.clone(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut owner = current.entity.unwrap();
+    let declarations = claims::declarations_mut(&mut owner).unwrap();
+    let mut parallel = declarations.claims[0].clone();
+    parallel.connection_id = None;
+    declarations.claims.push(parallel);
+    let staged = put(&mut client, owner, &current.etag).await.unwrap();
+    let mut owner = staged.entity.unwrap();
+    let declarations = claims::declarations_mut(&mut owner).unwrap();
+    let mut sibling = declarations.field_selections[0].clone();
+    sibling.connection_id = None;
+    sibling
+        .claim_id
+        .clone_from(&declarations.claims[1].connection_id);
+    declarations.field_selections.push(sibling);
+    let saved = put(&mut client, owner, &staged.etag).await.unwrap();
+    let mut owner = saved.entity.unwrap();
+    let declarations = claims::declarations_mut(&mut owner).unwrap();
+    let mut sibling = leaf.clone();
+    sibling.id = declarations.field_selections[1].connection_id.clone();
+    assert_ne!(leaf.id, sibling.id);
+    declarations.field_selections.remove(0);
+    put(&mut client, owner, &saved.etag).await.unwrap();
+    for kind in [
+        pb::EntityKind::Document,
+        pb::EntityKind::Decision,
+        pb::EntityKind::Team,
+        pb::EntityKind::Person,
+    ] {
+        assert_eq!(
+            put(
+                &mut client,
+                standalone_field_association(&namespace, "retired", kind, leaf.clone()),
+                ""
+            )
+            .await
+            .unwrap_err()
+            .code(),
+            Code::InvalidArgument
+        );
+        put(
+            &mut client,
+            standalone_field_association(&namespace, "sibling", kind, sibling.clone()),
+            "",
+        )
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn standalone_document_diagnostics_hydrate_native_schema_outside_owner_scope() {
+    let (mut client, namespace) = fixture().await;
+    let leaf = native_field_leaf(&mut client, &namespace).await;
+    let documents_namespace = client
+        .register_namespace(authed(
+            pb::RegisterNamespaceRequest {
+                name: "standalone-diagnostics".into(),
+                parent: "commerce".into(),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    put(
+        &mut client,
+        note(&documents_namespace, "standalone", leaf, 1),
+        "",
+    )
+    .await
+    .unwrap();
+    let report = client
+        .validate_project(authed(
+            pb::ValidateProjectRequest {
+                scope: Some(pb::validate_project_request::Scope::Namespace(
+                    documents_namespace,
+                )),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let issues: Vec<_> = report
+        .reports
+        .iter()
+        .flat_map(|report| &report.issues)
+        .collect();
+    assert!(
+        !issues
+            .iter()
+            .any(|issue| issue.code == "CATALOG_REFERENCE_UNRESOLVED"),
+        "{issues:?}"
+    );
 }
