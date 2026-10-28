@@ -1345,3 +1345,66 @@ async fn port_removal_must_carry_its_dependent_claim_in_the_same_guarded_mutatio
     };
     assert_eq!(removed.storage_claims.len(), 0);
 }
+
+fn versioned(slug: &str, version: u64) -> pb::Id {
+    pb::Id {
+        version,
+        ..id(slug)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn channel_links_select_another_exact_version_of_the_same_slug_but_never_the_same_channel() {
+    let mut client = client().await;
+    let (_, _, auto) = anchors(&mut client).await;
+    let pb::entity::Kind::AutomationSlice(slice) = auto.kind.as_ref().unwrap() else {
+        panic!()
+    };
+    let observation = connection(&auto, slice.source_read_models[0].connection_id.clone());
+    let at = |version: u64, links: Vec<pb::ChannelLink>| pb::Channel {
+        id: Some(versioned("versioned", version)),
+        title: format!("versioned {version}"),
+        bindings: vec![pb::ChannelBinding {
+            observation: Some(observation.clone()),
+            ..Default::default()
+        }],
+        links,
+        ..Default::default()
+    };
+    let toward = |version: u64| pb::ChannelLink {
+        kind: pb::ChannelLinkKind::RoutesTo as i32,
+        target: Some(pb::ChannelRef {
+            id: Some(versioned("versioned", version)),
+        }),
+        ..Default::default()
+    };
+    put(&mut client, pb::entity::Kind::Channel(at(2, vec![]))).await;
+    let first = put(
+        &mut client,
+        pb::entity::Kind::Channel(at(1, vec![toward(2)])),
+    )
+    .await;
+    assert_eq!(
+        channel_value(&first).links[0].target.as_ref().unwrap().id,
+        Some(versioned("versioned", 2)),
+        "exact target version is retained"
+    );
+    let second = put(
+        &mut client,
+        pb::entity::Kind::Channel(at(2, vec![toward(1)])),
+    )
+    .await;
+    assert_eq!(
+        channel_value(&second).links[0].target.as_ref().unwrap().id,
+        Some(versioned("versioned", 1))
+    );
+    let base = channel_value(&saved_target(&mut client, "versioned").await);
+    let mut itself = base.clone();
+    itself.links = vec![toward(1)];
+    reject_all(
+        &mut client,
+        "exact same channel",
+        pb::entity::Kind::Channel(itself),
+    )
+    .await;
+}

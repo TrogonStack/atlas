@@ -163,6 +163,10 @@ fn value_rules_allow_cross_key_cycles_and_reject_self_key_and_bad_shapes() {
     validate_values(&channel("a", vec![link(ChannelLinkKind::Composes, "b")])).unwrap();
     validate_values(&channel("b", vec![link(ChannelLinkKind::RoutesTo, "a")])).unwrap();
     let mut newer = channel("a", vec![link(ChannelLinkKind::Composes, "a")]);
+    assert!(
+        validate_values(&newer).is_err(),
+        "the exact same channel is a self link"
+    );
     links_mut(&mut newer)[0]
         .target
         .as_mut()
@@ -171,7 +175,7 @@ fn value_rules_allow_cross_key_cycles_and_reject_self_key_and_bad_shapes() {
         .as_mut()
         .unwrap()
         .version = 2;
-    assert!(validate_values(&newer).is_err(), "same key is a self link");
+    validate_values(&newer).expect("another exact version of the same slug is selectable");
     for case in 0..8 {
         let mut invalid = channel("a", vec![link(ChannelLinkKind::Composes, "b")]);
         let value = &mut links_mut(&mut invalid)[0];
