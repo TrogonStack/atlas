@@ -115,6 +115,98 @@ fn anchor_selection(owner: &Entity, pinned: bool) -> pb::DocumentSelection {
 }
 
 #[test]
+fn decision_calendar_dates_are_optional_gregorian_and_ordered() {
+    let date = |value: &str| pb::CalendarDate {
+        value: value.into(),
+    };
+    let mut proposed = decision();
+    catalog::validate_values(&proposed).unwrap();
+    for invalid in [
+        "",
+        "0000-01-01",
+        "2025-02-29",
+        "2024-04-31",
+        "2024-2-01",
+        "2024-01-01T00:00:00Z",
+    ] {
+        choice_mut(&mut proposed).authored_on = Some(date(invalid));
+        assert!(
+            catalog::validate_values(&proposed).is_err(),
+            "accepted {invalid}"
+        );
+        choice_mut(&mut proposed).authored_on = None;
+        choice_mut(&mut proposed).decided_on = Some(date(invalid));
+        assert!(
+            catalog::validate_values(&proposed).is_err(),
+            "accepted {invalid}"
+        );
+        choice_mut(&mut proposed).decided_on = None;
+    }
+    choice_mut(&mut proposed).authored_on = Some(date("2024-02-29"));
+    choice_mut(&mut proposed).decided_on = Some(date("2024-02-28"));
+    assert!(catalog::validate_values(&proposed).is_err());
+    for valid in ["2024-02-29", "2099-01-01"] {
+        choice_mut(&mut proposed).decided_on = Some(date(valid));
+        catalog::validate_values(&proposed).unwrap();
+        let stored = prepare_entity(None, &proposed).unwrap();
+        let entity::Kind::Decision(stored) = stored.kind.unwrap() else {
+            panic!("decision")
+        };
+        assert_eq!(stored.authored_on, Some(date("2024-02-29")));
+        assert_eq!(stored.decided_on, Some(date(valid)));
+        assert_eq!(stored.status, pb::DecisionStatus::Proposed as i32);
+    }
+}
+
+#[test]
+fn decision_dates_remain_native_under_source_ownership() {
+    use pb::source_field_ownership::Policy;
+    use trogon_atlas_core::source_integration::*;
+    let mut dated = decision();
+    choice_mut(&mut dated).authored_on = Some(pb::CalendarDate {
+        value: "2024-02-29".into(),
+    });
+    let title_policy = pb::SourceFieldOwnership {
+        policy: Some(Policy::Fields(pb::SourceOwnedFields {
+            fields: vec![pb::SourceOwnedField::Title as i32],
+        })),
+    };
+    let whole_policy = pb::SourceFieldOwnership {
+        policy: Some(Policy::WholeOwner(pb::SourceWholeOwnerOwnership {})),
+    };
+    for policy in [&title_policy, &whole_policy] {
+        assert_eq!(
+            validate_create_ownership(&dated, policy),
+            Err(SourceError::UnsupportedUnit)
+        );
+    }
+    assert!(validate_ownership(&dated, &title_policy).is_ok());
+    assert_eq!(
+        validate_ownership(&dated, &whole_policy),
+        Err(SourceError::UnsupportedUnit)
+    );
+    let plain = decision();
+    let mut incoming = plain.clone();
+    choice_mut(&mut incoming).title = Some(title("Updated source title"));
+    let mut budget = RunBudget::new(profile_budgets()).unwrap();
+    let merged = plan_merge(
+        &plain,
+        &plain,
+        &incoming,
+        &dated,
+        &title_policy,
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(
+        choice_mut(&mut merged.proposed.clone()).authored_on,
+        choice_mut(&mut dated).authored_on
+    );
+    assert!(plan_merge(&plain, &plain, &plain, &dated, &whole_policy, &mut budget).is_err());
+    assert!(plan_merge(&plain, &plain, &dated, &plain, &whole_policy, &mut budget).is_err());
+}
+
+#[test]
 fn native_resources_route_and_assign_distinct_persisted_identities() {
     for proposed in [document(), decision()] {
         catalog::validate_values(&proposed).unwrap();

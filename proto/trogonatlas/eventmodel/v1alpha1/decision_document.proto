@@ -3,6 +3,7 @@ syntax = "proto3";
 package trogonatlas.eventmodel.v1alpha1;
 
 import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/calendar_date.proto";
 import "trogonatlas/type/v1alpha1/id.proto";
 import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
@@ -93,6 +94,8 @@ message Decision {
   DecisionReplacement replaced_by = 13;
   repeated RelatedDecision related_decisions = 14;
   repeated SupportingDocument documents = 15;
+  trogonatlas.type.v1alpha1.CalendarDate authored_on = 16;
+  trogonatlas.type.v1alpha1.CalendarDate decided_on = 17;
 }
 message RetainedDocumentText {
   MediaType media_type = 1;

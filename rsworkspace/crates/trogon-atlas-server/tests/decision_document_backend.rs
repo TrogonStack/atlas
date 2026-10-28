@@ -271,6 +271,70 @@ fn whole_selection(value: &pb::Entity) -> pb::DocumentSelection {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn catalog_dates_persist_and_invalid_dates_cannot_create_an_owner() {
+    let mut client = client().await;
+    let target = put(&mut client, read_model("dated-target"), None)
+        .await
+        .entity
+        .unwrap();
+    let mut proposed = decision("dated-choice", subject(reference(&target)), false);
+    if let Some(pb::entity::Kind::Decision(value)) = &mut proposed.kind {
+        value.authored_on = Some(pb::CalendarDate {
+            value: "2024-02-29".into(),
+        });
+        value.decided_on = Some(pb::CalendarDate {
+            value: "2024-03-01".into(),
+        });
+    }
+    let stored = put(&mut client, proposed.clone(), None)
+        .await
+        .entity
+        .unwrap();
+    let fetched = detail(&mut client, &stored, ADMIN).await.entity.unwrap();
+    assert_eq!(fetched, stored);
+    let Some(pb::entity::Kind::Decision(value)) = &fetched.kind else {
+        panic!("decision")
+    };
+    assert_eq!(value.authored_on.as_ref().unwrap().value, "2024-02-29");
+    assert_eq!(value.decided_on.as_ref().unwrap().value, "2024-03-01");
+    for (slug, invalid) in [("bad-calendar", "2025-02-29"), ("bad-order", "2024-02-28")] {
+        let mut invalid_owner = proposed.clone();
+        if let Some(pb::entity::Kind::Decision(value)) = &mut invalid_owner.kind {
+            value.id = Some(id(slug));
+            value.decided_on = Some(pb::CalendarDate {
+                value: invalid.into(),
+            });
+        }
+        let error = client
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(invalid_owner.clone()),
+                    ..Default::default()
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        let error = client
+            .get_decision_detail(request(
+                pb::GetDecisionDetailRequest {
+                    decision: Some(pb::DecisionRef {
+                        id: reference(&invalid_owner).id,
+                    }),
+                    follow_replacement: false,
+                },
+                ADMIN,
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::NotFound);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn catalog_public_exact_queries_preserve_bytes_pins_and_provenance_outside_display_cap() {
     let mut client = client().await;
     let target = put(&mut client, read_model("receipt"), None)

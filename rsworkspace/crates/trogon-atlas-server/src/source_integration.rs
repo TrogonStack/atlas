@@ -1937,7 +1937,7 @@ async fn preview_source_run_attempt(
             }
             match (&mapping.base, &current) {
                 (None, None) => {
-                    bounded(core::validate_ownership(incoming, ownership))?;
+                    bounded(core::validate_create_ownership(incoming, ownership))?;
                     proposed = Some(incoming.clone());
                     results.push(result(
                         source,

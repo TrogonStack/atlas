@@ -70,6 +70,14 @@ fn unit_fields(
     unit: OwnershipUnit,
 ) -> Result<Vec<FieldDescriptor>, SourceError> {
     let descriptor = value.descriptor();
+    if unit == OwnershipUnit::WholeOwner
+        && descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Decision"
+        && ["authored_on", "decided_on"]
+            .iter()
+            .any(|name| value.has_field_by_name(name))
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     if unit == OwnershipUnit::Field(SourceOwnedField::Metadata)
         && crate::agent_metadata::metadata_has_additions(value)
             .map_err(|_| SourceError::NativeValue)?
@@ -159,6 +167,19 @@ pub fn validate_ownership(
         }
     }
     Ok(units)
+}
+
+pub fn validate_create_ownership(
+    entity: &Entity,
+    ownership: &SourceFieldOwnership,
+) -> Result<(), SourceError> {
+    if let Some(trogon_atlas_proto::entity::Kind::Decision(value)) = &entity.kind {
+        if value.authored_on.is_some() || value.decided_on.is_some() {
+            return Err(SourceError::UnsupportedUnit);
+        }
+    }
+    validate_ownership(entity, ownership)?;
+    Ok(())
 }
 pub fn validate_selection_ownership(
     selection: &SourceSelection,

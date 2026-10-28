@@ -285,6 +285,21 @@ fn validate_selection_list<'a>(
     Ok(())
 }
 fn validate_decision(value: &pb::Decision) -> Result<()> {
+    let authored_on = value
+        .authored_on
+        .as_ref()
+        .map(|date| date.value.parse::<crate::authored_date::AuthoredDate>())
+        .transpose()
+        .map_err(failure)?;
+    let decided_on = value
+        .decided_on
+        .as_ref()
+        .map(|date| date.value.parse::<crate::authored_date::AuthoredDate>())
+        .transpose()
+        .map_err(failure)?;
+    if let (Some(authored), Some(decided)) = (&authored_on, &decided_on) {
+        require(decided >= authored, "decided_on precedes authored_on")?;
+    }
     validate_catalog_title(value.title.as_ref())?;
     validate_catalog_text(value.context.as_ref())?;
     validate_catalog_text(value.rationale.as_ref())?;

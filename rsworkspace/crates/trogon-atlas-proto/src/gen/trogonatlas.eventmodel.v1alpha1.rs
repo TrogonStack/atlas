@@ -3975,6 +3975,10 @@ pub struct Decision {
     pub related_decisions: ::prost::alloc::vec::Vec<RelatedDecision>,
     #[prost(message, repeated, tag="15")]
     pub documents: ::prost::alloc::vec::Vec<SupportingDocument>,
+    #[prost(message, optional, tag="16")]
+    pub authored_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
+    #[prost(message, optional, tag="17")]
+    pub decided_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct RetainedDocumentText {

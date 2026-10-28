@@ -8,6 +8,11 @@ pub struct ConnectionId {
     #[prost(string, tag="1")]
     pub value: ::prost::alloc::string::String,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CalendarDate {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
 /// Universal identity for every top-level entity in the model: type
 /// definitions, slices, storyboards, and the model itself. Nested structures
 /// (scenarios, field specs, observer details) are scoped to their parent and

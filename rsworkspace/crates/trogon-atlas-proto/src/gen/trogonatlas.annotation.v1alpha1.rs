@@ -78,7 +78,7 @@ pub struct LifecycleAnnotation {
     #[prost(message, optional, tag="3")]
     pub draft: ::core::option::Option<DraftNotice>,
     #[prost(message, optional, tag="4")]
-    pub deprecated_on: ::core::option::Option<CalendarDate>,
+    pub deprecated_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
 }
 /// An unanswered design question pinned to an entity: the model does not
 /// yet say what happens here. The validator surfaces these as Info findings;
@@ -137,11 +137,6 @@ pub struct HexColor {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MetadataUrl {
-    #[prost(string, tag="1")]
-    pub value: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct CalendarDate {
     #[prost(string, tag="1")]
     pub value: ::prost::alloc::string::String,
 }
