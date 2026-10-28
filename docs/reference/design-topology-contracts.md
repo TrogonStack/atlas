@@ -23,9 +23,10 @@ owns union field 40 and enum value 39 in a sibling change, and the target oneof
 leaves field 10 unused for its future arm. Integration must preserve all of
 these allocations and report a conflict rather than overwrite one.
 
-Contract revision and minimum client/server revisions stay at 18, the
-coordinated floor that already includes metadata. No further wire break is
-introduced; upgrade connected clients and servers together as before.
+Contract revision and minimum client/server revisions are 19. Writers from
+before DesignGraph cannot name the kind, and a server from before it cannot
+store it, so clients refuse the mismatch before mutating in both directions.
+Upgrade connected clients and servers together.
 
 ## Entity shape
 
