@@ -135,14 +135,21 @@ fn wrapper_target(name: &str) -> Option<(&'static str, trogon_atlas_proto::Entit
 }
 
 fn identity_field(message: &DynamicMessage) -> &'static str {
-    if message.descriptor().full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroup" { "group_id" } else { "connection_id" }
+    if message.descriptor().full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroup" {
+        "group_id"
+    } else {
+        "connection_id"
+    }
 }
 
 fn read_id(message: &DynamicMessage) -> Result<Option<ConnectionId>, ConnectionError> {
     if !message.has_field_by_name(identity_field(message)) {
         return Ok(None);
     }
-    match message.get_field_by_name(identity_field(message)).as_deref() {
+    match message
+        .get_field_by_name(identity_field(message))
+        .as_deref()
+    {
         Some(Value::Message(id)) => match id.get_field_by_name("value").as_deref() {
             Some(Value::String(value)) if value.is_empty() => Ok(None),
             Some(Value::String(value)) => value.parse().map(Some),
@@ -214,18 +221,31 @@ fn visit(
         let mut any = prost_types::Any::decode(message.encode_to_vec().as_slice())
             .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
         if let Some(name) = crate::agent_metadata::known_type(&any.type_url) {
-            let descriptor = POOL.get_message_by_name(name).ok_or_else(|| ConnectionError::Encoding("annotation descriptor missing".into()))?;
-            let mut payload = DynamicMessage::decode(descriptor, any.value.as_slice()).map_err(|e| ConnectionError::Encoding(e.to_string()))?;
+            let descriptor = POOL
+                .get_message_by_name(name)
+                .ok_or_else(|| ConnectionError::Encoding("annotation descriptor missing".into()))?;
+            let mut payload = DynamicMessage::decode(descriptor, any.value.as_slice())
+                .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
             if name == crate::agent_metadata::GROUPS {
                 visit(&mut payload, path, role, predecessor, callback)?;
                 any.value = payload.encode_to_vec();
-                *message = DynamicMessage::decode(message.descriptor(), any.encode_to_vec().as_slice()).map_err(|e| ConnectionError::Encoding(e.to_string()))?;
+                *message =
+                    DynamicMessage::decode(message.descriptor(), any.encode_to_vec().as_slice())
+                        .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
             }
         }
         return Ok(());
     }
     if descriptor.full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroup" {
-        callback(message, ConnectionOccurrence { id: read_id(message)?, path: path.to_owned(), target: None, signature: b"resource-group".to_vec() })?;
+        callback(
+            message,
+            ConnectionOccurrence {
+                id: read_id(message)?,
+                path: path.to_owned(),
+                target: None,
+                signature: b"resource-group".to_vec(),
+            },
+        )?;
     }
     if descriptor.get_field_by_name("connection_id").is_some()
         && wrapper_target(descriptor.full_name()).is_none()
@@ -243,8 +263,16 @@ fn visit(
         let occurrence = ConnectionOccurrence {
             id: read_id(message)?,
             path: path.to_owned(),
-            target: if descriptor.full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroupItem" {
-                message.get_field_by_name("target").as_deref().and_then(Value::as_message).map(Message::encode_to_vec).map(|bytes| EntityRef::decode(bytes.as_slice())).transpose().map_err(|e| ConnectionError::Encoding(e.to_string()))?
+            target: if descriptor.full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroupItem"
+            {
+                message
+                    .get_field_by_name("target")
+                    .as_deref()
+                    .and_then(Value::as_message)
+                    .map(Message::encode_to_vec)
+                    .map(|bytes| EntityRef::decode(bytes.as_slice()))
+                    .transpose()
+                    .map_err(|e| ConnectionError::Encoding(e.to_string()))?
             } else if descriptor.full_name()
                 == "trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship"
             {
@@ -613,7 +641,7 @@ pub fn resolve_connection(
     validate_stored_connection_ids(entity)?;
     connection_occurrences(entity)?
         .into_iter()
-        .find(|item| item.id == Some(id))
+        .find(|item| item.id == Some(id) && !item.path.contains(".metadata["))
         .ok_or(ConnectionError::NotFound(id))
 }
 

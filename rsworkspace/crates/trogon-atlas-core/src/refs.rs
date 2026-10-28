@@ -836,6 +836,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
             }
         }
     }
+    out.extend(crate::agent_metadata::group_refs(entity).unwrap_or_else(|e| panic!("{e}")));
     out
 }
 
@@ -1167,7 +1168,8 @@ pub fn retarget_refs(
     from_id: &Id,
     to_id: &Id,
 ) -> Vec<String> {
-    let mut rewritten: Vec<String> = Vec::new();
+    let mut rewritten = crate::agent_metadata::retarget_groups(entity, from_kind, from_id, to_id)
+        .unwrap_or_else(|e| panic!("{e}"));
     let Some(kind) = entity.kind.as_mut() else {
         return rewritten;
     };
@@ -2342,6 +2344,29 @@ fn retarget_field_refs(
             }
         }
     }
+}
+
+/// Extract references while reporting malformed native annotation payloads.
+pub fn try_outbound_refs(
+    entity: &Entity,
+) -> Result<Vec<OutboundRef>, crate::agent_metadata::MetadataError> {
+    crate::agent_metadata::group_refs(entity)?;
+    Ok(outbound_refs(entity))
+}
+
+/// Retarget atomically after validating native annotation content.
+pub fn try_retarget_refs(
+    entity: &mut Entity,
+    from_kind: EntityKind,
+    from_id: &Id,
+    to_id: &Id,
+) -> Result<Vec<String>, crate::agent_metadata::MetadataError> {
+    crate::agent_metadata::validate(entity)?;
+    let mut proposed = entity.clone();
+    let paths = retarget_refs(&mut proposed, from_kind, from_id, to_id);
+    crate::agent_metadata::validate(&proposed)?;
+    *entity = proposed;
+    Ok(paths)
 }
 
 #[cfg(test)]
@@ -4195,3 +4220,4 @@ mod tests {
         }
     }
 }
+
