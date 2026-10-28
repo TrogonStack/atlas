@@ -437,6 +437,14 @@ describe('retained native content presentation', () => {
     expect(screen.getByText(/Declared filename is not a valid logical filename/)).toBeTruthy();
   });
 
+  it.each([{}, [], 'unexpected-unwrapped-name.bin'])('reports malformed filename wrappers (%j)', async (filename) => {
+    const note = contentEntity(Uint8Array.of(9));
+    note.raw.filename = filename;
+    render(<DecisionDocumentInspector entity={note} asOf="retained-revision" />);
+    expect(screen.getByText(/Declared filename is not a valid logical filename/)).toBeTruthy();
+    expect((await downloadedBytes()).name).toBe('retained-content.bin');
+  });
+
   it('accepts a 256 byte logical filename and uses the fallback when none is declared', async () => {
     const name = 'n'.repeat(256);
     const { unmount } = render(
