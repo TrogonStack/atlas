@@ -5282,6 +5282,202 @@ async fn architectural_source_title_only_create_rejects_without_native_or_mappin
     }
 }
 
+fn association_content(owner: pb::EntityKind, namespace: &str) -> pb::Entity {
+    let id = |slug: &str| pb::Id {
+        namespace: namespace.into(),
+        slug: slug.into(),
+        version: 1,
+    };
+    let claims = || {
+        vec![pb::StorageAccessClaim {
+            store: Some(pb::DataStoreRef {
+                id: Some(id("claimed-store")),
+            }),
+            direction: pb::StorageDirection::Read as i32,
+            ..Default::default()
+        }]
+    };
+    let kind = match owner {
+        pb::EntityKind::Channel => pb::entity::Kind::Channel(pb::Channel {
+            id: Some(id("association-owner")),
+            title: "Imported".into(),
+            links: vec![pb::ChannelLink {
+                kind: pb::ChannelLinkKind::Composes as i32,
+                target: Some(pb::ChannelRef {
+                    id: Some(id("linked-channel")),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        pb::EntityKind::Component => pb::entity::Kind::Component(pb::Component {
+            id: Some(id("association-owner")),
+            title: "Imported".into(),
+            storage_claims: claims(),
+            ..Default::default()
+        }),
+        pb::EntityKind::ExternalSystem => pb::entity::Kind::ExternalSystem(pb::ExternalSystem {
+            id: Some(id("association-owner")),
+            title: "Imported".into(),
+            storage_claims: claims(),
+            ..Default::default()
+        }),
+        pb::EntityKind::DataProduct => pb::entity::Kind::DataProduct(pb::DataProduct {
+            id: Some(id("association-owner")),
+            title: "Imported".into(),
+            storage_claims: claims(),
+            ..Default::default()
+        }),
+        _ => panic!("association owner"),
+    };
+    pb::Entity {
+        kind: Some(kind),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn association_source_title_only_create_rejects_without_native_or_mapping_base_publication() {
+    for owner in [
+        pb::EntityKind::Channel,
+        pb::EntityKind::Component,
+        pb::EntityKind::ExternalSystem,
+        pb::EntityKind::DataProduct,
+    ] {
+        let nats = trogon_atlas_testsupport::shared().await;
+        let mut server = server(nats.store().await).await;
+        let namespace = namespace(&mut server.client, "source-association", "visible-owner").await;
+        let registration = registration(
+            &mut server.client,
+            "association-source",
+            &namespace,
+            None,
+            None,
+        )
+        .await;
+        let incoming = association_content(owner, &namespace);
+        let owner_id = pb::Id {
+            namespace: namespace.clone(),
+            slug: "association-owner".into(),
+            version: 1,
+        };
+        let mapping = server
+            .client
+            .create_source_mapping(req(
+                ADMIN,
+                pb::CreateSourceMappingRequest {
+                    registration_revision: registration.revision.clone(),
+                    mapping: Some(pb::SourceMapping {
+                        id: "association-mapping".into(),
+                        source: Some(source(&registration.id)),
+                        selection: Some(pb::SourceSelection {
+                            selection: Some(pb::source_selection::Selection::Entity(
+                                pb::EntityRef {
+                                    kind: owner as i32,
+                                    id: Some(owner_id.clone()),
+                                },
+                            )),
+                        }),
+                        ownership: Some(pb::SourceFieldOwnership {
+                            policy: Some(pb::source_field_ownership::Policy::Fields(
+                                pb::SourceOwnedFields {
+                                    fields: vec![pb::SourceOwnedField::Title as i32],
+                                },
+                            )),
+                        }),
+                        ..Default::default()
+                    }),
+                },
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .mapping
+            .unwrap();
+        let snapshot = server
+            .client
+            .accept_source_snapshot(req(
+                ADMIN,
+                pb::AcceptSourceSnapshotRequest {
+                    registration_id: registration.id.clone(),
+                    registration_revision: registration.revision.clone(),
+                    inventory_bytes: inventory(&registration.id, "v1"),
+                    files: vec![pb::SourceFile {
+                        logical_name: "native/model".into(),
+                        media_type: "application/octet-stream".into(),
+                        content: b"native supplied content".to_vec(),
+                        ..Default::default()
+                    }],
+                },
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .snapshot
+            .unwrap();
+        let error = server
+            .client
+            .preview_source_run(req(
+                ADMIN,
+                pb::PreviewSourceRunRequest {
+                    registration_id: registration.id.clone(),
+                    registration_revision: registration.revision.clone(),
+                    snapshot_id: snapshot.id.clone(),
+                    run_id: "association-create".into(),
+                    native_payloads: vec![pb::SourceNativePayload {
+                        source: Some(source(&registration.id)),
+                        entity: Some(incoming),
+                    }],
+                    ..Default::default()
+                },
+                None,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument, "{owner:?}: {error}");
+        assert!(
+            error.message().contains("support native authoring only"),
+            "{owner:?}: {error}"
+        );
+        assert_eq!(
+            server
+                .client
+                .get_entity(req(
+                    ADMIN,
+                    pb::GetEntityRequest {
+                        kind: owner as i32,
+                        id: Some(owner_id)
+                    },
+                    None
+                ))
+                .await
+                .unwrap_err()
+                .code(),
+            Code::NotFound,
+            "{owner:?}"
+        );
+        let after = server
+            .client
+            .get_source_mapping(req(
+                ADMIN,
+                pb::GetSourceMappingRequest {
+                    registration_id: registration.id.clone(),
+                    mapping_id: mapping.id.clone(),
+                },
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .mapping
+            .unwrap();
+        assert_eq!(after, mapping, "{owner:?}");
+        assert!(after.base.is_none(), "{owner:?}");
+    }
+}
+
 #[tokio::test]
 async fn communication_source_title_only_create_rejects_without_native_or_mapping_base_publication()
 {
