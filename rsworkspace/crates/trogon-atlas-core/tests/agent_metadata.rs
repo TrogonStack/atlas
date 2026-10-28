@@ -39,3 +39,17 @@ fn values_and_resource_occurrences_are_native() {
     assert_eq!(assign_connection_ids(&mut entity).unwrap(),2);
     assert_eq!(connection_occurrences(&entity).unwrap().len(),2);
 }
+
+#[test]
+fn group_refs_retarget_and_malformed_payloads_are_accounted_for() {
+    use trogon_atlas_proto::*;
+    use trogon_atlas_core::{outbound_refs, retarget_refs};
+    let target = Id { namespace: "example".into(), slug: "target".into(), version: 1 };
+    let groups = ResourceGroupsAnnotation { groups: vec![ResourceGroup { items: vec![ResourceGroupItem { target: Some(EntityRef { kind: EntityKind::Component as i32, id: Some(target.clone()) }), ..Default::default() };2], ..Default::default() }] };
+    let mut owner = Entity { kind: Some(entity::Kind::Component(Component { metadata: vec![annotation("trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",groups.encode_to_vec())], ..Default::default() })), ..Default::default() };
+    trogon_atlas_core::connections::assign_connection_ids(&mut owner).unwrap();
+    assert_eq!(outbound_refs(&owner).len(),2);
+    let new = Id { slug: "new".into(), ..target.clone() };
+    assert_eq!(retarget_refs(&mut owner,EntityKind::Component,&target,&new).len(),2);
+    assert!(outbound_refs(&owner).iter().all(|r|r.to_id==new));
+}
