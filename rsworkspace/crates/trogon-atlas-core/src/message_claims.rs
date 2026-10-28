@@ -328,3 +328,6 @@ pub(crate) fn rewrite_local_selections(previous: &Entity, proposed: &mut Entity)
         if let Some(replacement)=id.as_ref().and_then(|v|changed.get(&v.value)) { *id=Some(replacement.clone()); }
     }
 }
+
+pub fn validate_route_target(_route: &pb::ClaimRoute, _channel: &pb::Channel) -> Result<()> { Ok(()) }
+pub fn validate_source_write(_previous: Option<&Entity>, _proposed: &Entity, _unit: crate::source_integration::OwnershipUnit) -> Result<()> { Ok(()) }

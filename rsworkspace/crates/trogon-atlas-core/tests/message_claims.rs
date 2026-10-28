@@ -99,3 +99,39 @@ fn partial_selected_claim_does_not_resolve_context() {
     trogon_atlas_core::message_claims::declarations_mut(&mut v).unwrap().claims[0].message.as_mut().unwrap().member_id=None;
     assert!(trogon_atlas_core::message_claims::resolve_connection_context(&v,&r).is_err());
 }
+
+#[test]
+fn route_parameters_require_authored_defaults_or_explicit_values() {
+    use trogon_atlas_core::message_claims::validate_route_target;
+    let channel=Channel{id:Some(id("channel")), address:Some(ChannelAddress{template:"{tenant}".into(),parameters:vec![AddressParameter{name:Some(ParameterName{value:"tenant".into()}),..Default::default()}]}),..Default::default()};
+    let mut route=ClaimRoute{channel:Some(ChannelRef{id:channel.id.clone()}),..Default::default()};
+    assert!(validate_route_target(&route,&channel).is_err());
+    route.parameter_values.insert("tenant".into(),"".into());
+    validate_route_target(&route,&channel).unwrap();
+    let mut defaults=channel.clone();defaults.address.as_mut().unwrap().parameters[0].default=Some("default".into());
+    route.parameter_values.clear(); validate_route_target(&route,&defaults).unwrap();
+    route.parameter_values.insert("unknown".into(),"".into()); assert!(validate_route_target(&route,&defaults).is_err());
+    defaults.address=None;assert!(validate_route_target(&route,&defaults).is_err());
+    route.parameter_values.clear();defaults.id=Some(id("different"));assert!(validate_route_target(&route,&defaults).is_err());
+}
+#[test]
+fn title_only_source_create_refuses_native_content_but_existing_title_preserves_it() {
+    use trogon_atlas_core::message_claims::validate_source_write;
+    let e=with_route();let title=OwnershipUnit::Field(SourceOwnedField::Title);
+    assert!(validate_source_write(None,&e,title).is_err());
+    validate_source_write(Some(&e),&e,title).unwrap();
+    let mut cleared=e.clone(); *trogon_atlas_core::message_claims::declarations_mut(&mut cleared).unwrap()=MessageClaims::default();
+    assert!(validate_source_write(Some(&e),&cleared,OwnershipUnit::WholeOwner).is_err());
+}
+#[test]
+fn complete_values_limits_and_staged_local_ids_are_enforced_without_mutation() {
+    use trogon_atlas_core::{connection_persistence::prepare_entity,message_claims as claims};
+    let base=with_route();let mut wrong=base.clone();
+    claims::declarations_mut(&mut wrong).unwrap().triggers.push(ClaimTrigger{claim_id:claims::declarations(&base).unwrap().claims[0].connection_id.clone(),message:claims::declarations(&base).unwrap().claims[0].message.clone(),..Default::default()});
+    assert!(prepare_entity(Some(&base),&wrong).is_err());
+    let mut new=base.clone();let v=claims::declarations_mut(&mut new).unwrap();let mut c=v.claims[0].clone();c.connection_id=Some(ConnectionId{value:"01930000-0000-7000-8000-000000000030".into()});v.claims.push(c.clone());v.routes[0].claim_id=c.connection_id;v.routes[0].connection_id=None;
+    assert!(prepare_entity(Some(&base),&new).is_err());
+    let mut many=owner();let v=claims::declarations_mut(&mut many).unwrap();v.claims=vec![v.claims[0].clone();1024];prepare_entity(None,&many).unwrap();
+    let c=claims::declarations(&many).unwrap().claims[0].clone();claims::declarations_mut(&mut many).unwrap().claims.push(c);assert!(prepare_entity(None,&many).is_err());
+    let mut large=owner();if let Some(entity::Kind::Domain(d))=&mut large.kind{d.doc="x".repeat(1_048_576);}assert!(prepare_entity(None,&large).is_err());
+}
