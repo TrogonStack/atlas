@@ -36,7 +36,7 @@ fn independent_message_claims_round_trip_on_every_native_owner() {
         let parsed = parsed.unwrap();
         assert_eq!(parsed[0].id.version, u64::MAX);
         let output = export::render_board(&[parsed[0].entity.clone()], &[], &types).unwrap();
-        assert!(output.skipped.is_empty());
+        assert_eq!(output.skipped.len(), 0);
         let restored = manifest::parse_str(&output.manifests, "export.yaml").unwrap();
         assert_eq!(restored[0].entity, parsed[0].entity);
         assert_eq!(
@@ -92,10 +92,10 @@ fn flat_claim_lists_preserve_exact_selectors_and_optional_delivery() {
 fn reference() -> serde_json::Value {
     json!({"specification":"messages@1","ownerUid":"spec-uid","kind":"CONTRACT_MEMBER_KIND_MESSAGE","memberId":{"value":"message-id"}})
 }
-fn claim_manifest(kind: &str, claims: serde_json::Value) -> String {
+fn claim_manifest(kind: &str, claims: &serde_json::Value) -> String {
     json!({"apiVersion":manifest::API_VERSION,"kind":kind,"metadata":{"namespace":"claims","name":"owner"},"spec":{"title":"Owner","messageClaims":claims}}).to_string()
 }
-fn selection(binding: serde_json::Value, selectors: serde_json::Value) -> serde_json::Value {
+fn selection(binding: &serde_json::Value, selectors: &serde_json::Value) -> serde_json::Value {
     json!({"claims":[{"connectionId":{"value":"claim-a"},"direction":"COMMUNICATION_DIRECTION_SEND","message":reference()}],
         "fieldSelections":[{"connectionId":{"value":"selection-a"},"claimId":{"value":"claim-a"},"binding":binding,"selectors":selectors}]})
 }
@@ -109,31 +109,31 @@ fn malformed_claim_manifests_are_rejected_without_guessing_targets_or_alternativ
         (
             "both selector alternatives",
             selection(
-                exact_binding(),
-                json!([{"path":{"segments":["a"]},"opaque":{"syntax":"json-pointer","value":"/a"}}]),
+                &exact_binding(),
+                &json!([{"path":{"segments":["a"]},"opaque":{"syntax":"json-pointer","value":"/a"}}]),
             ),
         ),
         (
             "selector with no alternative",
-            selection(exact_binding(), json!([{}])),
+            selection(&exact_binding(), &json!([{}])),
         ),
         (
             "unknown selector alternative",
-            selection(exact_binding(), json!([{"regex":{"value":"a.*"}}])),
+            selection(&exact_binding(), &json!([{"regex":{"value":"a.*"}}])),
         ),
         (
             "bare string path alternative",
-            selection(exact_binding(), json!([{"path":"a.b"}])),
+            selection(&exact_binding(), &json!([{"path":"a.b"}])),
         ),
         (
             "bare string binding without kind or incarnation",
-            selection(json!("messages@1"), json!([])),
+            selection(&json!("messages@1"), &json!([])),
         ),
         (
             "binding owner without an exact kind",
             selection(
-                json!({"owner":"messages@1","ownerUid":"spec-uid","id":{"value":"binding-a"}}),
-                json!([]),
+                &json!({"owner":"messages@1","ownerUid":"spec-uid","id":{"value":"binding-a"}}),
+                &json!([]),
             ),
         ),
         (
@@ -158,10 +158,7 @@ fn malformed_claim_manifests_are_rejected_without_guessing_targets_or_alternativ
             "unknown claim field",
             json!({"claims":[{"direction":"COMMUNICATION_DIRECTION_SEND","message":reference(),"peer":"provider@1"}]}),
         ),
-        (
-            "unknown container list",
-            json!({"claims":[],"links":[]}),
-        ),
+        ("unknown container list", json!({"claims":[],"links":[]})),
         (
             "trigger with a bare string message",
             json!({"triggers":[{"claimId":{"value":"claim-a"},"message":"messages@1","condition":{"value":"c"}}]}),
@@ -170,12 +167,15 @@ fn malformed_claim_manifests_are_rejected_without_guessing_targets_or_alternativ
     let mut accepted = Vec::new();
     for kind in ["Component", "ExternalSystem", "Domain"] {
         for (name, claims) in &cases {
-            if manifest::parse_str(&claim_manifest(kind, claims.clone()), "claims.yaml").is_ok() {
+            if manifest::parse_str(&claim_manifest(kind, claims), "claims.yaml").is_ok() {
                 accepted.push(format!("{kind}: {name}"));
             }
         }
     }
-    assert!(accepted.is_empty(), "accepted malformed manifests: {accepted:#?}");
+    assert!(
+        accepted.is_empty(),
+        "accepted malformed manifests: {accepted:#?}"
+    );
 }
 
 #[test]
@@ -183,12 +183,10 @@ fn describe_keeps_every_claim_occurrence_and_exact_provenance_without_merging_eq
     use trogon_atlas_core::refs::outbound_refs;
     let types = TranscodePool::builtin().unwrap();
     let message = reference();
-    let claim = |id: &str| {
-        json!({"connectionId":{"value":id},"direction":"COMMUNICATION_DIRECTION_SEND","message":message})
-    };
+    let claim = |id: &str| json!({"connectionId":{"value":id},"direction":"COMMUNICATION_DIRECTION_SEND","message":message});
     let input = claim_manifest(
         "Domain",
-        json!({
+        &json!({
             "claims":[claim("claim-a"), claim("claim-b")],
             "routes":[
                 {"connectionId":{"value":"route-a"},"claimId":{"value":"claim-a"},"channel":"orders@1"},
@@ -225,8 +223,7 @@ fn describe_keeps_every_claim_occurrence_and_exact_provenance_without_merging_eq
             ..Default::default()
         })
         .collect();
-    let described =
-        trogon_atlas_client::view::describe(&entity, &types, &outgoing, &[]).unwrap();
+    let described = trogon_atlas_client::view::describe(&entity, &types, &outgoing, &[]).unwrap();
     let text = trogon_atlas_client::view::render_description(&described);
     for field in [
         "message_claims.claims[0].message.specification",
@@ -244,7 +241,8 @@ fn describe_keeps_every_claim_occurrence_and_exact_provenance_without_merging_eq
     }
     assert_eq!(text.matches("Exact reference provenance").count(), 6);
     assert_eq!(
-        text.matches(r#""connectionId":{"value":"route-b"}"#).count(),
+        text.matches(r#""connectionId":{"value":"route-b"}"#)
+            .count(),
         1
     );
 }
