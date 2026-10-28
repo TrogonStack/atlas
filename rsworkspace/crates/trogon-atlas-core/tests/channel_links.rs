@@ -185,12 +185,12 @@ fn value_rules_allow_cross_key_cycles_and_reject_self_key_and_bad_shapes() {
             6 => {
                 value.doc = Some(CatalogText {
                     value: String::new(),
-                })
+                });
             }
             _ => {
                 value.connection_id = Some(ConnectionId {
                     value: "not-a-uuid".into(),
-                })
+                });
             }
         }
         assert!(validate_values(&invalid).is_err(), "case {case}");

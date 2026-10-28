@@ -1343,5 +1343,5 @@ async fn port_removal_must_carry_its_dependent_claim_in_the_same_guarded_mutatio
     let pb::entity::Kind::DataProduct(removed) = removed.kind.unwrap() else {
         panic!("product")
     };
-    assert!(removed.storage_claims.is_empty());
+    assert_eq!(removed.storage_claims.len(), 0);
 }

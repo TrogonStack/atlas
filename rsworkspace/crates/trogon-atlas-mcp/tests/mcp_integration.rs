@@ -2279,7 +2279,7 @@ async fn association_mcp_native_authoring_inspect_diff_export_and_reapply_preser
             .iter()
             .map(|item| item["connectionId"]["value"].clone())
             .collect();
-        assert!(ids.iter().all(|value| value.is_string()), "{slug}");
+        assert!(ids.iter().all(serde_json::Value::is_string), "{slug}");
         assert!(ids[0] != ids[1] && ids[1] != ids[2], "{slug}: {ids:?}");
         before.push((kind, slug, body));
     }

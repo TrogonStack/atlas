@@ -6,7 +6,7 @@ use trogon_atlas_core::{channel_links, storage_claims, transcode::TranscodePool}
 
 const MAX: &str = "18446744073709551615";
 
-fn envelope(kind: &str, spec: Value) -> Value {
+fn envelope(kind: &str, spec: &Value) -> Value {
     json!({"apiVersion":manifest::API_VERSION,"kind":kind,"metadata":{"namespace":"association","name":"subject","version":MAX},"spec":spec})
 }
 
@@ -53,7 +53,7 @@ mod pb_entity {
 fn channel_links_keep_kind_exact_target_values_ids_and_repeats_through_export_and_reapply() {
     let entity = round_trip(&envelope(
         "Channel",
-        json!({"title":"Subject","links":links()}),
+        &json!({"title":"Subject","links":links()}),
     ));
     let values = channel_links::links(&entity);
     assert_eq!(values.len(), 3);
@@ -91,7 +91,7 @@ fn storage_claims_keep_store_direction_attachment_port_ids_and_repeats_for_every
     for kind in ["Component", "ExternalSystem", "DataProduct"] {
         let entity = round_trip(&envelope(
             kind,
-            json!({"title":"Subject","storageClaims":claims()}),
+            &json!({"title":"Subject","storageClaims":claims()}),
         ));
         let values = storage_claims::claims(&entity);
         assert_eq!(values.len(), 3, "{kind}");
@@ -161,7 +161,7 @@ fn association_manifests_reject_coercions_and_unknown_fields() {
             json!([{"store":"association/warehouse","direction":"STORAGE_DIRECTION_READ","unknown":true}]),
         ),
     ] {
-        invalid.push(envelope(kind, json!({"title":"Subject", field: bad})));
+        invalid.push(envelope(kind, &json!({"title":"Subject", field: bad})));
     }
     let validator = jsonschema::validator_for(&manifest_schema::generate().unwrap()).unwrap();
     for input in invalid {

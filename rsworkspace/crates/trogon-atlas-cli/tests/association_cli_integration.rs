@@ -53,6 +53,7 @@ fn apply(endpoint: &str, dir: &Path, name: &str, document: &Value) {
     cli(endpoint, &["apply", "-f", path.to_str().unwrap()]);
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn document(kind: &str, name: &str, spec: Value) -> Value {
     json!({"apiVersion":manifest::API_VERSION,"kind":kind,"metadata":{"namespace":NS,"name":name},"spec":spec})
 }

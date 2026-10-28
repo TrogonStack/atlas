@@ -174,7 +174,7 @@ fn claim_shape_rules_reject_incomplete_selectors() {
                         .owner
                         .as_mut()
                         .unwrap()
-                        .kind = EntityKind::Channel as i32
+                        .kind = EntityKind::Channel as i32;
                 }
                 5 => {
                     value
@@ -184,24 +184,24 @@ fn claim_shape_rules_reject_incomplete_selectors() {
                         .owner
                         .as_mut()
                         .unwrap()
-                        .id = Some(id("other"))
+                        .id = Some(id("other"));
                 }
                 6 => value.attachment.as_mut().unwrap().owner_uid.clear(),
                 7 => {
                     value.attachment.as_mut().unwrap().id = Some(ConnectionId {
                         value: "bad".into(),
-                    })
+                    });
                 }
                 8 => value.attachment.as_mut().unwrap().owner = None,
                 9 => {
                     value.doc = Some(CatalogText {
                         value: String::new(),
-                    })
+                    });
                 }
                 _ => {
                     value.connection_id = Some(ConnectionId {
                         value: String::new(),
-                    })
+                    });
                 }
             }
             assert!(validate_values(&invalid).is_err(), "{kind} case {case}");
@@ -273,13 +273,15 @@ fn retarget_rewrites_unattached_stores_and_pins_attached_ones() {
         let claims = storage_claims::claims(&plain);
         assert!(claims[0].connection_id.is_none() && claims[1].connection_id.is_some());
         let before = attached.clone();
-        assert!(retarget_refs(
-            &mut attached,
-            EntityKind::DataStore,
-            &id("receipts"),
-            &id("fresh")
-        )
-        .is_empty());
+        assert_eq!(
+            retarget_refs(
+                &mut attached,
+                EntityKind::DataStore,
+                &id("receipts"),
+                &id("fresh")
+            ),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(attached, before);
         let refs: Vec<_> = outbound_refs(&before)
             .into_iter()
