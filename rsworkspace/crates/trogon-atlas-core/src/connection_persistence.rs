@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 
-use trogon_atlas_proto::Entity;
+use prost::Message;
+use trogon_atlas_proto::{entity, Entity};
 
 use crate::{
     connections::{
@@ -12,6 +13,19 @@ use crate::{
     },
     data_product, decision_document, design_topology, specification, stamp_system,
 };
+
+fn checked_prepared_owner(entity: Entity) -> Result<Entity, ConnectionError> {
+    if matches!(
+        entity.kind,
+        Some(entity::Kind::Document(_) | entity::Kind::Decision(_) | entity::Kind::DesignGraph(_))
+    ) && entity.encoded_len() > decision_document::MAX_ENCODED_BYTES
+    {
+        return Err(ConnectionError::Catalog(
+            "catalog entity byte limit exceeded".into(),
+        ));
+    }
+    Ok(entity)
+}
 
 /// Prepare an untrusted write against the value guarded by the store's CAS.
 pub fn prepare_entity(
@@ -25,7 +39,7 @@ pub fn prepare_entity(
             || data_product::equivalent_manifest(previous, proposed)?
             || design_topology::equivalent_manifest(previous, proposed)?
         {
-            return Ok(previous.clone());
+            return checked_prepared_owner(previous.clone());
         }
     }
     decision_document::prepare_values(previous, &mut prepared, false)?;
@@ -47,7 +61,7 @@ pub fn prepare_entity(
     prepared = stamp_system(previous, &prepared);
     crate::message_claims::validate_local_selections(previous, &prepared)
         .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
-    Ok(prepared)
+    checked_prepared_owner(prepared)
 }
 
 /// Land a trusted branch value after checking its baseline concurrency guard.
@@ -95,7 +109,7 @@ pub fn prepare_landing(
     }
     crate::message_claims::validate_values(&prepared)
         .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
-    Ok(prepared)
+    checked_prepared_owner(prepared)
 }
 
 /// Resolve an explicit branch choice without reviving occurrences removed since its base.
