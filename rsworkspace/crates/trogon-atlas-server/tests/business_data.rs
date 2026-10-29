@@ -3924,3 +3924,923 @@ async fn authenticated_order_fixture_keeps_business_declarations_explicit() {
         Some(&relationship)
     );
 }
+
+fn packed_annotation(type_name: &str, bytes: Vec<u8>) -> prost_types::Any {
+    prost_types::Any {
+        type_url: format!("type.googleapis.com/trogonatlas.eventmodel.v1alpha1.{type_name}"),
+        value: bytes,
+    }
+}
+
+fn uuid_field(name: &str) -> pb::FieldSpec {
+    pb::FieldSpec {
+        name: name.into(),
+        r#type: Some(pb::FieldType {
+            kind: Some(field_type::Kind::Uuid(field_type::UuidType { version: 7 })),
+        }),
+        metadata: vec![
+            packed_annotation(
+                "DerivedFieldAnnotation",
+                pb::DerivedFieldAnnotation {
+                    doc: "runtime uuid".into(),
+                    kind: pb::derived_field_annotation::Kind::Uuid as i32,
+                }
+                .encode_to_vec(),
+            ),
+            packed_annotation(
+                "DomainTagAnnotation",
+                pb::DomainTagAnnotation {
+                    tag: "shop.order-id".into(),
+                }
+                .encode_to_vec(),
+            ),
+            packed_annotation(
+                "PersonalDataAnnotation",
+                pb::PersonalDataAnnotation {
+                    doc: "customer token".into(),
+                    erasure: pb::personal_data_annotation::Erasure::CryptoShredding as i32,
+                    subject_field: "order_id".into(),
+                }
+                .encode_to_vec(),
+            ),
+        ],
+        ..Default::default()
+    }
+}
+
+async fn expect_unchanged(
+    service: &EventModelServiceImpl,
+    namespace: &str,
+    slug: &str,
+    version: u64,
+    proposed: pb::Entity,
+    fragment: &str,
+) {
+    let stored = get(service, namespace, slug, version).await;
+    let error = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(proposed),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(error.message().contains(fragment), "{error}");
+    assert_eq!(get(service, namespace, slug, version).await, stored);
+}
+
+async fn expect_unpublished(
+    service: &EventModelServiceImpl,
+    namespace: &str,
+    slug: &str,
+    proposed: pb::Entity,
+    code: Code,
+    fragment: &str,
+) {
+    let error = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(proposed),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), code, "{error}");
+    assert!(error.message().contains(fragment), "{error}");
+    assert_eq!(
+        service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, slug, 1)),
+            }))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+}
+
+fn order_with(
+    namespace: &str,
+    identifiers: Vec<pb::BusinessIdentifier>,
+    relationships: Vec<pb::BusinessPropertyRelationship>,
+) -> pb::Entity {
+    let mut order = schema_entity(
+        namespace,
+        "order",
+        1,
+        pb::Schema {
+            title: "Order".into(),
+            fields: order_fields(namespace, 1),
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(schema)) = &mut order.kind {
+        schema.identifiers = identifiers;
+        schema.property_relationships = relationships;
+    }
+    order
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn public_identifier_and_relationship_rules_reject_without_publishing() {
+    let namespace = "bd-rules";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    let stored = put(
+        &service,
+        order_with(
+            namespace,
+            vec![
+                pb::BusinessIdentifier {
+                    property: Some(path(&[("customer", false), ("id", false)])),
+                    role: pb::BusinessIdentifierRole::Primary as i32,
+                    ..Default::default()
+                },
+                pb::BusinessIdentifier {
+                    property: Some(path(&[("lines", true), ("sku", false)])),
+                    role: pb::BusinessIdentifierRole::Alternate as i32,
+                    ..Default::default()
+                },
+            ],
+            vec![relationship(namespace, 1, None, None)],
+        ),
+    )
+    .await;
+    let schema = schema_of(&stored);
+    assert!(schema.identifiers[0].connection_id.is_some());
+    assert!(schema.identifiers[1].connection_id.is_some());
+    assert_ne!(
+        schema.identifiers[0].connection_id,
+        schema.identifiers[1].connection_id
+    );
+    assert!(schema.property_relationships[0].target_property.is_none());
+    assert!(schema.property_relationships[0].label.is_none());
+    let primary_id = connection(&stored, false);
+    let alternate_id = schema.identifiers[1]
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    let relationship_id = connection(&stored, true);
+    let mut product = get(&service, namespace, "product", 1).await;
+    if let Some(pb::entity::Kind::Schema(body)) = &mut product.kind {
+        body.identifiers.push(pb::BusinessIdentifier {
+            property: Some(path(&[("sku", false)])),
+            role: pb::BusinessIdentifierRole::Primary as i32,
+            ..Default::default()
+        });
+    }
+    put(&service, product).await;
+    let order = get(&service, namespace, "order", 1).await;
+    let schema = schema_of(&order);
+    assert!(schema.property_relationships[0].target_property.is_none());
+    assert_eq!(schema.identifiers.len(), 2);
+    assert_eq!(connection(&order, false), primary_id);
+    let outgoing = service
+        .get_outgoing_references(Request::new(pb::GetReferencesRequest {
+            kind: pb::EntityKind::Schema as i32,
+            id: Some(id(namespace, "order", 1)),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .references;
+    assert_eq!(
+        outgoing
+            .iter()
+            .find(|reference| reference.from_field == "property_relationships[0].target_entity")
+            .unwrap()
+            .business_property_status,
+        Some(pb::BusinessPropertyReferenceStatus::EntityOnly as i32)
+    );
+    assert!(!outgoing
+        .iter()
+        .any(|reference| reference.from_field.contains("identifiers")));
+
+    let mut documented = order.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut documented.kind {
+        body.identifiers[0].doc = Some(pb::CatalogText {
+            value: "Customer id".into(),
+        });
+        body.property_relationships[0].label = Some(pb::CatalogTitle {
+            value: "hasMany".into(),
+        });
+        body.property_relationships[0].doc = Some(pb::CatalogText {
+            value: "Line product".into(),
+        });
+    }
+    let documented = put(&service, documented).await;
+    assert_eq!(connection(&documented, false), primary_id);
+    assert_eq!(connection(&documented, true), relationship_id);
+    assert_eq!(
+        schema_of(&documented).property_relationships[0]
+            .label
+            .as_ref()
+            .unwrap()
+            .value,
+        "hasMany"
+    );
+    let mut second = documented.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut second.kind {
+        body.property_relationships
+            .push(relationship(namespace, 1, None, Some("belongsTo")));
+    }
+    let second = put(&service, second).await;
+    assert_eq!(connection(&second, true), relationship_id);
+    assert_ne!(
+        schema_of(&second).property_relationships[1].connection_id,
+        schema_of(&second).property_relationships[0].connection_id
+    );
+    let belongs_to = schema_of(&second).property_relationships[1]
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    let mut reordered = second.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut reordered.kind {
+        body.fields.reverse();
+    }
+    let reordered = put(&service, reordered).await;
+    assert_eq!(connection(&reordered, false), primary_id);
+    assert_eq!(
+        schema_of(&reordered).identifiers[1]
+            .connection_id
+            .as_ref()
+            .unwrap()
+            .value,
+        alternate_id
+    );
+    assert_eq!(connection(&reordered, true), relationship_id);
+    assert_eq!(
+        schema_of(&reordered).identifiers[0]
+            .property
+            .as_ref()
+            .unwrap()
+            .segments
+            .iter()
+            .map(|segment| segment.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["customer", "id"]
+    );
+
+    let mut blank_label = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut blank_label.kind {
+        body.property_relationships[0].label = Some(pb::CatalogTitle { value: "  ".into() });
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        blank_label,
+        "catalog text blank or byte limit exceeded",
+    )
+    .await;
+    let mut blank_doc = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut blank_doc.kind {
+        body.property_relationships[0].doc = Some(pb::CatalogText { value: " ".into() });
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        blank_doc,
+        "catalog text blank or byte limit exceeded",
+    )
+    .await;
+    let mut kept_target = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut kept_target.kind {
+        body.property_relationships[0].target_property = Some(path(&[("sku", false)]));
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        kept_target,
+        "changed role or endpoint",
+    )
+    .await;
+    let mut kept_role = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut kept_role.kind {
+        body.identifiers[0].role = pb::BusinessIdentifierRole::Alternate as i32;
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        kept_role,
+        "changed role or endpoint",
+    )
+    .await;
+    let mut kept_path = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut kept_path.kind {
+        body.identifiers[1].property = Some(path(&[("order_id", false)]));
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        kept_path,
+        "changed role or endpoint",
+    )
+    .await;
+    let mut same_path = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut same_path.kind {
+        body.identifiers.push(pb::BusinessIdentifier {
+            property: Some(path(&[("customer", false), ("id", false)])),
+            role: pb::BusinessIdentifierRole::Alternate as i32,
+            ..Default::default()
+        });
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        same_path,
+        "identifier property path is declared more than once",
+    )
+    .await;
+    let mut repeated = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut repeated.kind {
+        body.identifiers[1].connection_id = None;
+        body.identifiers[1].property = Some(path(&[("lines", false), ("sku", false)]));
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        repeated,
+        "property segment lines repeated flag does not match the field",
+    )
+    .await;
+    let mut items = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut items.kind {
+        body.identifiers[1].connection_id = None;
+        body.identifiers[1].property =
+            Some(path(&[("lines", true), ("items", false), ("sku", false)]));
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        items,
+        "property segment items is missing or ambiguous",
+    )
+    .await;
+    let mut through_ref = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut through_ref.kind {
+        body.identifiers[1].connection_id = None;
+        body.identifiers[1].property = Some(path(&[("product_ref", false), ("sku", false)]));
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "order",
+        1,
+        through_ref,
+        "property segment product_ref is not an inline object",
+    )
+    .await;
+
+    let mut renewed = reordered.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut renewed.kind {
+        body.property_relationships[0].connection_id = None;
+        body.property_relationships[0].target_property = Some(path(&[("sku", false)]));
+    }
+    let renewed = put(&service, renewed).await;
+    let renewed_schema = schema_of(&renewed);
+    let renewed_relationship = renewed_schema.property_relationships[0]
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    assert_ne!(renewed_relationship, relationship_id);
+    assert_eq!(
+        renewed_schema.property_relationships[1]
+            .connection_id
+            .as_ref()
+            .unwrap()
+            .value,
+        belongs_to
+    );
+    assert_eq!(connection(&renewed, false), primary_id);
+    assert_eq!(
+        service
+            .get_outgoing_references(Request::new(pb::GetReferencesRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "order", 1)),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .references
+            .iter()
+            .find(|reference| reference.from_field == "property_relationships[0].target_entity")
+            .unwrap()
+            .business_property_status,
+        Some(pb::BusinessPropertyReferenceStatus::PropertyResolved as i32)
+    );
+    let old_relationship = connection_subject(&renewed, &relationship_id);
+    let new_relationship = connection_subject(&renewed, &renewed_relationship);
+    let missing = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::Team(pb::Team {
+                    id: Some(id(namespace, "old-relationship", 1)),
+                    title: Some(pb::DirectoryDisplayName {
+                        value: "Old relationship".into(),
+                    }),
+                    responsibilities: vec![pb::Responsibility {
+                        kind: pb::ResponsibilityKind::Owner as i32,
+                        subject: Some(old_relationship.clone()),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(missing.code(), Code::InvalidArgument, "{missing}");
+    assert_eq!(
+        service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Team as i32,
+                id: Some(id(namespace, "old-relationship", 1)),
+            }))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    put(
+        &service,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Team(pb::Team {
+                id: Some(id(namespace, "new-relationship", 1)),
+                title: Some(pb::DirectoryDisplayName {
+                    value: "New relationship".into(),
+                }),
+                responsibilities: vec![pb::Responsibility {
+                    kind: pb::ResponsibilityKind::Owner as i32,
+                    subject: Some(new_relationship.clone()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        service
+            .list_subject_assignments(Request::new(pb::ListSubjectAssignmentsRequest {
+                subject: Some(old_relationship),
+                kind: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .assignments
+            .len(),
+        0
+    );
+    assert_eq!(
+        service
+            .list_subject_assignments(Request::new(pb::ListSubjectAssignmentsRequest {
+                subject: Some(new_relationship),
+                kind: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .assignments
+            .len(),
+        1
+    );
+
+    let mut renewed_identifier = renewed.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut renewed_identifier.kind {
+        body.identifiers[1].connection_id = None;
+        body.identifiers[1].property = Some(path(&[("order_id", false)]));
+    }
+    let renewed_identifier = put(&service, renewed_identifier).await;
+    let new_alternate = schema_of(&renewed_identifier).identifiers[1]
+        .connection_id
+        .as_ref()
+        .unwrap()
+        .value
+        .clone();
+    assert_ne!(new_alternate, alternate_id);
+    assert_eq!(connection(&renewed_identifier, false), primary_id);
+    let old_identifier = catalog_subject(&renewed_identifier, &alternate_id);
+    let new_identifier = catalog_subject(&renewed_identifier, &new_alternate);
+    let missing_decision = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::Decision(pb::Decision {
+                    id: Some(id(namespace, "old-identifier", 1)),
+                    title: Some(pb::CatalogTitle {
+                        value: "Old identifier".into(),
+                    }),
+                    subjects: vec![pb::SubjectAssociation {
+                        subject: Some(old_identifier.clone()),
+                        ..Default::default()
+                    }],
+                    status: pb::DecisionStatus::Proposed as i32,
+                    context: Some(pb::CatalogText {
+                        value: "The previous occurrence.".into(),
+                    }),
+                    rationale: Some(pb::CatalogText {
+                        value: "A replaced path is not that occurrence.".into(),
+                    }),
+                    options: vec![pb::DecisionOption {
+                        title: Some(pb::CatalogTitle {
+                            value: "Keep the new id".into(),
+                        }),
+                        description: Some(pb::CatalogText {
+                            value: "The old connection ref does not resolve.".into(),
+                        }),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        missing_decision.code(),
+        Code::InvalidArgument,
+        "{missing_decision}"
+    );
+    assert_eq!(
+        service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Decision as i32,
+                id: Some(id(namespace, "old-identifier", 1)),
+            }))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    put(
+        &service,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Decision(pb::Decision {
+                id: Some(id(namespace, "new-identifier", 1)),
+                title: Some(pb::CatalogTitle {
+                    value: "New identifier".into(),
+                }),
+                subjects: vec![pb::SubjectAssociation {
+                    subject: Some(new_identifier.clone()),
+                    ..Default::default()
+                }],
+                status: pb::DecisionStatus::Proposed as i32,
+                context: Some(pb::CatalogText {
+                    value: "The replacement occurrence.".into(),
+                }),
+                rationale: Some(pb::CatalogText {
+                    value: "The new connection ref names that path.".into(),
+                }),
+                options: vec![pb::DecisionOption {
+                    title: Some(pb::CatalogTitle {
+                        value: "Use the new id".into(),
+                    }),
+                    description: Some(pb::CatalogText {
+                        value: "The omitted id was assigned by the server.".into(),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        service
+            .list_subject_decisions(Request::new(pb::ListSubjectDecisionsRequest {
+                subject: Some(old_identifier),
+                status: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .declarations
+            .len(),
+        0
+    );
+    assert_eq!(
+        service
+            .list_subject_decisions(Request::new(pb::ListSubjectDecisionsRequest {
+                subject: Some(new_identifier),
+                status: None,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .declarations
+            .len(),
+        1
+    );
+
+    let mut ambiguous = schema_entity(
+        namespace,
+        "ambiguous",
+        1,
+        pb::Schema {
+            title: "Ambiguous".into(),
+            fields: vec![
+                object_field("customer", false, vec![string_field("id")]),
+                string_field("sku"),
+                string_field("sku"),
+            ],
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(body)) = &mut ambiguous.kind {
+        body.identifiers.push(pb::BusinessIdentifier {
+            property: Some(path(&[("customer", false), ("id", false)])),
+            role: pb::BusinessIdentifierRole::Primary as i32,
+            ..Default::default()
+        });
+    }
+    let ambiguous = put(&service, ambiguous).await;
+    let mut rejected_sku = ambiguous.clone();
+    if let Some(pb::entity::Kind::Schema(body)) = &mut rejected_sku.kind {
+        body.title = "Changed".into();
+        body.identifiers.push(pb::BusinessIdentifier {
+            property: Some(path(&[("sku", false)])),
+            role: pb::BusinessIdentifierRole::Alternate as i32,
+            ..Default::default()
+        });
+    }
+    expect_unchanged(
+        &service,
+        namespace,
+        "ambiguous",
+        1,
+        rejected_sku,
+        "property segment sku is missing or ambiguous",
+    )
+    .await;
+    let kept_entity = get(&service, namespace, "ambiguous", 1).await;
+    let kept = schema_of(&kept_entity);
+    assert_eq!(kept.title, "Ambiguous");
+    assert_eq!(kept.fields.len(), 3);
+    assert_eq!(kept.identifiers.len(), 1);
+
+    let traps = put(
+        &service,
+        schema_entity(
+            namespace,
+            "traps",
+            1,
+            pb::Schema {
+                title: "Traps".into(),
+                fields: vec![uuid_field("subject_token"), string_field("order_id")],
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    let traps = schema_of(&traps);
+    assert_eq!(traps.identifiers.len(), 0);
+    assert_eq!(traps.property_relationships.len(), 0);
+    assert_eq!(traps.aggregate_root, None);
+    assert_eq!(traps.fields[0].metadata.len(), 3);
+    let plain_entity = put(
+        &service,
+        schema_entity(
+            namespace,
+            "plain",
+            1,
+            pb::Schema {
+                title: "Plain".into(),
+                fields: vec![string_field("id")],
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    let plain = schema_of(&plain_entity);
+    assert_eq!(plain.identifiers.len(), 0);
+
+    for (slug, role, fragment) in [
+        (
+            "role-zero",
+            0,
+            "identifier role must be primary or alternate",
+        ),
+        (
+            "role-unknown",
+            99,
+            "identifier role must be primary or alternate",
+        ),
+    ] {
+        expect_unpublished(
+            &service,
+            namespace,
+            slug,
+            order_with_role(namespace, slug, role),
+            Code::InvalidArgument,
+            fragment,
+        )
+        .await;
+    }
+    expect_unpublished(
+        &service,
+        namespace,
+        "empty-id",
+        order_with_connection(namespace, "empty-id", ""),
+        Code::InvalidArgument,
+        "connection ID must be a non-nil lowercase hyphenated UUID",
+    )
+    .await;
+    expect_unpublished(
+        &service,
+        namespace,
+        "bad-id",
+        order_with_connection(namespace, "bad-id", "not-a-uuid"),
+        Code::InvalidArgument,
+        "connection ID must be a non-nil lowercase hyphenated UUID",
+    )
+    .await;
+    let shared = "11111111-1111-7111-8111-111111111111";
+    let mut shared_owner = order_with(
+        namespace,
+        vec![pb::BusinessIdentifier {
+            connection_id: Some(pb::ConnectionId {
+                value: shared.into(),
+            }),
+            property: Some(path(&[("customer", false), ("id", false)])),
+            role: pb::BusinessIdentifierRole::Primary as i32,
+            ..Default::default()
+        }],
+        vec![relationship(namespace, 1, None, None)],
+    );
+    if let Some(pb::entity::Kind::Schema(body)) = &mut shared_owner.kind {
+        body.id = Some(id(namespace, "shared-id", 1));
+        body.property_relationships[0].connection_id = Some(pb::ConnectionId {
+            value: shared.into(),
+        });
+    }
+    expect_unpublished(
+        &service,
+        namespace,
+        "shared-id",
+        shared_owner,
+        Code::InvalidArgument,
+        "duplicate connection ID",
+    )
+    .await;
+
+    for (kind, slug) in [
+        (pb::EntityKind::Event, "placed"),
+        (pb::EntityKind::Command, "place"),
+        (pb::EntityKind::Swimlane, "orders"),
+    ] {
+        let owner_id = id(namespace, slug, 1);
+        let owner = match kind {
+            pb::EntityKind::Event => pb::Entity {
+                kind: Some(pb::entity::Kind::Event(pb::Event {
+                    id: Some(owner_id.clone()),
+                    title: slug.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            pb::EntityKind::Command => pb::Entity {
+                kind: Some(pb::entity::Kind::Command(pb::Command {
+                    id: Some(owner_id.clone()),
+                    title: slug.into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            pb::EntityKind::Swimlane => pb::Entity {
+                kind: Some(pb::entity::Kind::Swimlane(pb::Swimlane {
+                    id: Some(owner_id.clone()),
+                    title: slug.into(),
+                    stream_id: "orders-{order_id}".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            _ => unreachable!(),
+        };
+        put(&service, owner).await;
+        let mut bad = schema_entity(
+            namespace,
+            &format!("bad-{slug}"),
+            1,
+            pb::Schema {
+                title: "Bad target".into(),
+                fields: vec![string_field("product_ref")],
+                ..Default::default()
+            },
+        );
+        if let Some(pb::entity::Kind::Schema(body)) = &mut bad.kind {
+            body.property_relationships
+                .push(pb::BusinessPropertyRelationship {
+                    source: Some(path(&[("product_ref", false)])),
+                    target_entity: Some(pb::SchemaRef { id: Some(owner_id) }),
+                    ..Default::default()
+                });
+        }
+        expect_unpublished(
+            &service,
+            namespace,
+            &format!("bad-{slug}"),
+            bad,
+            Code::NotFound,
+            "entity not found",
+        )
+        .await;
+    }
+
+    let mut self_owner = schema_entity(
+        namespace,
+        "self-product",
+        1,
+        pb::Schema {
+            title: "Self".into(),
+            fields: vec![string_field("sku")],
+            ..Default::default()
+        },
+    );
+    if let Some(pb::entity::Kind::Schema(body)) = &mut self_owner.kind {
+        body.property_relationships
+            .push(pb::BusinessPropertyRelationship {
+                source: Some(path(&[("sku", false)])),
+                target_entity: Some(pb::SchemaRef {
+                    id: Some(id(namespace, "self-product", 1)),
+                }),
+                target_property: Some(path(&[("sku", false)])),
+                ..Default::default()
+            });
+    }
+    put(&service, self_owner).await;
+    let status = service
+        .get_outgoing_references(Request::new(pb::GetReferencesRequest {
+            kind: pb::EntityKind::Schema as i32,
+            id: Some(id(namespace, "self-product", 1)),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .references
+        .into_iter()
+        .find(|reference| reference.from_field == "property_relationships[0].target_entity")
+        .unwrap()
+        .business_property_status;
+    assert_eq!(
+        status,
+        Some(pb::BusinessPropertyReferenceStatus::PropertyResolved as i32)
+    );
+}
+
+fn order_with_role(namespace: &str, slug: &str, role: i32) -> pb::Entity {
+    let mut entity = order_with(
+        namespace,
+        vec![pb::BusinessIdentifier {
+            property: Some(path(&[("customer", false), ("id", false)])),
+            role,
+            ..Default::default()
+        }],
+        Vec::new(),
+    );
+    if let Some(pb::entity::Kind::Schema(body)) = &mut entity.kind {
+        body.id = Some(id(namespace, slug, 1));
+    }
+    entity
+}
+
+fn order_with_connection(namespace: &str, slug: &str, connection_id: &str) -> pb::Entity {
+    let mut entity = order_with_role(namespace, slug, pb::BusinessIdentifierRole::Primary as i32);
+    if let Some(pb::entity::Kind::Schema(body)) = &mut entity.kind {
+        body.identifiers[0].connection_id = Some(pb::ConnectionId {
+            value: connection_id.into(),
+        });
+    }
+    entity
+}
