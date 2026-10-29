@@ -1,5 +1,5 @@
 //! A gRPC server that answers `GetServerInfo` (and, when scripted,
-//! `BatchGetEntities`) with fixed responses and records every call, so tests
+//! `BatchGetEntities` or `ValidateProject`) with fixed responses and records every call, so tests
 //! can pose as a server of another version and prove a client refused before
 //! sending a mutation, or that a read still works against it.
 
@@ -16,12 +16,20 @@ const GET_SERVER_INFO_PATH: &str =
     "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetServerInfo";
 const BATCH_GET_ENTITIES_PATH: &str =
     "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BatchGetEntities";
+const VALIDATE_PROJECT_PATH: &str =
+    "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ValidateProject";
 
 #[derive(Clone)]
 struct DiscoveryOnlyService {
     info: pb::GetServerInfoResponse,
-    entities: Option<pb::BatchGetEntitiesResponse>,
+    scripted: Scripts,
     calls: Arc<Mutex<Vec<String>>>,
+}
+
+#[derive(Clone, Default)]
+struct Scripts {
+    entities: Option<pb::BatchGetEntitiesResponse>,
+    validate_project: Option<pb::ValidateProjectResponse>,
 }
 
 impl tonic::server::NamedService for DiscoveryOnlyService {
@@ -47,8 +55,13 @@ where
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(path.clone());
-        match (path.as_str(), &self.entities) {
-            (GET_SERVER_INFO_PATH, _) => {
+        let scripted = &self.scripted;
+        match (
+            path.as_str(),
+            &scripted.entities,
+            &scripted.validate_project,
+        ) {
+            (GET_SERVER_INFO_PATH, _, _) => {
                 let info = self.info.clone();
                 Box::pin(async move {
                     let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
@@ -57,13 +70,25 @@ where
                         .await)
                 })
             }
-            (BATCH_GET_ENTITIES_PATH, Some(entities)) => {
+            (BATCH_GET_ENTITIES_PATH, Some(entities), _) => {
                 let entities = entities.clone();
                 Box::pin(async move {
                     let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
                     Ok(grpc
                         .unary(
                             Scripted::<pb::BatchGetEntitiesRequest, _>::new(entities),
+                            req,
+                        )
+                        .await)
+                })
+            }
+            (VALIDATE_PROJECT_PATH, _, Some(response)) => {
+                let response = response.clone();
+                Box::pin(async move {
+                    let mut grpc = tonic::server::Grpc::new(tonic_prost::ProstCodec::default());
+                    Ok(grpc
+                        .unary(
+                            Scripted::<pb::ValidateProjectRequest, _>::new(response),
                             req,
                         )
                         .await)
@@ -114,7 +139,7 @@ impl DiscoveryOnlyServer {
     /// Bind an ephemeral port and serve `info` from `GetServerInfo`. Every
     /// other RPC answers UNIMPLEMENTED and is recorded.
     pub async fn start(info: pb::GetServerInfoResponse) -> Result<Self, String> {
-        Self::start_with_entities(info, None).await
+        Self::start_scripted(info, Scripts::default()).await
     }
 
     /// Like [`Self::start`], but also answer `BatchGetEntities` with
@@ -123,12 +148,36 @@ impl DiscoveryOnlyServer {
         info: pb::GetServerInfoResponse,
         entities: pb::BatchGetEntitiesResponse,
     ) -> Result<Self, String> {
-        Self::start_with_entities(info, Some(entities)).await
+        Self::start_scripted(
+            info,
+            Scripts {
+                entities: Some(entities),
+                ..Scripts::default()
+            },
+        )
+        .await
     }
 
-    async fn start_with_entities(
+    /// Like [`Self::start`], but also answer `ValidateProject` with
+    /// `response`, so a client can be shown coverage a real server would
+    /// only produce under conditions a test cannot cheaply arrange.
+    pub async fn start_serving_validate_project(
         info: pb::GetServerInfoResponse,
-        entities: Option<pb::BatchGetEntitiesResponse>,
+        response: pb::ValidateProjectResponse,
+    ) -> Result<Self, String> {
+        Self::start_scripted(
+            info,
+            Scripts {
+                validate_project: Some(response),
+                ..Scripts::default()
+            },
+        )
+        .await
+    }
+
+    async fn start_scripted(
+        info: pb::GetServerInfoResponse,
+        scripted: Scripts,
     ) -> Result<Self, String> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -139,7 +188,7 @@ impl DiscoveryOnlyServer {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let service = DiscoveryOnlyService {
             info,
-            entities,
+            scripted,
             calls: Arc::clone(&calls),
         };
         tokio::spawn(async move {
