@@ -736,6 +736,33 @@ async fn business_mcp_impact_retarget_delete_and_branch_keep_identity() {
         },
         other => panic!("ref, got {other:?}"),
     }
+    let mut relationship_only = call(
+        &writer,
+        "get_entity_json",
+        json!({"kind": "schema", "namespace": namespace, "slug": "order", "version": 1}),
+    )
+    .await["json"]
+        .clone();
+    relationship_only["schema"]["fields"][1] =
+        json!({"name": "product_ref", "type": {"string": {}}});
+    call(
+        &writer,
+        "put_entity_json",
+        json!({"entity_json": relationship_only.to_string()}),
+    )
+    .await;
+    let moved = decode_binpb::<pb::GetEntityResponse>(
+        &call(
+            &writer,
+            "get_entity",
+            json!({"kind": "schema", "namespace": namespace, "slug": "order", "version": 1}),
+        )
+        .await,
+    );
+    assert_eq!(
+        occurrence_ids(&moved),
+        (identifier_id.clone(), renewed.clone())
+    );
     let product_v2_before = decode_binpb::<pb::GetEntityResponse>(
         &call(
             &writer,
@@ -780,8 +807,11 @@ async fn business_mcp_impact_retarget_delete_and_branch_keep_identity() {
         )
         .await;
     match blocked_force {
-        Ok(result) => assert!(result.is_error.unwrap_or(false), "{result:?}"),
-        Err(error) => assert_ne!(error.to_string(), ""),
+        Ok(result) => {
+            assert!(result.is_error.unwrap_or(false), "{result:?}");
+            assert!(format!("{result:?}").contains("referenced"), "{result:?}");
+        }
+        Err(error) => assert!(error.to_string().contains("referenced"), "{error}"),
     }
     let product_v2_after = decode_binpb::<pb::GetEntityResponse>(
         &call(
@@ -818,8 +848,21 @@ async fn business_mcp_impact_retarget_delete_and_branch_keep_identity() {
         )
         .await;
     match solo_gone {
-        Ok(result) => assert!(result.is_error.unwrap_or(false), "{result:?}"),
-        Err(error) => assert_ne!(error.to_string(), ""),
+        Ok(result) => {
+            assert!(result.is_error.unwrap_or(false), "{result:?}");
+            let rendered = format!("{result:?}").to_lowercase();
+            assert!(
+                rendered.contains("not_found") || rendered.contains("not found"),
+                "{result:?}"
+            );
+        }
+        Err(error) => {
+            let rendered = error.to_string().to_lowercase();
+            assert!(
+                rendered.contains("not_found") || rendered.contains("not found"),
+                "{error}"
+            );
+        }
     }
     assert_eq!(
         decode_binpb::<pb::GetEntityResponse>(

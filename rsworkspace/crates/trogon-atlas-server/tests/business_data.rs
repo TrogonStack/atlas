@@ -2677,6 +2677,70 @@ async fn review_red_truncated_snapshot_does_not_present_omitted_schema_referrers
     );
     assert_eq!(error.code(), Code::ResourceExhausted, "{error:?}");
     assert!(error.message().contains("omitted schemas"), "{error:?}");
+    let (target, etag) = read_stored(
+        &service,
+        pb::EntityKind::Schema,
+        id(namespace, "product", 1),
+    )
+    .await;
+    let refused = service
+        .delete_entity(Request::new(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Schema as i32,
+            id: Some(id(namespace, "product", 1)),
+            mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Code::FailedPrecondition, "{refused}");
+    let (after, after_etag) = read_stored(
+        &service,
+        pb::EntityKind::Schema,
+        id(namespace, "product", 1),
+    )
+    .await;
+    assert_eq!(after, target);
+    assert_eq!(after_etag, etag);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn assigned_business_ids_cannot_grow_a_schema_past_its_byte_ceiling() {
+    let namespace = "bd-assigned-size";
+    let service = service().await;
+    put(&service, product_schema(namespace, 1)).await;
+    let mut proposed = fan_in(namespace, "oversized-after-ids", 1);
+    let pb::entity::Kind::Schema(schema) = proposed.kind.as_mut().unwrap() else {
+        panic!("schema")
+    };
+    let ceiling = trogon_atlas_core::business_data::MAX_SCHEMA_BYTES;
+    schema.fields[0].doc = "x".repeat(ceiling - 512);
+    let length = schema.encoded_len();
+    schema.fields[0].doc.push_str(&"x".repeat(ceiling - length));
+    assert_eq!(schema.encoded_len(), ceiling);
+    assert!(schema.property_relationships[0].connection_id.is_none());
+    let error = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(proposed),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(
+        error.message().contains("1048576") || error.message().contains("1 MiB"),
+        "{error}"
+    );
+    assert_eq!(
+        service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(id(namespace, "oversized-after-ids", 1))
+            }))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -6798,6 +6862,12 @@ async fn closure_target_reference_denial_is_not_source_write_denial() {
     let mut titled = order.clone();
     if let Some(pb::entity::Kind::Schema(schema)) = &mut titled.kind {
         schema.title = "Written".into();
+        schema.aggregate_root = Some(true);
+        schema.identifiers.push(pb::BusinessIdentifier {
+            property: Some(path(&[("product_ref", false)])),
+            role: pb::BusinessIdentifierRole::Primary as i32,
+            ..Default::default()
+        });
     }
     let written = service
         .put_entity(tenant_request(
@@ -6897,6 +6967,48 @@ async fn closure_target_reference_denial_is_not_source_write_denial() {
         "hidden-target-title-sentinel"
     );
     assert_eq!(hidden_after.system.as_ref().unwrap().uid, hidden_uid);
+    let lane_id = id(&hidden_ns, "orders", 1);
+    let lane = put(
+        &service,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Swimlane(pb::Swimlane {
+                id: Some(lane_id.clone()),
+                title: "Orders".into(),
+                stream_id: "orders".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let mut lane_edit = lane.clone();
+    if let Some(pb::entity::Kind::Swimlane(body)) = lane_edit.kind.as_mut() {
+        body.title = "Denied".into();
+    }
+    let refused = service
+        .put_entity(tenant_request(
+            pb::PutEntityRequest {
+                entity: Some(lane_edit),
+                ..Default::default()
+            },
+            "acme-writer",
+            Role::Writer,
+            "acme",
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Code::PermissionDenied);
+    let retained = service
+        .get_entity(Request::new(pb::GetEntityRequest {
+            kind: pb::EntityKind::Swimlane as i32,
+            id: Some(lane_id),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    assert_eq!(retained, lane);
 }
 
 #[tokio::test(flavor = "multi_thread")]
