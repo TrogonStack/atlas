@@ -1866,3 +1866,120 @@ async fn unknown_and_deleted_branches_refuse_every_structure_operation_without_f
         2
     );
 }
+
+#[tokio::test]
+async fn unrelated_edits_preserve_every_group_and_domain_curation_field() {
+    let service = fixture().await;
+    save(
+        &service,
+        domain(
+            "retail",
+            vec![
+                domain_member(pb::domain_member::Target::SystemGroup(pb::SystemGroupRef {
+                    id: Some(id("platform")),
+                })),
+                domain_member(pb::domain_member::Target::Component(pb::ComponentRef {
+                    id: Some(id("worker")),
+                })),
+            ],
+        ),
+        None,
+    )
+    .await;
+
+    let group_before = get_group(&service, "platform").await.entity.unwrap();
+    let mut retitled = group_before.clone();
+    group_mut(&mut retitled).title = "Platform renamed".into();
+    let group_after = save(&service, retitled, None).await.entity.unwrap();
+    let (before, after) = (
+        match group_before.kind.as_ref().unwrap() {
+            pb::entity::Kind::SystemGroup(value) => value.clone(),
+            _ => panic!("group"),
+        },
+        match group_after.kind.as_ref().unwrap() {
+            pb::entity::Kind::SystemGroup(value) => value.clone(),
+            _ => panic!("group"),
+        },
+    );
+    assert_eq!(after.title, "Platform renamed");
+    assert_eq!(after.members, before.members);
+    assert_eq!(after.relationships, before.relationships);
+    assert_eq!(after.actors, before.actors);
+    assert_eq!(after.scope, before.scope);
+    assert!(member_ids(&group_after).iter().all(Option::is_some));
+    assert_eq!(
+        relationship_ids(&group_after),
+        relationship_ids(&group_before)
+    );
+
+    let domain_before = get(&service, pb::EntityKind::Domain, "retail", None)
+        .await
+        .entity
+        .unwrap();
+    let mut renamed = domain_before.clone();
+    domain_mut(&mut renamed).title = "Retail renamed".into();
+    let domain_after = save(&service, renamed, None).await.entity.unwrap();
+    let (before, after) = (
+        match domain_before.kind.as_ref().unwrap() {
+            pb::entity::Kind::Domain(value) => value.clone(),
+            _ => panic!("domain"),
+        },
+        match domain_after.kind.as_ref().unwrap() {
+            pb::entity::Kind::Domain(value) => value.clone(),
+            _ => panic!("domain"),
+        },
+    );
+    assert_eq!(after.title, "Retail renamed");
+    assert_eq!(after.members, before.members);
+    assert_eq!(member_ids(&domain_after), member_ids(&domain_before));
+}
+
+#[tokio::test]
+async fn cycles_closed_inside_one_batch_are_accepted_and_reported() {
+    let service = snapshot_service().await;
+    let response = service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            ops: [
+                group("left", vec![member_group("right")], vec![], vec![]),
+                group("right", vec![member_group("left")], vec![], vec![]),
+            ]
+            .into_iter()
+            .map(|entity| pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(entity),
+                    create_only: true,
+                    ..Default::default()
+                })),
+            })
+            .collect(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.status,
+        pb::batch_mutate_response::Status::Applied as i32,
+        "{response:?}"
+    );
+    let report = service
+        .validate_project(Request::new(pb::ValidateProjectRequest {
+            scope: Some(pb::validate_project_request::Scope::Namespace(
+                "groups".into(),
+            )),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let findings: Vec<_> = report
+        .reports
+        .into_iter()
+        .flat_map(|report| report.issues)
+        .filter(|issue| issue.code == "SYSTEM_GROUP_MEMBERSHIP_CYCLE")
+        .collect();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(
+        findings[0].severity,
+        pb::validation_issue::Severity::Info as i32
+    );
+}
