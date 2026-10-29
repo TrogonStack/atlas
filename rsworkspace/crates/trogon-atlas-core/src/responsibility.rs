@@ -265,10 +265,14 @@ pub fn resolve_subject(subject: &pb::ResponsibilitySubject, owner: &Entity) -> R
     match subject.selection.as_ref() {
         Some(Selection::Entity(_)) => Ok(()),
         Some(Selection::Connection(reference)) => {
-            if matches!(
-                entity_kind(owner),
-                Some(EntityKind::Component | EntityKind::ExternalSystem)
-            ) {
+            let storage_claim = connections::resolve_connection(owner, reference)
+                .is_ok_and(|occurrence| occurrence.path.contains(".storage_claims["));
+            if !storage_claim
+                && matches!(
+                    entity_kind(owner),
+                    Some(EntityKind::Component | EntityKind::ExternalSystem)
+                )
+            {
                 crate::architectural_relationships::resolve_connection_context(owner, reference)
                     .map(|_| ())
                     .map_err(|e| ResponsibilityError(e.to_string()))
