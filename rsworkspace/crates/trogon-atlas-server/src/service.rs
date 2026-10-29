@@ -7336,10 +7336,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             reports.insert(0, synthetic);
         }
 
-        let models_examined = reports
-            .iter()
-            .filter(|r| r.event_model_id.is_some())
-            .count() as i32;
+        let models_examined = i32::try_from(
+            reports
+                .iter()
+                .filter(|r| r.event_model_id.is_some())
+                .count(),
+        )
+        .unwrap_or(i32::MAX);
         // Store hygiene / architecture walk the full visible snapshot.
         // Request filters only select which EventModels and strategic
         // namespaces are reported; they must not be written into
@@ -7387,7 +7390,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 ),
                 validation::ran_against_snapshot(
                     validation::CHECK_STRATEGIC,
-                    scoped_namespaces.len() as i32,
+                    i32::try_from(scoped_namespaces.len()).unwrap_or(i32::MAX),
                     snapshot_truncated,
                 ),
             ],
