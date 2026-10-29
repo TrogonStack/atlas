@@ -4,12 +4,19 @@ mod support;
 
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use support::two_tenants::{
     authed, make_registry, serve_with_registry, ACME_TOKEN, BETA_TOKEN, ROOT_TOKEN,
 };
-use tonic::{transport::Channel, Code};
+use tonic::{transport::Channel, Code, Status};
+use trogon_atlas_core::{NamespaceId, OwnerId};
 use trogon_atlas_proto::{self as pb, event_model_service_client::EventModelServiceClient};
-use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
+use trogon_atlas_server::{
+    metrics::ServerMetrics,
+    ownership::{Lens, NamespaceAuthorizer, RegistryAuthorizer, Visibility, WriteVerdict},
+    service::EventModelServiceImpl,
+};
+use trogon_atlas_store::{NamespaceRecord, Store};
 
 type Client = EventModelServiceClient<Channel>;
 
@@ -403,4 +410,153 @@ async fn writers_without_access_cannot_author_or_see_groups_across_tenants() {
         .unwrap()
         .into_inner();
     assert_eq!(listed.entities, [] as [trogon_atlas_proto::Entity; 0]);
+}
+
+#[derive(Debug)]
+struct FlakyAuthorizer {
+    inner: RegistryAuthorizer,
+    failing: std::sync::Mutex<Option<(NamespaceId, Code)>>,
+}
+
+impl FlakyAuthorizer {
+    fn fail(&self, namespace: &str, code: Option<Code>) {
+        *self.failing.lock().unwrap() =
+            code.map(|code| (NamespaceId::parse(namespace).unwrap(), code));
+    }
+}
+
+#[async_trait]
+impl NamespaceAuthorizer for FlakyAuthorizer {
+    async fn admits(&self, vis: &Visibility, namespace: &NamespaceId) -> Result<bool, Status> {
+        if let Some((failing, code)) = self.failing.lock().unwrap().as_ref() {
+            if failing == namespace {
+                return Err(Status::new(*code, "injected authorization outage"));
+            }
+        }
+        self.inner.admits(vis, namespace).await
+    }
+
+    async fn lens(&self, vis: &Visibility) -> Result<Lens, Status> {
+        self.inner.lens(vis).await
+    }
+
+    async fn may_write(
+        &self,
+        vis: &Visibility,
+        namespace: &NamespaceId,
+    ) -> Result<WriteVerdict, Status> {
+        self.inner.may_write(vis, namespace).await
+    }
+
+    async fn on_registered(&self, record: &NamespaceRecord) -> Result<(), Status> {
+        self.inner.on_registered(record).await
+    }
+
+    async fn on_moved(&self, record: &NamespaceRecord, from: &OwnerId) -> Result<(), Status> {
+        self.inner.on_moved(record, from).await
+    }
+
+    async fn on_released(&self, record: &NamespaceRecord) -> Result<(), Status> {
+        self.inner.on_released(record).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn authorization_outages_propagate_instead_of_reading_as_unresolved_targets() {
+    let store: Arc<dyn Store> = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let authorizer = Arc::new(FlakyAuthorizer {
+        inner: RegistryAuthorizer::new(service.directory(), store),
+        failing: std::sync::Mutex::new(None),
+    });
+    let mut client =
+        serve_with_registry(service.with_authorizer(authorizer.clone()), make_registry()).await;
+    let home = register(&mut client, ACME_TOKEN, "group-home").await;
+    let remote = register(&mut client, ACME_TOKEN, "group-remote").await;
+    let beta = register(&mut client, BETA_TOKEN, "group-beta-owned").await;
+    let target = put(&mut client, ACME_TOKEN, component(&remote, "worker"), "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let hidden = put(&mut client, BETA_TOKEN, component(&beta, "private"), "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+
+    for code in [Code::Unavailable, Code::DeadlineExceeded] {
+        authorizer.fail(&remote, Some(code));
+        let error = put(
+            &mut client,
+            ACME_TOKEN,
+            group(&home, "view", vec![component_member(&target)]),
+            "",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), code, "{error}");
+        assert!(!error
+            .message()
+            .contains("ARCHITECTURE_REFERENCE_UNRESOLVED"));
+        let absent = client
+            .get_entity(authed(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::SystemGroup as i32,
+                    id: Some(id(&home, "view")),
+                },
+                ACME_TOKEN,
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(absent.code(), Code::NotFound);
+    }
+
+    authorizer.fail(&remote, None);
+    let created = put(
+        &mut client,
+        ACME_TOKEN,
+        group(&home, "view", vec![component_member(&target)]),
+        "",
+    )
+    .await
+    .unwrap();
+
+    authorizer.fail(&remote, Some(Code::Unavailable));
+    let mut edited = created.entity.clone().unwrap();
+    let Some(pb::entity::Kind::SystemGroup(authored)) = &mut edited.kind else {
+        panic!("expected system group");
+    };
+    authored.title = "renamed".into();
+    let error = put(&mut client, ACME_TOKEN, edited, &created.etag)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::Unavailable, "{error}");
+    authorizer.fail(&remote, None);
+    let stored = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(id(&home, "view")),
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(stored.entity, created.entity);
+    assert_eq!(stored.etag, created.etag);
+
+    let hidden_error = put(
+        &mut client,
+        ACME_TOKEN,
+        group(&home, "peek", vec![component_member(&hidden)]),
+        "",
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(hidden_error.code(), Code::InvalidArgument);
+    assert!(hidden_error
+        .message()
+        .contains("ARCHITECTURE_REFERENCE_UNRESOLVED"));
 }

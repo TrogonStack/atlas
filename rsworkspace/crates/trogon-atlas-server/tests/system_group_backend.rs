@@ -596,7 +596,9 @@ async fn final_batch_overlay_rejects_tombstoned_members_atomically() {
     );
     let before = get_group(&service, "platform").await;
     let mut edited = before.entity.clone().unwrap();
-    group_mut(&mut edited).title = "renamed".into();
+    group_mut(&mut edited)
+        .members
+        .push(member_component("worker"));
     let response = service
         .batch_mutate(Request::new(pb::BatchMutateRequest {
             ops: vec![
@@ -628,6 +630,50 @@ async fn final_batch_overlay_rejects_tombstoned_members_atomically() {
     }
     assert_eq!(get_group(&service, "platform").await, before);
     get(&service, pb::EntityKind::Component, "worker", None).await;
+
+    let mut renamed = before.entity.clone().unwrap();
+    group_mut(&mut renamed).title = "renamed".into();
+    let response = service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            ops: vec![
+                pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                        entity: Some(renamed),
+                        if_match: before.etag.clone(),
+                        ..Default::default()
+                    })),
+                },
+                pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Delete(pb::DeleteEntityRequest {
+                        kind: pb::EntityKind::Component as i32,
+                        id: Some(id("worker")),
+                        mode: pb::delete_entity_request::Mode::Force as i32,
+                        ..Default::default()
+                    })),
+                },
+            ],
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.status,
+        pb::batch_mutate_response::Status::Applied as i32,
+        "{response:?}"
+    );
+    let stored = get_group(&service, "platform").await.entity.unwrap();
+    assert_eq!(
+        member_ids(&stored),
+        member_ids(before.entity.as_ref().unwrap())
+    );
+    assert!(service
+        .get_entity(Request::new(pb::GetEntityRequest {
+            kind: pb::EntityKind::Component as i32,
+            id: Some(id("worker")),
+        }))
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -715,4 +761,230 @@ async fn cycles_are_allowed_and_reported_as_bounded_advisories() {
     );
     assert!(findings[0].message.contains("groups/alpha@1"));
     assert!(findings[0].message.contains("groups/beta@1"));
+}
+
+async fn force_delete(service: &EventModelServiceImpl, kind: pb::EntityKind, slug: &str) {
+    service
+        .delete_entity(Request::new(pb::DeleteEntityRequest {
+            kind: kind as i32,
+            id: Some(id(slug)),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+}
+
+async fn put_with(
+    service: &EventModelServiceImpl,
+    entity: pb::Entity,
+    etag: &str,
+) -> Result<pb::PutEntityResponse, tonic::Status> {
+    service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(entity),
+            if_match: etag.into(),
+            ..Default::default()
+        }))
+        .await
+        .map(tonic::Response::into_inner)
+}
+
+#[tokio::test]
+async fn retained_dangling_curation_never_blocks_unrelated_writes_but_new_or_edited_links_stay_strict(
+) {
+    let service = fixture().await;
+    save(
+        &service,
+        domain(
+            "retail",
+            vec![
+                domain_member(pb::domain_member::Target::Component(pb::ComponentRef {
+                    id: Some(id("worker")),
+                })),
+                domain_member(pb::domain_member::Target::SystemGroup(pb::SystemGroupRef {
+                    id: Some(id("edge")),
+                })),
+            ],
+        ),
+        None,
+    )
+    .await;
+    let group_before = get_group(&service, "platform").await;
+    let domain_before = get(&service, pb::EntityKind::Domain, "retail", None).await;
+    for (kind, slug) in [
+        (pb::EntityKind::Component, "worker"),
+        (pb::EntityKind::Component, "scheduler"),
+        (pb::EntityKind::ExternalSystem, "provider"),
+        (pb::EntityKind::Persona, "shopper"),
+        (pb::EntityKind::SystemGroup, "edge"),
+    ] {
+        force_delete(&service, kind, slug).await;
+    }
+    assert_eq!(get_group(&service, "platform").await, group_before);
+    assert_eq!(
+        get(&service, pb::EntityKind::Domain, "retail", None).await,
+        domain_before
+    );
+
+    let mut renamed = group_before.entity.clone().unwrap();
+    group_mut(&mut renamed).title = "Platform".into();
+    let renamed = put_with(&service, renamed, &group_before.etag)
+        .await
+        .expect("an unrelated edit must not require repairing retained dangling links");
+    assert_eq!(
+        member_ids(renamed.entity.as_ref().unwrap()),
+        member_ids(group_before.entity.as_ref().unwrap())
+    );
+    assert_eq!(
+        renamed
+            .entity
+            .as_ref()
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .uid,
+        group_before
+            .entity
+            .as_ref()
+            .unwrap()
+            .system
+            .as_ref()
+            .unwrap()
+            .uid
+    );
+    let mut annotated = renamed.entity.clone().unwrap();
+    group_mut(&mut annotated).members.swap(0, 2);
+    group_mut(&mut annotated).members[0].doc = None;
+    let annotated = put_with(&service, annotated, &renamed.etag)
+        .await
+        .expect("reordering or annotating retained links keeps their endpoints");
+
+    let mut retitled = domain_before.entity.clone().unwrap();
+    domain_mut(&mut retitled).title = "Retail".into();
+    let retitled = put_with(&service, retitled, &domain_before.etag)
+        .await
+        .expect("an unrelated Domain edit must not require repairing retained members");
+    assert_eq!(
+        member_ids(retitled.entity.as_ref().unwrap()),
+        member_ids(domain_before.entity.as_ref().unwrap())
+    );
+
+    let group_state = get_group(&service, "platform").await;
+    assert_eq!(group_state.entity, annotated.entity);
+    let domain_state = get(&service, pb::EntityKind::Domain, "retail", None).await;
+    assert_eq!(domain_state.entity, retitled.entity);
+
+    let rejected = |mutate: &dyn Fn(&mut pb::Entity)| {
+        let mut entity = group_state.entity.clone().unwrap();
+        mutate(&mut entity);
+        entity
+    };
+    let attempts = [
+        rejected(&|entity| group_mut(entity).members.push(member_component("ghost"))),
+        rejected(&|entity| {
+            let link = &mut group_mut(entity).members[0];
+            link.connection_id = None;
+            link.member = member_component("other-ghost").member;
+        }),
+        rejected(&|entity| {
+            group_mut(entity)
+                .relationships
+                .push(relationship("ghost-group", None))
+        }),
+        rejected(&|entity| {
+            let link = &mut group_mut(entity).relationships[0];
+            link.connection_id = None;
+            link.target = Some(pb::SystemGroupRef {
+                id: Some(id("ghost-group")),
+            });
+        }),
+        rejected(&|entity| {
+            let link = &mut group_mut(entity).actors[0];
+            link.connection_id = None;
+            link.target = Some(pb::SystemActorTarget {
+                target: Some(pb::system_actor_target::Target::Persona(pb::PersonaRef {
+                    id: Some(id("ghost-persona")),
+                })),
+            });
+        }),
+        rejected(&|entity| {
+            group_mut(entity).actors.push(actor(
+                pb::system_actor_target::Target::Persona(pb::PersonaRef {
+                    id: Some(id("ghost-persona")),
+                }),
+                pb::SystemActorDirection::Inbound,
+            ))
+        }),
+    ];
+    for attempt in attempts {
+        let error = put_error(&service, attempt, &group_state.etag).await;
+        assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+        assert!(
+            error
+                .message()
+                .contains("ARCHITECTURE_REFERENCE_UNRESOLVED"),
+            "{error}"
+        );
+        assert_eq!(get_group(&service, "platform").await, group_state);
+    }
+    let domain_attempts = [
+        {
+            let mut entity = domain_state.entity.clone().unwrap();
+            domain_mut(&mut entity).members.push(domain_member(
+                pb::domain_member::Target::Component(pb::ComponentRef {
+                    id: Some(id("ghost")),
+                }),
+            ));
+            entity
+        },
+        {
+            let mut entity = domain_state.entity.clone().unwrap();
+            let link = &mut domain_mut(&mut entity).members[0];
+            link.connection_id = None;
+            link.member = domain_member(pb::domain_member::Target::Component(pb::ComponentRef {
+                id: Some(id("other-ghost")),
+            }))
+            .member;
+            entity
+        },
+    ];
+    for attempt in domain_attempts {
+        let error = put_error(&service, attempt, &domain_state.etag).await;
+        assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+        assert!(
+            error
+                .message()
+                .contains("ARCHITECTURE_REFERENCE_UNRESOLVED"),
+            "{error}"
+        );
+        assert_eq!(
+            get(&service, pb::EntityKind::Domain, "retail", None).await,
+            domain_state
+        );
+    }
+
+    let mut in_place = group_state.entity.clone().unwrap();
+    group_mut(&mut in_place).members[1].member = member_component("other-ghost").member;
+    let error = put_error(&service, in_place, &group_state.etag).await;
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(
+        error.message().contains("changed role or endpoint"),
+        "{error}"
+    );
+    assert_eq!(get_group(&service, "platform").await, group_state);
+
+    save(&service, component("worker-next"), None).await;
+    let mut repaired = group_state.entity.clone().unwrap();
+    let link = &mut group_mut(&mut repaired).members[1];
+    link.connection_id = None;
+    link.member = member_component("worker-next").member;
+    let repaired = put_with(&service, repaired, &group_state.etag)
+        .await
+        .expect("retargeting a dangling link to an existing entity is the repair");
+    assert_ne!(
+        member_ids(repaired.entity.as_ref().unwrap())[1],
+        member_ids(group_state.entity.as_ref().unwrap())[1]
+    );
 }

@@ -274,7 +274,11 @@ impl EventModelServiceImpl {
             let prepared =
                 prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
             super::validate_entity_content(&prepared)?;
-            let issues = validation::architecture_resources::validate(&prepared, &context);
+            let issues = validation::architecture_resources::validate_retaining(
+                previous.as_ref(),
+                &prepared,
+                &context,
+            );
             if !issues.is_empty() {
                 return Err(Status::invalid_argument(super::format_scenario_issues(
                     &issues,
@@ -578,8 +582,10 @@ impl EventModelServiceImpl {
                     self.require_visible(vis, &id.namespace).await?;
                 }
                 ArchitectureTargetAccess::Curation(vis) => {
-                    if self.require_visible(vis, &id.namespace).await.is_err() {
-                        continue;
+                    match self.require_visible(vis, &id.namespace).await {
+                        Ok(()) => {}
+                        Err(status) if status.code() == Code::NotFound => continue,
+                        Err(status) => return Err(status),
                     }
                 }
                 ArchitectureTargetAccess::Diagnostic(lens)
@@ -734,7 +740,7 @@ impl EventModelServiceImpl {
                     _ => {
                         return Err(Status::invalid_argument(
                             "Replacement chain must terminate at an ACCEPTED decision",
-                        ))
+                        ));
                     }
                 }
             }

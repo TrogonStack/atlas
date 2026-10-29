@@ -334,6 +334,91 @@ pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::Validation
     validate_in_context(entity, &ArchitectureContext::new(all))
 }
 
+/// Curation the author already holds and did not touch stays readable after
+/// its target is removed. Only a new or edited link must resolve.
+#[must_use]
+pub fn validate_retaining(
+    previous: Option<&pb::Entity>,
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate(entity, all);
+    if let Some(previous) = previous {
+        let retained = retained_links(previous, entity);
+        issues.retain(|issue| {
+            issue.code != "ARCHITECTURE_REFERENCE_UNRESOLVED"
+                || !retained.contains(&issue.subject_field)
+        });
+    }
+    issues
+}
+
+fn retained_links(previous: &pb::Entity, entity: &pb::Entity) -> HashSet<String> {
+    let mut retained = HashSet::new();
+    match (previous.kind.as_ref(), entity.kind.as_ref()) {
+        (
+            Some(pb::entity::Kind::SystemGroup(before)),
+            Some(pb::entity::Kind::SystemGroup(after)),
+        ) => {
+            retain_unchanged(
+                &mut retained,
+                "members",
+                "member",
+                (&before.members, &after.members),
+                |link| (link.connection_id.as_ref(), link.member.as_ref()),
+            );
+            retain_unchanged(
+                &mut retained,
+                "relationships",
+                "target",
+                (&before.relationships, &after.relationships),
+                |link| (link.connection_id.as_ref(), link.target.as_ref()),
+            );
+            retain_unchanged(
+                &mut retained,
+                "actors",
+                "target",
+                (&before.actors, &after.actors),
+                |link| (link.connection_id.as_ref(), link.target.as_ref()),
+            );
+        }
+        (Some(pb::entity::Kind::Domain(before)), Some(pb::entity::Kind::Domain(after))) => {
+            retain_unchanged(
+                &mut retained,
+                "members",
+                "member",
+                (&before.members, &after.members),
+                |link| (link.connection_id.as_ref(), link.member.as_ref()),
+            );
+        }
+        _ => {}
+    }
+    retained
+}
+
+fn retain_unchanged<L, E: PartialEq>(
+    retained: &mut HashSet<String>,
+    collection: &str,
+    endpoint: &str,
+    (before, after): (&[L], &[L]),
+    parts: impl Fn(&L) -> (Option<&pb::ConnectionId>, Option<&E>),
+) {
+    let held: HashMap<_, _> = before
+        .iter()
+        .filter_map(|link| {
+            let (id, target) = parts(link);
+            Some((id?, target?))
+        })
+        .collect();
+    for (index, link) in after.iter().enumerate() {
+        if let (Some(id), Some(target)) = parts(link) {
+            if held.get(id).is_some_and(|prior| *prior == target) {
+                retained.insert(format!("{collection}[{index}].{endpoint}"));
+            }
+        }
+    }
+}
+
 pub(super) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
