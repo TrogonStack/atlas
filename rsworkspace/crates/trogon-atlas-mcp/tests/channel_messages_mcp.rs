@@ -563,6 +563,34 @@ fn assert_preserved_records(records: &[&Value], namespace: &str, owner_uid: &str
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reader_discovers_design_topology_read_tools() {
+    let (uri, _, _) = server().await;
+    let admin = connect_mcp(&uri, ADMIN).await;
+    let reader = connect_mcp(&uri, READER_A).await;
+    let admin_tools = admin.list_all_tools().await.unwrap();
+    let reader_tools = reader.list_all_tools().await.unwrap();
+    assert!(reader_tools
+        .iter()
+        .any(|tool| tool.name == "list_channel_messages"));
+    assert!(!reader_tools.iter().any(|tool| tool.name == "put_entity"));
+    for name in [
+        "get_design_graph_detail",
+        "list_subject_design_graphs",
+        "traverse_design_graph_topology",
+        "list_incoming_design_graph_subflows",
+    ] {
+        assert!(admin_tools.iter().any(|tool| tool.name == name));
+        let tool = reader_tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("reader catalog omits {name}"));
+        let annotations = tool.annotations.as_ref().unwrap();
+        assert_eq!(annotations.read_only_hint, Some(true));
+        assert_eq!(annotations.destructive_hint, Some(false));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
     let (uri, endpoint, namespace) = server().await;
     let (owner_uid, expected_routes) = seed(&endpoint, &namespace).await;
