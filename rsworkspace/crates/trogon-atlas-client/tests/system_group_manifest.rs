@@ -328,3 +328,166 @@ fn group_diff_treats_omitted_ids_as_unassigned_only_for_the_same_ordered_endpoin
         apply::Action::Configure
     );
 }
+
+fn domain_mut(entity: &mut trogon_atlas_proto::Entity) -> &mut trogon_atlas_proto::Domain {
+    let Some(trogon_atlas_proto::entity::Kind::Domain(value)) = entity.kind.as_mut() else {
+        panic!("expected domain");
+    };
+    value
+}
+
+fn domain_manifest(members: &serde_json::Value) -> serde_json::Value {
+    json!({"apiVersion":manifest::API_VERSION,"kind":"Domain","metadata":{"namespace":"architecture","name":"commerce"},"spec":{
+        "title":"Commerce","project":"architecture","members":members
+    }})
+}
+
+fn domain_members() -> serde_json::Value {
+    json!([
+        {"connectionId":{"value":MEMBER_A},"member":{"domain":"payments@9007199254740993"},"doc":{"value":"Cafe\u{301}"}},
+        {"connectionId":{"value":MEMBER_B},"member":{"systemGroup":"platform"}}
+    ])
+}
+
+#[test]
+fn domain_diff_is_exact_for_every_persisted_member_field() {
+    use trogon_atlas_proto as pb;
+    let types = TranscodePool::builtin().unwrap();
+    let current = parsed(&domain_manifest(&domain_members()));
+    let output = export::render_board(std::slice::from_ref(&current), &[], &types).unwrap();
+    let exported = manifest::parse_str(&output.manifests, "export.yaml").unwrap();
+    assert_eq!(exported[0].entity, current);
+    assert_eq!(
+        apply::classify(&exported[0].entity, Some(&current)),
+        apply::Action::Unchanged
+    );
+
+    let domain = |slug: &str, version: u64| {
+        pb::domain_member::Target::Domain(pb::DomainRef {
+            id: Some(pb::Id {
+                namespace: "architecture".into(),
+                slug: slug.into(),
+                version,
+            }),
+        })
+    };
+    type DomainMutation = Box<dyn Fn(&mut pb::Domain)>;
+    let mutations: Vec<(&str, DomainMutation)> = vec![
+        ("title", Box::new(|d| d.title.push('!'))),
+        (
+            "member target slug",
+            Box::new(move |d| {
+                d.members[0].member.as_mut().unwrap().target = Some(domain("other", u64::MAX));
+            }),
+        ),
+        (
+            "member target version",
+            Box::new(move |d| {
+                d.members[0].member.as_mut().unwrap().target =
+                    Some(domain("payments", 9_007_199_254_740_992));
+            }),
+        ),
+        (
+            "member target kind",
+            Box::new(|d| {
+                d.members[0].member.as_mut().unwrap().target =
+                    Some(pb::domain_member::Target::SystemGroup(pb::SystemGroupRef {
+                        id: Some(pb::Id {
+                            namespace: "architecture".into(),
+                            slug: "payments".into(),
+                            version: 9_007_199_254_740_993,
+                        }),
+                    }));
+            }),
+        ),
+        (
+            "member doc text",
+            Box::new(|d| d.members[0].doc.as_mut().unwrap().value.push('x')),
+        ),
+        ("member doc cleared", Box::new(|d| d.members[0].doc = None)),
+        (
+            "member doc added",
+            Box::new(|d| {
+                d.members[1].doc = Some(pb::CatalogText {
+                    value: String::new(),
+                });
+            }),
+        ),
+        (
+            "member connection id",
+            Box::new(|d| {
+                d.members[0].connection_id = Some(id_of("01930000-0000-7000-8000-0000000000ff"));
+            }),
+        ),
+        ("member removed", Box::new(|d| drop(d.members.pop()))),
+        ("members cleared", Box::new(|d| d.members.clear())),
+        ("member order", Box::new(|d| d.members.swap(0, 1))),
+        (
+            "member appended",
+            Box::new(|d| d.members.push(d.members[1].clone())),
+        ),
+    ];
+    for (name, mutate) in mutations {
+        let mut desired = current.clone();
+        mutate(domain_mut(&mut desired));
+        assert_ne!(desired, current, "{name}");
+        assert_eq!(
+            apply::classify(&desired, Some(&current)),
+            apply::Action::Configure,
+            "{name}"
+        );
+        let output = export::render_board(std::slice::from_ref(&desired), &[], &types).unwrap();
+        assert_eq!(output.skipped, [], "{name}");
+        let reapplied = manifest::parse_str(&output.manifests, "mutated.yaml").unwrap();
+        assert_eq!(reapplied[0].entity, desired, "{name}");
+        assert_eq!(
+            apply::classify(&reapplied[0].entity, Some(&current)),
+            apply::Action::Configure,
+            "{name}"
+        );
+        assert_eq!(
+            apply::classify(&reapplied[0].entity, Some(&desired)),
+            apply::Action::Unchanged,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn domain_diff_treats_omitted_ids_as_unassigned_only_for_the_same_ordered_endpoints() {
+    let strip = |mut value: serde_json::Value| {
+        for link in value["spec"]["members"].as_array_mut().unwrap() {
+            link.as_object_mut().unwrap().remove("connectionId");
+        }
+        value
+    };
+    let current = parsed(&domain_manifest(&domain_members()));
+    let unassigned = parsed(&strip(domain_manifest(&domain_members())));
+    assert_eq!(
+        apply::classify(&unassigned, Some(&current)),
+        apply::Action::Unchanged
+    );
+    let mut reordered = domain_members();
+    reordered.as_array_mut().unwrap().reverse();
+    assert_eq!(
+        apply::classify(&parsed(&strip(domain_manifest(&reordered))), Some(&current)),
+        apply::Action::Configure
+    );
+    let mut shorter = domain_members();
+    shorter.as_array_mut().unwrap().pop();
+    assert_eq!(
+        apply::classify(&parsed(&strip(domain_manifest(&shorter))), Some(&current)),
+        apply::Action::Configure
+    );
+    let bare = parsed(
+        &json!({"apiVersion":manifest::API_VERSION,"kind":"Domain","metadata":{"namespace":"architecture","name":"commerce"},"spec":{"title":"Commerce","project":"architecture"}}),
+    );
+    assert_eq!(
+        apply::classify(&bare, Some(&current)),
+        apply::Action::Configure
+    );
+    assert_eq!(
+        apply::classify(&current, Some(&bare)),
+        apply::Action::Configure
+    );
+}
