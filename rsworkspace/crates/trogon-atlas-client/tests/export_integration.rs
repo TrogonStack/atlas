@@ -1329,3 +1329,114 @@ spec:
         .unwrap();
     assert_eq!(copied.manifests, copy);
 }
+
+#[tokio::test]
+async fn namespace_export_refuses_a_capped_listing_instead_of_returning_a_complete_artifact() {
+    async fn serve(service: EventModelServiceImpl) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(EventModelServiceServer::new(service))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+        format!("http://{addr}")
+    }
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let full =
+        serve(EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap())
+            .await;
+    let mut complete = client::connect(&full, None, 30).await.unwrap();
+    for slug in ["first", "omitted"] {
+        complete
+            .put_entity(put_req(
+                pb::Entity {
+                    kind: Some(pb::entity::Kind::SystemGroup(pb::SystemGroup {
+                        id: Some(pb::Id {
+                            namespace: "export-groups".into(),
+                            slug: slug.into(),
+                            version: 1,
+                        }),
+                        title: slug.into(),
+                        scope: pb::SystemGroupScope::Internal as i32,
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                },
+                true,
+            ))
+            .await
+            .unwrap();
+    }
+    let complete_artifact = export::export_namespace(&mut complete, "export-groups")
+        .await
+        .unwrap();
+    assert!(complete_artifact.skipped.is_empty());
+    let yaml = &complete_artifact.files["system-group.yaml"];
+    assert!(yaml.contains("name: first"));
+    assert!(yaml.contains("name: omitted"));
+    let capped = serve(
+        EventModelServiceImpl::try_new(store, ServerMetrics::default())
+            .unwrap()
+            .with_snapshot_cap(1),
+    )
+    .await;
+    let mut partial = client::connect(&capped, None, 30).await.unwrap();
+    let snapshot = partial
+        .get_snapshot_id(pb::GetSnapshotIdRequest {
+            namespaces: vec!["export-groups".into()],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(snapshot.truncated);
+    assert_eq!(snapshot.entity_count, 1);
+    assert_eq!(
+        partial
+            .get_entity(pb::GetEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(pb::Id {
+                    namespace: "export-groups".into(),
+                    slug: "omitted".into(),
+                    version: 1
+                }),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .entity
+            .unwrap()
+            .kind
+            .unwrap(),
+        pb::entity::Kind::SystemGroup(pb::SystemGroup {
+            id: Some(pb::Id {
+                namespace: "export-groups".into(),
+                slug: "omitted".into(),
+                version: 1
+            }),
+            title: "omitted".into(),
+            scope: pb::SystemGroupScope::Internal as i32,
+            ..Default::default()
+        })
+    );
+    for layout in [export::ExportLayout::Single, export::ExportLayout::Slices] {
+        let result = match layout {
+            export::ExportLayout::Single => {
+                export::export_namespace(&mut partial, "export-groups").await
+            }
+            export::ExportLayout::Slices => {
+                export::export_namespace_slices(&mut partial, "export-groups").await
+            }
+        };
+        let Err(error) = result else {
+            panic!("a truncated entity listing must not become a complete namespace export")
+        };
+        assert_eq!(
+            error.downcast_ref::<tonic::Status>().unwrap().code(),
+            tonic::Code::ResourceExhausted
+        );
+    }
+}
