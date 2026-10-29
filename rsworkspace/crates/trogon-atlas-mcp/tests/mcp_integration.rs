@@ -2230,7 +2230,7 @@ async fn association_mcp_native_authoring_inspect_diff_export_and_reapply_preser
     let self_link = channel(
         "loop",
         "1",
-        json!([{"kind":"CHANNEL_LINK_KIND_COMPOSES","target":{"id":id("loop","2")}}]),
+        json!([{"kind":"CHANNEL_LINK_KIND_COMPOSES","target":{"id":id("loop","1")}}]),
     );
     let error = client
         .call_tool(
@@ -2325,5 +2325,292 @@ async fn association_mcp_native_authoring_inspect_diff_export_and_reapply_preser
             "{slug}: no-op reapply keeps uid, etag and ids"
         );
     }
+    service.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn association_mcp_round_trips_attachments_and_parameter_maps_diffs_real_changes_and_refuses_invalid_input(
+) {
+    use serde_json::json;
+    let (client, service, _) = start_mcp_client().await;
+    let ns = "mcp-association-diff";
+    let max = "18446744073709551615";
+    let id = |slug: &str, version: &str| json!({"namespace":ns,"slug":slug,"version":version});
+    let put = |value: serde_json::Value| {
+        let client = &client;
+        async move {
+            call_ok(
+                client,
+                "put_entity_json",
+                put_entity_json_args(&value.to_string()),
+            )
+            .await
+        }
+    };
+    let get = |kind: &'static str, slug: &'static str, version: u64| {
+        let client = &client;
+        async move {
+            call_tool_result_text(
+                &call_ok(
+                    client,
+                    "get_entity_json",
+                    args_obj(&[
+                        ("kind", json!(kind)),
+                        ("namespace", json!(ns)),
+                        ("slug", json!(slug)),
+                        ("version", json!(version)),
+                    ]),
+                )
+                .await,
+            )
+        }
+    };
+    let refused = |label: &'static str, value: serde_json::Value| {
+        let client = &client;
+        async move {
+            let outcome = client
+                .call_tool(
+                    rmcp::model::CallToolRequestParams::new("put_entity_json")
+                        .with_arguments(put_entity_json_args(&value.to_string())),
+                )
+                .await;
+            match outcome {
+                Err(rmcp::ServiceError::McpError(error)) => error.message.to_string(),
+                Ok(result) if result.is_error.unwrap_or(false) => {
+                    result.content[0].as_text().unwrap().text.clone()
+                }
+                other => panic!("{label} must be refused: {other:?}"),
+            }
+        }
+    };
+    put(json!({"readModel":{"id":id("result","1"),"title":"Result"}})).await;
+    put(json!({"processor":{"id":id("worker","1"),"title":"Worker"}})).await;
+    put(json!({"automationSlice":{"id":id("observe","1"),"title":"Observe","sourceReadModels":[{"readModel":{"id":id("result","1")}}],"processor":{"processor":{"id":id("worker","1")}}}})).await;
+    let slice = get("automation_slice", "observe", 1).await;
+    let observation = json!({"owner":{"kind":"ENTITY_KIND_AUTOMATION_SLICE","id":id("observe","1")},"ownerUid":slice["json"]["system"]["uid"],"id":slice["json"]["automationSlice"]["sourceReadModels"][0]["connectionId"]});
+    put(json!({"channel":{"id":id("inner",max),"title":"inner",
+        "address":{"template":"orders.{tenant}","parameters":[{"name":{"value":"tenant"},"allowedValues":{"values":["acme","globex"]}}]},
+        "bindings":[{"observation":observation,"parameterValues":{"tenant":"acme"}}]}}))
+    .await;
+    let link = |kind: &str, tenant: &str| json!({"kind":kind,"target":{"id":id("inner",max)},"parameterValues":{"tenant":tenant}});
+    let hub = |links: serde_json::Value| json!({"channel":{"id":id("hub","1"),"title":"hub","bindings":[{"observation":observation}],"links":links}});
+    put(hub(json!([
+        link("CHANNEL_LINK_KIND_COMPOSES", "acme"),
+        link("CHANNEL_LINK_KIND_COMPOSES", "globex"),
+        link("CHANNEL_LINK_KIND_ROUTES_TO", "acme")
+    ])))
+    .await;
+
+    put(json!({"dataStore":{"id":id("warehouse","1"),"title":"Warehouse","storeClass":{"known":"KNOWN_CACHE"},"accessMode":"ACCESS_MODE_READ_WRITE","attachments":[{"readModel":{"id":id("result","1")}}]}})).await;
+    let store_entity = get("data_store", "warehouse", 1).await;
+    let attachment = json!({"owner":{"kind":"ENTITY_KIND_DATA_STORE","id":id("warehouse","1")},"ownerUid":store_entity["json"]["system"]["uid"],"id":store_entity["json"]["dataStore"]["attachments"][0]["connectionId"]});
+    let store = json!({"id":id("warehouse","1")});
+    let port = "01930000-0000-7000-8000-0000000000aa";
+    let component = |claims: serde_json::Value| json!({"component":{"id":id("app","1"),"title":"App","storageClaims":claims}});
+    put(component(json!([
+        {"store":store,"direction":"STORAGE_DIRECTION_READ","attachment":attachment},
+        {"store":store,"direction":"STORAGE_DIRECTION_WRITE"}
+    ])))
+    .await;
+    put(json!({"dataProduct":{"id":id("offering","1"),"title":"Offering","outputs":[{"portId":{"value":port},"name":{"value":"Result"}}],"storageClaims":[
+        {"store":store,"direction":"STORAGE_DIRECTION_READ","portId":{"value":port},"attachment":attachment}]}})).await;
+
+    let stored_hub = get("channel", "hub", 1).await;
+    let links = stored_hub["json"]["channel"]["links"].as_array().unwrap();
+    assert_eq!(links.len(), 3);
+    assert!(links
+        .iter()
+        .all(|item| item["target"]["id"]["version"] == max));
+    let tenants: Vec<_> = links
+        .iter()
+        .map(|item| item["parameterValues"]["tenant"].clone())
+        .collect();
+    assert_eq!(tenants, [json!("acme"), json!("globex"), json!("acme")]);
+    for (kind, slug, field) in [
+        ("component", "app", "component"),
+        ("data_product", "offering", "dataProduct"),
+    ] {
+        let body = get(kind, slug, 1).await;
+        assert_eq!(
+            body["json"][field]["storageClaims"][0]["attachment"]["id"], attachment["id"],
+            "{slug}"
+        );
+        assert_eq!(
+            body["json"][field]["storageClaims"][0]["attachment"]["ownerUid"],
+            attachment["ownerUid"],
+            "{slug}"
+        );
+    }
+    let offering = get("data_product", "offering", 1).await;
+    assert_eq!(
+        offering["json"]["dataProduct"]["storageClaims"][0]["portId"]["value"],
+        port
+    );
+
+    let exported = call_tool_result_text(
+        &call_ok(
+            &client,
+            "export_namespace",
+            args_obj(&[("namespace", json!(ns))]),
+        )
+        .await,
+    );
+    assert_eq!(exported["skipped"], json!([]));
+    let files = exported["files"].as_object().unwrap();
+    let documents: Vec<String> = files
+        .values()
+        .flat_map(|value| value.as_str().unwrap().split("\n---\n"))
+        .map(str::to_string)
+        .collect();
+    let file_with = |needle: &str| {
+        let mut matching = documents.iter().filter(|text| text.contains(needle));
+        let found = matching.next().unwrap().clone();
+        assert!(matching.next().is_none(), "{needle} is unique");
+        found
+    };
+    let hub_yaml = file_with("name: hub");
+    assert_eq!(hub_yaml.matches("globex").count(), 1);
+    let read_claim = "    direction: STORAGE_DIRECTION_READ\n";
+    let app_yaml = file_with("name: app");
+    assert_eq!(app_yaml.matches(read_claim).count(), 1);
+    let changed = [
+        hub_yaml.replace("globex", "acme"),
+        app_yaml.replace(
+            read_claim,
+            &format!("{read_claim}    doc:\n      value: reads the cache\n"),
+        ),
+    ]
+    .join("\n---\n");
+    let before_hub = get("channel", "hub", 1).await;
+    let before_app = get("component", "app", 1).await;
+    let diff = call_tool_result_text(
+        &call_ok(
+            &client,
+            "diff_manifests",
+            args_obj(&[("manifests_yaml", json!(changed))]),
+        )
+        .await,
+    );
+    assert_eq!(diff["changed"], true, "{diff}");
+    assert!(diff["diff"].as_str().unwrap().contains("globex"), "{diff}");
+    assert!(
+        diff["diff"].as_str().unwrap().contains("reads the cache"),
+        "{diff}"
+    );
+    assert_eq!(
+        get("channel", "hub", 1).await,
+        before_hub,
+        "diff never mutates"
+    );
+
+    call_ok(
+        &client,
+        "apply_manifests",
+        args_obj(&[("manifests_yaml", json!(changed))]),
+    )
+    .await;
+    let after_hub = get("channel", "hub", 1).await;
+    let after_app = get("component", "app", 1).await;
+    assert_ne!(after_hub, before_hub);
+    assert_ne!(after_app, before_app);
+    assert_eq!(
+        after_hub["json"]["system"]["uid"],
+        before_hub["json"]["system"]["uid"]
+    );
+    let occurrence_ids = |body: &serde_json::Value, field: &str, collection: &str| {
+        body["json"][field][collection]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["connectionId"]["value"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        occurrence_ids(&after_hub, "channel", "links"),
+        occurrence_ids(&before_hub, "channel", "links")
+    );
+    assert_eq!(
+        occurrence_ids(&after_app, "component", "storageClaims"),
+        occurrence_ids(&before_app, "component", "storageClaims")
+    );
+    assert_eq!(
+        after_hub["json"]["channel"]["links"][1]["parameterValues"]["tenant"],
+        "acme"
+    );
+    assert_eq!(
+        after_app["json"]["component"]["storageClaims"][0]["doc"]["value"],
+        "reads the cache"
+    );
+    let reapplied = call_tool_result_text(
+        &call_ok(
+            &client,
+            "diff_manifests",
+            args_obj(&[("manifests_yaml", json!(changed))]),
+        )
+        .await,
+    );
+    assert_eq!(reapplied["changed"], false, "{reapplied}");
+
+    let self_message = refused(
+        "self link",
+        json!({"channel":{"id":id("hub","1"),"title":"hub","bindings":[{"observation":observation}],"links":[{"kind":"CHANNEL_LINK_KIND_COMPOSES","target":{"id":id("hub","1")}}]}}),
+    )
+    .await;
+    assert!(self_message.contains("same channel"), "{self_message}");
+    for (label, value) in [
+        (
+            "missing target",
+            hub(json!([{"kind":"CHANNEL_LINK_KIND_COMPOSES","target":{"id":id("ghost","1")}}])),
+        ),
+        (
+            "undeclared parameter",
+            hub(
+                json!([{"kind":"CHANNEL_LINK_KIND_COMPOSES","target":{"id":id("inner",max)},"parameterValues":{"region":"eu"}}]),
+            ),
+        ),
+        (
+            "value outside the allowed set",
+            hub(json!([link("CHANNEL_LINK_KIND_COMPOSES", "initech")])),
+        ),
+        (
+            "unspecified link kind",
+            hub(json!([link("CHANNEL_LINK_KIND_UNSPECIFIED", "acme")])),
+        ),
+        (
+            "claim on a missing store",
+            component(
+                json!([{"store":{"id":id("ghost-store","1")},"direction":"STORAGE_DIRECTION_READ"}]),
+            ),
+        ),
+        (
+            "port on a Component claim",
+            component(
+                json!([{"store":store,"direction":"STORAGE_DIRECTION_READ","portId":{"value":port}}]),
+            ),
+        ),
+        (
+            "attachment the store never declared",
+            component(
+                json!([{"store":store,"direction":"STORAGE_DIRECTION_READ","attachment":{"owner":attachment["owner"],"ownerUid":attachment["ownerUid"],"id":{"value":"01930000-0000-7000-8000-0000000000bb"}}}]),
+            ),
+        ),
+        (
+            "unspecified direction",
+            component(json!([{"store":store,"direction":"STORAGE_DIRECTION_UNSPECIFIED"}])),
+        ),
+    ] {
+        let message = refused(label, value).await;
+        assert!(!message.trim().is_empty(), "{label}");
+    }
+    assert_eq!(
+        get("channel", "hub", 1).await,
+        after_hub,
+        "refusals are atomic"
+    );
+    assert_eq!(
+        get("component", "app", 1).await,
+        after_app,
+        "refusals are atomic"
+    );
     service.cancel().await.unwrap();
 }
