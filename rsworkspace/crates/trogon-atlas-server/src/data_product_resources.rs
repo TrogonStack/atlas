@@ -300,6 +300,23 @@ fn stable_occurrence(previous: Option<&pb::Entity>, current: &pb::Entity, field:
     let Some(previous) = previous else {
         return false;
     };
+    if let Some(rest) = field.strip_prefix("storage_claims[") {
+        let Some(index) = rest
+            .split(']')
+            .next()
+            .and_then(|index| index.parse::<usize>().ok())
+        else {
+            return false;
+        };
+        let (Some(pb::entity::Kind::DataProduct(before)), Some(pb::entity::Kind::DataProduct(now))) =
+            (&previous.kind, &current.kind)
+        else {
+            return false;
+        };
+        return now.storage_claims.get(index).is_some_and(|claim| {
+            claim.connection_id.is_some() && before.storage_claims.iter().any(|old| old == claim)
+        });
+    }
     let Ok(prior) = trogon_atlas_core::connections::connection_occurrences(previous) else {
         return false;
     };
