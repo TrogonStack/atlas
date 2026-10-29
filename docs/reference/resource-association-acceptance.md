@@ -202,19 +202,20 @@ backend and fixture and is separate from component or mocked results.
 
 ## Executable coverage and limits
 
-Isolated native implementations now have core, backend, manifest, CLI, MCP and
-Studio fixtures. Product and Specification correction tests pass independently,
-including exact message-member admission, unchanged dangling declarations,
-caller-bound pagination and scan exhaustion. MessageClaims has separate
-authenticated admission and connected-client fixtures. Combined Channel inverse authority and provenance, Channel composition and
-storage claims have separate acceptance ownership. MessageClaims-specific
-results do not establish their closure.
+Integrated native implementations have core, backend, manifest, CLI, MCP and
+Studio fixtures. Product and Specification corrections, MessageClaims, complete
+Channel inverse authority joins, Channel composition and storage claims pass
+in the [integrated candidate](eventcatalog-coverage.md#integrated-verification).
+That verification includes exact message-member admission, unchanged dangling
+declarations, caller-bound pagination, scan exhaustion, complete prepared-owner
+capacity and authenticated Channel/storage browser inspection. These are
+separate authorities; no declaration implies a producing or executable path.
 
-The following inventory describes the required verification boundaries. Promote
-each fixture to linked parent coverage after its implementation is integrated
-and verified; isolated passing results alone do not close this acceptance matrix.
+The inventory links the executable verification boundaries behind the native
+acceptance. Component and mocked results remain distinct from authenticated
+transport and real-backend browser proof.
 
-| Proposed fixture | Verification boundary |
+| Executable fixture | Verification boundary |
 | --- | --- |
 | `trogon-atlas-core/tests/resource_associations.rs` | Typed values, descriptor-scoped fingerprints, occurrence lifecycle, retargeting, subject resolution and native-only ownership helpers. |
 | `trogon-atlas-server/tests/resource_association_backend.rs` | Persistence, final-overlay admission, reference and provenance handling, subjects, bounds and deletion guards. |

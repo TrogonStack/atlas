@@ -167,10 +167,11 @@ or stream behavior.
 | Authenticated MCP authoring, references, relationship-only delete, retarget and branches | `trogon-atlas-mcp/tests/business_data_mcp.rs` |
 | Studio wire codec, presence and exact loaded selectors | `server/schema-business-codec.test.mjs`, `SchemaBusinessDetails.test.tsx` |
 
-The composed baseline passed workspace, protobuf, schema equality and Studio
-checks. The subsequent retained-claim correction and Business proof additions
-require their own focused execution receipts. Checklist closure remains pending
-the final requirement audit; this map alone does not claim a passing run.
+The [integrated candidate](eventcatalog-coverage.md#integrated-verification)
+passed workspace, protobuf, schema equality and Studio checks after the final
+requirement audit. Its execution includes the retained-claim correction and
+Business proof additions. This assertion map identifies the native boundaries
+behind the completed checklist item.
 
 ## Integration controls
 

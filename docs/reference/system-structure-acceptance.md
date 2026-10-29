@@ -3,8 +3,8 @@
 Status: acceptance requirements for the implemented
 [system structure contract](system-structure-contracts.md). Native fixtures
 exercise admission, identity, references, branch lifecycle, authorization,
-Source isolation and connected clients. Final composed verification remains
-pending. Logical names below are not manifest syntax, predicted owner UIDs or
+Source isolation and connected clients. Final composed verification passes in
+the [integrated candidate](eventcatalog-coverage.md#integrated-verification). Logical names below are not manifest syntax, predicted owner UIDs or
 submitted occurrence IDs. The [fixture inventory](#fixture-inventory) retains
 the original acceptance organization.
 
