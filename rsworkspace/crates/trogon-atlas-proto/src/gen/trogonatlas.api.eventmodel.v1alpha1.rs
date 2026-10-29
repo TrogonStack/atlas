@@ -1356,6 +1356,10 @@ pub struct ValidationScope {
 pub struct ValidationCoverage {
     #[prost(message, repeated, tag="1")]
     pub checks: ::prost::alloc::vec::Vec<ValidationCheckResult>,
+    /// What store-wide suites actually examined. For ValidateProject this is the
+    /// full visible snapshot under the branch (namespace / project / domain
+    /// empty): hygiene and architecture are not narrowed to the request filter.
+    /// Model and strategic suite subject counts still follow the request.
     #[prost(message, optional, tag="2")]
     pub effective_scope: ::core::option::Option<ValidationScope>,
     /// True when the entity snapshot hit the configured cap. Shared with the
@@ -1363,6 +1367,10 @@ pub struct ValidationCoverage {
     /// a clean bill of health.
     #[prost(bool, tag="3")]
     pub snapshot_truncated: bool,
+    /// What the caller asked to validate (project / domain / namespace / model).
+    /// May be narrower than `effective_scope` for store-wide checks.
+    #[prost(message, optional, tag="4")]
+    pub requested_scope: ::core::option::Option<ValidationScope>,
 }
 // Tenant type libraries are stored as proto source text and compiled on
 // demand. These messages let a client check a library and look up the

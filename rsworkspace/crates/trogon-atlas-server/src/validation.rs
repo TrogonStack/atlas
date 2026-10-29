@@ -3052,12 +3052,14 @@ pub fn ran_against_snapshot(
 pub fn validation_coverage(
     checks: Vec<pb::ValidationCheckResult>,
     effective_scope: pb::ValidationScope,
+    requested_scope: pb::ValidationScope,
     snapshot_truncated: bool,
 ) -> pb::ValidationCoverage {
     pb::ValidationCoverage {
         checks,
         effective_scope: Some(effective_scope),
         snapshot_truncated,
+        requested_scope: Some(requested_scope),
     }
 }
 

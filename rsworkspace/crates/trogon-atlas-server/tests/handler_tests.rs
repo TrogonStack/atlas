@@ -475,6 +475,17 @@ async fn validate_project_reports_the_strategic_chain_once() {
         model.state,
         pb::validation_check_result::State::Completed as i32
     );
+    let requested = coverage
+        .requested_scope
+        .expect("requested_scope required");
+    assert_eq!(requested.namespace, "vp-chain");
+    let effective = coverage
+        .effective_scope
+        .expect("effective_scope required");
+    assert!(
+        effective.namespace.is_empty(),
+        "store-wide suites examine the full visible snapshot, not the request namespace: {effective:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -86,7 +86,8 @@ Wire fields on `ValidationCoverage` / `ValidationCheckResult` /
 | `state` | `COMPLETED` / `SKIPPED` / `PARTIAL` / `ERROR` |
 | `reason` | Why skipped/partial/error (for example `event_model_id_absent`, `snapshot_truncated`) |
 | `subjects_examined` | Count when meaningful; zero is a valid completed empty scan |
-| `effective_scope` | Branch, project/domain/namespace/model ids for this call |
+| `effective_scope` | What store-wide suites actually examined. On ValidateProject this is the full visible snapshot (empty namespace/project/domain), because hygiene and architecture are not narrowed to the request filter |
+| `requested_scope` | What the caller asked to validate (may be narrower than `effective_scope`) |
 | `snapshot_truncated` | Shared with [snapshot identity](snapshot-identity.md) and the truncation package |
 
 Write and dry-run envelopes (`PutEntity`, `BatchMutate`, `MergeBranch`)

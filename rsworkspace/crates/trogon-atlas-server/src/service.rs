@@ -7163,19 +7163,21 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 0,
             )),
         }
+        let model_scope = pb::ValidationScope {
+            branch: branch.clone().unwrap_or_default(),
+            project_id: None,
+            domain_id: None,
+            namespace: model
+                .id
+                .as_ref()
+                .map(|id| id.namespace.clone())
+                .unwrap_or_default(),
+            event_model_id: model.id.clone(),
+        };
         let coverage = validation::validation_coverage(
             checks,
-            pb::ValidationScope {
-                branch: branch.clone().unwrap_or_default(),
-                project_id: None,
-                domain_id: None,
-                namespace: model
-                    .id
-                    .as_ref()
-                    .map(|id| id.namespace.clone())
-                    .unwrap_or_default(),
-                event_model_id: model.id.clone(),
-            },
+            model_scope.clone(),
+            model_scope,
             snapshot_truncated,
         );
         Ok(Response::new(pb::ValidateEventModelResponse {
@@ -7338,6 +7340,34 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .iter()
             .filter(|r| r.event_model_id.is_some())
             .count() as i32;
+        // Store hygiene / architecture walk the full visible snapshot.
+        // Request filters only select which EventModels and strategic
+        // namespaces are reported; they must not be written into
+        // `effective_scope` or clients will mis-attribute store findings.
+        let branch_name = branch.clone().unwrap_or_default();
+        let requested_scope = pb::ValidationScope {
+            branch: branch_name.clone(),
+            project_id: match &scope {
+                Scope::ProjectId(id) => Some(id.clone()),
+                _ => None,
+            },
+            domain_id: match &scope {
+                Scope::DomainId(id) => Some(id.clone()),
+                _ => None,
+            },
+            namespace: match &scope {
+                Scope::Namespace(ns) => ns.clone(),
+                _ => String::new(),
+            },
+            event_model_id: None,
+        };
+        let store_wide_scope = pb::ValidationScope {
+            branch: branch_name,
+            project_id: None,
+            domain_id: None,
+            namespace: String::new(),
+            event_model_id: None,
+        };
         let coverage = validation::validation_coverage(
             vec![
                 validation::ran_against_snapshot(
@@ -7361,22 +7391,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     snapshot_truncated,
                 ),
             ],
-            pb::ValidationScope {
-                branch: branch.clone().unwrap_or_default(),
-                project_id: match &scope {
-                    Scope::ProjectId(id) => Some(id.clone()),
-                    _ => None,
-                },
-                domain_id: match &scope {
-                    Scope::DomainId(id) => Some(id.clone()),
-                    _ => None,
-                },
-                namespace: match &scope {
-                    Scope::Namespace(ns) => ns.clone(),
-                    _ => String::new(),
-                },
-                event_model_id: None,
-            },
+            store_wide_scope,
+            requested_scope,
             snapshot_truncated,
         );
 
