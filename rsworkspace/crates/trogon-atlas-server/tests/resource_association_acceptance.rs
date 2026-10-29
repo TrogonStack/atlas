@@ -338,6 +338,15 @@ async fn schema_variants_keep_scope_case_defaults_and_mixed_targets() {
     let local = pb::schema_binding::Type::LocalSchema(member(SCHEMA));
     let mut payload_default = binding(pb::schema_binding::Role::Payload, local, &[], Some(true));
     payload_default.doc = Some("default payload".into());
+    let mut wide = binding(
+        pb::schema_binding::Role::Headers,
+        pb::schema_binding::Type::Schema(pb::SchemaRef {
+            id: Some(shape.clone()),
+        }),
+        &[],
+        None,
+    );
+    wide.environments = vec![env(&"a".repeat(64))];
     let spec = put(
         &mut client,
         pb::entity::Kind::Specification(pb::Specification {
@@ -381,6 +390,7 @@ async fn schema_variants_keep_scope_case_defaults_and_mixed_targets() {
                             &[],
                             Some(true),
                         ),
+                        wide,
                     ],
                     ..Default::default()
                 },
@@ -424,28 +434,30 @@ async fn schema_variants_keep_scope_case_defaults_and_mixed_targets() {
         Some(pb::schema_binding::Type::Schema(_))
     ));
     assert_eq!(first[3].is_default, Some(true));
-    assert_eq!(first[3].environments, [] as [pb::EnvironmentName; 0]);
+    assert_eq!(first[3].environments, []);
     assert_eq!(first[4].role, pb::schema_binding::Role::Headers as i32);
     assert!(first[4].is_default.is_none());
     assert_eq!(first[4].environments, vec![env("Blue")]);
     assert_eq!(first[5].role, pb::schema_binding::Role::Headers as i32);
     assert_eq!(first[5].is_default, Some(true));
-    assert_eq!(first[5].environments, [] as [pb::EnvironmentName; 0]);
+    assert_eq!(first[5].environments, []);
+    assert_eq!(first[6].role, pb::schema_binding::Role::Headers as i32);
+    assert!(first[6].is_default.is_none());
+    assert_eq!(first[6].environments.len(), 1);
+    assert_eq!(first[6].environments[0].value.len(), 64);
+    assert_eq!(first[6].environments[0].value, "a".repeat(64));
     assert!(stored.messages[1].schemas[0].is_default.is_none());
     assert_eq!(
         stored.messages[1].schemas[0].environments,
         vec![env("Blue")]
     );
     assert_eq!(stored.messages[1].schemas[1].is_default, Some(true));
-    assert_eq!(
-        stored.messages[1].schemas[1].environments,
-        [] as [pb::EnvironmentName; 0]
-    );
+    assert_eq!(stored.messages[1].schemas[1].environments, []);
     let ids: std::collections::HashSet<_> = first
         .iter()
         .map(|value| value.connection_id.clone().unwrap().value)
         .collect();
-    assert_eq!(ids.len(), 6);
+    assert_eq!(ids.len(), 7);
     assert_ne!(first[0].is_default, Some(true));
     assert_ne!(
         stored.messages[0].schemas[0].connection_id,
@@ -761,7 +773,7 @@ async fn default_and_environment_edits_renew_ids_and_retire_old_selectors() {
         rebound.subject_state,
         pb::ResponsibilityResolutionState::Resolved as i32
     );
-    assert_eq!(rebound.assignments, [] as [pb::ResponsibilityAssignment; 0]);
+    assert_eq!(rebound.assignments, []);
 
     let mut header = renewed.clone();
     spec_mut(&mut header).messages[0].schemas[0].environments = vec![env("other")];
@@ -799,7 +811,7 @@ async fn default_and_environment_edits_renew_ids_and_retire_old_selectors() {
         assignments(&mut client, subject(new_header))
             .await
             .assignments,
-        [] as [pb::ResponsibilityAssignment; 0]
+        []
     );
     assert_eq!(
         spec_of(&header).operations[0].messages[0].role,
@@ -1264,37 +1276,81 @@ async fn product_associations_cover_directions_targets_and_native_controls() {
         Some(old_target)
     );
 
-    let mut contract_edit = retarget.clone();
-    let association = &mut product_mut(&mut contract_edit).resource_associations[0];
-    if association.contract.is_some() {
-        association.contract = None;
-    } else if association.direction == pb::DataPortDirection::Output as i32 {
-        association.contract = contract;
-    } else {
-        association.direction = pb::DataPortDirection::Output as i32;
-        association.contract = contract;
-    }
+    let (stored, stored_etag) =
+        fetch(&mut client, pb::EntityKind::DataProduct as i32, &product_id).await;
+    assert_eq!(stored, retarget);
+    let mut contract_edit = stored.clone();
+    let index = product_of(&contract_edit)
+        .resource_associations
+        .iter()
+        .position(|association| {
+            association.direction == pb::DataPortDirection::Output as i32
+                && association.contract.is_none()
+        })
+        .expect("output association without a contract");
+    let kept_target = product_of(&contract_edit).resource_associations[index]
+        .target
+        .clone();
+    let kept_id = product_of(&contract_edit).resource_associations[index]
+        .connection_id
+        .clone();
+    let edited = &mut product_mut(&mut contract_edit).resource_associations[index];
+    edited.contract = contract.clone();
+    assert_eq!(edited.direction, pb::DataPortDirection::Output as i32);
+    assert_eq!(edited.target, kept_target);
     let error = reject(
         &mut client,
         pb::entity::Kind::DataProduct(product_of(&contract_edit).clone()),
     )
     .await;
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
     assert!(
         error
             .message()
             .contains("changed role or endpoint; use a new ID"),
         "{error}"
     );
-    product_mut(&mut contract_edit).resource_associations[0].connection_id = None;
+    let (unchanged, unchanged_etag) =
+        fetch(&mut client, pb::EntityKind::DataProduct as i32, &product_id).await;
+    assert_eq!(unchanged_etag, stored_etag);
+    assert_eq!(unchanged, stored);
+    let inventory: Vec<_> = product_of(&unchanged)
+        .resource_associations
+        .iter()
+        .map(|association| association.connection_id.clone())
+        .collect();
+    let stored_inventory: Vec<_> = product_of(&stored)
+        .resource_associations
+        .iter()
+        .map(|association| association.connection_id.clone())
+        .collect();
+    assert_eq!(inventory, stored_inventory);
+    product_mut(&mut contract_edit).resource_associations[index].connection_id = None;
     let contract_edit = put(
         &mut client,
         pb::entity::Kind::DataProduct(product_of(&contract_edit).clone()),
     )
     .await;
-    assert_ne!(
-        product_of(&contract_edit).resource_associations[0].connection_id,
-        product_of(&retarget).resource_associations[0].connection_id
-    );
+    let mut renewed = 0;
+    for (position, association) in product_of(&contract_edit)
+        .resource_associations
+        .iter()
+        .enumerate()
+    {
+        if position == index {
+            assert_ne!(association.connection_id, kept_id);
+            assert_eq!(association.direction, pb::DataPortDirection::Output as i32);
+            assert_eq!(association.target, kept_target);
+            assert_eq!(association.contract, contract);
+            renewed += 1;
+        } else {
+            assert_eq!(
+                association.connection_id,
+                product_of(&stored).resource_associations[position].connection_id
+            );
+        }
+    }
+    assert_eq!(renewed, 1);
     assert_eq!(
         (
             product_of(&contract_edit).inputs.clone(),
@@ -1315,7 +1371,121 @@ async fn product_associations_cover_directions_targets_and_native_controls() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn writer_below_revision_19_is_refused_before_a_variant_write() {
+async fn removed_variant_target_stays_readable_and_a_new_unresolved_binding_rejects() {
+    let mut client = client().await;
+    let namespace = unique("variant-dangling");
+    let shape = id(&namespace, "shape");
+    let spec_id = id(&namespace, "contract");
+    put(
+        &mut client,
+        pb::entity::Kind::Schema(pb::Schema {
+            id: Some(shape.clone()),
+            title: "Shape".into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let saved = put(
+        &mut client,
+        pb::entity::Kind::Specification(pb::Specification {
+            id: Some(spec_id.clone()),
+            title: "Contract".into(),
+            messages: vec![pb::ContractMessage {
+                member_id: Some(member(MESSAGE_A)),
+                name: Some(member_name("Order")),
+                schemas: vec![binding(
+                    pb::schema_binding::Role::Payload,
+                    pb::schema_binding::Type::Schema(pb::SchemaRef {
+                        id: Some(shape.clone()),
+                    }),
+                    &["Blue"],
+                    None,
+                )],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await;
+    let binding_id = spec_of(&saved).messages[0].schemas[0].connection_id.clone();
+    client
+        .delete_entity(request(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Schema as i32,
+            id: Some(shape.clone()),
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        client
+            .get_entity(request(pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(shape),
+            }))
+            .await
+            .unwrap_err()
+            .code(),
+        Code::NotFound
+    );
+    let (readable, _) = fetch(&mut client, pb::EntityKind::Specification as i32, &spec_id).await;
+    assert_eq!(
+        spec_of(&readable).messages[0].schemas,
+        spec_of(&saved).messages[0].schemas
+    );
+    assert_eq!(
+        spec_of(&readable).messages[0].schemas[0].connection_id,
+        binding_id
+    );
+    let mut renamed = readable.clone();
+    spec_mut(&mut renamed).title = "Renamed contract".into();
+    let renamed = put(
+        &mut client,
+        pb::entity::Kind::Specification(spec_of(&renamed).clone()),
+    )
+    .await;
+    assert_eq!(spec_of(&renamed).title, "Renamed contract");
+    assert_eq!(
+        spec_of(&renamed).messages[0].schemas,
+        spec_of(&readable).messages[0].schemas
+    );
+    let (kept, kept_etag) =
+        fetch(&mut client, pb::EntityKind::Specification as i32, &spec_id).await;
+    assert_eq!(kept, renamed);
+    let mut unresolved = kept.clone();
+    let edited = &mut spec_mut(&mut unresolved).messages[0].schemas[0];
+    edited.connection_id = None;
+    edited.r#type = Some(pb::schema_binding::Type::Schema(pb::SchemaRef {
+        id: Some(id(&namespace, "missing")),
+    }));
+    let error = reject(
+        &mut client,
+        pb::entity::Kind::Specification(spec_of(&unresolved).clone()),
+    )
+    .await;
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(
+        error
+            .message()
+            .contains("SPECIFICATION_REFERENCE_UNRESOLVED"),
+        "{error}"
+    );
+    let (after, after_etag) =
+        fetch(&mut client, pb::EntityKind::Specification as i32, &spec_id).await;
+    assert_eq!(after_etag, kept_etag);
+    assert_eq!(after, kept);
+    assert_eq!(
+        spec_of(&after).messages[0].schemas[0].connection_id,
+        binding_id
+    );
+    assert_eq!(
+        spec_of(&after).messages[0].schemas[0].environments,
+        vec![env("Blue")]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn advertised_writer_floor_is_revision_19_and_get_sends_no_mutation() {
     let mut client = client().await;
     let namespace = unique("writer-floor");
     let spec_id = id(&namespace, "contract");
