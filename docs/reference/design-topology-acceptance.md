@@ -1,10 +1,10 @@
 # Design graph topology acceptance requirements
 
-Status: proposed requirements for the
-[design topology contract](design-topology-contracts.md), not implemented or
-executed coverage. No passing fixture, schema change or deployed readiness is
-claimed. Logical names below are not manifest syntax, predicted owner UIDs or
-submitted occurrence IDs.
+Status: requirements for the
+[design topology contract](design-topology-contracts.md), mapped to executed
+tests under [Coverage linkage](#coverage-linkage). Deployed readiness and
+authenticated browser rendering are not claimed. Logical names below are not
+manifest syntax, predicted owner UIDs or submitted occurrence IDs.
 
 ## Fixture anchors
 
@@ -47,7 +47,7 @@ transport, CLI/MCP or deployed-browser receipts.
 
 | Case | Required public outcome |
 | --- | --- |
-| Complete fixture create/read | Proposed fields preserve profile, Unicode titles, step order, transition order and distinct step IDs for equal catalog targets. |
+| Complete fixture create/read | Fields preserve profile, Unicode titles, step order, transition order and distinct step IDs for equal catalog targets. |
 | Generic step | Step with title and absent `target` admits; queries return a generic node without fabricated catalog ref. |
 | Mutual exclusion | Step with more than one `TopologyStepTarget` alternative rejects atomically. |
 | Self-subflow | `subflow` selecting the same DesignGraph `id` rejects. |
@@ -140,7 +140,64 @@ execution, portable selector rebinding or atomic multi-owner snapshots.
 
 ## Coverage linkage
 
-When implemented, add a dedicated server test module (for example
-`design_topology_acceptance.rs`) and link it here. Until then, treat every case
-above as pending. Do not check off the master checklist in
-[eventcatalog-coverage.md](eventcatalog-coverage.md) from documentation alone.
+Server public-service acceptance lives in
+[`design_topology_acceptance.rs`](../../rsworkspace/crates/trogon-atlas-server/tests/design_topology_acceptance.rs).
+It drives the public service with the shared NATS-backed store and complements
+the preserved backend, branch and Source suites
+(`design_topology_backend.rs`, `design_topology_branch_backend.rs`,
+`design_topology_source_backend.rs`).
+
+| Requirement area | Executed test |
+| --- | --- |
+| Unicode, order, presence, equal catalog selections with distinct step IDs | `complete_fixture_preserves_unicode_order_presence_and_distinct_ids_for_equal_catalog_selections` |
+| Every adopted target arm, wrong kind and version, dangling and inline targets | `every_adopted_target_arm_admits_exact_selections_and_rejects_wrong_kind_version_and_dangling_refs` |
+| Layout document present, absent, unavailable and missing | `layout_document_state_is_absent_resolved_or_unavailable_and_missing_layouts_are_rejected` |
+| Invalid local IDs, transitions, entries and same-write unknowns leave state unchanged | `invalid_local_ids_transitions_entries_and_same_write_unknowns_leave_stored_state_unchanged` |
+| Two-write staging and stale etags | `two_write_staging_returns_ids_first_then_accepts_transitions_and_rejects_stale_etags` |
+| Label retention, endpoint renewal, reorder, remove and re-add | `transition_identity_follows_label_retention_endpoint_renewal_reorder_and_remove_readd` |
+| Linear, branch and loop traversal receipts | `linear_branch_and_loop_traversals_return_exact_nodes_edges_entries_and_cycles` |
+| Depth default, cap and exact completion | `subflow_depth_boundaries_default_cap_and_exact_completion_are_reported` |
+| Subflow cycles | `subflow_cycles_report_their_graph_path_and_both_edges` |
+| Authorization lens outage fails every query | `authorization_lens_outage_fails_all_four_queries_instead_of_returning_empty_graphs` |
+| Hidden and missing endpoints share one state and diagnostic | `hidden_and_missing_endpoints_share_one_state_and_one_diagnostic_across_every_read` |
+| Store, decode and authorizer failures are operational | `store_decode_faults_and_outages_are_operational_failures_not_empty_or_unavailable_targets` |
+| Step, transition and local identity maxima, then overflow by one | `step_transition_and_local_identity_maxima_are_accepted_then_overflow_by_one` |
+| Subject maximum and local identity ceiling | `subject_maximum_counts_toward_the_local_identity_ceiling_and_overflows_by_one` |
+| Traversal work budget, owner charged once | `traversal_work_budget_charges_each_distinct_owner_once_and_exhausts_on_the_tenth` |
+| Traversal output budget | `traversal_output_budget_exhausts_on_the_expansion_that_crosses_4096_rows` |
+| Explicit subjects, target-only negative, Reader query and denied mutation | `subject_listing_matches_explicit_subjects_only_and_readers_query_but_cannot_mutate` |
+| Reference multiplicity, hidden safe delete, recreation staleness | `references_keep_parallel_multiplicity_hidden_referrers_block_delete_and_recreation_is_stale` |
+| Storyboard control unchanged | `storyboard_slices_and_traces_stay_unchanged_when_design_graphs_are_added` |
+
+Client and surface evidence:
+
+| Surface | Executed test |
+| --- | --- |
+| CLI authenticated apply, exact detail, subject, traversal and incoming queries, export, diff, reapply, owned branch apply and merge | `authenticated_design_topology_cli_returns_exact_queries_exports_without_drift_and_follows_branches` in [`design_topology_cli_integration.rs`](../../rsworkspace/crates/trogon-atlas-cli/tests/design_topology_cli_integration.rs) |
+| MCP apply, exact detail, subject listing, traversal and incoming subflows | `design_topology_mcp_apply_inspect_traverse_and_incoming` in [`design_topology_mcp_integration.rs`](../../rsworkspace/crates/trogon-atlas-mcp/tests/design_topology_mcp_integration.rs) |
+| Studio gateway response identities, presence and unavailable states through the production codec | `design topology gateway response codec` in [`index.test.mjs`](../../tsworkspace/webapps/studio/server/index.test.mjs) |
+
+## Proof boundaries
+
+- The one mebibyte owner ceiling is proved at validate-only admission by
+  `prepared_owner_accepts_exactly_one_mebibyte_and_rejects_one_byte_more`.
+  Persisting an owner near that size fails in storage for every entity kind;
+  that is a shared storage limit, not a topology defect, and is not asserted
+  here.
+- The resource-row budget cannot be reached through traversal because the work
+  budget is exhausted first. Only the work and output budgets are exercised.
+- The owned branch lifecycle through the CLI stops at apply and branch-scoped
+  reads: `branch create`, `diff` and `merge` reject owned branch names on the
+  client, so creation, diff and merge are driven through the public gRPC
+  service in the same test.
+- The MCP test runs against an unauthenticated server. MCP Reader discovery of
+  the four tools depends on the tool policy rows in the MCP server and is
+  proved separately by that crate's role map test.
+- System grouping (union arm 10) is a dependency of the separate system
+  grouping contract and is not integrated or tested here.
+- Browser rendering with an authenticated backend is not proved. No maintained
+  authenticated browser fixture exists, and component tests with mocked
+  gateways do not establish it.
+
+Do not check off the master checklist in
+[eventcatalog-coverage.md](eventcatalog-coverage.md) from this document alone.
