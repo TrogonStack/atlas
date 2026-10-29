@@ -372,7 +372,9 @@ async fn validate_event_model_reports_the_strategic_chain() {
         assert_eq!(codes_of(&issues, code), 1, "{code}: {issues:?}");
     }
     assert_eq!(codes_of(&issues, "REALIZES_MULTIPLE"), 0, "{issues:?}");
-    let coverage = resp.coverage.expect("ValidateEventModel must report coverage");
+    let coverage = resp
+        .coverage
+        .expect("ValidateEventModel must report coverage");
     assert!(!coverage.snapshot_truncated);
     let checks: Vec<_> = coverage
         .checks
@@ -457,11 +459,13 @@ async fn validate_project_reports_the_strategic_chain_once() {
     for code in STRATEGIC_FINDINGS {
         assert_eq!(codes_of(&store_report.issues, code), 1, "{code}");
     }
-    let coverage = resp
-        .coverage
-        .expect("ValidateProject must report coverage");
+    let coverage = resp.coverage.expect("ValidateProject must report coverage");
     assert!(!coverage.snapshot_truncated);
-    let check_ids: Vec<_> = coverage.checks.iter().map(|c| c.check_id.as_str()).collect();
+    let check_ids: Vec<_> = coverage
+        .checks
+        .iter()
+        .map(|c| c.check_id.as_str())
+        .collect();
     for id in ["store_hygiene", "architecture", "model", "strategic"] {
         assert!(check_ids.contains(&id), "missing {id} in {check_ids:?}");
     }
@@ -475,13 +479,9 @@ async fn validate_project_reports_the_strategic_chain_once() {
         model.state,
         pb::validation_check_result::State::Completed as i32
     );
-    let requested = coverage
-        .requested_scope
-        .expect("requested_scope required");
+    let requested = coverage.requested_scope.expect("requested_scope required");
     assert_eq!(requested.namespace, "vp-chain");
-    let effective = coverage
-        .effective_scope
-        .expect("effective_scope required");
+    let effective = coverage.effective_scope.expect("effective_scope required");
     assert!(
         effective.namespace.is_empty(),
         "store-wide suites examine the full visible snapshot, not the request namespace: {effective:?}"
