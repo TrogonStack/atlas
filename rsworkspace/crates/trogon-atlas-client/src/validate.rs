@@ -144,6 +144,9 @@ const BY_DESIGN_SKIP_REASONS: &[&str] = &[
 pub enum CoverageGap {
     /// The server sent no coverage, so nothing proves the run was complete.
     CoverageAbsent,
+    /// The server sent coverage that names no checks, so nothing it reports
+    /// proves any suite ran.
+    NoChecks,
     /// The snapshot the suites ran against was truncated.
     SnapshotTruncated,
     /// A suite finished `PARTIAL`, `ERROR`, an unspecified state, or was
@@ -160,6 +163,7 @@ impl CoverageGap {
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             Self::CoverageAbsent => serde_json::json!({"gap": "coverage_absent"}),
+            Self::NoChecks => serde_json::json!({"gap": "no_checks"}),
             Self::SnapshotTruncated => serde_json::json!({"gap": "snapshot_truncated"}),
             Self::Check {
                 check_id,
@@ -190,6 +194,9 @@ impl Completeness {
             };
         };
         let mut gaps = Vec::new();
+        if coverage.checks.is_empty() {
+            gaps.push(CoverageGap::NoChecks);
+        }
         if coverage.snapshot_truncated {
             gaps.push(CoverageGap::SnapshotTruncated);
         }
@@ -495,5 +502,19 @@ mod tests {
             serde_json::json!([{"gap": "coverage_absent"}])
         );
         assert!(absent.get("coverage").is_none());
+    }
+
+    #[test]
+    fn coverage_without_checks_is_incomplete() {
+        let completeness = Completeness::of(Some(&pb::ValidationCoverage::default()));
+        assert_eq!(completeness.gaps, vec![CoverageGap::NoChecks]);
+        assert_eq!(
+            ValidationVerdict::of(0, &completeness),
+            ValidationVerdict::Incomplete
+        );
+        assert_eq!(
+            CoverageGap::NoChecks.to_json(),
+            serde_json::json!({"gap": "no_checks"})
+        );
     }
 }

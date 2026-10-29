@@ -655,6 +655,9 @@ fn print_coverage_gaps(completeness: &validate::Completeness) {
             validate::CoverageGap::CoverageAbsent => {
                 println!("incomplete: the server reported no validation coverage");
             }
+            validate::CoverageGap::NoChecks => {
+                println!("incomplete: the server's validation coverage named no checks");
+            }
             validate::CoverageGap::SnapshotTruncated => {
                 println!("incomplete: the validated snapshot was truncated");
             }

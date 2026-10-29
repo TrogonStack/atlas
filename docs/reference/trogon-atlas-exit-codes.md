@@ -52,6 +52,7 @@ A coverage gap is any of:
 | Gap | Cause |
 | --- | --- |
 | `coverage_absent` | The response carried no `coverage` (for example an older server). The client never invents coverage, so absent coverage is not complete. |
+| `no_checks` | `coverage` was present but listed no checks, so it proves no suite ran. |
 | `snapshot_truncated` | `coverage.snapshot_truncated` is true. |
 | `check` | A check whose state is `PARTIAL`, `ERROR` or unspecified, or `SKIPPED` with a reason that is not by design. |
 
@@ -68,7 +69,7 @@ not map exit codes itself:
 | Field | Meaning |
 | --- | --- |
 | `verdict` | `clean`, `findings` or `incomplete`. |
-| `coverage_gaps` | Each gap as `{"gap": "coverage_absent"}`, `{"gap": "snapshot_truncated"}`, or `{"gap": "check", "check_id", "state", "reason"}`. Empty when complete. Gaps are listed even when the verdict is `findings`. |
+| `coverage_gaps` | Each gap as `{"gap": "coverage_absent"}`, `{"gap": "no_checks"}`, `{"gap": "snapshot_truncated"}`, or `{"gap": "check", "check_id", "state", "reason"}`. Empty when complete. Gaps are listed even when the verdict is `findings`. |
 | `coverage` | The server's coverage, passed through unchanged; absent when the server sent none. |
 
 Text output prints one `incomplete:` line per gap after the findings.

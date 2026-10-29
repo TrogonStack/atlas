@@ -126,7 +126,9 @@ completed and reported what it saw.
 Absent coverage is treated as a gap rather than as complete, consistent with
 "never invent coverage client-side": a client cannot tell an older server's
 silent full run from a run that skipped suites. A CI job pointed at such a
-server exits `11` until the server reports coverage.
+server exits `11` until the server reports coverage. Coverage that is
+present but lists no checks is a gap for the same reason: a default message
+proves no suite ran.
 
 A `SKIPPED` check is only a gap when the suite applied and did not run.
 Reasons that mark a suite as outside the entry point by design are not gaps;
