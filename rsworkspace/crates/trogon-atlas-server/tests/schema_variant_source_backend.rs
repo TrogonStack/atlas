@@ -461,6 +461,21 @@ async fn source_message_and_title_updates_preserve_exact_local_variants_and_plai
         if key == "title" {
             assert_eq!(value.title, "Source title");
             assert_eq!(value.messages, old.messages);
+            let mapped = f.mapping(key).await;
+            let base = mapped.base.as_ref().unwrap();
+            assert_eq!(base.native_value.as_ref(), Some(&saved));
+            assert_eq!(
+                specification(base.native_value.as_ref().unwrap()).messages,
+                old.messages
+            );
+            assert_eq!(
+                specification(base.source_value.as_ref().unwrap()).title,
+                "Source title"
+            );
+            assert_eq!(
+                specification(base.native_value.as_ref().unwrap()).title,
+                "Source title"
+            );
         } else {
             assert_eq!(
                 value.messages[0].doc.as_deref(),
@@ -602,12 +617,14 @@ async fn source_variants_keep_all_policy_create_and_whole_owner_isolation() {
     assert_eq!(f.get(key).await, before);
     f.put(proposed).await;
     let local = f.get(key).await;
-    assert_eq!(
-        f.preview(key, "clear", native.entity.unwrap())
-            .await
-            .unwrap_err()
-            .code(),
-        Code::InvalidArgument
+    let cleared = f
+        .preview(key, "clear", native.entity.unwrap())
+        .await
+        .unwrap_err();
+    assert_eq!(cleared.code(), Code::InvalidArgument, "{cleared}");
+    assert!(
+        cleared.message().contains("native authoring only"),
+        "{cleared}"
     );
     assert_eq!(f.mapping(key).await, mapping);
     assert_eq!(f.get(key).await, local);
