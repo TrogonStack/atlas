@@ -179,11 +179,15 @@ Client and surface evidence:
 
 ## Proof boundaries
 
-- The one mebibyte owner ceiling is proved at validate-only admission by
-  `prepared_owner_accepts_exactly_one_mebibyte_and_rejects_one_byte_more`.
-  Persisting an owner near that size fails in storage for every entity kind;
-  that is a shared storage limit, not a topology defect, and is not asserted
-  here.
+- `prepared_owner_accepts_exactly_one_mebibyte_and_rejects_one_byte_more`
+  proves validate-only admission. Persisted complete-owner capacity is covered
+  separately by
+  [`complete_prepared_graph_capacity_persists_exact_boundary_and_refuses_one_byte_more`](../../rsworkspace/crates/trogon-atlas-server/tests/document_catalog_context_backend.rs):
+  the authenticated public service stores exactly 1,048,576 encoded bytes,
+  including assigned identities and server metadata, and rejects the next byte
+  without changing the owner, etag or change sequence. That fixture covers
+  baseline publication; broader branch-publication capacity assertions use
+  Document owners.
 - The resource-row budget cannot be reached through traversal because the work
   budget is exhausted first. Only the work and output budgets are exercised.
 - The owned branch lifecycle through the CLI stops at apply and branch-scoped
