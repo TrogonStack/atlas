@@ -17,6 +17,7 @@ use rmcp::{
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use trogon_atlas_client::client::{connect, connect_with_options, ConnectOptions};
+use trogon_atlas_core::transcode::TranscodePool;
 use trogon_atlas_proto::{self as pb, event_model_service_server::EventModelServiceServer};
 use trogon_atlas_server::{
     auth::{BearerAuth, TokenRegistry},
@@ -146,7 +147,7 @@ async fn put(
         .unwrap()
 }
 
-async fn seed(endpoint: &str, namespace: &str) -> String {
+async fn seed(endpoint: &str, namespace: &str) -> (String, Vec<Value>) {
     let mut client = connect_with_options(
         endpoint,
         Some(ADMIN),
@@ -287,7 +288,107 @@ async fn seed(endpoint: &str, namespace: &str) -> String {
         }),
     )
     .await;
-    specification.system.unwrap().uid
+    let owner_uid = specification.system.as_ref().unwrap().uid.clone();
+    let Some(pb::entity::Kind::Specification(spec)) = specification.kind else {
+        panic!("specification")
+    };
+    let message = pb::ContractMemberRef {
+        specification: Some(pb::SpecificationRef { id: spec.id }),
+        owner_uid: owner_uid.clone(),
+        kind: pb::ContractMemberKind::Message as i32,
+        member_id: spec.messages[0].member_id.clone(),
+        expected_digest: None,
+    };
+    let component = put(
+        &mut client,
+        pb::entity::Kind::Component(pb::Component {
+            id: Some(id(namespace, "claim-owner", 1)),
+            title: "Claim owner".into(),
+            message_claims: Some(pb::MessageClaims {
+                claims: [
+                    pb::CommunicationDirection::Receive,
+                    pb::CommunicationDirection::Send,
+                ]
+                .into_iter()
+                .map(|direction| pb::MessageClaim {
+                    direction: direction as i32,
+                    message: Some(message.clone()),
+                    ..Default::default()
+                })
+                .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let uid = component.system.as_ref().unwrap().uid.clone();
+    let Some(pb::entity::Kind::Component(mut value)) = component.kind else {
+        panic!("component")
+    };
+    let claims = value.message_claims.as_mut().unwrap();
+    claims.routes = claims
+        .claims
+        .iter()
+        .enumerate()
+        .map(|(index, claim)| pb::ClaimRoute {
+            claim_id: claim.connection_id.clone(),
+            channel: Some(pb::ChannelRef {
+                id: Some(id(namespace, "orders", CHANNEL_VERSION)),
+            }),
+            parameter_values: [("topic".into(), String::new())].into(),
+            delivery_mode: (index == 1).then_some(pb::ClaimDeliveryMode::Push as i32),
+            ..Default::default()
+        })
+        .collect();
+    let stored = put(&mut client, pb::entity::Kind::Component(value)).await;
+    assert_eq!(stored.system.as_ref().unwrap().uid, uid);
+    let Some(pb::entity::Kind::Component(value)) = stored.kind else {
+        panic!("component")
+    };
+    let claims = value.message_claims.unwrap();
+    let expected = claims
+        .routes
+        .iter()
+        .map(|route| {
+            let claim = claims
+                .claims
+                .iter()
+                .find(|claim| claim.connection_id == route.claim_id)
+                .unwrap();
+            pb::ChannelMessageRecord {
+                owner: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Component as i32,
+                    id: value.id.clone(),
+                }),
+                owner_uid: uid.clone(),
+                connection_id: route.connection_id.clone(),
+                message: Some(message.clone()),
+                channel: route.channel.clone(),
+                parameter_values: route.parameter_values.clone(),
+                delivery_mode: route.delivery_mode,
+                authority: pb::ChannelMessageAuthority::ClaimRoute as i32,
+                claim: Some(claim.clone()),
+                route: Some(route.clone()),
+                state: pb::CatalogResolutionState::Resolved as i32,
+                ..Default::default()
+            }
+        })
+        .collect();
+    let expected = TranscodePool::builtin()
+        .unwrap()
+        .message_json_value(
+            "trogonatlas.api.eventmodel.v1alpha1.ListChannelMessagesResponse",
+            &pb::ListChannelMessagesResponse {
+                records: expected,
+                ..Default::default()
+            },
+        )
+        .unwrap()["records"]
+        .as_array()
+        .unwrap()
+        .clone();
+    (owner_uid, expected)
 }
 
 async fn connect_mcp(uri: &str, token: &str) -> McpClient {
@@ -421,12 +522,17 @@ fn assert_preserved_records(records: &[&Value], namespace: &str, owner_uid: &str
             record["owner"]["kind"], "ENTITY_KIND_SPECIFICATION",
             "{record}"
         );
+        assert_eq!(record["owner"]["id"]["namespace"], namespace);
         assert_eq!(record["owner"]["id"]["slug"], "contract");
+        assert_eq!(record["state"], "CATALOG_RESOLUTION_STATE_RESOLVED");
+        assert!(record.get("claim").is_none());
+        assert!(record.get("route").is_none());
+        assert!(record.get("operation").is_none());
         assert_eq!(record["owner"]["id"]["version"], "1");
         assert_eq!(record["message"]["kind"], "CONTRACT_MEMBER_KIND_MESSAGE");
         assert_eq!(record["message"]["memberId"]["value"], MESSAGE);
         assert_eq!(record["message"]["ownerUid"], owner_uid);
-        assert_eq!(record["parameterValues"]["topic"], "orders");
+        assert_eq!(record["parameterValues"], json!({"topic": "orders"}));
         assert!(record["connectionId"]["value"]
             .as_str()
             .is_some_and(|id| !id.is_empty()));
@@ -457,9 +563,37 @@ fn assert_preserved_records(records: &[&Value], namespace: &str, owner_uid: &str
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reader_discovers_design_topology_read_tools() {
+    let (uri, _, _) = server().await;
+    let admin = connect_mcp(&uri, ADMIN).await;
+    let reader = connect_mcp(&uri, READER_A).await;
+    let admin_tools = admin.list_all_tools().await.unwrap();
+    let reader_tools = reader.list_all_tools().await.unwrap();
+    assert!(reader_tools
+        .iter()
+        .any(|tool| tool.name == "list_channel_messages"));
+    assert!(!reader_tools.iter().any(|tool| tool.name == "put_entity"));
+    for name in [
+        "get_design_graph_detail",
+        "list_subject_design_graphs",
+        "traverse_design_graph_topology",
+        "list_incoming_design_graph_subflows",
+    ] {
+        assert!(admin_tools.iter().any(|tool| tool.name == name));
+        let tool = reader_tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("reader catalog omits {name}"));
+        let annotations = tool.annotations.as_ref().unwrap();
+        assert_eq!(annotations.read_only_hint, Some(true));
+        assert_eq!(annotations.destructive_hint, Some(false));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
     let (uri, endpoint, namespace) = server().await;
-    let owner_uid = seed(&endpoint, &namespace).await;
+    let (owner_uid, expected_routes) = seed(&endpoint, &namespace).await;
     let reader = connect_mcp(&uri, READER_A).await;
     let other = connect_mcp(&uri, READER_B).await;
     let hidden = connect_mcp(&uri, HIDDEN).await;
@@ -487,7 +621,7 @@ async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
     assert!(full.get("incomplete").is_none(), "{full}");
     assert!(full.get("nextPageToken").is_none(), "{full}");
     let records = full["records"].as_array().unwrap();
-    assert_eq!(records.len(), 3, "{full}");
+    assert_eq!(records.len(), 5, "{full}");
     let independent: Vec<_> = records
         .iter()
         .filter(|record| {
@@ -499,7 +633,22 @@ async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
         .iter()
         .find(|record| record["authority"] == "CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING")
         .unwrap();
-    assert_operation_record(operation, &records[0], &namespace, &owner_uid);
+    assert_operation_record(operation, independent[0], &namespace, &owner_uid);
+    let routes: Vec<_> = records
+        .iter()
+        .filter(|row| row["authority"] == "CHANNEL_MESSAGE_AUTHORITY_CLAIM_ROUTE")
+        .collect();
+    assert_eq!(routes.len(), expected_routes.len());
+    for expected in &expected_routes {
+        assert_eq!(routes.iter().filter(|row| *row == &expected).count(), 1);
+        assert_channel_id(expected, &namespace);
+        assert_eq!(expected["message"], independent[0]["message"]);
+        assert_ne!(expected["ownerUid"], owner_uid);
+        assert_eq!(expected["parameterValues"], json!({"topic": ""}));
+    }
+    let ids: std::collections::HashSet<_> =
+        records.iter().map(|row| &row["connectionId"]).collect();
+    assert_eq!(ids.len(), records.len());
 
     let first = listed(
         &reader,
@@ -507,6 +656,7 @@ async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
     )
     .await;
     assert_scope(&first);
+    assert_eq!(first["scopeDigest"], full["scopeDigest"]);
     assert_eq!(first["records"].as_array().unwrap().len(), 1, "{first}");
     assert_ne!(first["complete"].as_bool(), Some(true), "{first}");
     assert_ne!(first["incomplete"].as_bool(), Some(true), "{first}");
@@ -515,42 +665,24 @@ async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
     assert!(!token.contains(READER_A), "{token}");
     assert!(!token.contains("reader-a"), "{token}");
 
-    let second = listed(
-        &reader,
-        channel_request(&namespace, "orders", Some(1), Some(token)),
-    )
-    .await;
-    assert_scope(&second);
-    assert_ne!(second["complete"].as_bool(), Some(true), "{second}");
-    assert!(second.get("incomplete").is_none(), "{second}");
-    let next = second["nextPageToken"].as_str().unwrap();
-    assert!(!next.is_empty(), "{second}");
-    assert_ne!(
-        first["records"][0]["connectionId"]["value"],
-        second["records"][0]["connectionId"]["value"]
-    );
-    assert_preserved_records(
-        &[&first["records"][0], &second["records"][0]],
-        &namespace,
-        &owner_uid,
-    );
-
-    let third = listed(
-        &reader,
-        channel_request(&namespace, "orders", Some(1), Some(next)),
-    )
-    .await;
-    assert_scope(&third);
-    assert_eq!(third["complete"], true, "{third}");
-    assert!(third.get("incomplete").is_none(), "{third}");
-    assert!(third.get("nextPageToken").is_none(), "{third}");
-    assert_eq!(third["records"].as_array().unwrap().len(), 1, "{third}");
-    assert_operation_record(
-        &third["records"][0],
-        &first["records"][0],
-        &namespace,
-        &owner_uid,
-    );
+    let mut seen = first["records"].as_array().unwrap().clone();
+    let mut next = token.to_owned();
+    while !next.is_empty() {
+        assert!(seen.len() < records.len());
+        let page = listed(
+            &reader,
+            channel_request(&namespace, "orders", Some(1), Some(&next)),
+        )
+        .await;
+        assert_scope(&page);
+        assert_eq!(page["scopeDigest"], full["scopeDigest"]);
+        assert!(page.get("incomplete").is_none(), "{page}");
+        assert_eq!(page["records"].as_array().unwrap().len(), 1);
+        seen.extend(page["records"].as_array().unwrap().iter().cloned());
+        next = page["nextPageToken"].as_str().unwrap_or("").to_owned();
+        assert_eq!(page["complete"].as_bool().unwrap_or(false), next.is_empty());
+    }
+    assert_eq!(&seen, records);
 
     let replay = invoke(
         &other,

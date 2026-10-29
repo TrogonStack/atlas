@@ -343,17 +343,41 @@ impl EventModelServiceImpl {
         };
         let mut world = HashMap::new();
         let mut required = Vec::new();
+        let mut anchors = Vec::new();
         for entity in &resources {
             if is_catalog(entity) || matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
                 continue;
             }
-            required.extend(
-                admission_references(entity)?
-                    .into_iter()
-                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
-            );
+            for reference in admission_references(entity)? {
+                let Some(kind) = reference.to_kind else {
+                    continue;
+                };
+                let is_anchor = match entity.kind.as_ref() {
+                    Some(pb::entity::Kind::Channel(_)) => {
+                        reference.from_field.starts_with("bindings[")
+                    }
+                    Some(pb::entity::Kind::DataStore(_)) => {
+                        reference.from_field.starts_with("attachments[")
+                    }
+                    _ => false,
+                };
+                let target = (kind, reference.to_id);
+                if is_anchor {
+                    anchors.push(target.clone());
+                }
+                required.push(target);
+            }
         }
         let mut loaded = HashSet::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            anchors,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -394,10 +418,17 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let mut endpoints = observation_endpoints(&resources, &world);
-        endpoints.extend(crate::data_product_resources::selected_endpoints(
-            &resources, &world,
-        ));
+        let observations = observation_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            observations,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let mut endpoints = crate::data_product_resources::selected_endpoints(&resources, &world);
         endpoints.extend(responsibility_endpoints(&resources, &world));
         self.load_architecture_targets(
             &proposal,
