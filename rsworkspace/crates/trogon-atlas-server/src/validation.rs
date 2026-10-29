@@ -3001,6 +3001,66 @@ pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::V
     issues
 }
 
+/// Stable suite ids reported on [`pb::ValidationCoverage`]. Keep in sync with
+/// `docs/explanation/validation-coverage.md`.
+pub const CHECK_MODEL: &str = "model";
+pub const CHECK_STRATEGIC: &str = "strategic";
+pub const CHECK_STORE_HYGIENE: &str = "store_hygiene";
+pub const CHECK_ARCHITECTURE: &str = "architecture";
+
+#[must_use]
+pub fn coverage_check(
+    check_id: impl Into<String>,
+    state: pb::validation_check_result::State,
+    reason: impl Into<String>,
+    subjects_examined: i32,
+) -> pb::ValidationCheckResult {
+    pb::ValidationCheckResult {
+        check_id: check_id.into(),
+        state: state as i32,
+        reason: reason.into(),
+        subjects_examined,
+    }
+}
+
+/// Mark a suite that ran against the loaded snapshot. Truncation makes the
+/// result `PARTIAL` so an empty issue list cannot look complete.
+#[must_use]
+pub fn ran_against_snapshot(
+    check_id: impl Into<String>,
+    subjects_examined: i32,
+    snapshot_truncated: bool,
+) -> pb::ValidationCheckResult {
+    if snapshot_truncated {
+        coverage_check(
+            check_id,
+            pb::validation_check_result::State::Partial,
+            "snapshot_truncated",
+            subjects_examined,
+        )
+    } else {
+        coverage_check(
+            check_id,
+            pb::validation_check_result::State::Completed,
+            "",
+            subjects_examined,
+        )
+    }
+}
+
+#[must_use]
+pub fn validation_coverage(
+    checks: Vec<pb::ValidationCheckResult>,
+    effective_scope: pb::ValidationScope,
+    snapshot_truncated: bool,
+) -> pb::ValidationCoverage {
+    pb::ValidationCoverage {
+        checks,
+        effective_scope: Some(effective_scope),
+        snapshot_truncated,
+    }
+}
+
 #[must_use]
 pub fn validate_model_content(
     model: &pb::EventModel,

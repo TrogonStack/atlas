@@ -7141,9 +7141,47 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             ));
         };
 
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
         let issues = validation::validate_model(&model, &all);
-        Ok(Response::new(pb::ValidateEventModelResponse { issues }))
+        let mut checks = vec![validation::ran_against_snapshot(
+            validation::CHECK_MODEL,
+            1,
+            snapshot_truncated,
+        )];
+        match model.id.as_ref() {
+            Some(_) => checks.push(validation::ran_against_snapshot(
+                validation::CHECK_STRATEGIC,
+                1,
+                snapshot_truncated,
+            )),
+            None => checks.push(validation::coverage_check(
+                validation::CHECK_STRATEGIC,
+                pb::validation_check_result::State::Skipped,
+                "event_model_id_absent",
+                0,
+            )),
+        }
+        let coverage = validation::validation_coverage(
+            checks,
+            pb::ValidationScope {
+                branch: branch.clone().unwrap_or_default(),
+                project_id: None,
+                domain_id: None,
+                namespace: model
+                    .id
+                    .as_ref()
+                    .map(|id| id.namespace.clone())
+                    .unwrap_or_default(),
+                event_model_id: model.id.clone(),
+            },
+            snapshot_truncated,
+        );
+        Ok(Response::new(pb::ValidateEventModelResponse {
+            issues,
+            coverage: Some(coverage),
+        }))
     }
 
     async fn list_validation_rules(
@@ -7172,7 +7210,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             return Err(Status::invalid_argument("namespace must not be empty"));
         }
 
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, snapshot_truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
 
         let architecture_context = self
             .architecture_validation_context(&all, branch.as_deref(), &vis)
@@ -7294,11 +7334,58 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             reports.insert(0, synthetic);
         }
 
+        let models_examined = reports
+            .iter()
+            .filter(|r| r.event_model_id.is_some())
+            .count() as i32;
+        let coverage = validation::validation_coverage(
+            vec![
+                validation::ran_against_snapshot(
+                    validation::CHECK_STORE_HYGIENE,
+                    1,
+                    snapshot_truncated,
+                ),
+                validation::ran_against_snapshot(
+                    validation::CHECK_ARCHITECTURE,
+                    1,
+                    snapshot_truncated,
+                ),
+                validation::ran_against_snapshot(
+                    validation::CHECK_MODEL,
+                    models_examined,
+                    snapshot_truncated,
+                ),
+                validation::ran_against_snapshot(
+                    validation::CHECK_STRATEGIC,
+                    scoped_namespaces.len() as i32,
+                    snapshot_truncated,
+                ),
+            ],
+            pb::ValidationScope {
+                branch: branch.clone().unwrap_or_default(),
+                project_id: match &scope {
+                    Scope::ProjectId(id) => Some(id.clone()),
+                    _ => None,
+                },
+                domain_id: match &scope {
+                    Scope::DomainId(id) => Some(id.clone()),
+                    _ => None,
+                },
+                namespace: match &scope {
+                    Scope::Namespace(ns) => ns.clone(),
+                    _ => String::new(),
+                },
+                event_model_id: None,
+            },
+            snapshot_truncated,
+        );
+
         Ok(Response::new(pb::ValidateProjectResponse {
             reports,
             total_errors,
             total_warnings,
             total_info,
+            coverage: Some(coverage),
         }))
     }
 
