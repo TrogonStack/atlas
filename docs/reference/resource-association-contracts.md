@@ -19,23 +19,23 @@ extraction and admission code named in the evidence table.
 ## Disposition by concept
 
 The table separates native support, behavioral limits and independent extension
-work. MessageClaims entries describe implemented support; other entries retain
-their design context for their acceptance owners to reconcile.
+work. The adopted declarations are integrated. Their executable acceptance boundaries
+remain distinct from runtime behavior and from final checklist closure.
 
-| Concept | Supported now | Actual gap | Proposed extension |
+| Concept | Supported now | Behavioral boundary | Native disposition |
 | --- | --- | --- | --- |
 | Communication claims | Peer-directed CommunicationDeclaration and independent MessageClaims on Component and ExternalSystem; independent MessageClaims on Domain. | No implicit peer or executable behavior. | [Message claims](#message-claims) is implemented independently of peer-directed declarations. |
 | Domain-level claims | Authored Domain.message_claims, independent of derived member views. | No member roll-up is inferred. | Existing domain-scoped listing semantics remain separate. |
 | Triggers | ClaimTrigger names an exact message from a local RECEIVE claim, with optional condition prose. | No executable trigger. | No Processor or slice is inferred. |
 | Field groups | ClaimFieldSelection selects exact PAYLOAD bindings and field selectors; group is descriptive. | Opaque selectors remain unverified. | Native inline paths resolve against exact Schema state. |
 | Channel bindings on a claim | ClaimRoute selects an exact Channel with parameter values and optional delivery mode. | No transport is instantiated. | Required parameters without authored defaults must be supplied. |
-| Channel composition and routes | Channel retains protocols, address parameters and observation bindings. The contract says composition is outside the first release. | No Channel-to-Channel relation, no routes, no parameter binding on a target Channel. | `ChannelLink`. See [channel links](#channel-links). |
-| Channel message list | None, and none is needed. | EventCatalog retains an authored message list on a channel. | Inverse listing may be derived, but Specification MESSAGE members need independent identified message-to-channel declarations when no boundary claim exists. |
-| Service and product storage access | DataStore attaches ReadModels. DataProduct OUTPUT access can select a store attachment. | Component, ExternalSystem and DataProduct cannot declare that they read or write a store. A ReadModel attachment is not that claim. | `StorageAccessClaim`. See [storage access claims](#storage-access-claims). |
-| Data product input targets | Input selects an exact ReadModel or a confirmed local Event. | Authored input associations may name messages, boundaries, channels or stores without asserting behavioral input. | Identified descriptive resource associations, separate from behavioral ports. See [data product targets](#data-product-targets). |
-| Data product output targets | Output selects exactly one ReadModel with optional exact contract pin. | Authored output associations may name messages, boundaries, channels or stores without claiming production. | Add the descriptive resource-association layer below; retain existing ReadModel output-port semantics. |
+| Channel composition and routes | Identified Channel links select exact Channels with authored target parameter values. | No routing or delivery execution is implied. | [Channel links](#channel-links) are implemented; a different exact version of the same slug is selectable. |
+| Channel message list | Native inverse discovery joins Specification declarations, claim routes and operation bindings. | Each authority and occurrence remains distinct; no stored inverse list is inferred. | `ListChannelMessages`, CLI and MCP retain exact provenance and completeness. |
+| Service and product storage access | Component, ExternalSystem and DataProduct retain explicit READ/WRITE storage claims and optional exact attachments. | A claim grants no runtime access and is distinct from a ReadModel attachment. | [Storage access claims](#storage-access-claims) are implemented. |
+| Data product input targets | Identified descriptive resource associations coexist with behavioral ReadModel/Event input ports. | An association does not establish behavioral input. | [Resource associations](#data-product-targets) retain exact typed selections and direction. |
+| Data product output targets | Descriptive output associations coexist with ReadModel output ports and optional contracts. | An association does not establish a producing path. | [Resource associations](#data-product-targets) retain independent identities. |
 | Optional output contract | Contract absence is valid and reported as undeclared. | None. | None. |
-| Schema variants, default, environment | Several SchemaBinding occurrences per message and role are valid and distinct. Native Schema, ContractTypeRef and TypeLibrary alternatives exist. | Environment scope and default designation among variants. No environment concept exists. | `EnvironmentName` and two SchemaBinding fields. See [schema variants](#schema-variants). |
+| Schema variants, default, environment | SchemaBinding retains environment names and optional default designation with presence. | No deployment or environment resolution is inferred. | [Schema variants](#schema-variants) preserve role/message scopes and identity. |
 | Unresolved schema references | New or edited declarations must resolve; unchanged dangling selectors remain inspectable. | None. A placeholder for unresolved references is a deliberate non-goal. | None. Recorded as an exclusion. |
 
 ## Evidence
