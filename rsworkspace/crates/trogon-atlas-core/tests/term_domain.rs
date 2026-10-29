@@ -49,7 +49,8 @@ fn namespace_never_implies_ownership() {
 }
 
 #[test]
-fn source_title_updates_preserve_native_domain_and_whole_owner_cannot_clear_it() {
+fn source_title_updates_preserve_native_domain_and_whole_owner_cannot_clear_it(
+) -> Result<(), Box<dyn std::error::Error>> {
     use trogon_atlas_core::source_integration::{extract_unit, replace_unit, OwnershipUnit};
     let mut local = pb::Entity {
         kind: Some(entity::Kind::Term(pb::Term {
@@ -71,11 +72,11 @@ fn source_title_updates_preserve_native_domain_and_whole_owner_cannot_clear_it()
         ..Default::default()
     };
     assert!(extract_unit(&local, OwnershipUnit::WholeOwner).is_err());
-    let clear = extract_unit(&incoming, OwnershipUnit::WholeOwner).expect("plain whole owner");
+    let clear = extract_unit(&incoming, OwnershipUnit::WholeOwner)?;
     assert!(replace_unit(&mut local, OwnershipUnit::WholeOwner, &clear).is_err());
     let title = OwnershipUnit::Field(pb::SourceOwnedField::Title);
-    let update = extract_unit(&incoming, title).expect("supported title");
-    replace_unit(&mut local, title, &update).expect("title preserves native domain");
+    let update = extract_unit(&incoming, title)?;
+    replace_unit(&mut local, title, &update)?;
     let Some(entity::Kind::Term(term)) = local.kind else {
         panic!("term expected")
     };
@@ -86,4 +87,5 @@ fn source_title_updates_preserve_native_domain_and_whole_owner_cannot_clear_it()
             id: Some(id("domain"))
         })
     );
+    Ok(())
 }
