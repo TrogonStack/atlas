@@ -1648,3 +1648,338 @@ async fn shared_row_budget_is_exact_and_non_resource_entities_do_not_spend_it() 
         .unwrap_err();
     assert_eq!(over.code(), Code::ResourceExhausted, "{over}");
 }
+
+async fn branch_refusals(
+    service: &EventModelServiceImpl,
+    branch: &str,
+    stored: &pb::GetEntityResponse,
+) -> Vec<(&'static str, Option<tonic::Status>)> {
+    let owner = stored.entity.clone().unwrap();
+    let key = pb::EntityRef {
+        kind: pb::EntityKind::SystemGroup as i32,
+        id: Some(id("platform")),
+    };
+    let mut refusals = Vec::new();
+    refusals.push((
+        "put create",
+        service
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(group(
+                        "fresh",
+                        vec![member_component("worker")],
+                        vec![],
+                        vec![],
+                    )),
+                    ..Default::default()
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    refusals.push((
+        "put edit",
+        service
+            .put_entity(request(
+                pb::PutEntityRequest {
+                    entity: Some(owner.clone()),
+                    if_match: stored.etag.clone(),
+                    force: true,
+                    ..Default::default()
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    refusals.push((
+        "get",
+        service
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::SystemGroup as i32,
+                    id: Some(id("platform")),
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    refusals.push((
+        "batch get",
+        service
+            .batch_get_entities(request(
+                pb::BatchGetEntitiesRequest {
+                    keys: vec![key.clone()],
+                    dense: true,
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    refusals.push((
+        "list",
+        service
+            .list_entities(request(
+                pb::ListEntitiesRequest {
+                    kinds: vec![pb::EntityKind::SystemGroup as i32],
+                    ..Default::default()
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    for (name, kind, slug) in [
+        ("incoming", pb::EntityKind::Component, "worker"),
+        ("outgoing", pb::EntityKind::SystemGroup, "platform"),
+    ] {
+        let body = pb::GetReferencesRequest {
+            kind: kind as i32,
+            id: Some(id(slug)),
+            ..Default::default()
+        };
+        let error = if name == "incoming" {
+            service
+                .get_incoming_references(request(body, Some(branch)))
+                .await
+        } else {
+            service
+                .get_outgoing_references(request(body, Some(branch)))
+                .await
+        }
+        .err();
+        refusals.push((name, error));
+    }
+    refusals.push((
+        "impact",
+        service
+            .get_impact(request(
+                pb::GetImpactRequest {
+                    root: Some(pb::EntityRef {
+                        kind: pb::EntityKind::Component as i32,
+                        id: Some(id("worker")),
+                    }),
+                    ..Default::default()
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    refusals.push((
+        "validate",
+        service
+            .validate_project(request(
+                pb::ValidateProjectRequest {
+                    scope: Some(pb::validate_project_request::Scope::Namespace(
+                        "groups".into(),
+                    )),
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    refusals.push((
+        "delete",
+        service
+            .delete_entity(request(
+                pb::DeleteEntityRequest {
+                    kind: pb::EntityKind::SystemGroup as i32,
+                    id: Some(id("platform")),
+                    mode: pb::delete_entity_request::Mode::Force as i32,
+                    ..Default::default()
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    refusals.push((
+        "batch mutate",
+        service
+            .batch_mutate(request(
+                pb::BatchMutateRequest {
+                    ops: vec![pb::BatchMutateOp {
+                        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                            entity: Some(group("batched", vec![], vec![], vec![])),
+                            ..Default::default()
+                        })),
+                    }],
+                    ..Default::default()
+                },
+                Some(branch),
+            ))
+            .await
+            .err(),
+    ));
+    refusals
+}
+
+#[tokio::test]
+async fn unknown_and_deleted_branches_refuse_every_structure_operation_without_falling_back() {
+    let service = fixture().await;
+    let stored = get_group(&service, "platform").await;
+    let leaks = |label: &str, refusals: Vec<(&'static str, Option<tonic::Status>)>| {
+        refusals
+            .into_iter()
+            .filter(|(_, status)| status.as_ref().map(tonic::Status::code) != Some(Code::NotFound))
+            .map(|(name, status)| format!("{label} {name}: {status:?}"))
+            .collect::<Vec<_>>()
+    };
+    let ghost = leaks(
+        "ghost",
+        branch_refusals(&service, "never-created", &stored).await,
+    );
+
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: "short-lived".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let mut edit = stored.entity.clone().unwrap();
+    group_mut(&mut edit).title = "branch only".into();
+    save(&service, edit, Some("short-lived")).await;
+    service
+        .delete_branch(Request::new(pb::DeleteBranchRequest {
+            name: "short-lived".into(),
+        }))
+        .await
+        .unwrap();
+    let deleted = leaks(
+        "deleted",
+        branch_refusals(&service, "short-lived", &stored).await,
+    );
+    assert_eq!((ghost, deleted), (vec![], vec![]));
+    assert_eq!(get_group(&service, "platform").await, stored);
+    assert_eq!(
+        incoming(&service, pb::EntityKind::Component, "worker")
+            .await
+            .iter()
+            .filter(|reference| reference.from_field.starts_with("members["))
+            .count(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn unrelated_edits_preserve_every_group_and_domain_curation_field() {
+    let service = fixture().await;
+    save(
+        &service,
+        domain(
+            "retail",
+            vec![
+                domain_member(pb::domain_member::Target::SystemGroup(pb::SystemGroupRef {
+                    id: Some(id("platform")),
+                })),
+                domain_member(pb::domain_member::Target::Component(pb::ComponentRef {
+                    id: Some(id("worker")),
+                })),
+            ],
+        ),
+        None,
+    )
+    .await;
+
+    let group_before = get_group(&service, "platform").await.entity.unwrap();
+    let mut retitled = group_before.clone();
+    group_mut(&mut retitled).title = "Platform renamed".into();
+    let group_after = save(&service, retitled, None).await.entity.unwrap();
+    let (before, after) = (
+        match group_before.kind.as_ref().unwrap() {
+            pb::entity::Kind::SystemGroup(value) => value.clone(),
+            _ => panic!("group"),
+        },
+        match group_after.kind.as_ref().unwrap() {
+            pb::entity::Kind::SystemGroup(value) => value.clone(),
+            _ => panic!("group"),
+        },
+    );
+    assert_eq!(after.title, "Platform renamed");
+    assert_eq!(after.members, before.members);
+    assert_eq!(after.relationships, before.relationships);
+    assert_eq!(after.actors, before.actors);
+    assert_eq!(after.scope, before.scope);
+    assert!(member_ids(&group_after).iter().all(Option::is_some));
+    assert_eq!(
+        relationship_ids(&group_after),
+        relationship_ids(&group_before)
+    );
+
+    let domain_before = get(&service, pb::EntityKind::Domain, "retail", None)
+        .await
+        .entity
+        .unwrap();
+    let mut renamed = domain_before.clone();
+    domain_mut(&mut renamed).title = "Retail renamed".into();
+    let domain_after = save(&service, renamed, None).await.entity.unwrap();
+    let (before, after) = (
+        match domain_before.kind.as_ref().unwrap() {
+            pb::entity::Kind::Domain(value) => value.clone(),
+            _ => panic!("domain"),
+        },
+        match domain_after.kind.as_ref().unwrap() {
+            pb::entity::Kind::Domain(value) => value.clone(),
+            _ => panic!("domain"),
+        },
+    );
+    assert_eq!(after.title, "Retail renamed");
+    assert_eq!(after.members, before.members);
+    assert_eq!(member_ids(&domain_after), member_ids(&domain_before));
+}
+
+#[tokio::test]
+async fn cycles_closed_inside_one_batch_are_accepted_and_reported() {
+    let service = snapshot_service().await;
+    let response = service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            ops: [
+                group("left", vec![member_group("right")], vec![], vec![]),
+                group("right", vec![member_group("left")], vec![], vec![]),
+            ]
+            .into_iter()
+            .map(|entity| pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(entity),
+                    create_only: true,
+                    ..Default::default()
+                })),
+            })
+            .collect(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.status,
+        pb::batch_mutate_response::Status::Applied as i32,
+        "{response:?}"
+    );
+    let report = service
+        .validate_project(Request::new(pb::ValidateProjectRequest {
+            scope: Some(pb::validate_project_request::Scope::Namespace(
+                "groups".into(),
+            )),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let findings: Vec<_> = report
+        .reports
+        .into_iter()
+        .flat_map(|report| report.issues)
+        .filter(|issue| issue.code == "SYSTEM_GROUP_MEMBERSHIP_CYCLE")
+        .collect();
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(
+        findings[0].severity,
+        pb::validation_issue::Severity::Info as i32
+    );
+}

@@ -3752,6 +3752,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
     ) -> Result<Response<pb::ListEntitiesResponse>, Status> {
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let req = req.into_inner();
         let page_size = clamp_page_size(
             req.page_size,
@@ -4286,6 +4289,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
     ) -> Result<Response<pb::GetReferencesResponse>, Status> {
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let req = req.into_inner();
         let kind = kind_from_i32(req.kind, "kind")?;
         let id = require_id(req.id.as_ref(), "")?;
@@ -4358,6 +4364,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
     ) -> Result<Response<pb::GetImpactResponse>, Status> {
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let req = req.into_inner();
         let root = req
             .root
@@ -7445,6 +7454,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let vis = Self::visibility_of(&req);
         use pb::{validate_project_request::Scope, validate_project_response::ModelReport};
         let branch = Self::branch_from_metadata(&req)?;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let req = req.into_inner();
         let scope = req.scope.ok_or_else(|| {
             Status::invalid_argument("scope is required (project_id, domain_id or namespace)")

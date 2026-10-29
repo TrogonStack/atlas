@@ -560,3 +560,377 @@ async fn authorization_outages_propagate_instead_of_reading_as_unresolved_target
         .message()
         .contains("ARCHITECTURE_REFERENCE_UNRESOLVED"));
 }
+
+fn group_ref_member(target: &pb::Entity) -> pb::SystemGroupMembership {
+    pb::SystemGroupMembership {
+        member: Some(pb::SystemGroupMember {
+            target: Some(pb::system_group_member::Target::SystemGroup(
+                pb::SystemGroupRef {
+                    id: reference(target).id,
+                },
+            )),
+        }),
+        ..Default::default()
+    }
+}
+
+async fn read_group(client: &mut Client, token: &str, namespace: &str, slug: &str) -> Status {
+    client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(id(namespace, slug)),
+            },
+            token,
+        ))
+        .await
+        .unwrap_err()
+}
+
+async fn namespace_findings(
+    client: &mut Client,
+    token: &str,
+    namespace: &str,
+) -> Vec<pb::ValidationIssue> {
+    client
+        .validate_project(authed(
+            pb::ValidateProjectRequest {
+                scope: Some(pb::validate_project_request::Scope::Namespace(
+                    namespace.into(),
+                )),
+            },
+            token,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .reports
+        .into_iter()
+        .flat_map(|report| report.issues)
+        .collect()
+}
+
+async fn impact_of(client: &mut Client, token: &str, root: &pb::Entity) -> Vec<pb::ImpactNode> {
+    client
+        .get_impact(authed(
+            pb::GetImpactRequest {
+                root: Some(reference(root)),
+                ..Default::default()
+            },
+            token,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .nodes
+}
+
+fn rendered(nodes: &[pb::ImpactNode]) -> String {
+    format!("{nodes:?}")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hidden_group_in_a_cycle_is_invisible_and_indistinguishable_from_absence() {
+    let mut client = serve().await;
+    let acme = register(&mut client, ACME_TOKEN, "cycle-acme").await;
+    let beta = register(&mut client, BETA_TOKEN, "cycle-beta").await;
+    let leaf = put(&mut client, ROOT_TOKEN, component(&acme, "leaf"), "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let front = put(
+        &mut client,
+        ROOT_TOKEN,
+        group(&acme, "front", vec![component_member(&leaf)]),
+        "",
+    )
+    .await
+    .unwrap();
+    let deep = put(&mut client, ROOT_TOKEN, group(&beta, "deep", vec![]), "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let back = put(
+        &mut client,
+        ROOT_TOKEN,
+        group(
+            &beta,
+            "back",
+            vec![
+                group_ref_member(front.entity.as_ref().unwrap()),
+                group_ref_member(&deep),
+            ],
+        ),
+        "",
+    )
+    .await
+    .unwrap()
+    .entity
+    .unwrap();
+    let mut closing = front.entity.clone().unwrap();
+    let Some(pb::entity::Kind::SystemGroup(authored)) = &mut closing.kind else {
+        panic!("expected system group");
+    };
+    authored.members.push(group_ref_member(&back));
+    let closed = put(&mut client, ROOT_TOKEN, closing, &front.etag)
+        .await
+        .unwrap();
+    let front_entity = closed.entity.clone().unwrap();
+
+    let cycle = |issues: &[pb::ValidationIssue]| {
+        issues
+            .iter()
+            .filter(|issue| issue.code == "SYSTEM_GROUP_MEMBERSHIP_CYCLE")
+            .count()
+    };
+    let root_view = namespace_findings(&mut client, ROOT_TOKEN, &acme).await;
+    assert_eq!(cycle(&root_view), 1, "{root_view:?}");
+    let root_impact = impact_of(&mut client, ROOT_TOKEN, &leaf).await;
+    let root_nodes: Vec<_> = root_impact
+        .iter()
+        .map(|node| (reference_slug(node), node.depth))
+        .collect();
+    assert_eq!(
+        root_nodes,
+        [
+            ("leaf".into(), 0),
+            ("front".into(), 1),
+            ("back".into(), 2),
+            ("deep".into(), 3)
+        ]
+    );
+    for node in root_impact.iter().filter(|node| node.depth > 0) {
+        assert_eq!(node.path.len(), node.depth as usize);
+        for hop in &node.path {
+            assert!(hop.connection_id.is_some(), "{hop:?}");
+            assert!(!hop.from_uid.is_empty(), "{hop:?}");
+            assert!(hop.from_field.starts_with("members["), "{hop:?}");
+        }
+    }
+
+    let hidden_view = namespace_findings(&mut client, ACME_TOKEN, &acme).await;
+    assert_eq!(cycle(&hidden_view), 0, "{hidden_view:?}");
+    let hidden_impact = impact_of(&mut client, ACME_TOKEN, &leaf).await;
+    assert_eq!(
+        hidden_impact
+            .iter()
+            .map(|node| (reference_slug(node), node.depth))
+            .collect::<Vec<_>>(),
+        [("leaf".into(), 0), ("front".into(), 1), ("back".into(), 2)]
+    );
+    assert!(hidden_impact
+        .iter()
+        .flat_map(|node| &node.path)
+        .all(|hop| hop.from.as_ref().unwrap().id.as_ref().unwrap().namespace == acme));
+    let hidden_incoming = incoming_of(&mut client, ACME_TOKEN, &front_entity).await;
+    assert_eq!(hidden_incoming, [] as [pb::Reference; 0]);
+    let hidden_read = read_group(&mut client, ACME_TOKEN, &beta, "back").await;
+    let hidden_batch = batch_of(&mut client, ACME_TOKEN, &[&front_entity, &back]).await;
+    let hidden_listing = list_groups(&mut client, ACME_TOKEN).await;
+    assert_eq!(hidden_batch.found, [true, false]);
+    assert_eq!(hidden_batch.etags[1], "");
+    assert_eq!(hidden_batch.entities[1], pb::Entity::default());
+    assert_eq!(hidden_listing.len(), 1);
+    assert!(!format!("{hidden_view:?}{hidden_incoming:?}").contains(&beta));
+    let hidden_front = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(id(&acme, "front")),
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(members(hidden_front.entity.as_ref().unwrap()).len(), 2);
+    let hidden_outgoing = outgoing_of(&mut client, ACME_TOKEN, &front_entity).await;
+
+    client
+        .delete_entity(authed(
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(id(&beta, "back")),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap();
+
+    let absent_read = read_group(&mut client, ACME_TOKEN, &beta, "back").await;
+    assert_eq!(hidden_read.code(), absent_read.code());
+    assert_eq!(hidden_read.message(), absent_read.message());
+    assert_eq!(
+        namespace_findings(&mut client, ACME_TOKEN, &acme).await,
+        hidden_view
+    );
+    assert_eq!(
+        rendered(&impact_of(&mut client, ACME_TOKEN, &leaf).await),
+        rendered(&hidden_impact)
+    );
+    assert_eq!(
+        batch_of(&mut client, ACME_TOKEN, &[&front_entity, &back]).await,
+        hidden_batch
+    );
+    assert_eq!(list_groups(&mut client, ACME_TOKEN).await, hidden_listing);
+    assert_eq!(
+        outgoing_of(&mut client, ACME_TOKEN, &front_entity).await,
+        hidden_outgoing
+    );
+    assert_eq!(
+        incoming_of(&mut client, ACME_TOKEN, &front_entity).await,
+        hidden_incoming
+    );
+}
+
+fn reference_slug(node: &pb::ImpactNode) -> String {
+    node.entity
+        .as_ref()
+        .unwrap()
+        .id
+        .as_ref()
+        .unwrap()
+        .slug
+        .clone()
+}
+
+async fn incoming_of(client: &mut Client, token: &str, target: &pb::Entity) -> Vec<pb::Reference> {
+    let target = reference(target);
+    client
+        .get_incoming_references(authed(
+            pb::GetReferencesRequest {
+                kind: target.kind,
+                id: target.id,
+                ..Default::default()
+            },
+            token,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .references
+}
+
+async fn outgoing_of(client: &mut Client, token: &str, owner: &pb::Entity) -> Vec<pb::Reference> {
+    let owner = reference(owner);
+    client
+        .get_outgoing_references(authed(
+            pb::GetReferencesRequest {
+                kind: owner.kind,
+                id: owner.id,
+                ..Default::default()
+            },
+            token,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .references
+}
+
+async fn batch_of(
+    client: &mut Client,
+    token: &str,
+    keys: &[&pb::Entity],
+) -> pb::BatchGetEntitiesResponse {
+    client
+        .batch_get_entities(authed(
+            pb::BatchGetEntitiesRequest {
+                keys: keys.iter().map(|key| reference(key)).collect(),
+                dense: true,
+            },
+            token,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+async fn list_groups(client: &mut Client, token: &str) -> Vec<pb::Entity> {
+    client
+        .list_entities(authed(
+            pb::ListEntitiesRequest {
+                kinds: vec![pb::EntityKind::SystemGroup as i32],
+                ..Default::default()
+            },
+            token,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entities
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restricted_caller_is_blocked_by_a_hidden_member_edge_without_learning_about_it() {
+    use pb::delete_entity_request::Mode;
+    let mut client = serve().await;
+    let acme = register(&mut client, ACME_TOKEN, "guard-acme").await;
+    let beta = register(&mut client, BETA_TOKEN, "guard-beta").await;
+    let shared = put(&mut client, ACME_TOKEN, component(&acme, "shared"), "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    put(&mut client, ACME_TOKEN, component(&acme, "alone"), "")
+        .await
+        .unwrap();
+    put(
+        &mut client,
+        ROOT_TOKEN,
+        group(&beta, "hidden-owner", vec![component_member(&shared)]),
+        "",
+    )
+    .await
+    .unwrap();
+    let delete = |slug: &str, mode: Mode| pb::DeleteEntityRequest {
+        kind: pb::EntityKind::Component as i32,
+        id: Some(id(&acme, slug)),
+        mode: mode as i32,
+        ..Default::default()
+    };
+
+    let preview = client
+        .delete_entity(authed(delete("shared", Mode::DryRun), ACME_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(preview.referrers, [] as [pb::Reference; 0]);
+    let refused = client
+        .delete_entity(authed(delete("shared", Mode::FailIfReferenced), ACME_TOKEN))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Code::FailedPrecondition, "{refused}");
+    assert!(
+        !refused.message().contains("hidden-owner") && !refused.message().contains(&beta),
+        "{refused}"
+    );
+    let survivor = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Component as i32,
+                id: Some(id(&acme, "shared")),
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(survivor.entity.is_some());
+
+    let owner_view = client
+        .delete_entity(authed(delete("shared", Mode::DryRun), ROOT_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(owner_view.referrers.len(), 1, "{owner_view:?}");
+
+    client
+        .delete_entity(authed(delete("alone", Mode::FailIfReferenced), ACME_TOKEN))
+        .await
+        .unwrap();
+}
