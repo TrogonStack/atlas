@@ -50,6 +50,14 @@ fn walk(entity: &mut Entity, visit: &mut Visit<'_>) {
                     false,
                 );
             }
+            Some(pb::topology_step_target::Selection::SystemGroup(r)) => {
+                visit(
+                    EntityKind::SystemGroup,
+                    &mut r.id,
+                    format!("{path}.system_group"),
+                    false,
+                );
+            }
             Some(pb::topology_step_target::Selection::Subflow(r)) => {
                 visit(
                     EntityKind::DesignGraph,

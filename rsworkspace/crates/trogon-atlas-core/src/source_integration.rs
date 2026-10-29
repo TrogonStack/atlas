@@ -239,6 +239,28 @@ fn unit_fields(
             return Err(SourceError::UnsupportedUnit);
         }
     }
+    let (native_units, native_collections): (&[SourceOwnedField], &[&str]) = match descriptor
+        .full_name()
+    {
+        "trogonatlas.eventmodel.v1alpha1.SystemGroup" => (
+            &[SourceOwnedField::Members, SourceOwnedField::Relationships],
+            &["members", "relationships", "actors"],
+        ),
+        "trogonatlas.eventmodel.v1alpha1.Domain" => (&[SourceOwnedField::Members], &["members"]),
+        _ => (&[], &[]),
+    };
+    if matches!(unit, OwnershipUnit::Field(field) if native_units.contains(&field))
+        || (unit == OwnershipUnit::WholeOwner
+            && native_collections.iter().any(|name| {
+                value
+                    .get_field_by_name(name)
+                    .as_deref()
+                    .and_then(Value::as_list)
+                    .is_some_and(|values| !values.is_empty())
+            }))
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     match unit {
         OwnershipUnit::WholeOwner => Ok(descriptor.fields().filter(|f| f.name() != "id").collect()),
         OwnershipUnit::Field(field) => {
@@ -330,6 +352,7 @@ pub fn validate_selection_ownership(
                 trogon_atlas_proto::EntityKind::try_from(owner.kind),
                 Ok(trogon_atlas_proto::EntityKind::Component
                     | trogon_atlas_proto::EntityKind::ExternalSystem
+                    | trogon_atlas_proto::EntityKind::SystemGroup
                     | trogon_atlas_proto::EntityKind::DesignGraph
                     | trogon_atlas_proto::EntityKind::Domain
                     | trogon_atlas_proto::EntityKind::Schema)

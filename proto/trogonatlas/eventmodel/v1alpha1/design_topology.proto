@@ -41,6 +41,7 @@ message TopologyStepTarget {
     TopologyActor actor = 7;
     TopologyCustomStep custom = 8;
     TopologyExternalSystem external_system = 9;
+    SystemGroupRef system_group = 10;
   }
 }
 message TopologyTransition {

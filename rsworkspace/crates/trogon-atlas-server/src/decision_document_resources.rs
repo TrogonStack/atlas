@@ -251,6 +251,7 @@ impl CatalogBudget {
                 Some(
                     pb::entity::Kind::Component(_)
                         | pb::entity::Kind::ExternalSystem(_)
+                        | pb::entity::Kind::SystemGroup(_)
                         | pb::entity::Kind::Domain(_)
                 )
             ) =>

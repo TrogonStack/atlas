@@ -178,6 +178,8 @@ pub fn entity_kind_catalog() -> Vec<pb::EntityKindInfo> {
           "Retained authored text or an unverified external link with exact model associations."),
         k(pb::EntityKind::DesignGraph, "ENTITY_KIND_DESIGN_GRAPH", "designGraph", "Design Graph", "Design Graphs",
           "A native flow or diagram of steps and labeled transitions over exact catalog targets."),
+        k(pb::EntityKind::SystemGroup, "ENTITY_KIND_SYSTEM_GROUP", "systemGroup", "System Group", "System Groups",
+          "An abstract curation of exact Components, External Systems, Data Stores, Schemas, Design Graphs and other groups, with optional group relationships and human or software actors. Membership grants no ownership, deployment or runtime meaning."),
         k(TypeLibrary, "ENTITY_KIND_TYPE_LIBRARY", "typeLibrary", "Type Library", "Type Libraries",
           "Tenant-owned protobuf source files under a package prefix the library owns. The server compiles them on demand; the source is the only stored form."),
     ]
@@ -260,6 +262,18 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("ARCHITECTURE_REFERENCE_UNRESOLVED", Error, "Architecture target does not resolve",
           "Architecture resources require exact readable targets in the current graph.",
           Unspecified, "", "architecture"),
+        r("SYSTEM_GROUP_MEMBERSHIP_CYCLE", Info, "System group membership cycle",
+          "Membership cycles are allowed curation; each cycle is reported once with its exact connection path.",
+          pb::EntityKind::SystemGroup, "members", "architecture"),
+        r("DOMAIN_MEMBERSHIP_CYCLE", Info, "Domain membership cycle",
+          "Membership cycles are allowed curation; each cycle is reported once with its exact connection path.",
+          pb::EntityKind::Domain, "members", "architecture"),
+        r("SYSTEM_GROUP_MEMBERSHIP_REPEAT", Info, "Repeated system group member",
+          "Equal members remain distinct authored connections; repeats are reported by exact target.",
+          pb::EntityKind::SystemGroup, "members", "architecture"),
+        r("DOMAIN_MEMBERSHIP_REPEAT", Info, "Repeated domain member",
+          "Equal members remain distinct authored connections; repeats are reported by exact target.",
+          pb::EntityKind::Domain, "members", "architecture"),
         r("CHANNEL_OBSERVATION_UNRESOLVED", Error, "Channel observation does not resolve",
           "A binding selects an exact AutomationSlice source ReadModel occurrence and its paired Processor.",
           pb::EntityKind::Channel, "bindings.observation", "architecture"),
@@ -634,6 +648,10 @@ mod catalog_drift_tests {
         "ARCHITECTURE_VALUE_INVALID",
         "ARCHITECTURE_REFERENCE_UNRESOLVED",
         "CHANNEL_OBSERVATION_UNRESOLVED",
+        "SYSTEM_GROUP_MEMBERSHIP_CYCLE",
+        "DOMAIN_MEMBERSHIP_CYCLE",
+        "SYSTEM_GROUP_MEMBERSHIP_REPEAT",
+        "DOMAIN_MEMBERSHIP_REPEAT",
         "AMBIGUITY_DANGLING_TERM",
         "AMBIGUITY_TOO_FEW_TERMS",
         "AMBIGUITY_UNSPECIFIED_KIND",
@@ -790,6 +808,7 @@ mod catalog_drift_tests {
             pb::EntityKind::Decision,
             pb::EntityKind::Document,
             pb::EntityKind::DesignGraph,
+            pb::EntityKind::SystemGroup,
         ];
         let got: HashSet<i32> = entity_kind_catalog().iter().map(|i| i.kind).collect();
         let missing: Vec<i32> = want
@@ -1165,6 +1184,7 @@ pub(crate) fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
         Some(pb::entity::Kind::Decision(x)) => &x.metadata,
         Some(pb::entity::Kind::Document(x)) => &x.metadata,
         Some(pb::entity::Kind::DesignGraph(x)) => &x.metadata,
+        Some(pb::entity::Kind::SystemGroup(x)) => &x.metadata,
         None => &[],
     }
 }
@@ -1223,8 +1243,63 @@ pub fn validate_store_with_architecture_context(
             ));
         }
     }
+    issues.extend(membership_advisories(all, architecture_context));
     issues.extend(validate_store_hygiene(all));
     issues
+}
+
+fn membership_advisories(
+    all: &[StoredEntity],
+    architecture_context: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    let mut seen: HashSet<pb::EntityKey> = HashSet::new();
+    let owners: Vec<pb::Entity> = all
+        .iter()
+        .chain(architecture_context)
+        .filter(|stored| {
+            matches!(
+                stored.entity.kind,
+                Some(pb::entity::Kind::SystemGroup(_) | pb::entity::Kind::Domain(_))
+            )
+        })
+        .filter(
+            |stored| match (entity_kind(&stored.entity), entity_id(&stored.entity)) {
+                (Some(kind), Some(id)) => seen.insert(pb::EntityKey::new(kind, id)),
+                _ => true,
+            },
+        )
+        .map(|stored| stored.entity.clone())
+        .collect();
+    trogon_atlas_core::system_group::advisories(&owners)
+        .into_iter()
+        .map(|advisory| {
+            let path = advisory
+                .path
+                .iter()
+                .map(|hop| {
+                    let owner = hop.owner.id.as_ref().map_or_else(String::new, |id| {
+                        format!("{}/{}@{}", id.namespace, id.slug, id.version)
+                    });
+                    let target = hop.target.id.as_ref().map_or_else(String::new, |id| {
+                        format!("{}/{}@{}", id.namespace, id.slug, id.version)
+                    });
+                    format!("{owner} -[{}]-> {target}", hop.connection_id)
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            pb::ValidationIssue {
+                severity: pb::validation_issue::Severity::Info as i32,
+                code: advisory.rule.into(),
+                message: path,
+                subject: advisory.path.first().map(|hop| hop.owner.clone()),
+                subject_field: advisory
+                    .path
+                    .first()
+                    .map_or_else(String::new, |hop| hop.connection_id.to_string()),
+                ..Default::default()
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn validate_store_hygiene(all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {

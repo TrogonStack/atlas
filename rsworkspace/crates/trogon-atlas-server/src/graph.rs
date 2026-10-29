@@ -874,6 +874,7 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
         K::Decision(x) => x.supersedes.as_ref(),
         K::Document(x) => x.supersedes.as_ref(),
         K::DesignGraph(x) => x.supersedes.as_ref(),
+        K::SystemGroup(x) => x.supersedes.as_ref(),
     }
 }
 
@@ -1148,6 +1149,30 @@ fn catalog_provenance(
                 .property_relationships
                 .get(index)
                 .and_then(|relationship| relationship.connection_id.clone());
+        }
+    }
+    if let Some((collection, index)) = field.split_once(']').and_then(|(head, _)| {
+        let (collection, index) = head.split_once('[')?;
+        Some((collection, index.parse::<usize>().ok()?))
+    }) {
+        let connection_id = match (&entity.kind, collection) {
+            (Some(pb::entity::Kind::SystemGroup(v)), "members") => {
+                v.members.get(index).and_then(|v| v.connection_id.clone())
+            }
+            (Some(pb::entity::Kind::SystemGroup(v)), "relationships") => v
+                .relationships
+                .get(index)
+                .and_then(|v| v.connection_id.clone()),
+            (Some(pb::entity::Kind::SystemGroup(v)), "actors") => {
+                v.actors.get(index).and_then(|v| v.connection_id.clone())
+            }
+            (Some(pb::entity::Kind::Domain(v)), "members") => {
+                v.members.get(index).and_then(|v| v.connection_id.clone())
+            }
+            _ => None,
+        };
+        if connection_id.is_some() {
+            reference.connection_id = connection_id;
         }
     }
     (

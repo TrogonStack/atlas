@@ -16,6 +16,7 @@ import {
   LifecycleAnnotationDetails,
   ResourceGroupsAnnotationDetails,
 } from '@/components/AgentMetadataDetails';
+import { SystemGroupDetails } from '@/components/SystemGroupDetails';
 import { SpecificationDetails } from '@/components/SpecificationDetails';
 import { CopyContextButton } from '@/components/CopyContextButton';
 import { EntityHistory } from '@/components/EntityHistory';
@@ -663,6 +664,7 @@ export function Inspector({
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <ArchitecturalRelationshipDetails entity={entity} model={model} onSelect={onSelect} />
           <SchemaBusinessDetails entity={entity} model={model} />
+          <SystemGroupDetails entity={entity} model={model} onSelect={onSelect} />
           <CommunicationIntentDetails entity={entity} model={model} onSelect={onSelect} />
           <MessageClaimsDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />

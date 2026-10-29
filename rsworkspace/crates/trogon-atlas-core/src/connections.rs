@@ -399,7 +399,10 @@ fn visit(
                         id: Some(id),
                     })
             } else {
-                None
+                crate::system_group::occurrence_target(
+                    descriptor.full_name(),
+                    &message.encode_to_vec(),
+                )
             },
             signature,
         };

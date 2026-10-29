@@ -22,6 +22,7 @@ struct CatalogGraphTraversal<'a> {
 #[derive(Clone, Copy)]
 enum ArchitectureTargetAccess<'a> {
     Required(&'a Visibility),
+    Curation(&'a Visibility),
     Diagnostic(&'a Lens),
     ExactRequired(&'a Visibility),
     ExactDiagnostic(&'a Lens),
@@ -37,6 +38,9 @@ fn admission_references(
     Ok(crate::graph::checked_refs(entity)?
         .into_iter()
         .filter(|reference| {
+            if matches!(entity.kind, Some(pb::entity::Kind::Domain(_))) {
+                return reference.from_field.starts_with("members[");
+            }
             if matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
                 return reference.from_field == "owning_domain";
             }
@@ -309,7 +313,8 @@ impl EventModelServiceImpl {
                 meta.is_put
                     && matches!(
                         meta.kind,
-                        pb::EntityKind::Component
+                        pb::EntityKind::SystemGroup
+                            | pb::EntityKind::Component
                             | pb::EntityKind::Domain
                             | pb::EntityKind::ExternalSystem
                             | pb::EntityKind::Channel
@@ -344,6 +349,7 @@ impl EventModelServiceImpl {
         let mut world = HashMap::new();
         let mut required = Vec::new();
         let mut anchors = Vec::new();
+        let mut curation = Vec::new();
         for entity in &resources {
             if is_catalog(entity) || matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
                 continue;
@@ -365,10 +371,26 @@ impl EventModelServiceImpl {
                 if is_anchor {
                     anchors.push(target.clone());
                 }
-                required.push(target);
+                if matches!(
+                    entity.kind,
+                    Some(pb::entity::Kind::SystemGroup(_) | pb::entity::Kind::Domain(_))
+                ) {
+                    curation.push(target);
+                } else {
+                    required.push(target);
+                }
             }
         }
         let mut loaded = HashSet::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::Curation(vis),
+            curation,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -642,7 +664,8 @@ impl EventModelServiceImpl {
                 matches!(
                     entity.kind,
                     Some(
-                        pb::entity::Kind::Component(_)
+                        pb::entity::Kind::SystemGroup(_)
+                            | pb::entity::Kind::Component(_)
                             | pb::entity::Kind::Domain(_)
                             | pb::entity::Kind::ExternalSystem(_)
                             | pb::entity::Kind::Channel(_)
@@ -903,6 +926,8 @@ impl EventModelServiceImpl {
             .list(
                 super::ListFilter {
                     kinds: &[
+                        pb::EntityKind::SystemGroup,
+                        pb::EntityKind::Domain,
                         pb::EntityKind::Component,
                         pb::EntityKind::Domain,
                         pb::EntityKind::ExternalSystem,
@@ -966,7 +991,8 @@ impl EventModelServiceImpl {
                 ArchitectureTargetAccess::ExactRequired(vis) => {
                     self.require_visible(vis, &id.namespace).await?;
                 }
-                ArchitectureTargetAccess::Required(vis) => {
+                ArchitectureTargetAccess::Required(vis)
+                | ArchitectureTargetAccess::Curation(vis) => {
                     match self.require_visible(vis, &id.namespace).await {
                         Ok(()) => {}
                         Err(status) if status.code() == Code::NotFound => continue,
@@ -1366,7 +1392,8 @@ impl EventModelServiceImpl {
         if !matches!(
             entity.kind,
             Some(
-                pb::entity::Kind::Component(_)
+                pb::entity::Kind::SystemGroup(_)
+                    | pb::entity::Kind::Component(_)
                     | pb::entity::Kind::Domain(_)
                     | pb::entity::Kind::ExternalSystem(_)
                     | pb::entity::Kind::Channel(_)

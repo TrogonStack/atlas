@@ -61,6 +61,7 @@ fn kind_name(e: &pb::Entity) -> &'static str {
         Some(K::Decision(_)) => "Decision",
         Some(K::Document(_)) => "Document",
         Some(K::DesignGraph(_)) => "DesignGraph",
+        Some(K::SystemGroup(_)) => "SystemGroup",
         None => "<empty>",
     }
 }

@@ -38,4 +38,5 @@ export const KIND_SHORT_TO_CAMEL: Record<string, string> = {
   decision: 'decision',
   document: 'document',
   design_graph: 'designGraph',
+  system_group: 'systemGroup',
 };

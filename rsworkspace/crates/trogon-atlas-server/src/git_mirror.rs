@@ -409,6 +409,7 @@ fn kind_dir(kind: pb::EntityKind) -> &'static str {
         pb::EntityKind::Decision => "decisions",
         pb::EntityKind::Document => "documents",
         pb::EntityKind::DesignGraph => "design_graphs",
+        pb::EntityKind::SystemGroup => "system_groups",
         pb::EntityKind::Unspecified => "unspecified",
     }
 }

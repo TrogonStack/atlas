@@ -333,6 +333,7 @@ pub fn entity_kind(entity: &pb::Entity) -> Result<pb::EntityKind, Status> {
         Some(K::Decision(_)) => Ok(pb::EntityKind::Decision),
         Some(K::Document(_)) => Ok(pb::EntityKind::Document),
         Some(K::DesignGraph(_)) => Ok(pb::EntityKind::DesignGraph),
+        Some(K::SystemGroup(_)) => Ok(pb::EntityKind::SystemGroup),
         None => Err(Status::invalid_argument("entity.kind oneof is required")),
     }
 }
@@ -378,6 +379,7 @@ pub fn entity_id(entity: &pb::Entity) -> Result<&pb::Id, Status> {
         Some(K::Decision(x)) => x.id.as_ref(),
         Some(K::Document(x)) => x.id.as_ref(),
         Some(K::DesignGraph(x)) => x.id.as_ref(),
+        Some(K::SystemGroup(x)) => x.id.as_ref(),
         None => return Err(Status::invalid_argument("entity.kind oneof is required")),
     };
     let id = id.ok_or_else(|| Status::invalid_argument("entity.id is required"))?;
@@ -412,6 +414,8 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
     trogon_atlas_core::architectural_relationships::validate_values(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
     trogon_atlas_core::communication_intent::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::system_group::validate_values(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
     trogon_atlas_core::business_data::validate_entity(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
@@ -504,6 +508,7 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
             0,
             x.metadata.len(),
         ),
+        Some(K::SystemGroup(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
         Some(K::DesignGraph(x)) => (
             x.title.as_ref().map_or("", |v| v.value.as_str()),
             x.doc.as_deref().unwrap_or_default(),

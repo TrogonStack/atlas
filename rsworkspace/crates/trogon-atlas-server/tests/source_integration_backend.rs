@@ -7154,3 +7154,458 @@ async fn message_claims_source_rpc_isolation_covers_every_owner_and_supported_po
         }
     }
 }
+
+fn curated_owner(
+    owner: &pb::Id,
+    domain: bool,
+    title: &str,
+    target: &pb::Id,
+    members: usize,
+) -> pb::Entity {
+    let component = pb::ComponentRef {
+        id: Some(target.clone()),
+    };
+    pb::Entity {
+        kind: Some(if domain {
+            pb::entity::Kind::Domain(pb::Domain {
+                id: Some(owner.clone()),
+                title: title.into(),
+                members: (0..members)
+                    .map(|_| pb::DomainMembership {
+                        member: Some(pb::DomainMember {
+                            target: Some(pb::domain_member::Target::Component(component.clone())),
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+        } else {
+            pb::entity::Kind::SystemGroup(pb::SystemGroup {
+                id: Some(owner.clone()),
+                title: title.into(),
+                scope: pb::SystemGroupScope::Internal as i32,
+                members: (0..members)
+                    .map(|_| pb::SystemGroupMembership {
+                        member: Some(pb::SystemGroupMember {
+                            target: Some(pb::system_group_member::Target::Component(
+                                component.clone(),
+                            )),
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+        }),
+        ..Default::default()
+    }
+}
+
+fn curated_member_count(entity: &pb::Entity) -> usize {
+    match entity.kind.as_ref().unwrap() {
+        pb::entity::Kind::Domain(value) => value.members.len(),
+        pb::entity::Kind::SystemGroup(value) => value.members.len(),
+        _ => panic!("curated owner"),
+    }
+}
+
+fn curated_title(entity: &pb::Entity) -> &str {
+    match entity.kind.as_ref().unwrap() {
+        pb::entity::Kind::Domain(value) => &value.title,
+        pb::entity::Kind::SystemGroup(value) => &value.title,
+        _ => panic!("curated owner"),
+    }
+}
+
+fn curated_set_title(entity: &mut pb::Entity, title: &str) {
+    match entity.kind.as_mut().unwrap() {
+        pb::entity::Kind::Domain(value) => value.title = title.into(),
+        pb::entity::Kind::SystemGroup(value) => value.title = title.into(),
+        _ => panic!("curated owner"),
+    }
+}
+
+fn curated_copy_members(entity: &mut pb::Entity, from: &pb::Entity) {
+    match (entity.kind.as_mut().unwrap(), from.kind.as_ref().unwrap()) {
+        (pb::entity::Kind::Domain(value), pb::entity::Kind::Domain(source)) => {
+            value.members.clone_from(&source.members);
+        }
+        (pb::entity::Kind::SystemGroup(value), pb::entity::Kind::SystemGroup(source)) => {
+            value.members.clone_from(&source.members);
+        }
+        _ => panic!("curated owner"),
+    }
+}
+
+fn curated_clear_members(entity: &mut pb::Entity) {
+    match entity.kind.as_mut().unwrap() {
+        pb::entity::Kind::Domain(value) => value.members.clear(),
+        pb::entity::Kind::SystemGroup(value) => value.members.clear(),
+        _ => panic!("curated owner"),
+    }
+}
+
+async fn curated_get(
+    client: &mut EventModelServiceClient<Channel>,
+    kind: pb::EntityKind,
+    owner: &pb::Id,
+) -> Result<pb::GetEntityResponse, tonic::Status> {
+    client
+        .get_entity(req(
+            ADMIN,
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(owner.clone()),
+            },
+            None,
+        ))
+        .await
+        .map(tonic::Response::into_inner)
+}
+
+async fn curated_put(client: &mut EventModelServiceClient<Channel>, entity: pb::Entity) {
+    client
+        .put_entity(req(
+            ADMIN,
+            pb::PutEntityRequest {
+                entity: Some(entity),
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+}
+
+async fn curated_mapping(
+    client: &mut EventModelServiceClient<Channel>,
+    registration: &pb::SourceRegistration,
+    mapping: &str,
+) -> pb::SourceMapping {
+    client
+        .get_source_mapping(req(
+            ADMIN,
+            pb::GetSourceMappingRequest {
+                registration_id: registration.id.clone(),
+                mapping_id: mapping.into(),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .mapping
+        .unwrap()
+}
+
+async fn curated_preview(
+    client: &mut EventModelServiceClient<Channel>,
+    registration: &pb::SourceRegistration,
+    run_id: &str,
+    version: &str,
+    incoming: pb::Entity,
+) -> Result<pb::ReconciliationRun, tonic::Status> {
+    let snapshot = accept(client, registration, version, false).await;
+    client
+        .preview_source_run(req(
+            ADMIN,
+            pb::PreviewSourceRunRequest {
+                registration_id: registration.id.clone(),
+                registration_revision: registration.revision.clone(),
+                snapshot_id: snapshot.id,
+                run_id: run_id.into(),
+                native_payloads: vec![pb::SourceNativePayload {
+                    source: Some(source(&registration.id)),
+                    entity: Some(incoming),
+                }],
+                ..Default::default()
+            },
+            None,
+        ))
+        .await
+        .map(|response| response.into_inner().run.unwrap())
+}
+
+fn source_whole_owner() -> pb::SourceFieldOwnership {
+    pb::SourceFieldOwnership {
+        policy: Some(pb::source_field_ownership::Policy::WholeOwner(
+            pb::SourceWholeOwnerOwnership {},
+        )),
+    }
+}
+
+async fn curated_source_case(domain: bool) {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let mut server = server(nats.store().await).await;
+    let client = &mut server.client;
+    let namespace = namespace(client, "source-curation", "visible-owner").await;
+    let registration = registration(client, "curation-source", &namespace, None, None).await;
+    let target = pb::Id {
+        namespace: namespace.clone(),
+        slug: "target".into(),
+        version: 1,
+    };
+    curated_put(
+        client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(target.clone()),
+                title: "Target".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let owner = pb::Id {
+        namespace: namespace.clone(),
+        slug: "curated".into(),
+        version: 1,
+    };
+    let kind = if domain {
+        pb::EntityKind::Domain
+    } else {
+        pb::EntityKind::SystemGroup
+    };
+    let mapping = client
+        .create_source_mapping(req(
+            ADMIN,
+            pb::CreateSourceMappingRequest {
+                registration_revision: registration.revision.clone(),
+                mapping: Some(pb::SourceMapping {
+                    id: "curation-mapping".into(),
+                    source: Some(source(&registration.id)),
+                    selection: Some(pb::SourceSelection {
+                        selection: Some(pb::source_selection::Selection::Entity(pb::EntityRef {
+                            kind: kind as i32,
+                            id: Some(owner.clone()),
+                        })),
+                    }),
+                    ownership: Some(pb::SourceFieldOwnership {
+                        policy: Some(pb::source_field_ownership::Policy::Fields(
+                            pb::SourceOwnedFields {
+                                fields: vec![pb::SourceOwnedField::Title as i32],
+                            },
+                        )),
+                    }),
+                    ..Default::default()
+                }),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .mapping
+        .unwrap();
+    assert!(mapping.base.is_none());
+
+    let refused = curated_preview(
+        client,
+        &registration,
+        "curation-create-with-members",
+        "v1",
+        curated_owner(&owner, domain, "Imported", &target, 1),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.code(), Code::InvalidArgument, "{refused}");
+    assert!(
+        refused.message().contains("native authoring only"),
+        "{refused}"
+    );
+    assert_eq!(
+        curated_get(client, kind, &owner).await.unwrap_err().code(),
+        Code::NotFound
+    );
+    assert_eq!(
+        curated_mapping(client, &registration, &mapping.id).await,
+        mapping
+    );
+
+    let created = curated_preview(
+        client,
+        &registration,
+        "curation-create-empty",
+        "v2",
+        curated_owner(&owner, domain, "Imported", &target, 0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        apply(client, &created).await.status,
+        pb::SourceRunStatus::Applied as i32
+    );
+    let sourced = curated_get(client, kind, &owner).await.unwrap();
+    assert_eq!(curated_title(sourced.entity.as_ref().unwrap()), "Imported");
+    assert_eq!(curated_member_count(sourced.entity.as_ref().unwrap()), 0);
+
+    let mut curated = sourced.entity.unwrap();
+    curated_copy_members(&mut curated, &curated_owner(&owner, domain, "", &target, 1));
+    curated_put(client, curated).await;
+    let native = curated_get(client, kind, &owner).await.unwrap();
+    assert_eq!(curated_member_count(native.entity.as_ref().unwrap()), 1);
+
+    let mut retitled = native.entity.clone().unwrap();
+    curated_set_title(&mut retitled, "Source title");
+    curated_clear_members(&mut retitled);
+    let update = curated_preview(
+        client,
+        &registration,
+        "curation-title-update",
+        "v3",
+        retitled,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        apply(client, &update).await.status,
+        pb::SourceRunStatus::Applied as i32
+    );
+    let after_title = curated_get(client, kind, &owner).await.unwrap();
+    assert_eq!(
+        curated_title(after_title.entity.as_ref().unwrap()),
+        "Source title"
+    );
+    assert_eq!(
+        curated_member_count(after_title.entity.as_ref().unwrap()),
+        1
+    );
+    assert_eq!(
+        member_connection_ids(after_title.entity.as_ref().unwrap()),
+        member_connection_ids(native.entity.as_ref().unwrap())
+    );
+
+    let current = curated_mapping(client, &registration, &mapping.id).await;
+    let mut whole = current.clone();
+    whole.ownership = Some(source_whole_owner());
+    let refused = client
+        .update_source_mapping(req(
+            ADMIN,
+            pb::UpdateSourceMappingRequest {
+                registration_revision: registration.revision.clone(),
+                if_match: current.revision.clone(),
+                mapping: Some(whole.clone()),
+            },
+            None,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Code::InvalidArgument, "{refused}");
+    assert!(
+        refused.message().contains("native authoring only"),
+        "{refused}"
+    );
+    assert_eq!(
+        curated_mapping(client, &registration, &mapping.id).await,
+        current
+    );
+
+    let mut emptied = after_title.entity.clone().unwrap();
+    curated_clear_members(&mut emptied);
+    curated_put(client, emptied).await;
+    let observed = curated_get(client, kind, &owner).await.unwrap();
+    let current = curated_mapping(client, &registration, &mapping.id).await;
+    let mut whole = current.clone();
+    whole.ownership = Some(source_whole_owner());
+    whole.adoption = Some(pb::SourceAdoption {
+        authorized_adoption: true,
+        observed: Some(pb::SourceObservedOwner {
+            owner: Some(pb::EntityRef {
+                kind: kind as i32,
+                id: Some(owner.clone()),
+            }),
+            uid: observed
+                .entity
+                .as_ref()
+                .unwrap()
+                .system
+                .as_ref()
+                .unwrap()
+                .uid
+                .clone(),
+            etag: observed.etag.clone(),
+        }),
+    });
+    let whole = client
+        .update_source_mapping(req(
+            ADMIN,
+            pb::UpdateSourceMappingRequest {
+                registration_revision: registration.revision.clone(),
+                if_match: current.revision,
+                mapping: Some(whole),
+            },
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .mapping
+        .unwrap();
+
+    let mut restored = curated_get(client, kind, &owner)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    curated_copy_members(
+        &mut restored,
+        &curated_owner(&owner, domain, "", &target, 1),
+    );
+    curated_put(client, restored).await;
+    let before_clear = curated_get(client, kind, &owner).await.unwrap();
+    assert_eq!(
+        curated_member_count(before_clear.entity.as_ref().unwrap()),
+        1
+    );
+    let mut clearing = before_clear.entity.clone().unwrap();
+    curated_clear_members(&mut clearing);
+    let refused = curated_preview(
+        client,
+        &registration,
+        "curation-whole-clear",
+        "v4",
+        clearing,
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.code(), Code::InvalidArgument, "{refused}");
+    assert!(
+        refused.message().contains("native authoring only"),
+        "{refused}"
+    );
+    let unchanged = curated_get(client, kind, &owner).await.unwrap();
+    assert_eq!(unchanged.etag, before_clear.etag);
+    assert_eq!(unchanged.entity, before_clear.entity);
+    assert_eq!(
+        curated_mapping(client, &registration, &mapping.id).await,
+        whole
+    );
+}
+
+fn member_connection_ids(entity: &pb::Entity) -> Vec<Option<pb::ConnectionId>> {
+    match entity.kind.as_ref().unwrap() {
+        pb::entity::Kind::Domain(value) => value
+            .members
+            .iter()
+            .map(|member| member.connection_id.clone())
+            .collect(),
+        pb::entity::Kind::SystemGroup(value) => value
+            .members
+            .iter()
+            .map(|member| member.connection_id.clone())
+            .collect(),
+        _ => panic!("curated owner"),
+    }
+}
+
+#[tokio::test]
+async fn system_group_source_lifecycle_keeps_native_members_and_refuses_whole_owner_atomically() {
+    Box::pin(curated_source_case(false)).await;
+}
+
+#[tokio::test]
+async fn domain_source_lifecycle_keeps_native_members_and_refuses_whole_owner_atomically() {
+    Box::pin(curated_source_case(true)).await;
+}

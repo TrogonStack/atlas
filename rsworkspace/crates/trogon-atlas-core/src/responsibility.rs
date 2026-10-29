@@ -146,6 +146,7 @@ pub fn connection_subject_owner(kind: EntityKind) -> bool {
             | EntityKind::ExternalSystem
             | EntityKind::Domain
             | EntityKind::Schema
+            | EntityKind::SystemGroup
     )
 }
 
@@ -279,6 +280,13 @@ pub fn resolve_subject(subject: &pb::ResponsibilitySubject, owner: &Entity) -> R
                 Some(EntityKind::Component | EntityKind::ExternalSystem)
             ) {
                 crate::architectural_relationships::resolve_connection_context(owner, reference)
+                    .map(|_| ())
+                    .map_err(|e| ResponsibilityError(e.to_string()))
+            } else if matches!(
+                entity_kind(owner),
+                Some(EntityKind::SystemGroup | EntityKind::Domain)
+            ) {
+                crate::system_group::resolve_connection_context(owner, reference)
                     .map(|_| ())
                     .map_err(|e| ResponsibilityError(e.to_string()))
             } else {

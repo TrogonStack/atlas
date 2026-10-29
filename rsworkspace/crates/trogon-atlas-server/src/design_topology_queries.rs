@@ -30,6 +30,7 @@ fn target_reference(selection: &Selection) -> Option<pb::EntityRef> {
         Selection::Channel(r) => (pb::EntityKind::Channel, r.id.as_ref()),
         Selection::DataStore(r) => (pb::EntityKind::DataStore, r.id.as_ref()),
         Selection::DataProduct(r) => (pb::EntityKind::DataProduct, r.id.as_ref()),
+        Selection::SystemGroup(r) => (pb::EntityKind::SystemGroup, r.id.as_ref()),
         Selection::Subflow(r) => (pb::EntityKind::DesignGraph, r.id.as_ref()),
         _ => return None,
     };

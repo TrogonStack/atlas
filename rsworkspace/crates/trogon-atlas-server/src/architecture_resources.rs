@@ -53,6 +53,28 @@ impl Checks {
         }
     }
 
+    fn member(
+        &mut self,
+        member: Option<pb::EntityRef>,
+        context: &ArchitectureContext<'_>,
+        field: &str,
+    ) {
+        match member.and_then(|target| Some((pb::EntityKind::try_from(target.kind).ok()?, target)))
+        {
+            Some((kind, target)) => self.target(kind, target.id.as_ref(), context, field),
+            None => self.target_missing(field),
+        }
+    }
+
+    fn target_missing(&mut self, field: &str) {
+        self.require(
+            false,
+            "ARCHITECTURE_REFERENCE_UNRESOLVED",
+            field,
+            "architecture resource target is absent or invalid",
+        );
+    }
+
     fn target(
         &mut self,
         kind: pb::EntityKind,
@@ -123,7 +145,8 @@ pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
         Some(
-            pb::entity::Kind::Component(_)
+            pb::entity::Kind::SystemGroup(_)
+                | pb::entity::Kind::Component(_)
                 | pb::entity::Kind::Domain(_)
                 | pb::entity::Kind::ExternalSystem(_)
                 | pb::entity::Kind::Channel(_)
@@ -326,7 +349,100 @@ pub(crate) fn validate_admission_with_previous(
     all: &[StoredEntity],
     previous: Option<&pb::Entity>,
 ) -> Vec<pb::ValidationIssue> {
-    validate_shipped_in_context(entity, &ArchitectureContext::new(all), previous)
+    let mut issues = validate_shipped_in_context(entity, &ArchitectureContext::new(all), previous);
+    if let Some(previous) = previous {
+        let retained = retained_links(previous, entity);
+        issues.retain(|issue| {
+            issue.code != "ARCHITECTURE_REFERENCE_UNRESOLVED"
+                || !retained.contains(&issue.subject_field)
+        });
+    }
+    issues
+}
+
+/// Curation the author already holds and did not touch stays readable after
+/// its target is removed. Only a new or edited link must resolve.
+#[must_use]
+pub fn validate_retaining(
+    previous: Option<&pb::Entity>,
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate(entity, all);
+    if let Some(previous) = previous {
+        let retained = retained_links(previous, entity);
+        issues.retain(|issue| {
+            issue.code != "ARCHITECTURE_REFERENCE_UNRESOLVED"
+                || !retained.contains(&issue.subject_field)
+        });
+    }
+    issues
+}
+
+fn retained_links(previous: &pb::Entity, entity: &pb::Entity) -> HashSet<String> {
+    let mut retained = HashSet::new();
+    match (previous.kind.as_ref(), entity.kind.as_ref()) {
+        (
+            Some(pb::entity::Kind::SystemGroup(before)),
+            Some(pb::entity::Kind::SystemGroup(after)),
+        ) => {
+            retain_unchanged(
+                &mut retained,
+                "members",
+                "member",
+                (&before.members, &after.members),
+                |link| (link.connection_id.as_ref(), link.member.as_ref()),
+            );
+            retain_unchanged(
+                &mut retained,
+                "relationships",
+                "target",
+                (&before.relationships, &after.relationships),
+                |link| (link.connection_id.as_ref(), link.target.as_ref()),
+            );
+            retain_unchanged(
+                &mut retained,
+                "actors",
+                "target",
+                (&before.actors, &after.actors),
+                |link| (link.connection_id.as_ref(), link.target.as_ref()),
+            );
+        }
+        (Some(pb::entity::Kind::Domain(before)), Some(pb::entity::Kind::Domain(after))) => {
+            retain_unchanged(
+                &mut retained,
+                "members",
+                "member",
+                (&before.members, &after.members),
+                |link| (link.connection_id.as_ref(), link.member.as_ref()),
+            );
+        }
+        _ => {}
+    }
+    retained
+}
+
+fn retain_unchanged<L, E: PartialEq>(
+    retained: &mut HashSet<String>,
+    collection: &str,
+    endpoint: &str,
+    (before, after): (&[L], &[L]),
+    parts: impl Fn(&L) -> (Option<&pb::ConnectionId>, Option<&E>),
+) {
+    let held: HashMap<_, _> = before
+        .iter()
+        .filter_map(|link| {
+            let (id, target) = parts(link);
+            Some((id?, target?))
+        })
+        .collect();
+    for (index, link) in after.iter().enumerate() {
+        if let (Some(id), Some(target)) = parts(link) {
+            if held.get(id).is_some_and(|prior| *prior == target) {
+                retained.insert(format!("{collection}[{index}].{endpoint}"));
+            }
+        }
+    }
 }
 
 pub(super) fn validate_in_context(
@@ -457,6 +573,62 @@ fn validate_shipped_in_context(
                         );
                     }
                 }
+            }
+        }
+        Some(pb::entity::Kind::SystemGroup(group)) => {
+            checks.value(
+                trogon_atlas_core::system_group::validate_values(entity).is_ok(),
+                "system_group",
+            );
+            checks.supersedes(
+                pb::EntityKind::SystemGroup,
+                group.id.as_ref(),
+                group.supersedes.as_ref(),
+                context,
+            );
+            for (index, value) in group.members.iter().enumerate() {
+                checks.member(
+                    value
+                        .member
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::group_member_ref),
+                    context,
+                    &format!("members[{index}].member"),
+                );
+            }
+            for (index, value) in group.relationships.iter().enumerate() {
+                checks.target(
+                    pb::EntityKind::SystemGroup,
+                    value.target.as_ref().and_then(|target| target.id.as_ref()),
+                    context,
+                    &format!("relationships[{index}].target"),
+                );
+            }
+            for (index, value) in group.actors.iter().enumerate() {
+                checks.member(
+                    value
+                        .target
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::actor_ref),
+                    context,
+                    &format!("actors[{index}].target"),
+                );
+            }
+        }
+        Some(pb::entity::Kind::Domain(domain)) => {
+            checks.value(
+                trogon_atlas_core::system_group::validate_values(entity).is_ok(),
+                "members",
+            );
+            for (index, value) in domain.members.iter().enumerate() {
+                checks.member(
+                    value
+                        .member
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::domain_member_ref),
+                    context,
+                    &format!("members[{index}].member"),
+                );
             }
         }
         Some(pb::entity::Kind::Channel(channel)) => {

@@ -157,6 +157,7 @@ fn validate_target(target: &pb::TopologyStepTarget, owner: Option<&pb::Id>) -> R
         S::Channel(r) => entity_target(r, EntityKind::Channel, "channel target kind"),
         S::DataStore(r) => entity_target(r, EntityKind::DataStore, "data store target kind"),
         S::DataProduct(r) => entity_target(r, EntityKind::DataProduct, "data product target kind"),
+        S::SystemGroup(r) => exact(r.id.as_ref()),
         S::Subflow(r) => {
             exact(r.id.as_ref())?;
             require(r.id.as_ref() != owner, "self subflow forbidden")
