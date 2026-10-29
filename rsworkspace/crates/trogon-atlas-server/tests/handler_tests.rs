@@ -359,19 +359,72 @@ async fn validate_event_model_reports_the_strategic_chain() {
     seed_confused_context(&svc, "vem-chain").await;
     put_entity(&svc, make_event_model("vem-chain", "checkout")).await;
 
-    let issues = svc
+    let resp = svc
         .validate_event_model(Request::new(pb::ValidateEventModelRequest {
             event_model: None,
             event_model_id: Some(id("vem-chain", "checkout", 1)),
         }))
         .await
         .unwrap()
-        .into_inner()
-        .issues;
+        .into_inner();
+    let issues = resp.issues;
     for code in STRATEGIC_FINDINGS {
         assert_eq!(codes_of(&issues, code), 1, "{code}: {issues:?}");
     }
     assert_eq!(codes_of(&issues, "REALIZES_MULTIPLE"), 0, "{issues:?}");
+    let coverage = resp
+        .coverage
+        .expect("ValidateEventModel must report coverage");
+    assert!(!coverage.snapshot_truncated);
+    let checks: Vec<_> = coverage
+        .checks
+        .iter()
+        .map(|c| (c.check_id.as_str(), c.state, c.reason.as_str()))
+        .collect();
+    assert!(
+        checks.contains(&(
+            "model",
+            pb::validation_check_result::State::Completed as i32,
+            ""
+        )),
+        "{checks:?}"
+    );
+    assert!(
+        checks.contains(&(
+            "strategic",
+            pb::validation_check_result::State::Completed as i32,
+            ""
+        )),
+        "{checks:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn validate_event_model_skips_strategic_without_an_id() {
+    let svc = svc().await;
+    let resp = svc
+        .validate_event_model(Request::new(pb::ValidateEventModelRequest {
+            event_model: Some(pb::EventModel {
+                id: None,
+                title: "inline".into(),
+                ..Default::default()
+            }),
+            event_model_id: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let coverage = resp.coverage.expect("coverage required");
+    let strategic = coverage
+        .checks
+        .iter()
+        .find(|c| c.check_id == "strategic")
+        .expect("strategic suite");
+    assert_eq!(
+        strategic.state,
+        pb::validation_check_result::State::Skipped as i32
+    );
+    assert_eq!(strategic.reason, "event_model_id_absent");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -406,6 +459,33 @@ async fn validate_project_reports_the_strategic_chain_once() {
     for code in STRATEGIC_FINDINGS {
         assert_eq!(codes_of(&store_report.issues, code), 1, "{code}");
     }
+    let coverage = resp.coverage.expect("ValidateProject must report coverage");
+    assert!(!coverage.snapshot_truncated);
+    let check_ids: Vec<_> = coverage
+        .checks
+        .iter()
+        .map(|c| c.check_id.as_str())
+        .collect();
+    for id in ["store_hygiene", "architecture", "model", "strategic"] {
+        assert!(check_ids.contains(&id), "missing {id} in {check_ids:?}");
+    }
+    let model = coverage
+        .checks
+        .iter()
+        .find(|c| c.check_id == "model")
+        .expect("model suite");
+    assert_eq!(model.subjects_examined, 2);
+    assert_eq!(
+        model.state,
+        pb::validation_check_result::State::Completed as i32
+    );
+    let requested = coverage.requested_scope.expect("requested_scope required");
+    assert_eq!(requested.namespace, "vp-chain");
+    let effective = coverage.effective_scope.expect("effective_scope required");
+    assert!(
+        effective.namespace.is_empty(),
+        "store-wide suites examine the full visible snapshot, not the request namespace: {effective:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

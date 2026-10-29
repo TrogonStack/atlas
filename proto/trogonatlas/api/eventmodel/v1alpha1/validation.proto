@@ -46,6 +46,9 @@ message ValidateEventModelRequest {
 
 message ValidateEventModelResponse {
   repeated ValidationIssue issues = 1;
+  // Suites that ran for this call, plus whether the snapshot was truncated.
+  // Absent or empty coverage must not be treated as "everything was checked".
+  ValidationCoverage coverage = 2;
 }
 
 // Static description of a single validation rule. Surfaces the catalog
@@ -98,4 +101,63 @@ message ValidateProjectResponse {
   int32 total_errors = 2;
   int32 total_warnings = 3;
   int32 total_info = 4;
+  // Suites that ran for this call, plus whether the snapshot was truncated.
+  ValidationCoverage coverage = 5;
+}
+
+// ---------- Coverage ---------------------------------------------------------
+//
+// Findings (`ValidationIssue`) say what was wrong. Coverage says what was
+// checked. A completed suite can still emit Errors; a skipped suite must
+// never be read as a pass. See docs/explanation/validation-coverage.md.
+
+message ValidationCheckResult {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // Suite finished for the declared scope. Findings may still be Errors.
+    STATE_COMPLETED = 1;
+    // Suite was not applicable on this route or for this request shape.
+    STATE_SKIPPED = 2;
+    // Suite ran but could not cover the full declared scope (for example a
+    // truncated snapshot). Do not treat an empty issue list as complete.
+    STATE_PARTIAL = 3;
+    // Suite failed to execute. Distinct from finding Errors inside a
+    // completed suite.
+    STATE_ERROR = 4;
+  }
+  // Stable suite id: "model", "strategic", "store_hygiene", "architecture",
+  // "scenarios", "request_shape".
+  string check_id = 1;
+  State state = 2;
+  // Why skipped / partial / error. Empty when completed without caveat.
+  string reason = 3;
+  // Subjects examined when meaningful (models, namespaces, …). Zero is a
+  // valid completed empty scan and must not be rewritten by clients.
+  int32 subjects_examined = 4;
+}
+
+message ValidationScope {
+  // Empty means baseline (no branch header).
+  string branch = 1;
+  // Effective project/domain/namespace/model when the route has one.
+  trogonatlas.type.v1alpha1.Id project_id = 2;
+  trogonatlas.type.v1alpha1.Id domain_id = 3;
+  string namespace = 4;
+  trogonatlas.type.v1alpha1.Id event_model_id = 5;
+}
+
+message ValidationCoverage {
+  repeated ValidationCheckResult checks = 1;
+  // What store-wide suites actually examined. For ValidateProject this is the
+  // full visible snapshot under the branch (namespace / project / domain
+  // empty): hygiene and architecture are not narrowed to the request filter.
+  // Model and strategic suite subject counts still follow the request.
+  ValidationScope effective_scope = 2;
+  // True when the entity snapshot hit the configured cap. Shared with the
+  // truncation package; an empty issue list on a truncated snapshot is not
+  // a clean bill of health.
+  bool snapshot_truncated = 3;
+  // What the caller asked to validate (project / domain / namespace / model).
+  // May be narrower than `effective_scope` for store-wide checks.
+  ValidationScope requested_scope = 4;
 }
