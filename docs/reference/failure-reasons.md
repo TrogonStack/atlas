@@ -26,9 +26,9 @@ instead of re-deriving category from code or reason on its own.
 
 | Reason | gRPC code | Category | Metadata |
 | --- | --- | --- | --- |
-| `NOT_FOUND` | `NOT_FOUND` | `not_found` | `did_you_mean`, up to 3 comma-separated slugs of the same kind in the same namespace that are near the requested slug, closest first. Only `get_entity`, `get_slice_projection`, `get_storyboard_projection` and `get_event_model_projection` set it, and only for a namespace the caller can read. Absent when nothing is near. The client gives it as a list in the failure details (MCP `next_action_detail.did_you_mean`). |
-| `ALREADY_EXISTS` | `ALREADY_EXISTS` | `precondition` | none |
-| `STALE_PRECONDITION` | `ABORTED` | `stale_state` | none |
+| `NOT_FOUND` | `NOT_FOUND` | `not_found` | `did_you_mean`, up to 3 comma-separated slugs of the same kind in the same namespace that are near the requested slug, closest first. Only `get_entity`, `get_slice_projection`, `get_storyboard_projection` and `get_event_model_projection` set it, and only for a namespace the caller can read. Absent when nothing is near. The client gives it as a list in the failure details (MCP `next_action_detail.did_you_mean`). An `if_match` write whose target is gone may instead carry `expected_etag` (the planned revision) and empty `actual_etag`. |
+| `ALREADY_EXISTS` | `ALREADY_EXISTS` | `precondition` | `expected_etag` (empty when the plan used `create_only`) and `actual_etag` when a single-entity write knows the live revision. Absent on generic already-exists refusals such as `operation_id` reuse. |
+| `STALE_PRECONDITION` | `ABORTED` | `stale_state` | `expected_etag` and `actual_etag` on single-entity etag mismatches (`PutEntity`, `DeleteEntity`, …). Empty `actual_etag` means the entity is absent. BatchMutate still reports the same pair on `precondition_failure` instead of ErrorInfo metadata. |
 | `VALIDATION_FAILED` | `INVALID_ARGUMENT` | `validation` | none |
 | `UNAVAILABLE` | `UNAVAILABLE` | `unavailable` | none |
 | `PARTIAL_APPLY` | `UNAVAILABLE` | `partial_apply` | `journal`, the batch journal id, when the apply was journaled and so is recoverable; absent when it was not (branch batches, branch merges) and the affected keys need manual repair |

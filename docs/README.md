@@ -82,6 +82,7 @@ Understand how Atlas works and why:
 - [Snapshot identity](explanation/snapshot-identity.md)
 - [Stale plans](explanation/stale-plans.md)
 - [Where tenant types live](explanation/tenant-types.md)
+- [Validation coverage](explanation/validation-coverage.md)
 - [Validation repair patterns](explanation/validation-repair-patterns.md)
 - [Wire compatibility and mixed-version operation](explanation/wire-compatibility.md)
 

@@ -5,9 +5,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::broadcast;
 use tonic::Request;
+use tonic_types::StatusExt;
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::event_model_service_server::EventModelService;
-use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
+use trogon_atlas_server::{conv::reason, metrics::ServerMetrics, service::EventModelServiceImpl};
 use trogon_atlas_store::{
     store::{
         BranchInfo, ChangeRecord, ChangeStreamStats, ListFilter, MutationOp, MutationOutcome,
@@ -358,19 +359,72 @@ async fn validate_event_model_reports_the_strategic_chain() {
     seed_confused_context(&svc, "vem-chain").await;
     put_entity(&svc, make_event_model("vem-chain", "checkout")).await;
 
-    let issues = svc
+    let resp = svc
         .validate_event_model(Request::new(pb::ValidateEventModelRequest {
             event_model: None,
             event_model_id: Some(id("vem-chain", "checkout", 1)),
         }))
         .await
         .unwrap()
-        .into_inner()
-        .issues;
+        .into_inner();
+    let issues = resp.issues;
     for code in STRATEGIC_FINDINGS {
         assert_eq!(codes_of(&issues, code), 1, "{code}: {issues:?}");
     }
     assert_eq!(codes_of(&issues, "REALIZES_MULTIPLE"), 0, "{issues:?}");
+    let coverage = resp
+        .coverage
+        .expect("ValidateEventModel must report coverage");
+    assert!(!coverage.snapshot_truncated);
+    let checks: Vec<_> = coverage
+        .checks
+        .iter()
+        .map(|c| (c.check_id.as_str(), c.state, c.reason.as_str()))
+        .collect();
+    assert!(
+        checks.contains(&(
+            "model",
+            pb::validation_check_result::State::Completed as i32,
+            ""
+        )),
+        "{checks:?}"
+    );
+    assert!(
+        checks.contains(&(
+            "strategic",
+            pb::validation_check_result::State::Completed as i32,
+            ""
+        )),
+        "{checks:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn validate_event_model_skips_strategic_without_an_id() {
+    let svc = svc().await;
+    let resp = svc
+        .validate_event_model(Request::new(pb::ValidateEventModelRequest {
+            event_model: Some(pb::EventModel {
+                id: None,
+                title: "inline".into(),
+                ..Default::default()
+            }),
+            event_model_id: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let coverage = resp.coverage.expect("coverage required");
+    let strategic = coverage
+        .checks
+        .iter()
+        .find(|c| c.check_id == "strategic")
+        .expect("strategic suite");
+    assert_eq!(
+        strategic.state,
+        pb::validation_check_result::State::Skipped as i32
+    );
+    assert_eq!(strategic.reason, "event_model_id_absent");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -405,6 +459,33 @@ async fn validate_project_reports_the_strategic_chain_once() {
     for code in STRATEGIC_FINDINGS {
         assert_eq!(codes_of(&store_report.issues, code), 1, "{code}");
     }
+    let coverage = resp.coverage.expect("ValidateProject must report coverage");
+    assert!(!coverage.snapshot_truncated);
+    let check_ids: Vec<_> = coverage
+        .checks
+        .iter()
+        .map(|c| c.check_id.as_str())
+        .collect();
+    for id in ["store_hygiene", "architecture", "model", "strategic"] {
+        assert!(check_ids.contains(&id), "missing {id} in {check_ids:?}");
+    }
+    let model = coverage
+        .checks
+        .iter()
+        .find(|c| c.check_id == "model")
+        .expect("model suite");
+    assert_eq!(model.subjects_examined, 2);
+    assert_eq!(
+        model.state,
+        pb::validation_check_result::State::Completed as i32
+    );
+    let requested = coverage.requested_scope.expect("requested_scope required");
+    assert_eq!(requested.namespace, "vp-chain");
+    let effective = coverage.effective_scope.expect("effective_scope required");
+    assert!(
+        effective.namespace.is_empty(),
+        "store-wide suites examine the full visible snapshot, not the request namespace: {effective:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1558,16 +1639,18 @@ async fn delete_by_query_successful_delete_removes_from_store() {
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_entity_etag_mismatch_aborts() {
     let svc = svc().await;
-    svc.put_entity(Request::new(pb::PutEntityRequest {
-        operation_id: String::new(),
-        entity: Some(make_event("orders", "placed", 1)),
-        create_only: true,
-        if_match: String::new(),
-        validate_only: false,
-        force: false,
-    }))
-    .await
-    .unwrap();
+    let put = svc
+        .put_entity(Request::new(pb::PutEntityRequest {
+            operation_id: String::new(),
+            entity: Some(make_event("orders", "placed", 1)),
+            create_only: true,
+            if_match: String::new(),
+            validate_only: false,
+            force: false,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
 
     let err = svc
         .delete_entity(Request::new(pb::DeleteEntityRequest {
@@ -1580,6 +1663,18 @@ async fn delete_entity_etag_mismatch_aborts() {
         .await
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::Aborted);
+    let info = err
+        .get_details_error_info()
+        .expect("delete etag mismatch must carry ErrorInfo");
+    assert_eq!(info.reason, reason::STALE_PRECONDITION);
+    assert_eq!(
+        info.metadata.get("expected_etag").map(String::as_str),
+        Some("wrong-etag")
+    );
+    assert_eq!(
+        info.metadata.get("actual_etag").map(String::as_str),
+        Some(put.etag.as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1642,6 +1642,10 @@ pub struct ValidateEventModelRequest {
 pub struct ValidateEventModelResponse {
     #[prost(message, repeated, tag="1")]
     pub issues: ::prost::alloc::vec::Vec<ValidationIssue>,
+    /// Suites that ran for this call, plus whether the snapshot was truncated.
+    /// Absent or empty coverage must not be treated as "everything was checked".
+    #[prost(message, optional, tag="2")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
 }
 /// Static description of a single validation rule. Surfaces the catalog
 /// the validator dispatches on: stable machine `code`, canonical
@@ -1721,6 +1725,9 @@ pub struct ValidateProjectResponse {
     pub total_warnings: i32,
     #[prost(int32, tag="4")]
     pub total_info: i32,
+    /// Suites that ran for this call, plus whether the snapshot was truncated.
+    #[prost(message, optional, tag="5")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
 }
 /// Nested message and enum types in `ValidateProjectResponse`.
 pub mod validate_project_response {
@@ -1731,6 +1738,107 @@ pub mod validate_project_response {
         #[prost(message, repeated, tag="2")]
         pub issues: ::prost::alloc::vec::Vec<super::ValidationIssue>,
     }
+}
+// ---------- Coverage ---------------------------------------------------------
+//
+// Findings (`ValidationIssue`) say what was wrong. Coverage says what was
+// checked. A completed suite can still emit Errors; a skipped suite must
+// never be read as a pass. See docs/explanation/validation-coverage.md.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationCheckResult {
+    /// Stable suite id: "model", "strategic", "store_hygiene", "architecture",
+    /// "scenarios", "request_shape".
+    #[prost(string, tag="1")]
+    pub check_id: ::prost::alloc::string::String,
+    #[prost(enumeration="validation_check_result::State", tag="2")]
+    pub state: i32,
+    /// Why skipped / partial / error. Empty when completed without caveat.
+    #[prost(string, tag="3")]
+    pub reason: ::prost::alloc::string::String,
+    /// Subjects examined when meaningful (models, namespaces, …). Zero is a
+    /// valid completed empty scan and must not be rewritten by clients.
+    #[prost(int32, tag="4")]
+    pub subjects_examined: i32,
+}
+/// Nested message and enum types in `ValidationCheckResult`.
+pub mod validation_check_result {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum State {
+        Unspecified = 0,
+        /// Suite finished for the declared scope. Findings may still be Errors.
+        Completed = 1,
+        /// Suite was not applicable on this route or for this request shape.
+        Skipped = 2,
+        /// Suite ran but could not cover the full declared scope (for example a
+        /// truncated snapshot). Do not treat an empty issue list as complete.
+        Partial = 3,
+        /// Suite failed to execute. Distinct from finding Errors inside a
+        /// completed suite.
+        Error = 4,
+    }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "STATE_UNSPECIFIED",
+                Self::Completed => "STATE_COMPLETED",
+                Self::Skipped => "STATE_SKIPPED",
+                Self::Partial => "STATE_PARTIAL",
+                Self::Error => "STATE_ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "STATE_UNSPECIFIED" => Some(Self::Unspecified),
+                "STATE_COMPLETED" => Some(Self::Completed),
+                "STATE_SKIPPED" => Some(Self::Skipped),
+                "STATE_PARTIAL" => Some(Self::Partial),
+                "STATE_ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationScope {
+    /// Empty means baseline (no branch header).
+    #[prost(string, tag="1")]
+    pub branch: ::prost::alloc::string::String,
+    /// Effective project/domain/namespace/model when the route has one.
+    #[prost(message, optional, tag="2")]
+    pub project_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="3")]
+    pub domain_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="4")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="5")]
+    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidationCoverage {
+    #[prost(message, repeated, tag="1")]
+    pub checks: ::prost::alloc::vec::Vec<ValidationCheckResult>,
+    /// What store-wide suites actually examined. For ValidateProject this is the
+    /// full visible snapshot under the branch (namespace / project / domain
+    /// empty): hygiene and architecture are not narrowed to the request filter.
+    /// Model and strategic suite subject counts still follow the request.
+    #[prost(message, optional, tag="2")]
+    pub effective_scope: ::core::option::Option<ValidationScope>,
+    /// True when the entity snapshot hit the configured cap. Shared with the
+    /// truncation package; an empty issue list on a truncated snapshot is not
+    /// a clean bill of health.
+    #[prost(bool, tag="3")]
+    pub snapshot_truncated: bool,
+    /// What the caller asked to validate (project / domain / namespace / model).
+    /// May be narrower than `effective_scope` for store-wide checks.
+    #[prost(message, optional, tag="4")]
+    pub requested_scope: ::core::option::Option<ValidationScope>,
 }
 // Tenant type libraries are stored as proto source text and compiled on
 // demand. These messages let a client check a library and look up the
