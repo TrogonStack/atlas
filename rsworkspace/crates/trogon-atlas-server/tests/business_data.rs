@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use prost::Message;
 use tokio::net::TcpListener;
 use tonic::{
     metadata::MetadataValue, service::interceptor::InterceptedService, transport::Channel, Code,
@@ -3157,5 +3158,769 @@ async fn review_accept_prepared_owner_rejects_the_next_identifier_relationship_a
             .unwrap_err()
             .code(),
         Code::NotFound
+    );
+}
+
+/// `2^53 + 1`, above JavaScript's exact integer range.
+const LARGE_VERSION: u64 = 9_007_199_254_740_993;
+const BUSINESS_WRITER: &str = "business-writer-token";
+
+type BusinessClient = EventModelServiceClient<Channel>;
+
+#[derive(Clone)]
+struct StoredMoment {
+    entity: pb::Entity,
+    etag: String,
+}
+
+struct OrderFixture {
+    namespace: &'static str,
+    product_id: pb::Id,
+    order_uid: String,
+    product: StoredMoment,
+    order: StoredMoment,
+    lane: StoredMoment,
+    event: StoredMoment,
+    row: StoredMoment,
+}
+
+#[derive(Clone, Copy)]
+enum PayloadBusiness {
+    Aggregate(bool),
+    Identifier,
+    Relationship,
+    All,
+}
+
+fn order_shape(product_id: pb::Id) -> Vec<pb::FieldSpec> {
+    vec![
+        object_field("customer", false, vec![string_field("id")]),
+        object_field("lines", true, vec![string_field("sku")]),
+        schema_ref_field("product_ref", product_id),
+        string_field("order_id"),
+    ]
+}
+
+fn primary_on(name: &str) -> pb::BusinessIdentifier {
+    pb::BusinessIdentifier {
+        property: Some(path(&[(name, false)])),
+        role: pb::BusinessIdentifierRole::Primary as i32,
+        ..Default::default()
+    }
+}
+
+fn customer_identifier() -> pb::BusinessIdentifier {
+    pb::BusinessIdentifier {
+        property: Some(path(&[("customer", false), ("id", false)])),
+        role: pb::BusinessIdentifierRole::Primary as i32,
+        ..Default::default()
+    }
+}
+
+fn product_relationship(product_id: &pb::Id) -> pb::BusinessPropertyRelationship {
+    pb::BusinessPropertyRelationship {
+        source: Some(path(&[("product_ref", false)])),
+        target_entity: Some(pb::SchemaRef {
+            id: Some(product_id.clone()),
+        }),
+        ..Default::default()
+    }
+}
+
+fn order_relationship(product_id: &pb::Id) -> pb::BusinessPropertyRelationship {
+    pb::BusinessPropertyRelationship {
+        source: Some(path(&[("order_id", false)])),
+        target_entity: Some(pb::SchemaRef {
+            id: Some(product_id.clone()),
+        }),
+        ..Default::default()
+    }
+}
+
+fn order_identity_annotation() -> prost_types::Any {
+    let annotation = pb::Uuidv5IdentityAnnotation {
+        name: "order_id".into(),
+        template: "orders/{order_id}".into(),
+        version: 1,
+        namespace: Some(pb::uuidv5_identity_annotation::Namespace::Dns(
+            "orders.example".into(),
+        )),
+    };
+    prost_types::Any {
+        type_url: "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.Uuidv5IdentityAnnotation"
+            .into(),
+        value: annotation.encode_to_vec(),
+    }
+}
+
+fn id_only_fields() -> pb::Schema {
+    pb::Schema {
+        fields: vec![string_field("order_id")],
+        ..Default::default()
+    }
+}
+
+fn id_only(order_id: pb::Id) -> pb::Schema {
+    let mut schema = id_only_fields();
+    schema.id = Some(order_id);
+    schema
+}
+
+fn business_payload(
+    order_id: Option<pb::Id>,
+    product_id: &pb::Id,
+    business: PayloadBusiness,
+) -> pb::Schema {
+    let mut schema = id_only_fields();
+    schema.id = order_id;
+    match business {
+        PayloadBusiness::Aggregate(value) => schema.aggregate_root = Some(value),
+        PayloadBusiness::Identifier => schema.identifiers.push(primary_on("order_id")),
+        PayloadBusiness::Relationship => {
+            schema
+                .property_relationships
+                .push(order_relationship(product_id));
+        }
+        PayloadBusiness::All => {
+            schema.aggregate_root = Some(true);
+            schema.identifiers.push(primary_on("order_id"));
+            schema
+                .property_relationships
+                .push(order_relationship(product_id));
+        }
+    }
+    schema
+}
+
+fn uid_of(entity: &pb::Entity) -> &str {
+    &entity.system.as_ref().unwrap().uid
+}
+
+fn returned_id(moment: &StoredMoment) -> pb::Id {
+    trogon_atlas_core::refs::entity_id(&moment.entity)
+        .unwrap()
+        .clone()
+}
+
+fn payload_of(entity: &pb::Entity) -> pb::Schema {
+    let any = trogon_atlas_core::schema::entity_schema(entity).unwrap();
+    pb::Schema::decode(any.value.as_slice()).unwrap()
+}
+
+fn with_aggregate(entity: &pb::Entity, value: Option<bool>) -> pb::Entity {
+    let mut entity = entity.clone();
+    match &mut entity.kind {
+        Some(pb::entity::Kind::Schema(schema)) => schema.aggregate_root = value,
+        other => panic!("schema, got {other:?}"),
+    }
+    entity
+}
+
+fn with_declarations(entity: &pb::Entity, product_id: &pb::Id) -> pb::Entity {
+    let mut entity = with_aggregate(entity, Some(true));
+    match &mut entity.kind {
+        Some(pb::entity::Kind::Schema(schema)) => {
+            schema.identifiers.push(customer_identifier());
+            schema
+                .property_relationships
+                .push(product_relationship(product_id));
+        }
+        other => panic!("schema, got {other:?}"),
+    }
+    entity
+}
+
+fn with_payload(entity: &pb::Entity, schema: &pb::Schema) -> pb::Entity {
+    let packed = Some(trogon_atlas_core::schema::pack_schema(schema));
+    let mut entity = entity.clone();
+    match &mut entity.kind {
+        Some(pb::entity::Kind::Event(event)) => event.schema = packed,
+        Some(pb::entity::Kind::Command(command)) => command.schema = packed,
+        Some(pb::entity::Kind::ReadModel(row)) => row.schema = packed,
+        other => panic!("payload owner, got {other:?}"),
+    }
+    entity
+}
+
+fn pack_owner(kind: pb::EntityKind, owner: pb::Id, schema: &pb::Schema) -> pb::Entity {
+    let title = owner.slug.clone();
+    let packed = Some(trogon_atlas_core::schema::pack_schema(schema));
+    let body = match kind {
+        pb::EntityKind::Event => pb::entity::Kind::Event(pb::Event {
+            id: Some(owner),
+            title,
+            schema: packed,
+            ..Default::default()
+        }),
+        pb::EntityKind::Command => pb::entity::Kind::Command(pb::Command {
+            id: Some(owner),
+            title,
+            schema: packed,
+            ..Default::default()
+        }),
+        pb::EntityKind::ReadModel => pb::entity::Kind::ReadModel(pb::ReadModel {
+            id: Some(owner),
+            title,
+            key: vec!["order_id".into()],
+            schema: packed,
+            ..Default::default()
+        }),
+        other => panic!("payload kind {other:?}"),
+    };
+    pb::Entity {
+        kind: Some(body),
+        ..Default::default()
+    }
+}
+
+fn reject_slug(kind: pb::EntityKind, business: PayloadBusiness, with_id: bool) -> String {
+    let kind = match kind {
+        pb::EntityKind::Event => "event",
+        pb::EntityKind::Command => "command",
+        pb::EntityKind::ReadModel => "read-model",
+        other => panic!("payload kind {other:?}"),
+    };
+    let business = match business {
+        PayloadBusiness::Aggregate(true) => "root-true",
+        PayloadBusiness::Aggregate(false) => "root-false",
+        PayloadBusiness::Identifier => "identifier",
+        PayloadBusiness::Relationship => "relationship",
+        PayloadBusiness::All => "all",
+    };
+    let id_mode = if with_id { "id" } else { "noid" };
+    format!("rej-{kind}-{business}-{id_mode}")
+}
+
+fn moment_kind_filter() -> Vec<i32> {
+    [
+        pb::EntityKind::Event,
+        pb::EntityKind::Command,
+        pb::EntityKind::ReadModel,
+        pb::EntityKind::Swimlane,
+        pb::EntityKind::CommandSlice,
+        pb::EntityKind::ReadModelSlice,
+        pb::EntityKind::AutomationSlice,
+        pb::EntityKind::UiSlice,
+    ]
+    .into_iter()
+    .map(|kind| kind as i32)
+    .collect()
+}
+
+fn initial_moment_keys(namespace: &str) -> Vec<(i32, String, String, u64)> {
+    vec![
+        (
+            pb::EntityKind::Event as i32,
+            namespace.to_owned(),
+            "OrderPlaced".into(),
+            LARGE_VERSION,
+        ),
+        (
+            pb::EntityKind::ReadModel as i32,
+            namespace.to_owned(),
+            "order-row".into(),
+            LARGE_VERSION,
+        ),
+        (
+            pb::EntityKind::Swimlane as i32,
+            namespace.to_owned(),
+            "orders".into(),
+            LARGE_VERSION,
+        ),
+    ]
+}
+
+async fn put_and_read(client: &mut BusinessClient, entity: pb::Entity) -> StoredMoment {
+    let written = client
+        .put_entity(with_token(
+            pb::PutEntityRequest {
+                entity: Some(entity),
+                ..Default::default()
+            },
+            BUSINESS_WRITER,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let stored = written.entity.unwrap();
+    let kind = trogon_atlas_core::refs::entity_kind(&stored).unwrap();
+    let stored_id = trogon_atlas_core::refs::entity_id(&stored).unwrap().clone();
+    assert_eq!(stored_id.version, LARGE_VERSION);
+    assert_ne!(written.etag, "");
+    assert_ne!(uid_of(&stored), "");
+    let read = client
+        .get_entity(with_token(
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(stored_id),
+            },
+            BUSINESS_WRITER,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(read.etag, written.etag);
+    assert_eq!(read.entity.as_ref(), Some(&stored));
+    StoredMoment {
+        entity: read.entity.unwrap(),
+        etag: read.etag,
+    }
+}
+
+async fn assert_held(client: &mut BusinessClient, before: &StoredMoment) {
+    let kind = trogon_atlas_core::refs::entity_kind(&before.entity).unwrap();
+    let stored_id = trogon_atlas_core::refs::entity_id(&before.entity)
+        .unwrap()
+        .clone();
+    let read = client
+        .get_entity(with_token(
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(stored_id),
+            },
+            BUSINESS_WRITER,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(read.etag, before.etag);
+    assert_eq!(read.entity.as_ref(), Some(&before.entity));
+}
+
+async fn assert_absent(
+    client: &mut BusinessClient,
+    kind: pb::EntityKind,
+    namespace: &str,
+    slug: &str,
+    version: u64,
+) {
+    let missing = client
+        .get_entity(with_token(
+            pb::GetEntityRequest {
+                kind: kind as i32,
+                id: Some(id(namespace, slug, version)),
+            },
+            BUSINESS_WRITER,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        missing.code(),
+        Code::NotFound,
+        "{kind:?} {slug}@{version}: {missing:?}"
+    );
+}
+
+async fn assert_rejected(client: &mut BusinessClient, entity: pb::Entity) {
+    let kind = trogon_atlas_core::refs::entity_kind(&entity).unwrap();
+    let stored_id = trogon_atlas_core::refs::entity_id(&entity).unwrap().clone();
+    let error = client
+        .put_entity(with_token(
+            pb::PutEntityRequest {
+                entity: Some(entity),
+                ..Default::default()
+            },
+            BUSINESS_WRITER,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        Code::InvalidArgument,
+        "{kind:?} {}: {error:?}",
+        stored_id.slug
+    );
+    assert_eq!(
+        error.message(),
+        "business declarations are not allowed on a payload schema",
+        "{error:?}"
+    );
+}
+
+async fn moment_keys(
+    client: &mut BusinessClient,
+    namespace: &str,
+) -> Vec<(i32, String, String, u64)> {
+    let listed = client
+        .list_entities(with_token(
+            pb::ListEntitiesRequest {
+                kinds: moment_kind_filter(),
+                namespaces: vec![namespace.to_owned()],
+                page_size: 100,
+                ..Default::default()
+            },
+            BUSINESS_WRITER,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(listed.next_page_token, "");
+    let mut keys = Vec::new();
+    for entity in listed.entities {
+        let stored_id = trogon_atlas_core::refs::entity_id(&entity).unwrap();
+        let kind = trogon_atlas_core::refs::entity_kind(&entity).unwrap() as i32;
+        keys.push((
+            kind,
+            stored_id.namespace.clone(),
+            stored_id.slug.clone(),
+            stored_id.version,
+        ));
+    }
+    keys.sort();
+    keys
+}
+
+fn assert_declares_order_without_copying(
+    entity: &pb::Entity,
+    order_id: &pb::Id,
+    addressable: &pb::Schema,
+) {
+    let payload = payload_of(entity);
+    assert_eq!(payload.id.as_ref(), Some(order_id));
+    assert_eq!(payload.aggregate_root, None);
+    assert_eq!(payload.identifiers.len(), 0);
+    assert_eq!(payload.property_relationships.len(), 0);
+    assert_eq!(payload.fields, vec![string_field("order_id")]);
+    assert_eq!(
+        trogon_atlas_core::schema::declared_schema_id(entity).as_ref(),
+        Some(order_id)
+    );
+    assert_eq!(addressable.aggregate_root, Some(true));
+    assert_ne!(addressable.identifiers.len(), 0);
+    assert_ne!(addressable.property_relationships.len(), 0);
+    assert_ne!(payload.aggregate_root, addressable.aggregate_root);
+    assert_ne!(payload.identifiers, addressable.identifiers);
+    assert_ne!(
+        payload.property_relationships,
+        addressable.property_relationships
+    );
+}
+
+async fn prepare_order_fixture(client: &mut BusinessClient) -> OrderFixture {
+    let namespace = "bd-order-fixture";
+    let product = put_and_read(
+        client,
+        schema_entity(
+            namespace,
+            "product",
+            LARGE_VERSION,
+            pb::Schema {
+                title: "Product".into(),
+                fields: vec![string_field("sku")],
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    let product_id = returned_id(&product);
+    assert_eq!(product_id, id(namespace, "product", LARGE_VERSION));
+    let order = put_and_read(
+        client,
+        schema_entity(
+            namespace,
+            "order",
+            LARGE_VERSION,
+            pb::Schema {
+                title: "Order".into(),
+                fields: order_shape(product_id.clone()),
+                ..Default::default()
+            },
+        ),
+    )
+    .await;
+    let order_uid = uid_of(&order.entity).to_owned();
+    let lane = put_and_read(
+        client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Swimlane(pb::Swimlane {
+                id: Some(id(namespace, "orders", LARGE_VERSION)),
+                title: "orders".into(),
+                stream_id: "orders-{order_id}".into(),
+                state: vec![string_field("order_id")],
+                metadata: vec![order_identity_annotation()],
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let lane_id = returned_id(&lane);
+    assert_eq!(lane_id, id(namespace, "orders", LARGE_VERSION));
+    let lane_body = match &lane.entity.kind {
+        Some(pb::entity::Kind::Swimlane(body)) => body,
+        other => panic!("swimlane, got {other:?}"),
+    };
+    assert_eq!(lane_body.stream_id, "orders-{order_id}");
+    assert_eq!(lane_body.state, vec![string_field("order_id")]);
+    assert_eq!(lane_body.transitions.len(), 0);
+    assert_eq!(lane_body.metadata.len(), 1);
+    let annotation =
+        pb::Uuidv5IdentityAnnotation::decode(lane_body.metadata[0].value.as_slice()).unwrap();
+    assert_eq!(annotation.name, "order_id");
+    let event = put_and_read(
+        client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Event(pb::Event {
+                id: Some(id(namespace, "OrderPlaced", LARGE_VERSION)),
+                title: "OrderPlaced".into(),
+                swimlane: Some(pb::SwimlaneRef { id: Some(lane_id) }),
+                schema: Some(trogon_atlas_core::schema::pack_fields(vec![string_field(
+                    "order_id",
+                )])),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let event_payload = payload_of(&event.entity);
+    assert_eq!(event_payload.fields, vec![string_field("order_id")]);
+    assert_eq!(event_payload.id, None);
+    assert_eq!(event_payload.aggregate_root, None);
+    assert!(trogon_atlas_core::schema::declared_schema_id(&event.entity).is_none());
+    let row = put_and_read(
+        client,
+        pb::Entity {
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id(namespace, "order-row", LARGE_VERSION)),
+                title: "order-row".into(),
+                key: vec!["order_id".into()],
+                schema: Some(trogon_atlas_core::schema::pack_fields(vec![string_field(
+                    "order_id",
+                )])),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    )
+    .await;
+    let row_body = match &row.entity.kind {
+        Some(pb::entity::Kind::ReadModel(body)) => body,
+        other => panic!("read model, got {other:?}"),
+    };
+    assert_eq!(row_body.key, vec!["order_id".to_string()]);
+    assert_eq!(payload_of(&row.entity).id, None);
+    assert_held(client, &order).await;
+    assert_eq!(schema_of(&order.entity).aggregate_root, None);
+    assert_eq!(schema_of(&order.entity).identifiers.len(), 0);
+    assert_eq!(schema_of(&order.entity).property_relationships.len(), 0);
+    assert_eq!(
+        moment_keys(client, namespace).await,
+        initial_moment_keys(namespace)
+    );
+    OrderFixture {
+        namespace,
+        product_id,
+        order_uid,
+        product,
+        order,
+        lane,
+        event,
+        row,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn authenticated_order_fixture_keeps_business_declarations_explicit() {
+    let mut client = authenticated_business_server().await;
+    let mut fixture = prepare_order_fixture(&mut client).await;
+
+    let mut flagged = fixture.product.entity.clone();
+    match &mut flagged.kind {
+        Some(pb::entity::Kind::Schema(schema)) => {
+            schema.aggregate_root = Some(true);
+            schema.identifiers.push(primary_on("sku"));
+        }
+        other => panic!("schema, got {other:?}"),
+    }
+    let product_uid = uid_of(&fixture.product.entity).to_owned();
+    fixture.product = put_and_read(&mut client, flagged).await;
+    assert_eq!(
+        schema_of(&fixture.product.entity).aggregate_root,
+        Some(true)
+    );
+    assert_eq!(uid_of(&fixture.product.entity), product_uid);
+    assert_eq!(returned_id(&fixture.product), fixture.product_id);
+    let product_identifier = schema_of(&fixture.product.entity).identifiers[0]
+        .connection_id
+        .clone()
+        .unwrap();
+    assert_ne!(product_identifier.value, "");
+    assert_held(&mut client, &fixture.order).await;
+    assert_held(&mut client, &fixture.lane).await;
+    assert_held(&mut client, &fixture.event).await;
+    assert_held(&mut client, &fixture.row).await;
+    assert_eq!(schema_of(&fixture.order.entity).aggregate_root, None);
+    assert_eq!(schema_of(&fixture.order.entity).identifiers.len(), 0);
+    assert_eq!(
+        schema_of(&fixture.order.entity).fields,
+        order_shape(fixture.product_id.clone())
+    );
+
+    for value in [Some(true), Some(false), None] {
+        let next = with_aggregate(&fixture.order.entity, value);
+        let previous_etag = fixture.order.etag.clone();
+        fixture.order = put_and_read(&mut client, next).await;
+        assert_eq!(schema_of(&fixture.order.entity).aggregate_root, value);
+        assert_ne!(fixture.order.etag, previous_etag);
+        assert_eq!(uid_of(&fixture.order.entity), fixture.order_uid);
+        assert_eq!(schema_of(&fixture.order.entity).identifiers.len(), 0);
+        assert_eq!(
+            schema_of(&fixture.order.entity)
+                .property_relationships
+                .len(),
+            0
+        );
+        assert_held(&mut client, &fixture.lane).await;
+        assert_held(&mut client, &fixture.event).await;
+        assert_held(&mut client, &fixture.row).await;
+        assert_eq!(
+            moment_keys(&mut client, fixture.namespace).await,
+            initial_moment_keys(fixture.namespace)
+        );
+        if value == Some(true) {
+            for (kind, slug, version) in [
+                (pb::EntityKind::Swimlane, "order", LARGE_VERSION),
+                (pb::EntityKind::Swimlane, "order", 1),
+                (pb::EntityKind::Event, "order", LARGE_VERSION),
+                (pb::EntityKind::CommandSlice, "order", LARGE_VERSION),
+                (pb::EntityKind::ReadModelSlice, "order-row", LARGE_VERSION),
+                (pb::EntityKind::AutomationSlice, "orders", LARGE_VERSION),
+                (pb::EntityKind::UiSlice, "orders", LARGE_VERSION),
+            ] {
+                assert_absent(&mut client, kind, fixture.namespace, slug, version).await;
+            }
+        }
+    }
+
+    let product_id = fixture.product_id.clone();
+    let next = with_declarations(&fixture.order.entity, &product_id);
+    let previous_etag = fixture.order.etag.clone();
+    fixture.order = put_and_read(&mut client, next).await;
+    assert_ne!(fixture.order.etag, previous_etag);
+    assert_eq!(uid_of(&fixture.order.entity), fixture.order_uid);
+    let addressable = schema_of(&fixture.order.entity).clone();
+    assert_eq!(addressable.aggregate_root, Some(true));
+    let identifier = addressable.identifiers[0].connection_id.clone().unwrap();
+    let relationship = addressable.property_relationships[0]
+        .connection_id
+        .clone()
+        .unwrap();
+    assert_ne!(identifier.value, "");
+    assert_ne!(relationship.value, "");
+    assert_ne!(identifier.value, relationship.value);
+    assert_held(&mut client, &fixture.lane).await;
+    assert_held(&mut client, &fixture.event).await;
+    assert_held(&mut client, &fixture.row).await;
+    assert_eq!(
+        moment_keys(&mut client, fixture.namespace).await,
+        initial_moment_keys(fixture.namespace)
+    );
+
+    let order_id = returned_id(&fixture.order);
+    assert_eq!(order_id, id(fixture.namespace, "order", LARGE_VERSION));
+    let poisoned = with_payload(
+        &fixture.event.entity,
+        &business_payload(None, &fixture.product_id, PayloadBusiness::Aggregate(true)),
+    );
+    assert_rejected(&mut client, poisoned).await;
+    assert_held(&mut client, &fixture.event).await;
+
+    let event_uid = uid_of(&fixture.event.entity).to_owned();
+    let cited = with_payload(&fixture.event.entity, &id_only(order_id.clone()));
+    fixture.event = put_and_read(&mut client, cited).await;
+    assert_eq!(uid_of(&fixture.event.entity), event_uid);
+    assert_declares_order_without_copying(&fixture.event.entity, &order_id, &addressable);
+    assert_held(&mut client, &fixture.lane).await;
+    assert_held(&mut client, &fixture.row).await;
+
+    let poisoned = with_payload(
+        &fixture.event.entity,
+        &business_payload(
+            Some(order_id.clone()),
+            &fixture.product_id,
+            PayloadBusiness::Relationship,
+        ),
+    );
+    assert_rejected(&mut client, poisoned).await;
+    assert_held(&mut client, &fixture.event).await;
+
+    let poisoned = with_payload(
+        &fixture.row.entity,
+        &business_payload(None, &fixture.product_id, PayloadBusiness::Identifier),
+    );
+    assert_rejected(&mut client, poisoned).await;
+    assert_held(&mut client, &fixture.row).await;
+    let row_uid = uid_of(&fixture.row.entity).to_owned();
+    let cited = with_payload(&fixture.row.entity, &id_only(order_id.clone()));
+    fixture.row = put_and_read(&mut client, cited).await;
+    assert_eq!(uid_of(&fixture.row.entity), row_uid);
+    assert_declares_order_without_copying(&fixture.row.entity, &order_id, &addressable);
+    let row_body = match &fixture.row.entity.kind {
+        Some(pb::entity::Kind::ReadModel(body)) => body,
+        other => panic!("read model, got {other:?}"),
+    };
+    assert_eq!(row_body.key, vec!["order_id".to_string()]);
+    assert_held(&mut client, &fixture.lane).await;
+
+    let command = put_and_read(
+        &mut client,
+        pack_owner(
+            pb::EntityKind::Command,
+            id(fixture.namespace, "place-order", LARGE_VERSION),
+            &id_only(order_id.clone()),
+        ),
+    )
+    .await;
+    assert_declares_order_without_copying(&command.entity, &order_id, &addressable);
+    assert_held(&mut client, &fixture.lane).await;
+    assert_held(&mut client, &fixture.event).await;
+    assert_held(&mut client, &fixture.row).await;
+    let poisoned = with_payload(
+        &command.entity,
+        &business_payload(None, &fixture.product_id, PayloadBusiness::All),
+    );
+    assert_rejected(&mut client, poisoned).await;
+    assert_held(&mut client, &command).await;
+
+    for kind in [
+        pb::EntityKind::Event,
+        pb::EntityKind::Command,
+        pb::EntityKind::ReadModel,
+    ] {
+        for with_id in [false, true] {
+            for business in [
+                PayloadBusiness::Aggregate(true),
+                PayloadBusiness::Aggregate(false),
+                PayloadBusiness::Identifier,
+                PayloadBusiness::Relationship,
+                PayloadBusiness::All,
+            ] {
+                let slug = reject_slug(kind, business, with_id);
+                let schema_id = with_id.then(|| order_id.clone());
+                let entity = pack_owner(
+                    kind,
+                    id(fixture.namespace, &slug, LARGE_VERSION),
+                    &business_payload(schema_id, &fixture.product_id, business),
+                );
+                assert_rejected(&mut client, entity).await;
+                assert_absent(&mut client, kind, fixture.namespace, &slug, LARGE_VERSION).await;
+            }
+        }
+    }
+    assert_held(&mut client, &fixture.lane).await;
+    assert_held(&mut client, &fixture.order).await;
+    assert_eq!(schema_of(&fixture.order.entity).aggregate_root, Some(true));
+    assert_eq!(
+        schema_of(&fixture.order.entity).identifiers[0]
+            .connection_id
+            .as_ref(),
+        Some(&identifier)
+    );
+    assert_eq!(
+        schema_of(&fixture.order.entity).property_relationships[0]
+            .connection_id
+            .as_ref(),
+        Some(&relationship)
     );
 }
