@@ -864,3 +864,73 @@ async fn list_groups(client: &mut Client, token: &str) -> Vec<pb::Entity> {
         .into_inner()
         .entities
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn restricted_caller_is_blocked_by_a_hidden_member_edge_without_learning_about_it() {
+    use pb::delete_entity_request::Mode;
+    let mut client = serve().await;
+    let acme = register(&mut client, ACME_TOKEN, "guard-acme").await;
+    let beta = register(&mut client, BETA_TOKEN, "guard-beta").await;
+    let shared = put(&mut client, ACME_TOKEN, component(&acme, "shared"), "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    put(&mut client, ACME_TOKEN, component(&acme, "alone"), "")
+        .await
+        .unwrap();
+    put(
+        &mut client,
+        ROOT_TOKEN,
+        group(&beta, "hidden-owner", vec![component_member(&shared)]),
+        "",
+    )
+    .await
+    .unwrap();
+    let delete = |slug: &str, mode: Mode| pb::DeleteEntityRequest {
+        kind: pb::EntityKind::Component as i32,
+        id: Some(id(&acme, slug)),
+        mode: mode as i32,
+        ..Default::default()
+    };
+
+    let preview = client
+        .delete_entity(authed(delete("shared", Mode::DryRun), ACME_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(preview.referrers, [] as [pb::Reference; 0]);
+    let refused = client
+        .delete_entity(authed(delete("shared", Mode::FailIfReferenced), ACME_TOKEN))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), Code::FailedPrecondition, "{refused}");
+    assert!(
+        !refused.message().contains("hidden-owner") && !refused.message().contains(&beta),
+        "{refused}"
+    );
+    let survivor = client
+        .get_entity(authed(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::Component as i32,
+                id: Some(id(&acme, "shared")),
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(survivor.entity.is_some());
+
+    let owner_view = client
+        .delete_entity(authed(delete("shared", Mode::DryRun), ROOT_TOKEN))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(owner_view.referrers.len(), 1, "{owner_view:?}");
+
+    client
+        .delete_entity(authed(delete("alone", Mode::FailIfReferenced), ACME_TOKEN))
+        .await
+        .unwrap();
+}
