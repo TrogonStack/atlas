@@ -24,15 +24,15 @@ fn versioned(slug: &str, version: u64) -> Id {
         ..id(slug)
     }
 }
-fn title(value: &str) -> Option<CatalogTitle> {
-    Some(CatalogTitle {
+fn title(value: &str) -> CatalogTitle {
+    CatalogTitle {
         value: value.into(),
-    })
+    }
 }
-fn text(value: &str) -> Option<CatalogText> {
-    Some(CatalogText {
+fn text(value: &str) -> CatalogText {
+    CatalogText {
         value: value.into(),
-    })
+    }
 }
 
 fn member(target: system_group_member::Target) -> SystemGroupMember {
@@ -49,14 +49,14 @@ fn group_ref(slug: &str) -> system_group_member::Target {
 fn membership(target: system_group_member::Target) -> SystemGroupMembership {
     SystemGroupMembership {
         member: Some(member(target)),
-        doc: text("curated"),
+        doc: Some(text("curated")),
         ..Default::default()
     }
 }
 fn relationship(slug: &str, label: Option<&str>) -> SystemGroupRelationship {
     SystemGroupRelationship {
         target: Some(SystemGroupRef { id: Some(id(slug)) }),
-        label: label.and_then(title),
+        label: label.map(title),
         ..Default::default()
     }
 }
@@ -66,7 +66,7 @@ fn actor(target: system_actor_target::Target, direction: SystemActorDirection) -
             target: Some(target),
         }),
         direction: direction as i32,
-        label: title("uses"),
+        label: Some(title("uses")),
         ..Default::default()
     }
 }
@@ -753,10 +753,10 @@ fn wording_and_order_preserve_identity_but_exact_targets_and_direction_do_not() 
     let stored = prepare_entity(None, &platform()).unwrap();
     let mut edited = stored.clone();
     group_mut(&mut edited).members.reverse();
-    group_mut(&mut edited).members[6].doc = text("reworded");
-    group_mut(&mut edited).relationships[0].label = title("settles with");
+    group_mut(&mut edited).members[6].doc = Some(text("reworded"));
+    group_mut(&mut edited).relationships[0].label = Some(title("settles with"));
     group_mut(&mut edited).actors[0].label = None;
-    group_mut(&mut edited).actors[0].doc = text("notes");
+    group_mut(&mut edited).actors[0].doc = Some(text("notes"));
     let edited = prepare_entity(Some(&stored), &edited).unwrap();
     assert_eq!(member_selector(&stored, 0), member_selector(&edited, 6));
     assert!(connections::resolve_connection(&edited, &member_selector(&stored, 0)).is_ok());
@@ -814,7 +814,7 @@ fn exact_reapply_is_a_noop_and_edits_without_ids_are_rejected() {
     let stored = prepare_entity(None, &authored).unwrap();
     assert_eq!(prepare_entity(Some(&stored), &authored).unwrap(), stored);
     let mut edited = authored;
-    group_mut(&mut edited).members[0].doc = text("changed");
+    group_mut(&mut edited).members[0].doc = Some(text("changed"));
     assert!(matches!(
         prepare_entity(Some(&stored), &edited),
         Err(ConnectionError::StrippedId(_))
