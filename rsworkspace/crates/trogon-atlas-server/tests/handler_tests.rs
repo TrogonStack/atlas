@@ -4508,3 +4508,228 @@ async fn retarget_references_rejects_incomplete_resource_scan_before_preview_or_
         }
     }
 }
+
+fn structure_component_ref(ns: &str, slug: &str) -> pb::ComponentRef {
+    pb::ComponentRef {
+        id: Some(id(ns, slug, 1)),
+    }
+}
+
+fn structure_group(ns: &str, slug: &str, member: &str) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::SystemGroup(pb::SystemGroup {
+            id: Some(id(ns, slug, 1)),
+            title: slug.into(),
+            scope: pb::SystemGroupScope::Internal as i32,
+            members: vec![structure_group_member(ns, member)],
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+fn structure_group_member(ns: &str, member: &str) -> pb::SystemGroupMembership {
+    pb::SystemGroupMembership {
+        member: Some(pb::SystemGroupMember {
+            target: Some(pb::system_group_member::Target::Component(
+                structure_component_ref(ns, member),
+            )),
+        }),
+        ..Default::default()
+    }
+}
+
+fn structure_domain(ns: &str, slug: &str, member: &str) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(id(ns, slug, 1)),
+            title: slug.into(),
+            members: vec![pb::DomainMembership {
+                member: Some(pb::DomainMember {
+                    target: Some(pb::domain_member::Target::Component(
+                        structure_component_ref(ns, member),
+                    )),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn system_structure_propagates_dependency_read_failures_without_publishing() {
+    const NS: &str = "structure-errors";
+    let failures: [(fn() -> StoreError, tonic::Code); 3] = [
+        (
+            || StoreError::Unavailable("injected dependency outage".into()),
+            tonic::Code::Unavailable,
+        ),
+        (
+            || StoreError::Backend("injected dependency failure".into()),
+            tonic::Code::Internal,
+        ),
+        (
+            || StoreError::CorruptEntry {
+                key: "dependency".into(),
+                reason: "injected decode failure".into(),
+            },
+            tonic::Code::Internal,
+        ),
+    ];
+    for (failure, expected) in failures {
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut backend = FailingBatchStore::with_failure(failure).await;
+        backend.fail_batches = false;
+        backend.get_failure = Some((id(NS, "worker", 1), armed.clone()));
+        let service = EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+            .unwrap()
+            .with_snapshot_cap(0);
+        let put = |entity: pb::Entity| {
+            service.put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(entity),
+                ..Default::default()
+            }))
+        };
+        put(pb::Entity {
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(id(NS, "worker", 1)),
+                title: "Worker".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        put(structure_group(NS, "platform", "worker"))
+            .await
+            .unwrap();
+        put(structure_domain(NS, "retail", "worker")).await.unwrap();
+        let group = service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(id(NS, "platform", 1)),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let domain = service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: Some(id(NS, "retail", 1)),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let selector = pb::ConnectionRef {
+            owner: Some(
+                trogon_atlas_server::conv::entity_to_ref(group.entity.as_ref().unwrap()).unwrap(),
+            ),
+            owner_uid: group
+                .entity
+                .as_ref()
+                .unwrap()
+                .system
+                .as_ref()
+                .unwrap()
+                .uid
+                .clone(),
+            id: match group.entity.as_ref().unwrap().kind.as_ref().unwrap() {
+                pb::entity::Kind::SystemGroup(value) => value.members[0].connection_id.clone(),
+                _ => unreachable!(),
+            },
+        };
+        put(pb::Entity {
+            kind: Some(pb::entity::Kind::Person(pb::Person {
+                id: Some(id(NS, "maintainer", 1)),
+                title: Some(pb::DirectoryDisplayName {
+                    value: "Maintainer".into(),
+                }),
+                responsibilities: vec![pb::Responsibility {
+                    kind: pb::ResponsibilityKind::Owner as i32,
+                    subject: Some(pb::ResponsibilitySubject {
+                        selection: Some(pb::responsibility_subject::Selection::Connection(
+                            selector,
+                        )),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut edited_group = group.entity.clone().unwrap();
+        if let Some(pb::entity::Kind::SystemGroup(value)) = edited_group.kind.as_mut() {
+            value.members.push(structure_group_member(NS, "worker"));
+        }
+        let mut edited_domain = domain.entity.clone().unwrap();
+        if let Some(pb::entity::Kind::Domain(value)) = edited_domain.kind.as_mut() {
+            value.members.push(pb::DomainMembership {
+                member: Some(pb::DomainMember {
+                    target: Some(pb::domain_member::Target::Component(
+                        structure_component_ref(NS, "worker"),
+                    )),
+                }),
+                ..Default::default()
+            });
+        }
+        for entity in [edited_group, edited_domain] {
+            let error = put(entity).await.unwrap_err();
+            assert_eq!(error.code(), expected, "{error:?}");
+        }
+        let error = service
+            .list_assignee_responsibilities(Request::new(pb::ListAssigneeResponsibilitiesRequest {
+                assignee: Some(pb::ResponsibilityAssignee {
+                    selection: Some(pb::responsibility_assignee::Selection::Person(
+                        pb::PersonRef {
+                            id: Some(id(NS, "maintainer", 1)),
+                        },
+                    )),
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), expected, "{error:?}");
+
+        armed.store(false, std::sync::atomic::Ordering::SeqCst);
+        for (kind, slug, before) in [
+            (pb::EntityKind::SystemGroup, "platform", &group),
+            (pb::EntityKind::Domain, "retail", &domain),
+        ] {
+            let after = service
+                .get_entity(Request::new(pb::GetEntityRequest {
+                    kind: kind as i32,
+                    id: Some(id(NS, slug, 1)),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(after.etag, before.etag);
+            assert_eq!(after.entity, before.entity);
+        }
+        let recovered = service
+            .list_assignee_responsibilities(Request::new(pb::ListAssigneeResponsibilitiesRequest {
+                assignee: Some(pb::ResponsibilityAssignee {
+                    selection: Some(pb::responsibility_assignee::Selection::Person(
+                        pb::PersonRef {
+                            id: Some(id(NS, "maintainer", 1)),
+                        },
+                    )),
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            recovered.assignments[0].state,
+            pb::ResponsibilityResolutionState::Resolved as i32
+        );
+    }
+}
