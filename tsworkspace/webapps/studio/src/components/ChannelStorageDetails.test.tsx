@@ -363,3 +363,25 @@ it('retains Channel and storage declarations through the real wire codec into In
   render(<Inspector entity={model.entities[5]} model={model} onSelect={select} onClose={vi.fn()} />);
   expect(screen.getByText('READ declared by the owner')).toBeDefined();
 });
+
+it.each(['claims', 'routes', 'triggers', 'fieldSelections'])(
+  'refuses a composed storage selector that collides with messageClaims.%s',
+  (field) => {
+    const model = fixture();
+    const owner = model.entities[3];
+    const subject = selection(owner, 'claim-a');
+    expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('claim-a');
+    owner.raw.messageClaims = { [field]: [{ connectionId: { value: 'claim-a' } }] };
+    expect(resolveAssociationSubject(model, subject)).toBeUndefined();
+  },
+);
+
+it('refuses a composed product storage selector that collides with a resource association', () => {
+  const model = fixture();
+  const owner = model.entities[4];
+  owner.uid = 'product-uid';
+  const subject = selection(owner, 'product-claim');
+  expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('product-claim');
+  owner.raw.resourceAssociations = [{ connectionId: { value: 'product-claim' } }];
+  expect(resolveAssociationSubject(model, subject)).toBeUndefined();
+});
