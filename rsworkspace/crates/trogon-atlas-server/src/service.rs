@@ -7343,7 +7343,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Store hygiene / architecture walk the full visible snapshot.
         // Request filters only select which EventModels and strategic
         // namespaces are reported; they must not be written into
-        // `effective_scope` or clients will mis-attribute store findings.
+        // `effective_scope` or clients will attribute store findings wrongly.
         let branch_name = branch.clone().unwrap_or_default();
         let requested_scope = pb::ValidationScope {
             branch: branch_name.clone(),
