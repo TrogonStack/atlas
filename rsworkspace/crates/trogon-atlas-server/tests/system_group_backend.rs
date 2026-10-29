@@ -1368,3 +1368,284 @@ async fn independent_same_key_creation_keeps_distinct_uids_until_an_explicit_cho
     assert!(resolves(&stored, &branch_selector));
     assert!(!resolves(&stored, &baseline_selector));
 }
+
+fn person_with(slug: &str, responsibilities: Vec<pb::Responsibility>) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::Person(pb::Person {
+            id: Some(id(slug)),
+            title: Some(pb::DirectoryDisplayName { value: slug.into() }),
+            responsibilities,
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+fn responsibility_for(
+    kind: pb::ResponsibilityKind,
+    subject: &pb::ResponsibilitySubject,
+) -> pb::Responsibility {
+    pb::Responsibility {
+        kind: kind as i32,
+        subject: Some(subject.clone()),
+        ..Default::default()
+    }
+}
+
+fn connection_subject(selector: pb::ConnectionRef) -> pb::ResponsibilitySubject {
+    pb::ResponsibilitySubject {
+        selection: Some(pb::responsibility_subject::Selection::Connection(selector)),
+    }
+}
+
+async fn assignee_responsibilities(
+    service: &EventModelServiceImpl,
+    slug: &str,
+) -> Result<pb::ListAssigneeResponsibilitiesResponse, tonic::Status> {
+    service
+        .list_assignee_responsibilities(Request::new(pb::ListAssigneeResponsibilitiesRequest {
+            assignee: Some(pb::ResponsibilityAssignee {
+                selection: Some(pb::responsibility_assignee::Selection::Person(
+                    pb::PersonRef { id: Some(id(slug)) },
+                )),
+            }),
+            ..Default::default()
+        }))
+        .await
+        .map(tonic::Response::into_inner)
+}
+
+async fn subject_assignments(
+    service: &EventModelServiceImpl,
+    subject: &pb::ResponsibilitySubject,
+    kind: Option<pb::ResponsibilityKind>,
+) -> Result<pb::ListSubjectAssignmentsResponse, tonic::Status> {
+    service
+        .list_subject_assignments(Request::new(pb::ListSubjectAssignmentsRequest {
+            subject: Some(subject.clone()),
+            kind: kind.map(|kind| kind as i32),
+            ..Default::default()
+        }))
+        .await
+        .map(tonic::Response::into_inner)
+}
+
+async fn seeded_service() -> (EventModelServiceImpl, Arc<trogon_atlas_store::NatsStore>) {
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(0);
+    (service, store)
+}
+
+async fn seed_people(
+    store: &trogon_atlas_store::NatsStore,
+    people: impl Iterator<Item = pb::Entity>,
+) {
+    use trogon_atlas_store::{store::MutationOp, Store as _, WriteContext};
+    let people: Vec<_> = people.collect();
+    for chunk in people.chunks(128) {
+        let ops: Vec<_> = chunk
+            .iter()
+            .cloned()
+            .map(|entity| MutationOp::Create {
+                kind: pb::EntityKind::Person,
+                entity,
+            })
+            .collect();
+        store
+            .batch_apply(&ops, WriteContext::baseline())
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn shared_occurrence_budget_counts_each_group_once_across_repeats_and_cycles() {
+    let service = service().await;
+    save(&service, component("worker"), None).await;
+    for index in 0..10 {
+        save(
+            &service,
+            group(&format!("ring-{index}"), vec![], vec![], vec![]),
+            None,
+        )
+        .await;
+    }
+    let fill = |index: usize, count: usize| {
+        let mut members = vec![member_group(&format!("ring-{}", (index + 1) % 10))];
+        members.extend(std::iter::repeat_n(member_component("worker"), count - 1));
+        members
+    };
+    let mut selectors = Vec::new();
+    for index in 0..10 {
+        let slug = format!("ring-{index}");
+        let mut entity = get_group(&service, &slug).await.entity.unwrap();
+        group_mut(&mut entity).members = fill(index, if index == 9 { 774 } else { 1_024 });
+        save(&service, entity, None).await;
+        selectors.push(member_selector(
+            &get_group(&service, &slug).await.entity.unwrap(),
+            0,
+        ));
+    }
+    save(
+        &service,
+        person_with(
+            "maintainer",
+            selectors
+                .iter()
+                .map(|selector| {
+                    responsibility_for(
+                        pb::ResponsibilityKind::Owner,
+                        &connection_subject(selector.clone()),
+                    )
+                })
+                .collect(),
+        ),
+        None,
+    )
+    .await;
+
+    let boundary = assignee_responsibilities(&service, "maintainer")
+        .await
+        .unwrap();
+    assert_eq!(boundary.assignments.len(), 10);
+    assert!(!boundary.incomplete);
+    assert!(boundary
+        .assignments
+        .iter()
+        .all(|row| row.state == pb::ResponsibilityResolutionState::Resolved as i32));
+
+    let mut last = get_group(&service, "ring-9").await.entity.unwrap();
+    let stored_etag = get_group(&service, "ring-9").await.etag;
+    group_mut(&mut last)
+        .members
+        .push(member_component("worker"));
+    save(&service, last, None).await;
+    let over = assignee_responsibilities(&service, "maintainer")
+        .await
+        .unwrap_err();
+    assert_eq!(over.code(), Code::ResourceExhausted, "{over}");
+    assert!(over.message().contains("occurrence"), "{over}");
+    assert_ne!(get_group(&service, "ring-9").await.etag, stored_etag);
+
+    let mut trimmed = get_group(&service, "ring-9").await.entity.unwrap();
+    group_mut(&mut trimmed).members.pop();
+    save(&service, trimmed, None).await;
+    assert_eq!(
+        assignee_responsibilities(&service, "maintainer")
+            .await
+            .unwrap()
+            .assignments
+            .len(),
+        10
+    );
+}
+
+#[tokio::test]
+async fn shared_output_budget_is_exact_and_filtered_rows_do_not_spend_it() {
+    let (service, store) = seeded_service().await;
+    save(&service, component("worker"), None).await;
+    save(
+        &service,
+        group("edge", vec![member_component("worker")], vec![], vec![]),
+        None,
+    )
+    .await;
+    let subject = connection_subject(member_selector(
+        &get_group(&service, "edge").await.entity.unwrap(),
+        0,
+    ));
+    let every_kind = [
+        pb::ResponsibilityKind::Owner,
+        pb::ResponsibilityKind::Maintainer,
+        pb::ResponsibilityKind::Steward,
+        pb::ResponsibilityKind::Contact,
+    ];
+    seed_people(
+        &store,
+        (0..1_024).map(|index| {
+            person_with(
+                &format!("holder-{index}"),
+                every_kind
+                    .iter()
+                    .map(|kind| responsibility_for(*kind, &subject))
+                    .collect(),
+            )
+        }),
+    )
+    .await;
+
+    let boundary = subject_assignments(&service, &subject, None).await.unwrap();
+    assert_eq!(boundary.assignments.len(), 4_096);
+    assert!(!boundary.incomplete);
+
+    seed_people(
+        &store,
+        std::iter::once(person_with(
+            "holder-extra",
+            vec![responsibility_for(pb::ResponsibilityKind::Owner, &subject)],
+        )),
+    )
+    .await;
+    let over = subject_assignments(&service, &subject, None)
+        .await
+        .unwrap_err();
+    assert_eq!(over.code(), Code::ResourceExhausted, "{over}");
+    assert!(over.message().contains("output"), "{over}");
+
+    let filtered = subject_assignments(&service, &subject, Some(pb::ResponsibilityKind::Owner))
+        .await
+        .unwrap();
+    assert_eq!(filtered.assignments.len(), 1_025);
+}
+
+#[tokio::test]
+async fn shared_row_budget_is_exact_and_non_resource_entities_do_not_spend_it() {
+    let (service, store) = seeded_service().await;
+    save(&service, component("worker"), None).await;
+    save(
+        &service,
+        group("edge", vec![member_component("worker")], vec![], vec![]),
+        None,
+    )
+    .await;
+    let subject = connection_subject(member_selector(
+        &get_group(&service, "edge").await.entity.unwrap(),
+        0,
+    ));
+    seed_people(
+        &store,
+        (0..4_998).map(|index| {
+            person_with(
+                &format!("holder-{index}"),
+                if index == 0 {
+                    vec![responsibility_for(pb::ResponsibilityKind::Owner, &subject)]
+                } else {
+                    vec![]
+                },
+            )
+        }),
+    )
+    .await;
+
+    let boundary = subject_assignments(&service, &subject, None).await.unwrap();
+    assert_eq!(boundary.assignments.len(), 1);
+    assert!(!boundary.incomplete);
+
+    save(&service, persona("shopper"), None).await;
+    assert_eq!(
+        subject_assignments(&service, &subject, None)
+            .await
+            .unwrap()
+            .assignments
+            .len(),
+        1
+    );
+
+    seed_people(&store, std::iter::once(person_with("holder-extra", vec![]))).await;
+    let over = subject_assignments(&service, &subject, None)
+        .await
+        .unwrap_err();
+    assert_eq!(over.code(), Code::ResourceExhausted, "{over}");
+}
