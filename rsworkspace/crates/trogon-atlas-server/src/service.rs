@@ -2582,16 +2582,6 @@ fn world_after(
     world.into_iter().flatten().collect()
 }
 
-fn is_slice_kind(kind: pb::EntityKind) -> bool {
-    matches!(
-        kind,
-        pb::EntityKind::CommandSlice
-            | pb::EntityKind::ReadModelSlice
-            | pb::EntityKind::AutomationSlice
-            | pb::EntityKind::UiSlice
-    )
-}
-
 fn runs_scenarios(kind: pb::EntityKind) -> bool {
     matches!(
         kind,
@@ -5597,7 +5587,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let mut mutations: Vec<MutationOp> = Vec::with_capacity(req.ops.len());
         let mut metas: Vec<OpMetaLike> = Vec::with_capacity(req.ops.len());
         let mut dry_run = req.validate_only;
-        let mut has_slice_puts = false;
+        let mut has_scenario_puts = false;
         let mut has_strategic_puts = false;
         let mut has_strategic_deletes = false;
 
@@ -5613,8 +5603,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     validate_entity_content(&entity)?;
                     check_project_namespace_conflict(&entity)?;
                     check_context_slug(&entity)?;
-                    if is_slice_kind(kind) {
-                        has_slice_puts = true;
+                    if runs_scenarios(kind) {
+                        has_scenario_puts = true;
                     }
                     if is_strategic_kind(kind) {
                         has_strategic_puts = true;
@@ -5788,7 +5778,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             architecture: validation::SuiteRun::over(architecture_subjects),
             ..Default::default()
         };
-        if branch.is_none() && (has_strategic_ops || has_slice_puts) {
+        if branch.is_none() && (has_strategic_ops || has_scenario_puts) {
             self.invalidate_snapshot().await;
         }
         if has_strategic_ops {
@@ -5848,7 +5838,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             }
         }
-        if has_slice_puts {
+        if has_scenario_puts {
             let (pre_all_for_validation, truncated) = self
                 .snapshot_with_truncation(branch.as_deref(), &vis)
                 .await?;
