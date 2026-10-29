@@ -953,10 +953,11 @@ async fn run(
                     }
                 }
             }
-            let data = json!({
+            let mut data = json!({
                 "lines": outcome.lines,
                 "issues": outcome.issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
             });
+            apply::insert_coverage(&mut data, outcome.coverage.as_ref());
             Ok((ExitCode::SUCCESS, Some(data)))
         }
         Cmd::Diff { filenames } => {
@@ -2219,7 +2220,7 @@ async fn run(
                             }
                         }
                         let counts = branch::MergeCounts::of(&resp);
-                        let data = json!({
+                        let mut data = json!({
                             "status": "applied",
                             "applied_count": resp.applied_count,
                             "added_count": counts.added,
@@ -2232,6 +2233,7 @@ async fn run(
                             },
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
+                        apply::insert_coverage(&mut data, resp.coverage.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Validated => {
@@ -2247,7 +2249,7 @@ async fn run(
                                 println!("{}", apply::format_issue(issue));
                             }
                         }
-                        let data = json!({
+                        let mut data = json!({
                             "status": "validated",
                             "applied_count": resp.applied_count,
                             "added_count": counts.added,
@@ -2260,6 +2262,7 @@ async fn run(
                             },
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
+                        apply::insert_coverage(&mut data, resp.coverage.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Conflicts => {
@@ -2282,7 +2285,7 @@ async fn run(
                                 eprintln!("{}", apply::format_issue(issue));
                             }
                         }
-                        let data = json!({
+                        let mut data = json!({
                             "status": "invalid",
                             "added_count": counts.added,
                             "changed_count": counts.changed,
@@ -2294,6 +2297,7 @@ async fn run(
                             },
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
+                        apply::insert_coverage(&mut data, resp.coverage.as_ref());
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Unspecified => {

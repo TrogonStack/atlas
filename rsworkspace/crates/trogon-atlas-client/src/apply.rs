@@ -306,6 +306,51 @@ pub struct ApplyOutcome {
     /// The batch's idempotency receipt, present only when the caller passed
     /// an `operation_id` to `apply` and at least one op ran.
     pub operation_receipt: Option<pb::OperationReceipt>,
+    /// Server-reported suite coverage for the batch. Absent when no ops ran
+    /// or the server omitted it (for example operation_id replay). Never
+    /// invent coverage client-side.
+    pub coverage: Option<pb::ValidationCoverage>,
+}
+
+/// Adds server-reported coverage to a JSON object. Absent coverage stays
+/// absent so a reader never mistakes an omitted report for a full-model pass.
+pub fn insert_coverage(body: &mut Value, coverage: Option<&pb::ValidationCoverage>) {
+    if let (Some(fields), Some(coverage)) = (body.as_object_mut(), coverage) {
+        fields.insert("coverage".into(), coverage_to_json(coverage));
+    }
+}
+
+/// JSON shape for [`pb::ValidationCoverage`], for CLI/MCP structured output.
+/// Callers must pass through the server value; do not invent fields.
+#[must_use]
+pub fn coverage_to_json(coverage: &pb::ValidationCoverage) -> Value {
+    json!({
+        "snapshot_truncated": coverage.snapshot_truncated,
+        "effective_scope": coverage.effective_scope.as_ref().map(|s| json!({
+            "branch": s.branch,
+            "namespace": s.namespace,
+        })),
+        "requested_scope": coverage.requested_scope.as_ref().map(|s| json!({
+            "branch": s.branch,
+            "namespace": s.namespace,
+        })),
+        "checks": coverage.checks.iter().map(|c| json!({
+            "check_id": c.check_id,
+            "state": check_state_name(c.state),
+            "reason": c.reason,
+            "subjects_examined": c.subjects_examined,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn check_state_name(state: i32) -> &'static str {
+    match pb::validation_check_result::State::try_from(state) {
+        Ok(pb::validation_check_result::State::Completed) => "COMPLETED",
+        Ok(pb::validation_check_result::State::Skipped) => "SKIPPED",
+        Ok(pb::validation_check_result::State::Partial) => "PARTIAL",
+        Ok(pb::validation_check_result::State::Error) => "ERROR",
+        _ => "UNSPECIFIED",
+    }
 }
 
 /// Groups the findings of put and delete results by op, tagging each group
@@ -356,6 +401,7 @@ pub async fn apply(
     let mut issues = Vec::new();
     let mut op_issues = Vec::new();
     let mut operation_receipt = None;
+    let mut coverage = None;
     if !changed.is_empty() {
         let ops = changed
             .iter()
@@ -425,6 +471,7 @@ pub async fn apply(
             .iter()
             .flat_map(|o| o.issues.iter().cloned())
             .collect();
+        coverage = resp.coverage;
     }
 
     let lines = plan
@@ -436,6 +483,7 @@ pub async fn apply(
         issues,
         op_issues,
         operation_receipt,
+        coverage,
     })
 }
 

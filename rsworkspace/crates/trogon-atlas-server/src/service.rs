@@ -2316,6 +2316,7 @@ impl EventModelServiceImpl {
             }],
             precondition_failure: None,
             operation_receipt: None,
+            coverage: None,
         }
     }
 
@@ -2380,6 +2381,7 @@ impl EventModelServiceImpl {
             }],
             precondition_failure: None,
             operation_receipt: None,
+            coverage: None,
         }
     }
 
@@ -2588,6 +2590,10 @@ fn is_slice_kind(kind: pb::EntityKind) -> bool {
     )
 }
 
+fn subject_count(n: usize) -> i32 {
+    i32::try_from(n).unwrap_or(i32::MAX)
+}
+
 fn build_op_results(
     metas: &[OpMetaLike],
     outcomes: &[MutationOutcome],
@@ -2630,6 +2636,9 @@ fn build_op_results(
                             validation,
                             no_op,
                             operation_receipt: None,
+                            // Suite coverage for the batch lives on
+                            // BatchMutateResponse.coverage.
+                            coverage: None,
                         },
                     )),
                 }
@@ -4903,13 +4912,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .check_schema(&*self.store, &entity, &[], branch.as_deref())
             .await?;
 
-        let mut scenario_issues = if matches!(
+        let ran_scenarios = matches!(
             kind,
             pb::EntityKind::CommandSlice
                 | pb::EntityKind::ReadModelSlice
                 | pb::EntityKind::AutomationSlice
-        ) {
-            let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        );
+        let ran_strategic = is_strategic_kind(kind);
+        let mut snapshot_truncated = false;
+        let mut scenario_issues = if ran_scenarios {
+            let (all, truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
+            snapshot_truncated = truncated;
             validation::validate_scenarios(&entity, &all)
         } else {
             Vec::new()
@@ -4926,11 +4941,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // space are order dependent, so a context put before its subdomains
         // is transiently dangling and rejecting it would make the model
         // impossible to build one call at a time. They ride the response.
-        if is_strategic_kind(kind) {
+        if ran_strategic {
             if branch.is_none() {
                 self.invalidate_snapshot().await;
             }
-            let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let (all, truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
+            snapshot_truncated |= truncated;
             let world = world_after(&all, &[(kind, &id, Some(&entity))]);
             scenario_issues.extend(
                 validation::strategic_issues_by_change(&[(kind, id.clone())], &all, &world)
@@ -4938,6 +4956,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     .flatten(),
             );
         }
+        let put_coverage = validation::write_validation_coverage(
+            branch.as_deref(),
+            1,
+            validation::WriteSuites {
+                architecture: architecture_admission::is_architecture_kind(kind).then_some(1),
+                scenarios: ran_scenarios.then_some(1),
+                strategic: ran_strategic.then_some(1),
+                snapshot_truncated,
+            },
+        );
 
         // Dry runs share the mutation lock with apply so `create_only` /
         // `if_match` see a stable view and report the same typed refusal as a
@@ -4982,6 +5010,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 validation: scenario_issues,
                 no_op: false,
                 operation_receipt: None,
+                coverage: Some(put_coverage),
             }));
         }
 
@@ -5050,6 +5079,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                 &req.operation_id,
                                 &record,
                             )),
+                            // Replay reconstructs current state; it did not
+                            // re-run write-path suites for this call.
+                            coverage: None,
                         }));
                     }
                 }
@@ -5202,6 +5234,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             operation_receipt: claim_key.as_ref().map(|_| {
                 operation_receipts::fresh_receipt(&req.operation_id, &receipt_changeset_id)
             }),
+            coverage: Some(put_coverage),
         }))
     }
 
@@ -5739,11 +5772,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let mut per_op_validation: Vec<Vec<pb::ValidationIssue>> =
             std::iter::repeat_with(Vec::new).take(metas.len()).collect();
         let has_strategic_ops = has_strategic_puts || has_strategic_deletes;
+        let architecture_subjects = metas
+            .iter()
+            .filter(|m| m.is_put && architecture_admission::is_architecture_kind(m.kind))
+            .count();
+        let mut suites = validation::WriteSuites {
+            architecture: (architecture_subjects > 0).then(|| subject_count(architecture_subjects)),
+            ..Default::default()
+        };
         if branch.is_none() && (has_strategic_ops || has_slice_puts) {
             self.invalidate_snapshot().await;
         }
         if has_strategic_ops {
-            let base = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let (base, truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
+            suites.snapshot_truncated |= truncated;
+            suites.strategic = Some(subject_count(
+                metas.iter().filter(|m| is_strategic_kind(m.kind)).count(),
+            ));
             let world_changes: Vec<(pb::EntityKind, &pb::Id, Option<&pb::Entity>)> = metas
                 .iter()
                 .map(|m| (m.kind, &m.id, m.entity.as_ref().filter(|_| m.is_put)))
@@ -5794,7 +5841,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
         if has_slice_puts {
-            let pre_all_for_validation = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let (pre_all_for_validation, truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
+            suites.snapshot_truncated |= truncated;
+            suites.scenarios = Some(subject_count(
+                metas
+                    .iter()
+                    .filter(|m| m.is_put && is_slice_kind(m.kind) && m.entity.is_some())
+                    .count(),
+            ));
             let mut validation_ctx: Vec<StoredEntity> = (*pre_all_for_validation).clone();
             validation_ctx.extend(metas.iter().filter(|m| m.is_put).filter_map(|m| {
                 m.entity.as_ref().map(|entity| StoredEntity {
@@ -5832,9 +5888,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     failure: scenario_errors,
                     precondition_failure: None,
                     operation_receipt: None,
+                    coverage: Some(validation::write_validation_coverage(
+                        branch.as_deref(),
+                        subject_count(metas.len()),
+                        suites,
+                    )),
                 }));
             }
         }
+        let batch_coverage = validation::write_validation_coverage(
+            branch.as_deref(),
+            subject_count(metas.len()),
+            suites,
+        );
 
         // Safety includes hidden referrers; response details remain visibility-scoped.
         let delete_modes: Vec<Option<pb::delete_entity_request::Mode>> = req
@@ -6056,6 +6122,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         failure: Vec::new(),
                         precondition_failure: None,
                         operation_receipt: None,
+                        coverage: Some(batch_coverage.clone()),
                     }))
                 }
                 Err(err) => Ok(Response::new(
@@ -6117,6 +6184,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                     &req.operation_id,
                                     &record,
                                 )),
+                                coverage: None,
                             }));
                         }
                     }
@@ -6216,6 +6284,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                 &receipt_changeset_id,
                             )
                         }),
+                        coverage: Some(batch_coverage),
                     }))
                 }
                 // A partial apply leaves the claim deliberately unsettled:
@@ -8161,11 +8230,30 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Accepted anchor edits may leave unchanged resource declarations unresolved.
         self.validate_architecture_landing(&op_metas, &ops, &vis)
             .await?;
+        let merge_architecture_subjects = op_metas
+            .iter()
+            .filter(|m| m.is_put && architecture_admission::is_architecture_kind(m.kind))
+            .count();
+        let merge_strategic_subjects = op_metas
+            .iter()
+            .filter(|m| is_strategic_kind(m.kind))
+            .count();
+        let merge_coverage = |snapshot_truncated: bool, ran_strategic: bool| {
+            validation::merge_validation_coverage(
+                &req.name,
+                validation::MergeSuites {
+                    architecture: (merge_architecture_subjects > 0)
+                        .then(|| subject_count(merge_architecture_subjects)),
+                    strategic: ran_strategic.then(|| subject_count(merge_strategic_subjects)),
+                    snapshot_truncated,
+                },
+            )
+        };
 
         if req.dry_run {
             // Full detection already ran above; validate the post-merge
             // world via an in-memory overlay without persisting anything.
-            let pre_all = self.snapshot(&vis).await?;
+            let (pre_all, snapshot_truncated) = self.snapshot_with_truncation(None, &vis).await?;
             let post_world: Vec<StoredEntity> = match dry_run::apply_landing(&pre_all, &ops) {
                 Ok(outcomes) => {
                     let mut world: Vec<StoredEntity> = (*pre_all).clone();
@@ -8220,6 +8308,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 return Ok(Response::new(pb::MergeBranchResponse {
                     status: pb::merge_branch_response::Status::Invalid as i32,
                     validation: validation_issues,
+                    coverage: Some(merge_coverage(snapshot_truncated, false)),
                     ..landed.into_response()
                 }));
             }
@@ -8227,6 +8316,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             return Ok(Response::new(pb::MergeBranchResponse {
                 status: pb::merge_branch_response::Status::Validated as i32,
                 validation: validation_issues,
+                coverage: Some(merge_coverage(snapshot_truncated, true)),
                 ..landed.into_response()
             }));
         }
@@ -8234,8 +8324,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Real merge: land verbatim, then validate the *actual* post-merge
         // world. If invalid, nothing was persisted -- `land_branch_merge`
         // has not been called yet, so there is nothing to roll back.
-        let strategic_findings = {
-            let pre_all = self.snapshot(&vis).await?;
+        let (strategic_findings, merge_snapshot_truncated) = {
+            let (pre_all, snapshot_truncated) = self.snapshot_with_truncation(None, &vis).await?;
             let mut projected: Vec<StoredEntity> = (*pre_all).clone();
             let mut by_key: std::collections::HashMap<pb::EntityKey, usize> =
                 std::collections::HashMap::new();
@@ -8293,10 +8383,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     validation: validation_issues,
                     applied_count: 0,
                     operation_receipt: None,
+                    coverage: Some(merge_coverage(snapshot_truncated, false)),
                     ..landed.into_response()
                 }));
             }
-            merge_strategic_findings(&op_metas, &pre_all, &projected)
+            (
+                merge_strategic_findings(&op_metas, &pre_all, &projected),
+                snapshot_truncated,
+            )
         };
 
         // Claimed here, past every validation failure above (conflicts,
@@ -8374,6 +8468,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 operation_receipt: claim_key
                     .as_ref()
                     .map(|_| operation_receipts::fresh_receipt(&req.operation_id, "")),
+                coverage: Some(merge_coverage(merge_snapshot_truncated, true)),
                 ..Default::default()
             }));
         }
@@ -8437,6 +8532,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             operation_receipt: claim_key
                 .as_ref()
                 .map(|_| operation_receipts::fresh_receipt(&req.operation_id, &merge_changeset_id)),
+            coverage: Some(merge_coverage(merge_snapshot_truncated, true)),
             ..landed.into_response()
         }))
     }

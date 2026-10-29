@@ -102,22 +102,7 @@ impl EventModelServiceImpl {
     ) -> Result<(), Status> {
         let resources: Vec<_> = metas
             .iter()
-            .filter(|meta| {
-                meta.is_put
-                    && matches!(
-                        meta.kind,
-                        pb::EntityKind::Component
-                            | pb::EntityKind::ExternalSystem
-                            | pb::EntityKind::Channel
-                            | pb::EntityKind::DataStore
-                            | pb::EntityKind::Specification
-                            | pb::EntityKind::DataProduct
-                            | pb::EntityKind::Team
-                            | pb::EntityKind::Person
-                            | pb::EntityKind::Decision
-                            | pb::EntityKind::Document
-                    )
-            })
+            .filter(|meta| meta.is_put && is_architecture_kind(meta.kind))
             .filter_map(|meta| meta.entity.as_ref())
             .collect();
         if resources.is_empty() {
@@ -815,26 +800,13 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<(), Status> {
-        if !matches!(
-            entity.kind,
-            Some(
-                pb::entity::Kind::Component(_)
-                    | pb::entity::Kind::ExternalSystem(_)
-                    | pb::entity::Kind::Channel(_)
-                    | pb::entity::Kind::DataStore(_)
-                    | pb::entity::Kind::Specification(_)
-                    | pb::entity::Kind::DataProduct(_)
-                    | pb::entity::Kind::Team(_)
-                    | pb::entity::Kind::Person(_)
-                    | pb::entity::Kind::Decision(_)
-                    | pb::entity::Kind::Document(_)
-            )
-        ) {
+        let kind = entity_kind(entity)?;
+        if !is_architecture_kind(kind) {
             return Ok(());
         }
         self.validate_architecture_writes(
             &[OpMetaLike {
-                kind: entity_kind(entity)?,
+                kind,
                 id: entity_id(entity)?.clone(),
                 is_put: true,
                 entity: Some(entity.clone()),
@@ -844,6 +816,22 @@ impl EventModelServiceImpl {
         )
         .await
     }
+}
+
+pub(super) fn is_architecture_kind(kind: pb::EntityKind) -> bool {
+    matches!(
+        kind,
+        pb::EntityKind::Component
+            | pb::EntityKind::ExternalSystem
+            | pb::EntityKind::Channel
+            | pb::EntityKind::DataStore
+            | pb::EntityKind::Specification
+            | pb::EntityKind::DataProduct
+            | pb::EntityKind::Team
+            | pb::EntityKind::Person
+            | pb::EntityKind::Decision
+            | pb::EntityKind::Document
+    )
 }
 
 fn prepare_proposal_entity(
