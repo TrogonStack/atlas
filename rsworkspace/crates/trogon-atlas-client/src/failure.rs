@@ -613,6 +613,7 @@ mod tests {
                 message: "entity is referenced".into(),
                 ..Default::default()
             }],
+            coverage: None,
         };
         let err = anyhow::Error::new(rejected).context("BatchMutate failed");
         let failure = Failure::classify(&err);
@@ -636,6 +637,7 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            coverage: None,
         };
         let err = anyhow::Error::new(rejected);
         let failure = Failure::classify(&err);

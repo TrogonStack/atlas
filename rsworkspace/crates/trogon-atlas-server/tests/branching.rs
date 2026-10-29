@@ -1963,6 +1963,15 @@ async fn merge_branch_invalid_via_dangling_reference() {
         .iter()
         .any(|i| i.code == "TERM_DANGLING_ENTITY"
             && i.severity == pb::validation_issue::Severity::Error as i32));
+    let strategic = resp
+        .coverage
+        .as_ref()
+        .and_then(|c| c.checks.iter().find(|c| c.check_id == "strategic"))
+        .expect("an invalid merge must report strategic coverage");
+    assert_eq!(
+        strategic.reason, "kind_not_applicable",
+        "a Term-only merge never reaches strategic, even when hygiene blocks it"
+    );
     assert_eq!(resp.applied_count, 0);
     assert_eq!(
         (resp.added_count, resp.changed_count, resp.deleted_count),
