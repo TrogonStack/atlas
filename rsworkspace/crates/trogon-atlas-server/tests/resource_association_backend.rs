@@ -1596,3 +1596,212 @@ async fn unchanged_dangling_storage_claims_stay_editable_for_every_owner_kind() 
         .await;
     }
 }
+
+fn connection_subject(owner: &pb::Entity, id: Option<pb::ConnectionId>) -> pb::CatalogSubject {
+    pb::CatalogSubject {
+        selection: Some(pb::catalog_subject::Selection::Connection(connection(
+            owner, id,
+        ))),
+    }
+}
+fn decision_on(slug: &str, subject: pb::CatalogSubject) -> pb::entity::Kind {
+    let option_id = pb::LocalValueId {
+        value: uuid::Uuid::now_v7().to_string(),
+    };
+    pb::entity::Kind::Decision(pb::Decision {
+        id: Some(id(slug)),
+        title: Some(pb::CatalogTitle { value: slug.into() }),
+        subjects: vec![pb::SubjectAssociation {
+            subject: Some(subject),
+            ..Default::default()
+        }],
+        status: pb::DecisionStatus::Proposed as i32,
+        context: Some(pb::CatalogText {
+            value: "Choose".into(),
+        }),
+        rationale: Some(pb::CatalogText {
+            value: "Explicit".into(),
+        }),
+        options: vec![pb::DecisionOption {
+            option_id: Some(option_id),
+            title: Some(pb::CatalogTitle {
+                value: "Native".into(),
+            }),
+            description: Some(pb::CatalogText {
+                value: "Keep".into(),
+            }),
+        }],
+        ..Default::default()
+    })
+}
+async fn subject_decisions(
+    client: &mut Client,
+    subject: &pb::CatalogSubject,
+    token: &str,
+    branch: Option<&str>,
+) -> pb::ListSubjectDecisionsResponse {
+    client
+        .list_subject_decisions(request(
+            pb::ListSubjectDecisionsRequest {
+                subject: Some(subject.clone()),
+                status: None,
+            },
+            token,
+            branch,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+}
+fn occurrence_ids(value: &pb::Entity) -> Vec<pb::ConnectionId> {
+    match value.kind.as_ref().unwrap() {
+        pb::entity::Kind::Channel(v) => v
+            .links
+            .iter()
+            .map(|item| item.connection_id.clone().unwrap())
+            .collect(),
+        pb::entity::Kind::Component(v) => v
+            .storage_claims
+            .iter()
+            .map(|item| item.connection_id.clone().unwrap())
+            .collect(),
+        pb::entity::Kind::ExternalSystem(v) => v
+            .storage_claims
+            .iter()
+            .map(|item| item.connection_id.clone().unwrap())
+            .collect(),
+        pb::entity::Kind::DataProduct(v) => v
+            .storage_claims
+            .iter()
+            .map(|item| item.connection_id.clone().unwrap())
+            .collect(),
+        _ => panic!("owner"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_through_their_lifecycle()
+{
+    let mut client = client().await;
+    let (_, _, auto) = anchors(&mut client).await;
+    let pb::entity::Kind::AutomationSlice(slice) = auto.kind.as_ref().unwrap() else {
+        panic!()
+    };
+    let observation = connection(&auto, slice.source_read_models[0].connection_id.clone());
+    channel(&mut client, "inner", &observation, None, &[], vec![]).await;
+    let composes = pb::ChannelLinkKind::Composes;
+    let hub = channel(
+        &mut client,
+        "hub",
+        &observation,
+        None,
+        &[],
+        vec![
+            link(composes, "inner", &[]),
+            link(composes, "inner", &[]),
+            link(pb::ChannelLinkKind::RoutesTo, "inner", &[]),
+        ],
+    )
+    .await;
+    let store = data_store(
+        &mut client,
+        "storage",
+        pb::data_store::AccessMode::ReadWrite,
+        &["result"],
+    )
+    .await;
+    let read = pb::StorageDirection::Read;
+    let mut owners = vec![hub];
+    for owner in [
+        pb::EntityKind::Component,
+        pb::EntityKind::ExternalSystem,
+        pb::EntityKind::DataProduct,
+    ] {
+        owners.push(
+            put(
+                &mut client,
+                owner_kind(
+                    owner,
+                    &format!("holder-{}", owner as i32),
+                    vec![
+                        claim(&store, read, Some(0)),
+                        claim(&store, read, Some(0)),
+                        claim(&store, pb::StorageDirection::Write, None),
+                    ],
+                ),
+            )
+            .await,
+        );
+    }
+    for (position, owner) in owners.iter().enumerate() {
+        let ids = occurrence_ids(owner);
+        assert_eq!(ids.len(), 3);
+        for (index, connection_id) in ids.iter().enumerate() {
+            let selected = connection_subject(owner, Some(connection_id.clone()));
+            put(
+                &mut client,
+                decision_on(&format!("pick-{position}-{index}"), selected.clone()),
+            )
+            .await;
+        }
+        for (index, connection_id) in ids.iter().enumerate() {
+            let selected = connection_subject(owner, Some(connection_id.clone()));
+            let found = subject_decisions(&mut client, &selected, READER, None).await;
+            assert_eq!(
+                found.subject_state,
+                pb::CatalogResolutionState::Resolved as i32,
+                "{position}/{index}"
+            );
+            assert_eq!(
+                found.declarations.len(),
+                1,
+                "{position}/{index}: equal siblings are never merged"
+            );
+            let Some(pb::catalog_declaration::Declaration::Subject(association)) =
+                &found.declarations[0].declaration
+            else {
+                panic!("subject provenance");
+            };
+            assert_eq!(association.subject.as_ref(), Some(&selected));
+        }
+    }
+
+    for (position, owner) in owners.iter().enumerate() {
+        let ids = occurrence_ids(owner);
+        let mut shrunk = kind_entity(owner);
+        match &mut shrunk {
+            pb::entity::Kind::Channel(v) => {
+                v.links.remove(0);
+            }
+            pb::entity::Kind::Component(v) => {
+                v.storage_claims.remove(0);
+            }
+            pb::entity::Kind::ExternalSystem(v) => {
+                v.storage_claims.remove(0);
+            }
+            pb::entity::Kind::DataProduct(v) => {
+                v.storage_claims.remove(0);
+            }
+            _ => panic!("owner"),
+        }
+        let after = put(&mut client, shrunk).await;
+        assert_eq!(occurrence_ids(&after), ids[1..], "{position}");
+        let removed = connection_subject(&after, Some(ids[0].clone()));
+        let found = subject_decisions(&mut client, &removed, READER, None).await;
+        assert_eq!(
+            found.subject_state,
+            pb::CatalogResolutionState::Unresolved as i32,
+            "{position}: a removed occurrence no longer resolves"
+        );
+        for connection_id in &ids[1..] {
+            let kept = connection_subject(&after, Some(connection_id.clone()));
+            let found = subject_decisions(&mut client, &kept, READER, None).await;
+            assert_eq!(
+                found.subject_state,
+                pb::CatalogResolutionState::Resolved as i32,
+                "{position}: surviving occurrences keep resolving"
+            );
+            assert_eq!(found.declarations.len(), 1, "{position}");
+        }
+    }
+}
