@@ -533,3 +533,178 @@ async fn authenticated_cli_absent_aggregate_reapply_isolates_versions() {
     assert_eq!(read(&mut native, 1).await, edited_v1);
     assert_eq!(read(&mut native, 2).await, before_v2);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_branch_preserves_business_identity_and_discards_unmerged_edits() {
+    use serde_json::json;
+    use trogon_atlas_proto as pb;
+
+    let endpoint = authenticated_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("schema.yaml");
+    let namespace = "cli-branch";
+    let product = json!({
+        "apiVersion": trogon_atlas_client::manifest::API_VERSION,
+        "kind": "Schema",
+        "metadata": {"namespace": namespace, "name": "product"},
+        "spec": {"title": "Product", "fields": [{"name": "sku", "type": {"string": {}}}]}
+    });
+    std::fs::write(&path, product.to_string()).unwrap();
+    authed_ok(&endpoint, WRITER, &["apply", "-f", path.to_str().unwrap()]);
+    let order = json!({
+        "apiVersion": trogon_atlas_client::manifest::API_VERSION,
+        "kind": "Schema",
+        "metadata": {"namespace": namespace, "name": "order"},
+        "spec": {
+            "title": "Order",
+            "fields": [
+                {"name": "customer", "repeated": false, "type": {"object": {"fields": [
+                    {"name": "id", "repeated": false, "type": {"string": {}}}
+                ]}}},
+                {"name": "product_ref", "type": {"ref": {"ref": {"schema": "product"}}}}
+            ],
+            "identifiers": [{
+                "property": {"segments": [
+                    {"name": "customer", "repeated": false},
+                    {"name": "id", "repeated": false}
+                ]},
+                "role": "BUSINESS_IDENTIFIER_ROLE_PRIMARY"
+            }],
+            "propertyRelationships": [{
+                "source": {"segments": [{"name": "product_ref", "repeated": false}]},
+                "targetEntity": "product",
+                "targetProperty": {"segments": [{"name": "sku", "repeated": false}]},
+                "label": {"value": "hasMany"}
+            }]
+        }
+    });
+    std::fs::write(&path, order.to_string()).unwrap();
+    authed_ok(&endpoint, WRITER, &["apply", "-f", path.to_str().unwrap()]);
+    let address = format!("schema/{namespace}/order@1");
+    let manifest = authed_ok(&endpoint, WRITER, &["get", &address])["data"]["manifest"].clone();
+    let identifier_id = manifest["spec"]["identifiers"][0]["connectionId"]["value"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let relationship_id = manifest["spec"]["propertyRelationships"][0]["connectionId"]["value"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(identifier_id, "");
+    assert_ne!(relationship_id, "");
+    let mut native = trogon_atlas_client::client::connect(&endpoint, Some(WRITER), 30)
+        .await
+        .unwrap();
+    let read = async |client: &mut trogon_atlas_client::client::Client| {
+        client
+            .get_entity(pb::GetEntityRequest {
+                kind: pb::EntityKind::Schema as i32,
+                id: Some(pb::Id {
+                    namespace: namespace.into(),
+                    slug: "order".into(),
+                    version: 1,
+                }),
+            })
+            .await
+            .unwrap()
+            .into_inner()
+    };
+    let before = read(&mut native).await;
+    let uid = before
+        .entity
+        .as_ref()
+        .unwrap()
+        .system
+        .as_ref()
+        .unwrap()
+        .uid
+        .clone();
+    assert_ne!(uid, "");
+    authed_ok(
+        &endpoint,
+        WRITER,
+        &["branch", "create", "bd-cli-keep", "--doc", "business ids"],
+    );
+    let mut branched = manifest.clone();
+    branched["spec"]["title"] = json!("Branch title");
+    std::fs::write(&path, branched.to_string()).unwrap();
+    authed_ok(
+        &endpoint,
+        WRITER,
+        &[
+            "--branch",
+            "bd-cli-keep",
+            "apply",
+            "-f",
+            path.to_str().unwrap(),
+        ],
+    );
+    let on_branch = authed_ok(
+        &endpoint,
+        WRITER,
+        &["--branch", "bd-cli-keep", "get", &address],
+    );
+    let on_branch_manifest = &on_branch["data"]["manifest"];
+    assert_eq!(on_branch_manifest["spec"]["title"], "Branch title");
+    assert_eq!(
+        on_branch_manifest["spec"]["identifiers"][0]["connectionId"]["value"],
+        identifier_id
+    );
+    assert_eq!(
+        on_branch_manifest["spec"]["propertyRelationships"][0]["connectionId"]["value"],
+        relationship_id
+    );
+    assert_eq!(read(&mut native).await, before);
+    authed_ok(&endpoint, WRITER, &["branch", "merge", "bd-cli-keep"]);
+    let landed = read(&mut native).await;
+    let pb::entity::Kind::Schema(schema) = landed.entity.as_ref().unwrap().kind.as_ref().unwrap()
+    else {
+        panic!("schema");
+    };
+    assert_eq!(schema.title, "Branch title");
+    assert_eq!(
+        landed.entity.as_ref().unwrap().system.as_ref().unwrap().uid,
+        uid
+    );
+    assert_eq!(
+        schema.identifiers[0].connection_id.as_ref().unwrap().value,
+        identifier_id
+    );
+    assert_eq!(
+        schema.property_relationships[0]
+            .connection_id
+            .as_ref()
+            .unwrap()
+            .value,
+        relationship_id
+    );
+    assert_ne!(landed.etag, before.etag);
+    authed_ok(
+        &endpoint,
+        WRITER,
+        &["branch", "create", "bd-cli-drop", "--doc", "discard"],
+    );
+    let mut discarded =
+        authed_ok(&endpoint, WRITER, &["get", &address])["data"]["manifest"].clone();
+    discarded["spec"]["title"] = json!("Discarded");
+    std::fs::write(&path, discarded.to_string()).unwrap();
+    authed_ok(
+        &endpoint,
+        WRITER,
+        &[
+            "--branch",
+            "bd-cli-drop",
+            "apply",
+            "-f",
+            path.to_str().unwrap(),
+        ],
+    );
+    authed_ok(
+        &endpoint,
+        WRITER,
+        &["branch", "merge", "bd-cli-drop", "--dry-run"],
+    );
+    assert_eq!(read(&mut native).await, landed);
+    authed_ok(&endpoint, WRITER, &["branch", "delete", "bd-cli-drop"]);
+    assert_eq!(read(&mut native).await, landed);
+}

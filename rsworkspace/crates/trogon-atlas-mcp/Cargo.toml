@@ -35,6 +35,7 @@ tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true }
 tower = "0.5"
 toml = "1.1"
+http = "1"
 rmcp = { version = "3", features = ["server", "client", "transport-streamable-http-client-reqwest"] }
 
 [lints]
