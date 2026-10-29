@@ -328,3 +328,29 @@ fn group_diff_treats_omitted_ids_as_unassigned_only_for_the_same_ordered_endpoin
         apply::Action::Configure
     );
 }
+
+#[test]
+fn integrated_graph_target_and_repeated_schema_graph_members_roundtrip_exact_versions() {
+    let input = json!({"apiVersion":manifest::API_VERSION,"kind":"DesignGraph","metadata":{"namespace":"architecture","name":"graph","version":"18446744073709551615"},"spec":{"title":{"value":"Graph"},"profile":"DESIGN_GRAPH_PROFILE_DIAGRAM","steps":[{"title":{"value":"Group step"},"target":{"systemGroup":"platform@9007199254740993"}}]}});
+    let mut members = members();
+    members.as_array_mut().unwrap().extend([
+        json!({"member":{"schema":"model@18446744073709551615"}}),
+        json!({"member":{"designGraph":"graph@18446744073709551615"}}),
+        json!({"member":{"designGraph":"graph@18446744073709551615"}}),
+    ]);
+    let group = group(&members);
+    let domain = json!({"apiVersion":manifest::API_VERSION,"kind":"Domain","metadata":{"namespace":"architecture","name":"domain"},"spec":{"members":[{"member":{"schema":"model@18446744073709551615"}},{"member":{"designGraph":"graph@18446744073709551615"}},{"member":{"designGraph":"graph@18446744073709551615"}}]}});
+    let pool = TranscodePool::builtin().unwrap();
+    let validator = jsonschema::validator_for(&manifest_schema::generate().unwrap()).unwrap();
+    for input in [input, group, domain] {
+        assert!(validator.is_valid(&input), "{input}");
+        let parsed = manifest::parse_str(&input.to_string(), "integrated.yaml").unwrap();
+        let rendered = export::render_board(&[parsed[0].entity.clone()], &[], &pool).unwrap();
+        assert_eq!(
+            rendered.skipped,
+            [] as [trogon_atlas_proto::SkippedEntity; 0]
+        );
+        let output = manifest::parse_str(&rendered.manifests, "export.yaml").unwrap();
+        assert_eq!(output[0].entity, parsed[0].entity);
+    }
+}

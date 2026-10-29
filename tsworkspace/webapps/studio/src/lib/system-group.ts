@@ -22,6 +22,7 @@ const TARGET_KINDS: Record<string, EntityKind> = {
   externalSystem: 'externalSystem',
   dataStore: 'dataStore',
   schema: 'schema',
+  designGraph: 'designGraph',
   domain: 'domain',
   dataProduct: 'dataProduct',
   persona: 'persona',

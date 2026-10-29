@@ -156,6 +156,7 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
     'messageClaims.fieldSelections.*',
   ],
   domain: [
+    'members.*',
     'messageClaims.claims.*',
     'messageClaims.routes.*',
     'messageClaims.triggers.*',
@@ -164,7 +165,6 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
   channel: ['bindings.*'],
   dataStore: ['attachments.*'],
   systemGroup: ['members.*', 'relationships.*', 'actors.*'],
-  domain: ['members.*'],
   specification: [
     'schemas.*.definition',
     'messages.*.schemas.*',

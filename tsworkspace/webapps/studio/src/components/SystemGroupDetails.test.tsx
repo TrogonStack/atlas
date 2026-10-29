@@ -18,7 +18,7 @@ function fixture() {
         members: [
           { ...connection('member-a'), member: { component: { id: id('api') } }, doc: { value: '<b>inert</b>' } },
           { ...connection('member-b'), member: { component: { id: id('api') } } },
-          { ...connection('member-c'), member: { designGraph: { id: id('graph') } } },
+          { ...connection('member-c'), member: { designGraph: { id: id('graph', '9007199254740993') } } },
           { ...connection('member-d'), member: { systemGroup: { id: id('platform') } } },
         ],
         relationships: [{ ...connection('relationship-a'), target: { id: id('billing') } }],
@@ -42,6 +42,7 @@ function fixture() {
       },
     },
     { domain: { id: id('empty'), title: 'Empty' } },
+    { designGraph: { id: id('graph', '9007199254740993'), title: { value: 'Graph' } } },
   ]);
 }
 
@@ -52,7 +53,7 @@ it('maps the wire kind to the Studio kind', () => {
   expect(fixture().byKind.get('systemGroup')).toHaveLength(2);
 });
 
-it('keeps equal members distinct, links exact targets and leaves the pending design graph kind unresolved', () => {
+it('keeps equal members distinct, links exact targets and links integrated design graph members', () => {
   const model = fixture();
   const select = vi.fn();
   const { container } = render(<SystemGroupDetails entity={model.entities[0]} model={model} onSelect={select} />);
@@ -62,7 +63,8 @@ it('keeps equal members distinct, links exact targets and leaves the pending des
   expect(screen.getAllByRole('button', { name: 'groups/api@1' })).toHaveLength(2);
   fireEvent.click(screen.getAllByRole('button', { name: 'groups/api@1' })[0]);
   expect(select).toHaveBeenCalledWith(entityKey('component', id('api')));
-  expect(screen.getByText('Unavailable typed target (designGraph)')).toBeDefined();
+  fireEvent.click(screen.getByRole('button', { name: 'groups/graph@9007199254740993' }));
+  expect(select).toHaveBeenCalledWith(entityKey('designGraph', id('graph', '9007199254740993')));
   expect(screen.getByText('groups/operator@1 (not loaded)')).toBeDefined();
   expect(screen.getByText('inbound')).toBeDefined();
   expect(screen.getByText('operates')).toBeDefined();

@@ -17,13 +17,20 @@ use crate::{
 fn checked_prepared_owner(entity: Entity) -> Result<Entity, ConnectionError> {
     if matches!(
         entity.kind,
-        Some(entity::Kind::Document(_) | entity::Kind::Decision(_) | entity::Kind::DesignGraph(_))
+        Some(
+            entity::Kind::Document(_)
+                | entity::Kind::Decision(_)
+                | entity::Kind::DesignGraph(_)
+                | entity::Kind::SystemGroup(_)
+        )
     ) && entity.encoded_len() > decision_document::MAX_ENCODED_BYTES
     {
         return Err(ConnectionError::Catalog(
             "catalog entity byte limit exceeded".into(),
         ));
     }
+    crate::system_group::validate_values(&entity)
+        .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
     Ok(entity)
 }
 

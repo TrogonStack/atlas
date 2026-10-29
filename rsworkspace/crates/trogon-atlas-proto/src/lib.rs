@@ -327,12 +327,8 @@ mod tests {
         #[allow(clippy::expect_used)]
         let all_kinds_len =
             i32::try_from(ALL_KINDS.len()).expect("ALL_KINDS is too large to fit in i32");
-        // Discriminant 38 is reserved for the parallel DesignGraph kind until
-        // it is integrated; remove the allowance when that kind is listed.
-        let reserved_pending = i32::from(!ALL_KINDS.iter().any(|&k| k as i32 == 38));
         assert_eq!(
-            all_kinds_len + reserved_pending,
-            max_discriminant,
+            all_kinds_len, max_discriminant,
             "ALL_KINDS length must equal the highest enum discriminant; \
              add the new kind to ALL_KINDS when extending the proto enum"
         );

@@ -79,6 +79,11 @@ pub struct ExternalSystemRef {
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemGroupRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DomainRef {
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
@@ -181,6 +186,7 @@ pub enum EntityKind {
     Decision = 36,
     Document = 37,
     DesignGraph = 38,
+    SystemGroup = 39,
 }
 impl EntityKind {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -228,6 +234,7 @@ impl EntityKind {
             Self::Decision => "ENTITY_KIND_DECISION",
             Self::Document => "ENTITY_KIND_DOCUMENT",
             Self::DesignGraph => "ENTITY_KIND_DESIGN_GRAPH",
+            Self::SystemGroup => "ENTITY_KIND_SYSTEM_GROUP",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -272,6 +279,7 @@ impl EntityKind {
             "ENTITY_KIND_DECISION" => Some(Self::Decision),
             "ENTITY_KIND_DOCUMENT" => Some(Self::Document),
             "ENTITY_KIND_DESIGN_GRAPH" => Some(Self::DesignGraph),
+            "ENTITY_KIND_SYSTEM_GROUP" => Some(Self::SystemGroup),
             _ => None,
         }
     }
@@ -3579,6 +3587,204 @@ impl CommunicationDirection {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemGroupMember {
+    #[prost(oneof="system_group_member::Target", tags="1, 2, 3, 4, 5, 6")]
+    pub target: ::core::option::Option<system_group_member::Target>,
+}
+/// Nested message and enum types in `SystemGroupMember`.
+pub mod system_group_member {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="1")]
+        SystemGroup(super::SystemGroupRef),
+        #[prost(message, tag="2")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="3")]
+        ExternalSystem(super::ExternalSystemRef),
+        #[prost(message, tag="4")]
+        DataStore(super::DataStoreRef),
+        #[prost(message, tag="5")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="6")]
+        DesignGraph(super::DesignGraphRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemGroupMembership {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub member: ::core::option::Option<SystemGroupMember>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemGroupRelationship {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub target: ::core::option::Option<SystemGroupRef>,
+    /// optional; omission never erases the authored edge
+    #[prost(message, optional, tag="3")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemActorTarget {
+    #[prost(oneof="system_actor_target::Target", tags="1, 2, 3, 4")]
+    pub target: ::core::option::Option<system_actor_target::Target>,
+}
+/// Nested message and enum types in `SystemActorTarget`.
+pub mod system_actor_target {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="1")]
+        Persona(super::PersonaRef),
+        #[prost(message, tag="2")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="3")]
+        ExternalSystem(super::ExternalSystemRef),
+        #[prost(message, tag="4")]
+        SystemGroup(super::SystemGroupRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SystemActorLink {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub target: ::core::option::Option<SystemActorTarget>,
+    #[prost(enumeration="SystemActorDirection", tag="3")]
+    pub direction: i32,
+    /// optional; presence is authored
+    #[prost(message, optional, tag="4")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="5")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+/// An abstract grouping of exact architectural entities. It is neither a
+/// deployable Component nor a third-party ExternalSystem. Membership is a
+/// curation claim made by the group: no ownership, deployment, exclusivity,
+/// permission or runtime meaning.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemGroup {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="5")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(enumeration="SystemGroupScope", tag="6")]
+    pub scope: i32,
+    #[prost(message, repeated, tag="7")]
+    pub members: ::prost::alloc::vec::Vec<SystemGroupMembership>,
+    #[prost(message, repeated, tag="8")]
+    pub relationships: ::prost::alloc::vec::Vec<SystemGroupRelationship>,
+    #[prost(message, repeated, tag="9")]
+    pub actors: ::prost::alloc::vec::Vec<SystemActorLink>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DomainMember {
+    #[prost(oneof="domain_member::Target", tags="1, 2, 3, 4, 5, 6, 7")]
+    pub target: ::core::option::Option<domain_member::Target>,
+}
+/// Nested message and enum types in `DomainMember`.
+pub mod domain_member {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Target {
+        #[prost(message, tag="1")]
+        Domain(super::DomainRef),
+        #[prost(message, tag="2")]
+        SystemGroup(super::SystemGroupRef),
+        #[prost(message, tag="3")]
+        Component(super::ComponentRef),
+        #[prost(message, tag="4")]
+        DataProduct(super::DataProductRef),
+        #[prost(message, tag="5")]
+        Schema(super::SchemaRef),
+        #[prost(message, tag="6")]
+        DesignGraph(super::DesignGraphRef),
+        #[prost(message, tag="7")]
+        ExternalSystem(super::ExternalSystemRef),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DomainMembership {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub member: ::core::option::Option<DomainMember>,
+    #[prost(message, optional, tag="3")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
+/// Descriptive classification of a group. It grants no ownership and does not
+/// restrict which authorized members a group may list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SystemGroupScope {
+    Unspecified = 0,
+    Internal = 1,
+    External = 2,
+}
+impl SystemGroupScope {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SYSTEM_GROUP_SCOPE_UNSPECIFIED",
+            Self::Internal => "SYSTEM_GROUP_SCOPE_INTERNAL",
+            Self::External => "SYSTEM_GROUP_SCOPE_EXTERNAL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SYSTEM_GROUP_SCOPE_UNSPECIFIED" => Some(Self::Unspecified),
+            "SYSTEM_GROUP_SCOPE_INTERNAL" => Some(Self::Internal),
+            "SYSTEM_GROUP_SCOPE_EXTERNAL" => Some(Self::External),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum SystemActorDirection {
+    Unspecified = 0,
+    /// actor toward the group
+    Inbound = 1,
+    /// group toward the actor
+    Outbound = 2,
+}
+impl SystemActorDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "SYSTEM_ACTOR_DIRECTION_UNSPECIFIED",
+            Self::Inbound => "SYSTEM_ACTOR_DIRECTION_INBOUND",
+            Self::Outbound => "SYSTEM_ACTOR_DIRECTION_OUTBOUND",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "SYSTEM_ACTOR_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "SYSTEM_ACTOR_DIRECTION_INBOUND" => Some(Self::Inbound),
+            "SYSTEM_ACTOR_DIRECTION_OUTBOUND" => Some(Self::Outbound),
+            _ => None,
+        }
+    }
+}
 /// The bounded context itself, as data (Decision #27): one per namespace,
 /// identified BY the namespace (id.slug == id.namespace). Carries the
 /// context charter -- what this boundary owns, its links and metadata.
@@ -3691,6 +3897,8 @@ pub struct Domain {
     pub project: ::core::option::Option<ProjectRef>,
     #[prost(message, optional, tag="7")]
     pub message_claims: ::core::option::Option<MessageClaims>,
+    #[prost(message, repeated, tag="8")]
+    pub members: ::prost::alloc::vec::Vec<DomainMembership>,
 }
 /// The codebase / repository / customer the model is being mapped FROM.
 /// In a multi-project store (e.g. one server holding several unrelated
@@ -4968,7 +5176,7 @@ pub struct TopologyExternalSystem {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TopologyStepTarget {
-    #[prost(oneof="topology_step_target::Selection", tags="1, 2, 3, 4, 5, 6, 7, 8, 9")]
+    #[prost(oneof="topology_step_target::Selection", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10")]
     pub selection: ::core::option::Option<topology_step_target::Selection>,
 }
 /// Nested message and enum types in `TopologyStepTarget`.
@@ -4993,6 +5201,8 @@ pub mod topology_step_target {
         Custom(super::TopologyCustomStep),
         #[prost(message, tag="9")]
         ExternalSystem(super::TopologyExternalSystem),
+        #[prost(message, tag="10")]
+        SystemGroup(super::SystemGroupRef),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -5557,7 +5767,7 @@ impl DesignGraphProfile {
 pub struct Entity {
     #[prost(message, optional, tag="29")]
     pub system: ::core::option::Option<super::super::r#type::v1alpha1::SystemMeta>,
-    #[prost(oneof="entity::Kind", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39")]
+    #[prost(oneof="entity::Kind", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40")]
     pub kind: ::core::option::Option<entity::Kind>,
 }
 /// Nested message and enum types in `Entity`.
@@ -5640,6 +5850,8 @@ pub mod entity {
         Document(super::Document),
         #[prost(message, tag="39")]
         DesignGraph(super::DesignGraph),
+        #[prost(message, tag="40")]
+        SystemGroup(super::SystemGroup),
     }
 }
 // @@protoc_insertion_point(module)

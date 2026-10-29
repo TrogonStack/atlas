@@ -424,20 +424,23 @@ async fn schema_variants_keep_scope_case_defaults_and_mixed_targets() {
         Some(pb::schema_binding::Type::Schema(_))
     ));
     assert_eq!(first[3].is_default, Some(true));
-    assert!(first[3].environments.is_empty());
+    assert_eq!(first[3].environments, [] as [pb::EnvironmentName; 0]);
     assert_eq!(first[4].role, pb::schema_binding::Role::Headers as i32);
     assert!(first[4].is_default.is_none());
     assert_eq!(first[4].environments, vec![env("Blue")]);
     assert_eq!(first[5].role, pb::schema_binding::Role::Headers as i32);
     assert_eq!(first[5].is_default, Some(true));
-    assert!(first[5].environments.is_empty());
+    assert_eq!(first[5].environments, [] as [pb::EnvironmentName; 0]);
     assert!(stored.messages[1].schemas[0].is_default.is_none());
     assert_eq!(
         stored.messages[1].schemas[0].environments,
         vec![env("Blue")]
     );
     assert_eq!(stored.messages[1].schemas[1].is_default, Some(true));
-    assert!(stored.messages[1].schemas[1].environments.is_empty());
+    assert_eq!(
+        stored.messages[1].schemas[1].environments,
+        [] as [pb::EnvironmentName; 0]
+    );
     let ids: std::collections::HashSet<_> = first
         .iter()
         .map(|value| value.connection_id.clone().unwrap().value)
@@ -758,7 +761,7 @@ async fn default_and_environment_edits_renew_ids_and_retire_old_selectors() {
         rebound.subject_state,
         pb::ResponsibilityResolutionState::Resolved as i32
     );
-    assert!(rebound.assignments.is_empty());
+    assert_eq!(rebound.assignments, [] as [pb::ResponsibilityAssignment; 0]);
 
     let mut header = renewed.clone();
     spec_mut(&mut header).messages[0].schemas[0].environments = vec![env("other")];
@@ -792,10 +795,12 @@ async fn default_and_environment_edits_renew_ids_and_retire_old_selectors() {
         stale_header.subject_state,
         pb::ResponsibilityResolutionState::Unresolved as i32
     );
-    assert!(assignments(&mut client, subject(new_header))
-        .await
-        .assignments
-        .is_empty());
+    assert_eq!(
+        assignments(&mut client, subject(new_header))
+            .await
+            .assignments,
+        [] as [pb::ResponsibilityAssignment; 0]
+    );
     assert_eq!(
         spec_of(&header).operations[0].messages[0].role,
         pb::operation_message::Role::Request as i32

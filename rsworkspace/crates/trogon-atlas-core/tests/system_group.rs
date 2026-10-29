@@ -605,8 +605,11 @@ fn extraction_reports_every_typed_occurrence_with_its_diagnostic_path() {
 }
 
 #[test]
-fn design_graph_members_are_typed_but_wait_for_the_kind_to_land() {
-    assert_eq!(system_group::design_graph_kind(), None);
+fn design_graph_members_resolve_the_integrated_native_kind() {
+    assert_eq!(
+        system_group::design_graph_kind(),
+        Some(EntityKind::DesignGraph)
+    );
     let mut owner = platform();
     group_mut(&mut owner)
         .members

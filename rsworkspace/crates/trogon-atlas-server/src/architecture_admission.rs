@@ -927,7 +927,6 @@ impl EventModelServiceImpl {
                 super::ListFilter {
                     kinds: &[
                         pb::EntityKind::SystemGroup,
-                        pb::EntityKind::Domain,
                         pb::EntityKind::Component,
                         pb::EntityKind::Domain,
                         pb::EntityKind::ExternalSystem,

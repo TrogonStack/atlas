@@ -354,7 +354,8 @@ async fn schema_valid_but_semantically_malformed_annotations_are_rejected_by_the
     }
     let before = stored_metadata(&client, namespace).await;
     let tool_a = json!({"name":{"value":"lookup"},"type":{"value":"manual"}});
-    let edits: Vec<(&str, usize, Box<dyn Fn(&mut serde_json::Value)>)> = vec![
+    type MetadataEdit = (&'static str, usize, Box<dyn Fn(&mut serde_json::Value)>);
+    let edits: Vec<MetadataEdit> = vec![
         (
             "empty present model",
             0,

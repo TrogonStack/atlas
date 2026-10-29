@@ -190,3 +190,48 @@ async fn group_cli_refuses_self_membership_and_unresolved_targets_without_writin
     let output = run(&endpoint, &["get", "system_group/cli-refused/loop@1"]);
     assert!(!output.status.success());
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_integrated_topology_group_targets_keep_large_exact_versions() {
+    let endpoint = start_server().await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("integrated.yaml");
+    std::fs::write(
+        &path,
+        r"apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: SystemGroup
+metadata: {namespace: cli-composed, name: platform, version: '18446744073709551615'}
+spec: {title: Platform, scope: SYSTEM_GROUP_SCOPE_INTERNAL}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: DesignGraph
+metadata: {namespace: cli-composed, name: graph, version: '9007199254740993'}
+spec:
+  title: {value: Graph}
+  profile: DESIGN_GRAPH_PROFILE_DIAGRAM
+  steps:
+    - title: {value: Group step}
+      target: {systemGroup: platform@18446744073709551615}
+",
+    )
+    .unwrap();
+    cli(&endpoint, &["apply", "-f", path.to_str().unwrap()]);
+    let request = r#"{"graph":{"id":{"namespace":"cli-composed","slug":"graph","version":"9007199254740993"}}}"#;
+    let output = cli(
+        &endpoint,
+        &["get-design-graph-detail", "--request", request],
+    );
+    let detail: serde_json::Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(
+        detail["targets"][0]["target"]["systemGroup"]["id"]["version"],
+        "18446744073709551615"
+    );
+    assert_eq!(
+        detail["targets"][0]["owner"]["owner"]["kind"],
+        "ENTITY_KIND_SYSTEM_GROUP"
+    );
+    assert_eq!(
+        detail["targets"][0]["state"],
+        "CATALOG_RESOLUTION_STATE_RESOLVED"
+    );
+}

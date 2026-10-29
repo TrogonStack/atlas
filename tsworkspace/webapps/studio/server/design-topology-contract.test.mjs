@@ -41,3 +41,24 @@ describe('design topology actual serializer boundary', () => {
     expect(() => roundTrip(rpc, input)).toThrow(/expected|unknown/);
   });
 });
+
+it('preserves integrated SystemGroup topology and repeated Schema/DesignGraph members through actual service codecs', () => {
+  const service = definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService'];
+  const method = (rpc) => Object.values(service).find((item) => item.path.endsWith(`/${rpc}`));
+  const groupId = { ...id, slug: 'platform', version: '18446744073709551615' };
+  const target = { systemGroup: { id: groupId } };
+  const graph = { designGraph: { id, title: { value: 'Graph' }, steps: [{ stepId: { value: '01930000-0000-7000-8000-000000000001' }, title: { value: 'Group step' }, target }] } };
+  const members = [
+    { connectionId: { value: '01930000-0000-7000-8000-000000000002' }, member: { schema: ref } },
+    { connectionId: { value: '01930000-0000-7000-8000-000000000003' }, member: { designGraph: ref } },
+    { connectionId: { value: '01930000-0000-7000-8000-000000000004' }, member: { designGraph: ref } },
+  ];
+  for (const entity of [graph, { systemGroup: { id: groupId, title: 'Platform', scope: 'SYSTEM_GROUP_SCOPE_EXTERNAL', members } }, { domain: { id: groupId, members } }]) {
+    const input = { entity };
+    const codec = definitions['trogonatlas.api.eventmodel.v1alpha1.PutEntityRequest'];
+    expect(codec.deserialize(method('PutEntity').requestSerialize(input))).toEqual(input);
+  }
+  const input = { entity: graph, targets: [{ target, state: 'CATALOG_RESOLUTION_STATE_RESOLVED', owner: { owner: { kind: 'ENTITY_KIND_SYSTEM_GROUP', id: groupId }, uid: 'native-group' } }] };
+  const codec = definitions['trogonatlas.api.eventmodel.v1alpha1.GetDesignGraphDetailResponse'];
+  expect(codec.deserialize(method('GetDesignGraphDetail').responseSerialize(input))).toEqual(input);
+});

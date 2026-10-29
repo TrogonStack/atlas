@@ -232,3 +232,44 @@ async fn mcp_refuses_self_membership_and_unresolved_targets_without_writing() {
         .await;
     assert!(absent.map_or(true, |result| result.is_error.unwrap_or(false)));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_integrated_topology_group_targets_keep_large_exact_versions() {
+    let client = start_client().await;
+    let manifests = r"apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: SystemGroup
+metadata: {namespace: mcp-composed, name: platform, version: '18446744073709551615'}
+spec: {title: Platform, scope: SYSTEM_GROUP_SCOPE_INTERNAL}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: DesignGraph
+metadata: {namespace: mcp-composed, name: graph, version: '9007199254740993'}
+spec:
+  title: {value: Graph}
+  profile: DESIGN_GRAPH_PROFILE_DIAGRAM
+  steps:
+    - title: {value: Group step}
+      target: {systemGroup: platform@18446744073709551615}
+";
+    let applied = call(
+        &client,
+        "apply_manifests",
+        json!({"manifests_yaml":manifests}),
+    )
+    .await;
+    assert!(!applied.is_error.unwrap_or(false), "{applied:?}");
+    let detail = call(&client, "get_design_graph_detail", json!({"request_json":{"graph":{"id":{"namespace":"mcp-composed","slug":"graph","version":"9007199254740993"}}}})).await;
+    assert!(!detail.is_error.unwrap_or(false), "{detail:?}");
+    assert_eq!(
+        body(&detail)["targets"][0]["target"]["systemGroup"]["id"]["version"],
+        "18446744073709551615"
+    );
+    assert_eq!(
+        body(&detail)["targets"][0]["owner"]["owner"]["kind"],
+        "ENTITY_KIND_SYSTEM_GROUP"
+    );
+    assert_eq!(
+        body(&detail)["targets"][0]["state"],
+        "CATALOG_RESOLUTION_STATE_RESOLVED"
+    );
+}

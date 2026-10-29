@@ -81,3 +81,59 @@ fn equal_custom_properties_cannot_hide_stripped_step_identity() {
     };
     assert_ne!(replacement.steps[0].step_id, previous.steps[0].step_id);
 }
+
+#[test]
+fn topology_system_group_target_is_exact_and_retargets_only_its_typed_identity() {
+    use trogon_atlas_proto as pb;
+    let from = pb::Id {
+        namespace: "groups".into(),
+        slug: "platform".into(),
+        version: u64::MAX,
+    };
+    let to = pb::Id {
+        version: 2,
+        ..from.clone()
+    };
+    let mut graph = pb::Entity {
+        kind: Some(pb::entity::Kind::DesignGraph(pb::DesignGraph {
+            id: Some(pb::Id {
+                slug: "graph".into(),
+                version: 1,
+                ..from.clone()
+            }),
+            title: Some(pb::CatalogTitle {
+                value: "Graph".into(),
+            }),
+            profile: pb::DesignGraphProfile::Diagram as i32,
+            steps: vec![pb::TopologyStep {
+                title: Some(pb::CatalogTitle {
+                    value: "Group step".into(),
+                }),
+                target: Some(pb::TopologyStepTarget {
+                    selection: Some(pb::topology_step_target::Selection::SystemGroup(
+                        pb::SystemGroupRef {
+                            id: Some(from.clone()),
+                        },
+                    )),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    trogon_atlas_core::design_topology::validate_values(&graph).unwrap();
+    let refs = trogon_atlas_core::outbound_refs(&graph);
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].to_kind, Some(pb::EntityKind::SystemGroup));
+    assert_eq!(refs[0].to_id, from);
+    assert_eq!(
+        trogon_atlas_core::retarget_refs(&mut graph, pb::EntityKind::Component, &from, &to),
+        [] as [String; 0]
+    );
+    assert_eq!(
+        trogon_atlas_core::retarget_refs(&mut graph, pb::EntityKind::SystemGroup, &from, &to),
+        ["steps[0].target.system_group"]
+    );
+    assert_eq!(trogon_atlas_core::outbound_refs(&graph)[0].to_id, to);
+}
