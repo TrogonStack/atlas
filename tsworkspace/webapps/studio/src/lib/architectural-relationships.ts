@@ -1,6 +1,6 @@
 import { asId, entityKey, type Entity, type EntityId, type Model, wireKind } from './model';
 import { hasUniqueIdentities } from './message-claims';
-import type { ResponsibilitySubject } from './responsibility';
+import { hasUnambiguousOwnerIdentities, type ResponsibilitySubject } from './responsibility';
 
 export interface ArchitecturalDeclaration {
   owner: Entity;
@@ -56,5 +56,6 @@ export function resolveArchitecturalSubject(
   if (!entity || entity.uid !== ownerUid) return undefined;
   if (!hasUniqueIdentities(entity)) return undefined;
   const declarations = architecturalDeclarations(entity);
+  if (!hasUnambiguousOwnerIdentities(entity)) return undefined;
   return declarations.find((item) => item.connectionId === id);
 }

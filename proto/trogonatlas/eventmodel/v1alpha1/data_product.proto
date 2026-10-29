@@ -9,6 +9,7 @@ import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/connections.proto";
 import "trogonatlas/eventmodel/v1alpha1/specification.proto";
 import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
 
 message DataPortId { string value = 1; }
 message PortName { string value = 1; }
@@ -123,6 +124,20 @@ message ProductResourceAssociation {
   ProductResourceContract contract = 10;
   optional string doc = 11;
 }
+enum StorageDirection {
+  STORAGE_DIRECTION_UNSPECIFIED = 0;
+  STORAGE_DIRECTION_READ = 1;
+  STORAGE_DIRECTION_WRITE = 2;
+}
+
+message StorageAccessClaim {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DataStoreRef store = 2;
+  StorageDirection direction = 3;
+  ConnectionRef attachment = 4;
+  DataPortId port_id = 5;
+  CatalogText doc = 6;
+}
 
 message DataProduct {
   trogonatlas.type.v1alpha1.Id id = 1;
@@ -133,8 +148,6 @@ message DataProduct {
   optional string purpose = 6;
   repeated DataInputPort inputs = 7;
   repeated DataOutputPort outputs = 8;
-  // storage_claims belongs to a peer slice.
-  reserved 9;
-  reserved "storage_claims";
   repeated ProductResourceAssociation resource_associations = 10;
+  repeated StorageAccessClaim storage_claims = 9;
 }

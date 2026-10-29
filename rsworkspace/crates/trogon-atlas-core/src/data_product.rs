@@ -125,6 +125,13 @@ fn active(value: &DataProduct, persisted: bool) -> Result<HashMap<DataPortId, Di
     Ok(ids)
 }
 
+pub(crate) fn port_id_strings(value: &DataProduct, persisted: bool) -> Result<HashSet<String>> {
+    Ok(active(value, persisted)?
+        .keys()
+        .map(ToString::to_string)
+        .collect())
+}
+
 pub fn validate_stored_ports(entity: &Entity) -> Result<()> {
     if let Some(value) = product(entity) {
         active(value, true)?;
@@ -334,6 +341,14 @@ pub(crate) fn restore_ports(
         Ok(())
     })
     .map_err(connection_error)?;
+    for claim in &mut value.storage_claims {
+        if let Some(port) = claim.port_id.as_ref() {
+            let id = port_id(Some(port)).map_err(connection_error)?;
+            if let Some(fresh) = map.get(&id) {
+                claim.port_id = Some(fresh.clone());
+            }
+        }
+    }
     for output in &mut value.outputs {
         if let Some(lineage) = &mut output.derived_from {
             for input in &mut lineage.inputs {
@@ -602,6 +617,11 @@ pub fn validate_values(value: &DataProduct) -> Result<()> {
         "DataProduct encoded size limit exceeded",
     )?;
     let ids = active(value, true)?;
+    crate::storage_claims::validate_claims(
+        &value.storage_claims,
+        Some(&ids.keys().map(ToString::to_string).collect()),
+    )
+    .map_err(|e| DataProductError(e.to_string()))?;
     for names in [
         value
             .inputs

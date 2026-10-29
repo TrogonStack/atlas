@@ -188,6 +188,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::ExternalSystem(x) => {
             crate::architectural_relationships::outbound(&x.relationships, &mut out);
             crate::communication_intent::outbound(&x.communications, &mut out);
+            crate::storage_claims::outbound(&x.storage_claims, &mut out);
         }
         EntityOneof::Domain(x) => {
             if let Some(id) = x.project.as_ref().and_then(|p| p.id.as_ref()) {
@@ -591,6 +592,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
         EntityOneof::Component(x) => {
             crate::architectural_relationships::outbound(&x.relationships, &mut out);
             crate::communication_intent::outbound(&x.communications, &mut out);
+            crate::storage_claims::outbound(&x.storage_claims, &mut out);
             for (i, m) in x.members.iter().enumerate() {
                 if let Some(id) = &m.id {
                     match EntityKind::try_from(m.kind) {
@@ -818,6 +820,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
                     from_field: field.into(),
                 });
             }
+            crate::channel_links::outbound(&x.links, &mut out);
             for (i, binding) in x.bindings.iter().enumerate() {
                 if let Some(owner) = binding.observation.as_ref().and_then(|r| r.owner.as_ref()) {
                     if let (Ok(kind), Some(id)) =
@@ -1377,6 +1380,13 @@ pub fn retarget_refs(
                 to_id,
                 &mut rewritten,
             );
+            crate::storage_claims::retarget(
+                &mut x.storage_claims,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
         }
         EntityOneof::Domain(x) => {
             if from_kind == EntityKind::Project
@@ -1873,6 +1883,13 @@ pub fn retarget_refs(
                 to_id,
                 &mut rewritten,
             );
+            crate::storage_claims::retarget(
+                &mut x.storage_claims,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
             crate::architectural_relationships::retarget(
                 &mut x.relationships,
                 from_kind,
@@ -2080,6 +2097,7 @@ pub fn retarget_refs(
                 }
             }
             // An observation pins an incarnation and occurrence, so changing only its owner key cannot select a replacement.
+            crate::channel_links::retarget(&mut x.links, from_kind, from_id, to_id, &mut rewritten);
         }
         EntityOneof::Specification(x) => {
             crate::specification_refs::retarget(x, from_kind, from_id, to_id, &mut rewritten);

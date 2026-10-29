@@ -1,6 +1,7 @@
 import { asId, entityKey, type Entity, type Model, wireKind } from './model';
 import { hasUniqueIdentities, resolveMessageMember } from './message-claims';
 import { contractRecord as record } from './specification';
+import { hasUnambiguousOwnerIdentities } from './responsibility';
 
 export interface CommunicationIntent {
   owner: Entity;
@@ -57,6 +58,7 @@ export function resolveCommunicationSubject(model: Model, subject: unknown): Com
   const entity = model.byKey.get(entityKey(kind, asId(owner.id)));
   if (!entity || entity.uid !== connection.ownerUid) return undefined;
   if (!hasUniqueIdentities(entity)) return undefined;
+  if (!hasUnambiguousOwnerIdentities(entity)) return undefined;
   return communications(entity).find((item) => item.connectionId === id);
 }
 export function resolvedCommunicationMessage(

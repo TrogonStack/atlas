@@ -71,11 +71,11 @@ fn source_title_updates_preserve_native_domain_and_whole_owner_cannot_clear_it()
         ..Default::default()
     };
     assert!(extract_unit(&local, OwnershipUnit::WholeOwner).is_err());
-    let clear = extract_unit(&incoming, OwnershipUnit::WholeOwner).unwrap();
+    let clear = extract_unit(&incoming, OwnershipUnit::WholeOwner).expect("plain whole owner");
     assert!(replace_unit(&mut local, OwnershipUnit::WholeOwner, &clear).is_err());
     let title = OwnershipUnit::Field(pb::SourceOwnedField::Title);
-    let update = extract_unit(&incoming, title).unwrap();
-    replace_unit(&mut local, title, &update).unwrap();
+    let update = extract_unit(&incoming, title).expect("supported title");
+    replace_unit(&mut local, title, &update).expect("title preserves native domain");
     let Some(entity::Kind::Term(term)) = local.kind else {
         panic!("term expected")
     };

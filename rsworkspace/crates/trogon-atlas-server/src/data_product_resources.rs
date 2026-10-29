@@ -71,6 +71,14 @@ pub(crate) fn validate_in_context_with_previous(
             }
         }
     }
+    for (index, claim) in product.storage_claims.iter().enumerate() {
+        if !storage_claim_attachment_resolves(claim, context) {
+            issue(
+                "DATA_PRODUCT_REFERENCE_UNRESOLVED",
+                &format!("storage_claims[{index}].attachment"),
+            );
+        }
+    }
     for (index, output) in product.outputs.iter().enumerate() {
         if !contract_resolves(output.contract.as_ref(), context) {
             issue(
@@ -134,6 +142,26 @@ fn connection_owner<'a>(
     let entity = context.find(kind, owner.id.as_ref()?)?;
     trogon_atlas_core::connections::resolve_connection(entity, reference).ok()?;
     Some(entity)
+}
+
+pub(crate) fn storage_claim_attachment_resolves(
+    claim: &pb::StorageAccessClaim,
+    context: &ArchitectureContext<'_>,
+) -> bool {
+    let Some(reference) = &claim.attachment else {
+        return true;
+    };
+    let Some(owner) = connection_owner(reference, context) else {
+        return false;
+    };
+    let Some(pb::entity::Kind::DataStore(store)) = &owner.kind else {
+        return false;
+    };
+    claim.store.as_ref().and_then(|r| r.id.as_ref()) == store.id.as_ref()
+        && store
+            .attachments
+            .iter()
+            .any(|edge| edge.connection_id == reference.id)
 }
 
 pub(crate) fn access_resolves(

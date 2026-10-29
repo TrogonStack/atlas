@@ -263,6 +263,29 @@ fn context_for(message: &DynamicMessage, field: &str) -> Vec<u8> {
     bytes
 }
 
+fn entity_target(
+    message: &DynamicMessage,
+    field: &str,
+    kind: trogon_atlas_proto::EntityKind,
+) -> Result<Option<EntityRef>, ConnectionError> {
+    let id = message
+        .get_field_by_name(field)
+        .as_deref()
+        .and_then(Value::as_message)
+        .and_then(|target| target.get_field_by_name("id"))
+        .and_then(|value| value.as_message().map(Message::encode_to_vec));
+    id.as_deref()
+        .map(trogon_atlas_proto::Id::decode)
+        .transpose()
+        .map_err(|e| ConnectionError::Encoding(e.to_string()))
+        .map(|id| {
+            id.map(|id| EntityRef {
+                kind: kind as i32,
+                id: Some(id),
+            })
+        })
+}
+
 fn visit(
     message: &mut DynamicMessage,
     path: &str,
@@ -322,6 +345,11 @@ fn visit(
         };
         for name in descriptive {
             if let Some(field) = descriptor.get_field_by_name(name) {
+                endpoint.clear_field(&field);
+            }
+        }
+        if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.ChannelLink" {
+            if let Some(field) = descriptor.get_field_by_name("parameter_values") {
                 endpoint.clear_field(&field);
             }
         }
@@ -398,6 +426,11 @@ fn visit(
                         kind: trogon_atlas_proto::EntityKind::Schema as i32,
                         id: Some(id),
                     })
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.ChannelLink" {
+                entity_target(message, "target", trogon_atlas_proto::EntityKind::Channel)?
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.StorageAccessClaim"
+            {
+                entity_target(message, "store", trogon_atlas_proto::EntityKind::DataStore)?
             } else {
                 crate::system_group::occurrence_target(
                     descriptor.full_name(),

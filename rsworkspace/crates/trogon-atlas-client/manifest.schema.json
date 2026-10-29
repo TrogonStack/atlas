@@ -740,6 +740,12 @@
         "externalSystem": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ExternalSystemRef"
         },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelLink"
+          },
+          "type": "array"
+        },
         "metadata": {
           "items": {
             "properties": {
@@ -828,6 +834,45 @@
         }
       },
       "type": "object"
+    },
+    "trogonatlas.eventmodel.v1alpha1.ChannelLink": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            },
+            "kind": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelLinkKind"
+            },
+            "parameterValues": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "target": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ChannelRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.ChannelLinkKind": {
+      "enum": [
+        "CHANNEL_LINK_KIND_COMPOSES",
+        "CHANNEL_LINK_KIND_ROUTES_TO",
+        "CHANNEL_LINK_KIND_UNSPECIFIED"
+      ],
+      "type": "string"
     },
     "trogonatlas.eventmodel.v1alpha1.ChannelOperationBinding": {
       "oneOf": [
@@ -1382,6 +1427,12 @@
         "relationships": {
           "items": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship"
+          },
+          "type": "array"
+        },
+        "storageClaims": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.StorageAccessClaim"
           },
           "type": "array"
         },
@@ -2129,6 +2180,12 @@
         "resourceAssociations": {
           "items": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ProductResourceAssociation"
+          },
+          "type": "array"
+        },
+        "storageClaims": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.StorageAccessClaim"
           },
           "type": "array"
         },
@@ -3476,6 +3533,12 @@
         "relationships": {
           "items": {
             "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship"
+          },
+          "type": "array"
+        },
+        "storageClaims": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.StorageAccessClaim"
           },
           "type": "array"
         },
@@ -6449,6 +6512,45 @@
           "type": "object"
         }
       ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.StorageAccessClaim": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "attachment": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.ConnectionRef"
+            },
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "direction": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.StorageDirection"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            },
+            "portId": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataPortId"
+            },
+            "store": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DataStoreRef"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.StorageDirection": {
+      "enum": [
+        "STORAGE_DIRECTION_READ",
+        "STORAGE_DIRECTION_UNSPECIFIED",
+        "STORAGE_DIRECTION_WRITE"
+      ],
+      "type": "string"
     },
     "trogonatlas.eventmodel.v1alpha1.StoreAccess": {
       "additionalProperties": false,

@@ -275,10 +275,12 @@ pub fn resolve_subject(subject: &pb::ResponsibilitySubject, owner: &Entity) -> R
                     .map(|_| ())
                     .map_err(|e| ResponsibilityError(e.to_string()));
             }
-            if matches!(
-                entity_kind(owner),
-                Some(EntityKind::Component | EntityKind::ExternalSystem)
-            ) {
+            if !occurrence.path.contains(".storage_claims[")
+                && matches!(
+                    entity_kind(owner),
+                    Some(EntityKind::Component | EntityKind::ExternalSystem)
+                )
+            {
                 crate::architectural_relationships::resolve_connection_context(owner, reference)
                     .map(|_| ())
                     .map_err(|e| ResponsibilityError(e.to_string()))

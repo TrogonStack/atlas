@@ -46,6 +46,8 @@ Resource contracts and acceptance:
 - [System relationship acceptance requirements](reference/system-relationship-acceptance.md)
 - [Communication intent contracts](reference/communication-intent-contracts.md)
 - [Communication intent acceptance requirements](reference/communication-intent-acceptance.md)
+- [Channel link and storage claim contracts](reference/channel-link-and-storage-claim-contracts.md)
+- [Channel link and storage claim acceptance](reference/channel-link-and-storage-claim-acceptance.md)
 - [Human interaction contracts (proposed)](reference/human-interaction-contracts.md)
 - [Human interaction acceptance requirements (proposed)](reference/human-interaction-acceptance.md)
 - [Channel and DataStore contracts](reference/channel-and-datastore-contracts.md)

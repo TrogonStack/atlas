@@ -1175,6 +1175,28 @@ fn catalog_provenance(
             reference.connection_id = connection_id;
         }
     }
+    if let Some(index) = field
+        .strip_prefix("links[")
+        .and_then(|rest| rest.split_once(']'))
+        .and_then(|(index, suffix)| (suffix == ".target").then_some(index))
+        .and_then(|index| index.parse::<usize>().ok())
+    {
+        reference.connection_id = trogon_atlas_core::channel_links::links(entity)
+            .get(index)
+            .and_then(|link| link.connection_id.clone());
+    }
+    if let Some(index) = field
+        .strip_prefix("storage_claims[")
+        .and_then(|rest| rest.split_once(']'))
+        .and_then(|(index, suffix)| {
+            (suffix == ".store" || suffix == ".attachment.owner").then_some(index)
+        })
+        .and_then(|index| index.parse::<usize>().ok())
+    {
+        reference.connection_id = trogon_atlas_core::storage_claims::claims(entity)
+            .get(index)
+            .and_then(|claim| claim.connection_id.clone());
+    }
     (
         reference.catalog_subject,
         reference.document_selection,

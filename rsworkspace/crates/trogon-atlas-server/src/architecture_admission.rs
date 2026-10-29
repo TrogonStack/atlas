@@ -53,7 +53,8 @@ fn admission_references(
             !reference.from_field.starts_with("message_claims.")
                 && (!architectural
                     || reference.from_field.starts_with("relationships[")
-                    || reference.from_field.starts_with("communications["))
+                    || reference.from_field.starts_with("communications[")
+                    || reference.from_field.starts_with("storage_claims["))
         })
         .collect())
 }
@@ -136,6 +137,72 @@ fn charge_claim_selections(
         }
     }
     Ok(())
+}
+
+#[derive(PartialEq)]
+enum Occurrence {
+    Link(pb::ChannelLink),
+    Claim(pb::StorageAccessClaim),
+}
+
+fn occurrences(entity: &pb::Entity) -> Vec<(String, Option<String>, Occurrence)> {
+    let id =
+        |id: Option<&pb::ConnectionId>| id.map(|id| id.value.clone()).filter(|id| !id.is_empty());
+    let claims = |claims: &[pb::StorageAccessClaim]| {
+        claims
+            .iter()
+            .enumerate()
+            .map(|(index, claim)| {
+                (
+                    format!("storage_claims[{index}]"),
+                    id(claim.connection_id.as_ref()),
+                    Occurrence::Claim(claim.clone()),
+                )
+            })
+            .collect()
+    };
+    match entity.kind.as_ref() {
+        Some(pb::entity::Kind::Channel(value)) => value
+            .links
+            .iter()
+            .enumerate()
+            .map(|(index, link)| {
+                (
+                    format!("links[{index}]"),
+                    id(link.connection_id.as_ref()),
+                    Occurrence::Link(link.clone()),
+                )
+            })
+            .collect(),
+        Some(pb::entity::Kind::Component(value)) => claims(&value.storage_claims),
+        Some(pb::entity::Kind::ExternalSystem(value)) => claims(&value.storage_claims),
+        Some(pb::entity::Kind::DataProduct(value)) => claims(&value.storage_claims),
+        _ => Vec::new(),
+    }
+}
+
+fn unchanged_occurrences(entity: &pb::Entity, baselines: &[&pb::Entity]) -> Vec<String> {
+    let before: Vec<_> = baselines
+        .iter()
+        .flat_map(|baseline| occurrences(baseline))
+        .filter_map(|(_, id, value)| id.map(|id| (id, value)))
+        .collect();
+    occurrences(entity)
+        .into_iter()
+        .filter(|(_, id, value)| {
+            id.as_ref()
+                .is_some_and(|id| before.iter().any(|(b, v)| b == id && v == value))
+        })
+        .map(|(path, _, _)| path)
+        .collect()
+}
+
+fn is_unchanged_field(unchanged: &[String], field: &str) -> bool {
+    unchanged.iter().any(|path| {
+        field
+            .strip_prefix(path.as_str())
+            .is_some_and(|rest| rest.starts_with('.'))
+    })
 }
 
 fn is_catalog(entity: &pb::Entity) -> bool {
@@ -360,7 +427,13 @@ impl EventModelServiceImpl {
             if is_catalog(entity) || matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
                 continue;
             }
-            for reference in admission_references(entity)? {
+            let unchanged = self
+                .unchanged_occurrences_of(&proposal, branch, entity)
+                .await?;
+            for reference in admission_references(entity)?
+                .into_iter()
+                .filter(|reference| !is_unchanged_field(&unchanged, &reference.from_field))
+            {
                 let Some(kind) = reference.to_kind else {
                     continue;
                 };
@@ -372,7 +445,8 @@ impl EventModelServiceImpl {
                         reference.from_field.starts_with("attachments[")
                     }
                     Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_)) => {
-                        true
+                        reference.from_field.starts_with("relationships[")
+                            || reference.from_field.starts_with("communications[")
                     }
                     _ => false,
                 };
@@ -639,11 +713,22 @@ impl EventModelServiceImpl {
                     prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
                 };
             super::validate_entity_content(&prepared)?;
-            let issues = validation::architecture_resources::validate_admission_with_previous(
+            let unchanged = unchanged_occurrences(
                 &prepared,
-                &context,
-                previous.as_ref(),
+                &baselines(&proposal, kind, id, previous.as_ref()),
             );
+            let issues: Vec<_> =
+                validation::architecture_resources::validate_admission_with_previous(
+                    &prepared,
+                    &context,
+                    previous.as_ref(),
+                )
+                .into_iter()
+                .filter(|issue| {
+                    !(issue.code.ends_with("_REFERENCE_UNRESOLVED")
+                        && is_unchanged_field(&unchanged, &issue.subject_field))
+                })
+                .collect();
             if !issues.is_empty() {
                 return Err(Status::invalid_argument(super::format_scenario_issues(
                     &issues,
@@ -672,6 +757,29 @@ impl EventModelServiceImpl {
             }
         }
         Ok(())
+    }
+
+    async fn unchanged_occurrences_of(
+        &self,
+        proposal: &ArchitectureProposal<'_>,
+        branch: Option<&str>,
+        resource: &pb::Entity,
+    ) -> Result<Vec<String>, Status> {
+        if occurrences(resource).is_empty() {
+            return Ok(Vec::new());
+        }
+        let kind = entity_kind(resource)?;
+        let id = entity_id(resource)?;
+        let previous = match self.store.get(kind, id, branch).await {
+            Ok(stored) => Some(stored.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(error) => return Err(store_err(error)),
+        };
+        let prepared = prepare_proposal_entity(proposal, kind, id, previous.as_ref(), resource)?;
+        Ok(unchanged_occurrences(
+            &prepared,
+            &baselines(proposal, kind, id, previous.as_ref()),
+        ))
     }
 
     pub(super) async fn architecture_validation_context(
@@ -1465,6 +1573,46 @@ impl EventModelServiceImpl {
     }
 }
 
+fn landing_put<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Option<&'a BranchLandOp> {
+    proposal.landing.and_then(|ops| {
+        ops.iter().find(|op| match op {
+            BranchLandOp::Put {
+                kind: op_kind,
+                ours,
+                ..
+            } => *op_kind == kind && entity_id(ours).ok() == Some(id),
+            BranchLandOp::Delete { .. } => false,
+        })
+    })
+}
+
+fn landing_base<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Option<&'a pb::Entity> {
+    match landing_put(proposal, kind, id)? {
+        BranchLandOp::Put { base, .. } => base.as_deref(),
+        BranchLandOp::Delete { .. } => None,
+    }
+}
+
+fn baselines<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+    previous: Option<&'a pb::Entity>,
+) -> Vec<&'a pb::Entity> {
+    previous
+        .into_iter()
+        .chain(landing_base(proposal, kind, id))
+        .collect()
+}
+
 fn prepare_proposal_entity(
     proposal: &ArchitectureProposal<'_>,
     kind: pb::EntityKind,
@@ -1472,20 +1620,12 @@ fn prepare_proposal_entity(
     previous: Option<&pb::Entity>,
     entity: &pb::Entity,
 ) -> Result<pb::Entity, Status> {
-    match proposal.landing.and_then(|ops| {
-        ops.iter().find_map(|op| match op {
-            BranchLandOp::Put {
-                kind: op_kind,
-                ours,
-                base,
-                ..
-            } if *op_kind == kind && entity_id(ours).ok() == Some(id) => Some(base.as_deref()),
-            _ => None,
-        })
-    }) {
-        Some(base) => {
-            trogon_atlas_core::connection_persistence::prepare_landing(base, previous, entity)
-        }
+    match landing_put(proposal, kind, id) {
+        Some(_) => trogon_atlas_core::connection_persistence::prepare_landing(
+            landing_base(proposal, kind, id),
+            previous,
+            entity,
+        ),
         None => trogon_atlas_core::connection_persistence::prepare_entity(previous, entity),
     }
     .map_err(|error| Status::invalid_argument(error.to_string()))

@@ -144,6 +144,14 @@ relationships. An older writer would drop those fields. `GetServerInfo`
 followed by `compat::check` refuses that writer before any mutation is sent.
 Reads stay available.
 
+Contract revision 19 adds Channel links and storage access claims on Component,
+ExternalSystem and DataProduct, and raised both mutation compatibility floors to
+19. Older writers could drop these occurrences and their IDs, so they are
+refused before they can. The shared `CatalogTitle` and `CatalogText` values moved
+to `catalog_values.proto` with unchanged names and field numbers; buf reports the
+move as an acknowledged FILE break. Upgrade clients and server together before
+authoring these associations. Development data may be recreated.
+
 ## Supported combinations
 
 | Client vs server | Mutations |

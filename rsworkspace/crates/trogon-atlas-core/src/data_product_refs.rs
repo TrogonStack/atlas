@@ -239,6 +239,7 @@ pub(crate) fn outbound(value: &DataProduct, out: &mut Vec<OutboundRef>) {
             });
         }
     });
+    crate::storage_claims::outbound(&value.storage_claims, out);
 }
 pub(crate) fn retarget(
     value: &mut DataProduct,
@@ -253,4 +254,5 @@ pub(crate) fn retarget(
             rewritten.push(path);
         }
     });
+    crate::storage_claims::retarget(&mut value.storage_claims, kind, from, to, rewritten);
 }
