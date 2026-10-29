@@ -8269,10 +8269,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 &req.name,
                 validation::MergeSuites {
                     architecture: validation::SuiteRun::over(merge_architecture_subjects),
-                    strategic: if ran_strategic {
-                        validation::SuiteRun::over(merge_strategic_subjects)
-                    } else {
-                        validation::SuiteRun::NotReached(validation::REASON_BLOCKED_BY_HYGIENE)
+                    strategic: match validation::SuiteRun::over(merge_strategic_subjects) {
+                        validation::SuiteRun::Ran(_) if !ran_strategic => {
+                            validation::SuiteRun::NotReached(validation::REASON_BLOCKED_BY_HYGIENE)
+                        }
+                        run => run,
                     },
                     snapshot_truncated,
                 },

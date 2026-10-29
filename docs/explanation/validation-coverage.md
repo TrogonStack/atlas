@@ -50,8 +50,8 @@ Write coverage always lists `model` and `store_hygiene` as `SKIPPED` with
 reason `write_path`; merge coverage lists `model`, `scenarios` and
 `request_shape` as `SKIPPED` with reason `merge_path`. Suites a request's
 kinds never reach are `SKIPPED` with reason `kind_not_applicable`. When
-blocking hygiene Errors stop a merge, `strategic` is `SKIPPED` with reason
-`blocked_by_hygiene`. A real batch admits architecture resources only after
+blocking hygiene Errors stop a merge that lands strategic kinds, `strategic`
+is `SKIPPED` with reason `blocked_by_hygiene`. A real batch admits architecture resources only after
 its scenario gate, so a scenario failure reports `architecture` as `SKIPPED`
 with reason `blocked_by_scenarios`. Merge reports the projected baseline as
 `effective_scope` and the merged branch as `requested_scope`.
