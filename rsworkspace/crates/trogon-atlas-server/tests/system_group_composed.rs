@@ -458,3 +458,138 @@ async fn composed() {
     assert_eq!(after.entity, before.entity);
     assert_eq!(after.etag, before.etag);
 }
+
+fn capacity_owner(ns: &str, slug: &str, domain: bool, tail: usize) -> pb::Entity {
+    let docs = (0..66).map(|index| pb::CatalogText {
+        value: "x".repeat(if index == 65 { tail } else { 15_900 }),
+    });
+    let target = Some(pb::ComponentRef {
+        id: Some(id(ns, "capacity-target", 1)),
+    });
+    if domain {
+        entity(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(id(ns, slug, 1)),
+            title: "Capacity".into(),
+            members: docs
+                .map(|doc| pb::DomainMembership {
+                    member: Some(pb::DomainMember {
+                        target: target.clone().map(pb::domain_member::Target::Component),
+                    }),
+                    doc: Some(doc),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }))
+    } else {
+        entity(pb::entity::Kind::SystemGroup(pb::SystemGroup {
+            id: Some(id(ns, slug, 1)),
+            title: "Capacity".into(),
+            scope: pb::SystemGroupScope::Internal as i32,
+            members: docs
+                .map(|doc| pb::SystemGroupMembership {
+                    member: Some(pb::SystemGroupMember {
+                        target: target
+                            .clone()
+                            .map(pb::system_group_member::Target::Component),
+                    }),
+                    doc: Some(doc),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn complete_system_group_and_domain_capacity_is_atomic_after_native_ids() {
+    Box::pin(capacity_case()).await;
+}
+async fn capacity_case() {
+    use prost::Message;
+    use trogon_atlas_store::{error::StoreError, store::WriteContext};
+    const CEILING: usize = 1_048_576;
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let mut client = serve_with_registry(service, make_registry()).await;
+    let ns = register(&mut client, ACME_TOKEN, "prepared-capacity").await;
+    put(
+        &mut client,
+        entity(pb::entity::Kind::Component(pb::Component {
+            id: Some(id(&ns, "capacity-target", 1)),
+            ..Default::default()
+        })),
+    )
+    .await;
+    for domain in [false, true] {
+        let kind = if domain {
+            pb::EntityKind::Domain
+        } else {
+            pb::EntityKind::SystemGroup
+        };
+        let probe = put(
+            &mut client,
+            capacity_owner(&ns, "capacity-probe", domain, 300),
+        )
+        .await;
+        let tail = 300 + CEILING.checked_sub(probe.encoded_len()).unwrap();
+        assert!(tail < 16_384);
+        let exact_input = capacity_owner(&ns, "capacity-exact", domain, tail);
+        assert!(exact_input.encoded_len() < CEILING);
+        let authored_exact_size = exact_input.encoded_len();
+        let persisted = put(&mut client, exact_input).await;
+        assert_eq!(persisted.encoded_len(), CEILING, "{kind:?}");
+        let occurrences =
+            trogon_atlas_core::connections::connection_occurrences(&persisted).unwrap();
+        assert_eq!(occurrences.len(), 66);
+        assert!(occurrences.iter().all(|v| v.id.is_some()));
+        assert!(!persisted.system.as_ref().unwrap().uid.is_empty());
+        let before = store
+            .get(kind, &id(&ns, "capacity-exact", 1), None)
+            .await
+            .unwrap();
+        assert_eq!(before.entity, persisted);
+        let sequence = store.current_change_seq().await.unwrap();
+        let over = capacity_owner(&ns, "capacity-above", domain, tail + 1);
+        assert!(
+            over.encoded_len() < CEILING,
+            "authored bytes alone must fit"
+        );
+        assert_eq!(over.encoded_len(), authored_exact_size + 1);
+        for validate_only in [true, false] {
+            let refused = client
+                .put_entity(authed(
+                    pb::PutEntityRequest {
+                        entity: Some(over.clone()),
+                        validate_only,
+                        ..Default::default()
+                    },
+                    ACME_TOKEN,
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(refused.code(), Code::InvalidArgument, "{refused}");
+            assert!(refused.message().contains("byte limit"), "{refused}");
+        }
+        let refused = store
+            .put(kind, &over, false, WriteContext::baseline())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(refused, StoreError::InvalidArgument(_)),
+            "{refused:?}"
+        );
+        assert!(matches!(
+            store.get(kind, &id(&ns, "capacity-above", 1), None).await,
+            Err(StoreError::NotFound)
+        ));
+        let after = store
+            .get(kind, &id(&ns, "capacity-exact", 1), None)
+            .await
+            .unwrap();
+        assert_eq!(after.entity, before.entity);
+        assert_eq!(after.etag, before.etag);
+        assert_eq!(store.current_change_seq().await.unwrap(), sequence);
+    }
+}
