@@ -142,6 +142,7 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
   component: [
     'relationships.*',
     'communications.*',
+    'storageClaims.*',
     'messageClaims.claims.*',
     'messageClaims.routes.*',
     'messageClaims.triggers.*',
@@ -150,6 +151,7 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
   externalSystem: [
     'relationships.*',
     'communications.*',
+    'storageClaims.*',
     'messageClaims.claims.*',
     'messageClaims.routes.*',
     'messageClaims.triggers.*',
