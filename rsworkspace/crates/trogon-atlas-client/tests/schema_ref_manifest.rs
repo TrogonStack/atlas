@@ -72,10 +72,7 @@ fn schema_ref_shorthand_fills_namespace_and_version_without_inventing_a_connecti
     };
     assert_eq!(schema.aggregate_root, Some(false));
     assert!(schema.identifiers[0].connection_id.is_none());
-    assert_eq!(
-        schema.identifiers[0].property.as_ref().unwrap().segments[0].repeated,
-        false
-    );
+    assert!(!schema.identifiers[0].property.as_ref().unwrap().segments[0].repeated);
     let target = schema.property_relationships[0]
         .target_entity
         .as_ref()
