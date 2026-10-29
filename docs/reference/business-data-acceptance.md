@@ -136,7 +136,7 @@ absent status is not reported as resolved.
 
 ## Client boundary
 
-CLI and MCP, when implemented, preserve bool presence, segment repeated flags,
+CLI and MCP preserve bool presence, segment repeated flags,
 uint64 versions, connection IDs and owner UIDs on native authoring, get,
 reference, impact, retarget, delete, export, diff, reapply and branch calls.
 Manifest shorthand for a SchemaRef does not invent a connection ref.
@@ -145,10 +145,32 @@ Studio shows unset aggregate intent as unspecified and a stale target path as
 unresolved. A type ref drawn next to a relationship is two facts. Loaded-model
 correlation is not the backend check.
 
-Completion of implementation requires maintained executable fixtures and
-retained commands and results at the candidate SHA. This acceptance file does
-not supply those results. It does not check the EventCatalog coverage item, and
-it does not cover service or domain membership, source import, or stream behavior.
+Completion requires maintained executable fixtures and retained commands and
+results at the candidate SHA. The assertion map below identifies the native
+proof boundaries. It does not cover service or domain membership, source import,
+or stream behavior.
+
+## Executable assertion map
+
+| Requirement boundary | Maintained evidence |
+| --- | --- |
+| Explicit aggregate intent and behavioral controls | `business_data::authenticated_order_fixture_keeps_business_declarations_explicit` |
+| Identifier and relationship admission with atomic refusal | `business_data::public_identifier_and_relationship_rules_reject_without_publishing` |
+| Real `items` field and independent type reuse | `business_data::closure_real_items_field_resolves_without_a_synthetic_hop`, `closure_type_ref_edit_leaves_the_relationship_and_its_id` |
+| Shared discovery work, complete Schema scans and page-only output | `business_data::review_red_incoming_discovery_charges_every_examined_schema`, `review_red_truncated_snapshot_does_not_present_omitted_schema_referrers_as_complete`, `review_red_one_row_page_of_4097_references_stays_valid` |
+| Prepared size including assigned IDs | `business_data::assigned_business_ids_cannot_grow_a_schema_past_its_byte_ceiling` |
+| Path bounds, reorder and incarnation identity | `business_data::remainder_path_caps_resolve_and_refuse_the_next_byte`, `remainder_collection_reorder_keeps_occurrence_ids`, `remainder_owner_recreate_scopes_reused_ids` |
+| Stale receipts and operational failures | `business_data::remainder_stale_match_and_receipt_leave_the_index`, `remainder_store_and_decode_failures_publish_nothing`, `remainder_authorization_failures_publish_nothing` |
+| Target privacy and no privilege grant | `business_data::closure_hidden_schema_get_and_checked_target_are_generic`, `closure_target_reference_denial_is_not_source_write_denial` |
+| Source policy matrix and legacy tolerance | `business_data::closure_source_policies_reject_create_and_whole_owner_matrix`, `closure_missing_legacy_ref_and_supersedes_stay_admitted` |
+| Native CLI identity, presence, version isolation and branches | `trogon-atlas-cli/tests/business_data_cli.rs` |
+| Authenticated MCP authoring, references, relationship-only delete, retarget and branches | `trogon-atlas-mcp/tests/business_data_mcp.rs` |
+| Studio wire codec, presence and exact loaded selectors | `server/schema-business-codec.test.mjs`, `SchemaBusinessDetails.test.tsx` |
+
+The composed baseline passed workspace, protobuf, schema equality and Studio
+checks. The subsequent retained-claim correction and Business proof additions
+require their own focused execution receipts. Checklist closure remains pending
+the final requirement audit; this map alone does not claim a passing run.
 
 ## Integration controls
 

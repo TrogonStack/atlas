@@ -2,8 +2,9 @@
 
 Status: requirements for the
 [design topology contract](design-topology-contracts.md), mapped to executed
-tests under [Coverage linkage](#coverage-linkage). Deployed readiness and
-authenticated browser rendering are not claimed. Logical names below are not
+tests under [Coverage linkage](#coverage-linkage). Authenticated browser
+inspection uses the maintained native fixture below; deployed readiness is
+not claimed. Logical names below are not
 manifest syntax, predicted owner UIDs or submitted occurrence IDs.
 
 ## Fixture anchors
@@ -202,11 +203,15 @@ Client and surface evidence:
 - MCP tool discovery by role depends on the tool policy rows in the MCP
   server and is proved separately by that crate's role map test. The
   authenticated MCP test proves role forwarding on calls, not discovery.
-- System grouping (union arm 10) is a dependency of the separate system
-  grouping contract and is not integrated or tested here.
-- Browser rendering with an authenticated backend is not proved. No maintained
-  authenticated browser fixture exists, and component tests with mocked
-  gateways do not establish it.
+- System grouping uses typed target arm 10 in the composed schema. The native
+  `system_group_composed` fixture covers its integration with memberships.
+- Authenticated browser inspection is covered by
+  [`design-graph.native.spec.ts`](../../tsworkspace/webapps/studio/e2e/design-graph.native.spec.ts)
+  against the real backend in `connected_architecture_fixture.rs`. It checks
+  persisted FLOW and DIAGRAM identities, entries, transitions, actor and layout
+  selections, and unavailable state after target deletion. Component tests
+  remain separate from this browser receipt. A separate restricted-reader
+  browser matrix is not claimed.
 
 Do not check off the master checklist in
 [eventcatalog-coverage.md](eventcatalog-coverage.md) from this document alone.

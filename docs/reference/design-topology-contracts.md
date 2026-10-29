@@ -281,7 +281,7 @@ validates the other automatically.
 | Storyboard, Document, Specification, CatalogSubject | Shipped |
 | DesignGraph entity, topology messages, reference extraction, four read RPCs, Source guards, CLI and MCP surfaces, Studio gateway routes | Implemented, with executed coverage in the acceptance map |
 | System grouping step target (union arm 10) | Depends on the separate system grouping contract; not integrated here |
-| Authenticated browser rendering of a native graph | Not proved; no maintained authenticated browser fixture exists |
+| Authenticated browser rendering of a native graph | Maintained `design-graph.native.spec.ts` uses the real authenticated backend fixture; exact persisted FLOW/DIAGRAM identities and deleted-target safety are asserted. This is inspection evidence, not deployed readiness. |
 | EventCatalog import, `.ecstudio` parser, layout renderer, workflow execution | Explicitly out of scope |
 
 ## Open objections
