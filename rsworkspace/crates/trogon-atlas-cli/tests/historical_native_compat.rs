@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::{
+    fmt::Write as _,
     process::Command,
     sync::{Arc, Mutex},
 };
@@ -43,14 +44,11 @@ async fn historical_18_apply_refuses_native_19_without_writes() {
     let expected =
         std::env::var("ATLAS_HISTORICAL_SHA256").expect("ATLAS_HISTORICAL_SHA256 required");
     assert_eq!(expected.len(), 64);
-    assert_eq!(
-        Sha256::digest(std::fs::read(&binary).unwrap())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
-        expected,
-        "artifact hash mismatch"
-    );
+    let mut actual = String::with_capacity(64);
+    for byte in Sha256::digest(std::fs::read(&binary).unwrap()) {
+        write!(&mut actual, "{byte:02x}").unwrap();
+    }
+    assert_eq!(actual, expected, "artifact hash mismatch");
     assert_eq!(
         (pb::CONTRACT_REVISION, pb::MIN_CLIENT_CONTRACT_REVISION),
         (19, 19)
