@@ -122,17 +122,22 @@ Detection alone is half a design; this section is the other half.
 2. *Edit/delete*: the branch deleted what the baseline meanwhile changed.
 3. *Delete/edit*: the branch changed what the baseline meanwhile deleted.
 4. *Compositional invalidity*: no entity conflicts at all, but the merged
-   world fails the server's own validation. Baseline added a slice
-   referencing an entity the branch deletes; both sides gave the same
-   command an issuer. Three-way comparison cannot see this class. Only
-   validating the whole post-merge world catches it, which is why the
-   merge gate always runs the dry-run overlay validation, even for
-   "clean" merges.
+   world fails server validation that three-way comparison cannot see.
+   Baseline added a slice referencing an entity the branch deletes; both
+   sides gave the same command an issuer. The merge gate always runs
+   dry-run overlay validation even for "clean" merges, but that gate is
+   **not** a full-model validate: it refuses on `store_hygiene` Errors,
+   admits architecture resources through landing checks, and reports
+   advisory strategic findings. EventModel-wide rules, scenarios, and
+   most dangling-reference passes still require `ValidateEventModel` /
+   `ValidateProject` (or a future, deliberate expansion of the merge
+   gate). See [validation coverage](validation-coverage.md).
 
 A dry run reports the same gate without landing anything: the landable
-entries split into added, changed and deleted, and every finding the merged
-world carries, errors and non-blocking ones alike. A reviewer reads one
-result instead of a diff and a separate validation call.
+entries split into added, changed and deleted, plus the hygiene and
+strategic findings that gate actually runs. A reviewer who needs
+model-wide rules still runs validate separately (or waits for coverage
+reporting to make the narrower merge scope explicit on the wire).
 
 Independently creating the same key on baseline and a branch creates distinct
 owner incarnations, even when the authored content matches. This remains an
