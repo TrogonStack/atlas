@@ -988,3 +988,383 @@ async fn retained_dangling_curation_never_blocks_unrelated_writes_but_new_or_edi
         member_ids(group_state.entity.as_ref().unwrap())[1]
     );
 }
+
+const RESTORE_BRANCH: &str = "restore-work";
+
+async fn open_branch(service: &EventModelServiceImpl) {
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: RESTORE_BRANCH.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+}
+
+fn member_selector(owner: &pb::Entity, index: usize) -> pb::ConnectionRef {
+    let pb::entity::Kind::SystemGroup(value) = owner.kind.as_ref().unwrap() else {
+        panic!("system group");
+    };
+    pb::ConnectionRef {
+        owner: Some(trogon_atlas_server::conv::entity_to_ref(owner).unwrap()),
+        owner_uid: owner.system.as_ref().unwrap().uid.clone(),
+        id: value.members[index].connection_id.clone(),
+    }
+}
+
+fn resolves(owner: &pb::Entity, selector: &pb::ConnectionRef) -> bool {
+    trogon_atlas_core::connections::resolve_connection(owner, selector).is_ok()
+}
+
+fn uid(owner: &pb::Entity) -> &str {
+    &owner.system.as_ref().unwrap().uid
+}
+
+async fn merge(
+    service: &EventModelServiceImpl,
+    dry_run: bool,
+    auto_merge: bool,
+) -> pb::MergeBranchResponse {
+    service
+        .merge_branch(Request::new(pb::MergeBranchRequest {
+            name: RESTORE_BRANCH.into(),
+            dry_run,
+            auto_merge,
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+async fn diff(service: &EventModelServiceImpl) -> Vec<pb::BranchDiffEntry> {
+    service
+        .diff_branch(Request::new(pb::DiffBranchRequest {
+            name: RESTORE_BRANCH.into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entries
+}
+
+async fn resolve_entry(
+    service: &EventModelServiceImpl,
+    owner: &pb::ConnectionRef,
+    resolution: pb::resolve_branch_entry_request::Resolution,
+) {
+    service
+        .resolve_branch_entry(Request::new(pb::ResolveBranchEntryRequest {
+            name: RESTORE_BRANCH.into(),
+            r#ref: owner.owner.clone(),
+            resolution: resolution as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+}
+
+async fn group_on_branch(service: &EventModelServiceImpl, slug: &str) -> pb::GetEntityResponse {
+    get(
+        service,
+        pb::EntityKind::SystemGroup,
+        slug,
+        Some(RESTORE_BRANCH),
+    )
+    .await
+}
+
+fn relationship_ids(owner: &pb::Entity) -> Vec<Option<pb::ConnectionId>> {
+    let pb::entity::Kind::SystemGroup(value) = owner.kind.as_ref().unwrap() else {
+        panic!("system group");
+    };
+    value
+        .relationships
+        .iter()
+        .map(|link| link.connection_id.clone())
+        .chain(value.actors.iter().map(|link| link.connection_id.clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn branch_baseline_removal_and_branch_addition_land_without_touching_unrelated_identity() {
+    let service = fixture().await;
+    let platform = get_group(&service, "platform").await.entity.unwrap();
+    let edge = get_group(&service, "edge").await.entity.unwrap();
+    open_branch(&service).await;
+
+    let mut added = edge.clone();
+    group_mut(&mut added)
+        .members
+        .push(member_component("scheduler"));
+    let branch_edge = save(&service, added, Some(RESTORE_BRANCH))
+        .await
+        .entity
+        .unwrap();
+    let assigned = member_selector(&branch_edge, 0);
+    assert!(assigned.id.is_some());
+
+    let mut removed = platform.clone();
+    group_mut(&mut removed).members.remove(0);
+    let baseline_platform = save(&service, removed, None).await.entity.unwrap();
+    let removed_selector = member_selector(&platform, 0);
+    assert!(!resolves(&baseline_platform, &removed_selector));
+    assert!(resolves(&baseline_platform, &member_selector(&platform, 1)));
+
+    for dry_run in [true, false] {
+        let response = merge(&service, dry_run, false).await;
+        assert_eq!(
+            response.status,
+            if dry_run {
+                pb::merge_branch_response::Status::Validated
+            } else {
+                pb::merge_branch_response::Status::Applied
+            } as i32,
+            "{response:?}"
+        );
+        let stored = get_group(&service, "edge").await.entity.unwrap();
+        if dry_run {
+            assert_eq!(stored, edge);
+        } else {
+            assert_eq!(stored, branch_edge);
+            assert!(resolves(&stored, &assigned));
+            assert_eq!(uid(&stored), uid(&edge));
+        }
+    }
+    let landed = get_group(&service, "platform").await.entity.unwrap();
+    assert_eq!(landed, baseline_platform);
+    assert_eq!(uid(&landed), uid(&platform));
+    assert!(!resolves(&landed, &removed_selector));
+}
+
+#[tokio::test]
+async fn ordinary_landing_refuses_to_revive_removed_ids() {
+    let service = fixture().await;
+    let edge = get_group(&service, "edge").await.entity.unwrap();
+    open_branch(&service).await;
+    let mut proposed = edge.clone();
+    group_mut(&mut proposed)
+        .members
+        .push(member_component("scheduler"));
+    let mut added = save(&service, proposed, Some(RESTORE_BRANCH))
+        .await
+        .entity
+        .unwrap();
+    let revived = group_mut(&mut added).members.pop().unwrap();
+    assert!(revived.connection_id.is_some());
+    save(&service, added, Some(RESTORE_BRANCH)).await;
+    assert_eq!(get_group(&service, "edge").await.entity, Some(edge));
+
+    let response = merge(&service, false, false).await;
+    assert_eq!(
+        response.status,
+        pb::merge_branch_response::Status::Applied as i32,
+        "{response:?}"
+    );
+    let landed = get_group(&service, "edge").await;
+    let mut attempt = landed.entity.clone().unwrap();
+    group_mut(&mut attempt).members.push(revived);
+    let error = put_error(&service, attempt, &landed.etag).await;
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert_eq!(get_group(&service, "edge").await, landed);
+}
+
+#[tokio::test]
+async fn explicit_keep_or_take_renews_only_the_restored_member_id() {
+    for take_theirs in [false, true] {
+        let service = fixture().await;
+        let original = get_group(&service, "platform").await.entity.unwrap();
+        let selected = member_selector(&original, 0);
+        let unaffected = member_selector(&original, 2);
+        open_branch(&service).await;
+
+        let mut branch = original.clone();
+        group_mut(&mut branch).members[1].doc = Some(pb::CatalogText {
+            value: "branch wording".into(),
+        });
+        if take_theirs {
+            group_mut(&mut branch).members.remove(0);
+        }
+        save(&service, branch, Some(RESTORE_BRANCH)).await;
+        let mut baseline = original.clone();
+        group_mut(&mut baseline).members[1].doc = Some(pb::CatalogText {
+            value: "baseline wording".into(),
+        });
+        if !take_theirs {
+            group_mut(&mut baseline).members.remove(0);
+        }
+        save(&service, baseline, None).await;
+        let before = get_group(&service, "platform").await;
+
+        let blocked = merge(&service, false, false).await;
+        assert_eq!(
+            blocked.status,
+            pb::merge_branch_response::Status::Conflicts as i32
+        );
+        assert_eq!(get_group(&service, "platform").await, before);
+
+        resolve_entry(
+            &service,
+            &selected,
+            if take_theirs {
+                pb::resolve_branch_entry_request::Resolution::TakeTheirs
+            } else {
+                pb::resolve_branch_entry_request::Resolution::KeepOurs
+            },
+        )
+        .await;
+        let resolved = group_on_branch(&service, "platform").await.entity.unwrap();
+        assert_eq!(uid(&resolved), uid(&original));
+        let ids = member_ids(&resolved);
+        let original_ids = member_ids(&original);
+        assert_eq!(ids.len(), original_ids.len());
+        assert_ne!(ids[0], original_ids[0]);
+        assert_eq!(ids[1..], original_ids[1..]);
+        assert_eq!(relationship_ids(&resolved), relationship_ids(&original));
+        assert!(!resolves(&resolved, &selected));
+        assert!(resolves(&resolved, &unaffected));
+
+        for dry_run in [true, false] {
+            let landed = merge(&service, dry_run, false).await;
+            assert_eq!(
+                landed.status,
+                if dry_run {
+                    pb::merge_branch_response::Status::Validated
+                } else {
+                    pb::merge_branch_response::Status::Applied
+                } as i32,
+                "{landed:?}"
+            );
+        }
+        let stored = get_group(&service, "platform").await.entity.unwrap();
+        assert_eq!(stored, resolved);
+        assert!(!resolves(&stored, &selected));
+        assert!(resolves(&stored, &unaffected));
+    }
+}
+
+#[tokio::test]
+async fn keeping_the_branch_owner_after_baseline_deletion_restores_its_member_identity() {
+    let service = fixture().await;
+    let original = get_group(&service, "platform").await.entity.unwrap();
+    let selectors: Vec<_> = (0..4)
+        .map(|index| member_selector(&original, index))
+        .collect();
+    open_branch(&service).await;
+    let mut edit = original.clone();
+    group_mut(&mut edit).title = "Platform on branch".into();
+    let branch = save(&service, edit, Some(RESTORE_BRANCH))
+        .await
+        .entity
+        .unwrap();
+    force_delete(&service, pb::EntityKind::SystemGroup, "platform").await;
+
+    let entries = diff(&service).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].status,
+        pb::branch_diff_entry::Status::ConflictDeleteEdit as i32
+    );
+    let blocked = merge(&service, false, false).await;
+    assert_eq!(
+        blocked.status,
+        pb::merge_branch_response::Status::Conflicts as i32
+    );
+    assert!(service
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(id("platform")),
+            },
+            None,
+        ))
+        .await
+        .is_err());
+
+    resolve_entry(
+        &service,
+        &selectors[0],
+        pb::resolve_branch_entry_request::Resolution::KeepOurs,
+    )
+    .await;
+    let resolved = group_on_branch(&service, "platform").await.entity.unwrap();
+    assert_eq!(uid(&resolved), uid(&branch));
+    assert_eq!(member_ids(&resolved), member_ids(&branch));
+    for selector in &selectors {
+        assert!(resolves(&resolved, selector));
+    }
+    for dry_run in [true, false] {
+        let landed = merge(&service, dry_run, false).await;
+        assert_eq!(
+            landed.status,
+            if dry_run {
+                pb::merge_branch_response::Status::Validated
+            } else {
+                pb::merge_branch_response::Status::Applied
+            } as i32,
+            "{landed:?}"
+        );
+    }
+    let stored = get_group(&service, "platform").await.entity.unwrap();
+    assert_eq!(uid(&stored), uid(&branch));
+    assert_eq!(member_ids(&stored), member_ids(&branch));
+    for selector in &selectors {
+        assert!(resolves(&stored, selector));
+    }
+}
+
+#[tokio::test]
+async fn independent_same_key_creation_keeps_distinct_uids_until_an_explicit_choice() {
+    let service = service().await;
+    save(&service, component("worker"), None).await;
+    open_branch(&service).await;
+    let twin = group("twin", vec![member_component("worker")], vec![], vec![]);
+    let branch = save(&service, twin.clone(), Some(RESTORE_BRANCH))
+        .await
+        .entity
+        .unwrap();
+    let baseline = save(&service, twin, None).await.entity.unwrap();
+    assert_ne!(uid(&branch), uid(&baseline));
+    assert_ne!(member_ids(&branch), member_ids(&baseline));
+    let branch_selector = member_selector(&branch, 0);
+    let baseline_selector = member_selector(&baseline, 0);
+    assert!(!resolves(&baseline, &branch_selector));
+    assert!(!resolves(&branch, &baseline_selector));
+
+    let entries = diff(&service).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(
+        entries[0].status,
+        pb::branch_diff_entry::Status::ConflictEditEdit as i32
+    );
+    assert!(entries[0].auto_merged.is_none());
+    assert!(entries[0]
+        .conflict_field_paths
+        .contains(&"system.uid".into()));
+    let blocked = merge(&service, false, true).await;
+    assert_eq!(
+        blocked.status,
+        pb::merge_branch_response::Status::Conflicts as i32
+    );
+    assert_eq!(
+        get_group(&service, "twin").await.entity.as_ref(),
+        Some(&baseline)
+    );
+
+    resolve_entry(
+        &service,
+        &branch_selector,
+        pb::resolve_branch_entry_request::Resolution::KeepOurs,
+    )
+    .await;
+    let landed = merge(&service, false, false).await;
+    assert_eq!(
+        landed.status,
+        pb::merge_branch_response::Status::Applied as i32,
+        "{landed:?}"
+    );
+    let stored = get_group(&service, "twin").await.entity.unwrap();
+    assert_eq!(uid(&stored), uid(&branch));
+    assert!(resolves(&stored, &branch_selector));
+    assert!(!resolves(&stored, &baseline_selector));
+}
