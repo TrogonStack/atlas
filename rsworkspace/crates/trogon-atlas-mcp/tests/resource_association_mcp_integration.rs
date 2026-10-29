@@ -126,12 +126,13 @@ async fn etag(endpoint: &str, kind: pb::EntityKind, namespace: &str, slug: &str)
 }
 
 fn manifest(namespace: &str, kind: &str, name: &str, spec: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "apiVersion": "eventmodel.atlas.trogonstack.com/v1alpha1",
         "kind": kind,
         "metadata": {"namespace": namespace, "name": name, "version": if name == "receipt" { serde_json::json!(2) } else { serde_json::json!(1) }},
-        "spec": spec
-    })
+    });
+    value.as_object_mut().unwrap().insert("spec".into(), spec);
+    value
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -766,7 +766,7 @@ async fn document_whole_ref_stable_while_anchor_pin_recreates_ids_on_rerender() 
         .await
         .unwrap()
         .into_inner();
-    assert!(incoming_whole.declarations.is_empty());
+    assert_eq!(incoming_whole.declarations, vec![]);
     let revised = "# Revised delivery\n";
     let mut edited = entity.clone();
     if let Some(pb::entity::Kind::Document(document)) = &mut edited.kind {
@@ -1143,7 +1143,7 @@ async fn incoming_document_declarations_drop_after_referrer_force_delete() {
         .await
         .unwrap()
         .into_inner();
-    assert!(incoming_after.declarations.is_empty());
+    assert_eq!(incoming_after.declarations, vec![]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1392,7 +1392,7 @@ async fn branch_opposing_related_content_removal_restores_with_selective_connect
                         pb::document_selection::Selection::Document(r) => {
                             r.id.as_ref().unwrap().slug.clone()
                         }
-                        _ => String::new(),
+                        pb::document_selection::Selection::RelatedContent(_) => String::new(),
                     })
                     .unwrap_or_default(),
                 entry.connection_id.clone().expect("connection"),
