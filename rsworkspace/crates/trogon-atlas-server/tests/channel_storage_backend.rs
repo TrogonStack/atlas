@@ -1564,6 +1564,25 @@ async fn unchanged_dangling_storage_claims_stay_editable_for_every_owner_kind() 
 
         let base = claims_of(&grown);
         let rebuilt = |claims: Vec<pb::StorageAccessClaim>| with_claims(&grown, claims);
+        let mut documented = base.clone();
+        documented[2].doc = Some(pb::CatalogText {
+            value: "Visible store documentation".into(),
+        });
+        let documented = put(&mut client, rebuilt(documented)).await;
+        assert_eq!(
+            claims_of(&documented)[2].connection_id,
+            base[2].connection_id
+        );
+        let mut dangling_doc = claims_of(&documented);
+        dangling_doc[1].doc = Some(pb::CatalogText {
+            value: "Dangling store documentation".into(),
+        });
+        reject_all(
+            &mut client,
+            &format!("{owner:?} doc-only dangling edit"),
+            with_claims(&documented, dangling_doc),
+        )
+        .await;
         let mut new_missing = base.clone();
         let mut absent = claim(&kept, read, None);
         absent.store = Some(pb::DataStoreRef {
@@ -1585,6 +1604,7 @@ async fn unchanged_dangling_storage_claims_stay_editable_for_every_owner_kind() 
         )
         .await;
         let mut retargeted = base;
+        retargeted[0].connection_id = None;
         retargeted[0].store = Some(pb::DataStoreRef {
             id: Some(id("absent-store")),
         });
@@ -1761,6 +1781,26 @@ async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_throug
     let mut assignees = Vec::new();
     for (position, owner) in owners.iter().enumerate() {
         let mut owner_assignees = Vec::new();
+        put(
+            &mut client,
+            pb::entity::Kind::Team(pb::Team {
+                id: Some(id(&format!("owner-assigned-{position}"))),
+                title: Some(pb::DirectoryDisplayName {
+                    value: "Owner maintainer".into(),
+                }),
+                responsibilities: vec![pb::Responsibility {
+                    kind: pb::ResponsibilityKind::Maintainer as i32,
+                    subject: Some(pb::ResponsibilitySubject {
+                        selection: Some(pb::responsibility_subject::Selection::Entity(
+                            trogon_atlas_server::conv::entity_to_ref(owner).unwrap(),
+                        )),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        )
+        .await;
         let ids = occurrence_ids(owner);
         assert_eq!(ids.len(), 3);
         for (index, connection_id) in ids.iter().enumerate() {
@@ -1856,7 +1896,7 @@ async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_throug
             .await
             .unwrap()
             .into_inner();
-        assert_eq!(owner_assignments.assignments.len(), 0);
+        assert_eq!(owner_assignments.assignments.len(), 1);
         assignees.push(owner_assignees);
     }
 
