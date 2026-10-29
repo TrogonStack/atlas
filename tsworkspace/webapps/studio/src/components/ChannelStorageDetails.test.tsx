@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import protobuf from 'protobufjs';
 import { afterEach, expect, it, vi } from 'vitest';
 import { buildModel, entityKey, type Entity } from '@/lib/model';
 import {
@@ -205,11 +206,11 @@ it('keeps READ and WRITE claims distinct, with exact attachment and DataProduct 
 it('resolves a connection subject only against the full identity inventory and exact owner UID', () => {
   const model = fixture();
   const owner = model.entities[3];
-  const subject = responsibilitySubjects(owner)[2]?.subject;
-  expect(resolveAssociationSubject(model, subject)?.path).toBe('storageClaims[1]');
+  const subject = responsibilitySubjects(owner).find((item) => item.label.endsWith(': claim-a'))?.subject;
+  expect(resolveAssociationSubject(model, subject)?.path).toBe('storageClaims[0]');
   (owner.raw.storageClaims as unknown[]).reverse();
-  expect(resolveAssociationSubject(model, subject)?.path).toBe('storageClaims[1]');
-  owner.raw.communications = [{ connectionId: { value: 'claim-b' } }];
+  expect(resolveAssociationSubject(model, subject)?.path).toBe('storageClaims[2]');
+  owner.raw.communications = [{ connectionId: { value: 'claim-a' } }];
   expect(resolveAssociationSubject(model, subject)).toBeUndefined();
   owner.raw.communications = [];
   owner.uid = 'replacement';
@@ -223,6 +224,30 @@ it('shows an unavailable attachment when the pinned store UID no longer matches'
   expect(screen.getAllByText('Unavailable exact attachment').length).toBeGreaterThan(0);
 });
 
+it.each(['duplicate attachment', 'missing attachment identity', 'group collision'] as const)(
+  'does not hydrate an attachment with %s in the target owner',
+  (mode) => {
+    const model = fixture();
+    const owner = model.entities[3];
+    const store = model.entities[2];
+    const rendered = render(<ChannelStorageDetails entity={owner} model={model} onSelect={vi.fn()} />);
+    expect(screen.queryByText('Unavailable exact attachment')).toBeNull();
+    if (mode === 'group collision') {
+      store.raw.metadata = [
+        {
+          '@type': 'type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation',
+          groups: [{ groupId: { value: 'attachment-a' }, items: [] }],
+        },
+      ];
+    } else {
+      const attachments = store.raw.attachments as unknown[];
+      attachments.push(mode === 'duplicate attachment' ? attachments[0] : {});
+    }
+    rendered.rerender(<ChannelStorageDetails entity={owner} model={model} onSelect={vi.fn()} />);
+    expect(screen.getByText('Unavailable exact attachment')).toBeDefined();
+  },
+);
+
 it('is mounted by the Inspector for Channel, Component and DataProduct owners', () => {
   const model = fixture();
   for (const index of [0, 3, 4]) {
@@ -230,4 +255,111 @@ it('is mounted by the Inspector for Channel, Component and DataProduct owners', 
     render(<Inspector entity={model.entities[index]} model={model} onSelect={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByRole('heading', { name: 'Channel links and storage claims' })).toBeDefined();
   }
+});
+
+it.each([
+  undefined,
+  null,
+  {},
+  { connection: {} },
+  { connection: { id: { value: 'link-a' } } },
+  { connection: { owner: { kind: 'ENTITY_KIND_CHANNEL' }, ownerUid: 'hub-uid', id: { value: 'link-a' } } },
+])('does not crash or substitute a selected association for a partial subject %j', (subject) => {
+  const model = fixture();
+  const context = buildModel([
+    { document: { id: id('context'), title: { value: 'Context' }, subjects: [{ subject }] } },
+  ]).entities[0];
+  expect(resolveAssociationSubject(model, subject)).toBeUndefined();
+  render(<ChannelStorageDetails entity={context} model={model} onSelect={vi.fn()} />);
+  expect(screen.queryByRole('heading', { name: 'Selected associations in the loaded model' })).toBeNull();
+});
+
+const protoSources = import.meta.glob('../../../../../proto/trogonatlas/{eventmodel,type}/v1alpha1/*.proto', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+const wireRoot = new protobuf.Root();
+for (const wellKnown of ['any', 'duration', 'struct'])
+  wireRoot.addJSON(
+    (protobuf.common.get(`google/protobuf/${wellKnown}.proto`) as { nested: Record<string, protobuf.AnyNestedObject> })
+      .nested,
+  );
+for (const source of Object.values(protoSources)) protobuf.parse(source, wireRoot);
+wireRoot.resolveAll();
+const entityType = wireRoot.lookupType('trogonatlas.eventmodel.v1alpha1.Entity');
+
+function wireEntity(payload: Record<string, unknown>) {
+  const packed = entityType.encode(entityType.fromObject(payload)).finish();
+  return entityType.toObject(entityType.decode(packed), { longs: String, enums: String, bytes: String });
+}
+
+it('retains Channel and storage declarations through the real wire codec into Inspector projection', () => {
+  const source = fixture();
+  source.entities[0].raw.links = [
+    { ...link('link-a'), parameterValues: { tenant: '', region: 'eu' } },
+    link('link-b'),
+    link('link-c', 'CHANNEL_LINK_KIND_ROUTES_TO'),
+  ];
+  source.entities[4].raw.inputs = [{ portId: { value: 'port-a' }, name: { value: 'Rows' } }];
+  const rows = source.entities.map((owner) =>
+    wireEntity({
+      [owner.kind]: owner.raw,
+      system: { uid: owner.uid ?? 'product-uid' },
+    }),
+  );
+  rows.push(
+    wireEntity({
+      externalSystem: {
+        id: id('external'),
+        title: 'External',
+        storageClaims: [claim('external-claim', 'STORAGE_DIRECTION_READ')],
+      },
+      system: { uid: 'external-uid' },
+    }),
+  );
+  const model = buildModel(rows);
+  const links = channelLinks(model.entities[0]);
+  expect(links.map((item) => [item.connectionId, item.kind])).toEqual([
+    ['link-a', 'COMPOSES'],
+    ['link-b', 'COMPOSES'],
+    ['link-c', 'ROUTES_TO'],
+  ]);
+  expect(links[0].target?.id.version).toBe('18446744073709551615');
+  expect(links[0].parameterValues).toEqual([
+    ['tenant', ''],
+    ['region', 'eu'],
+  ]);
+  const claims = storageClaims(model.entities[3]);
+  expect(claims.map((item) => item.direction)).toEqual(['READ', 'WRITE', 'WRITE']);
+  expect(claims[0].attachment).toEqual({
+    owner: { kind: 'ENTITY_KIND_DATA_STORE', id: id('warehouse') },
+    ownerUid: 'store-uid',
+    id: 'attachment-a',
+  });
+  expect(claims[1].attachment).toBeUndefined();
+  expect(storageClaims(model.entities[4])[0].portId).toBe('port-a');
+  expect(storageClaims(model.entities[5])[0].connectionId).toBe('external-claim');
+  expect(storageClaims(model.entities[5])[0].store?.id.version).toBe('18446744073709551615');
+  expect(resolveAssociationSubject(model, selection(model.entities[4], 'product-claim'))?.connectionId).toBe(
+    'product-claim',
+  );
+  const select = vi.fn();
+  const { container } = render(
+    <Inspector entity={model.entities[0]} model={model} onSelect={select} onClose={vi.fn()} />,
+  );
+  expect(screen.getAllByText('COMPOSES declared by the owner')).toHaveLength(2);
+  expect(screen.getByText('ROUTES_TO declared by the owner')).toBeDefined();
+  expect(screen.getByText('tenant=')).toBeDefined();
+  expect(screen.getByText('region=eu')).toBeDefined();
+  expect(container.querySelector('script')).toBeNull();
+  fireEvent.click(screen.getAllByRole('button', { name: 'shop/inner@18446744073709551615' })[0]);
+  expect(select).toHaveBeenCalledWith(entityKey('channel', id('inner')));
+  cleanup();
+  render(<Inspector entity={model.entities[3]} model={model} onSelect={select} onClose={vi.fn()} />);
+  expect(screen.getByText('READ declared by the owner')).toBeDefined();
+  expect(screen.queryByText('Unavailable exact attachment')).toBeNull();
+  cleanup();
+  render(<Inspector entity={model.entities[5]} model={model} onSelect={select} onClose={vi.fn()} />);
+  expect(screen.getByText('READ declared by the owner')).toBeDefined();
 });
