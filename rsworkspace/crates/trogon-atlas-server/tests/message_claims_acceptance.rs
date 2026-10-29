@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
-mod support;
 #[path = "support/observed_claim_store.rs"]
 mod observed_claim_store;
+mod support;
 use std::sync::Arc;
 
 use support::two_tenants::{authed, make_registry, serve_with_registry, ROOT_TOKEN};
@@ -3481,17 +3481,23 @@ async fn native_claims_and_peer_declarations_coexist_without_inferred_peer_refer
         );
         let mut invalid = saved.clone();
         match invalid.kind.as_mut().unwrap() {
-            pb::entity::Kind::Component(v) => v.communications[0].peer = None,
-            pb::entity::Kind::ExternalSystem(v) => v.communications[0].peer = None,
+            pb::entity::Kind::Component(v) => {
+                v.communications[0].peer = None;
+                v.communications[0].connection_id = None;
+            }
+            pb::entity::Kind::ExternalSystem(v) => {
+                v.communications[0].peer = None;
+                v.communications[0].connection_id = None;
+            }
             _ => unreachable!(),
         }
-        refused_unchanged(
-            &mut client,
-            &current,
-            invalid,
-            "declaration still requires peer",
-        )
-        .await;
+        let error = put(&mut client, invalid, &current.etag).await.unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert!(
+            error.message().contains("communication peer required"),
+            "{error}"
+        );
+        assert_eq!(read_owner(&mut client, &saved).await, current);
         let mut without_claim = saved.clone();
         claims::declarations_mut(&mut without_claim)
             .unwrap()
@@ -4600,20 +4606,13 @@ async fn native_schema_hydration_is_once_per_request_and_timeouts_remain_errors(
         );
     }
     store.timeout.store(false, Ordering::SeqCst);
-    assert!(
-        put(
-            &mut client,
-            standalone_field_association(
-                &namespace,
-                "after-timeout",
-                pb::EntityKind::Document,
-                leaf
-            ),
-            ""
-        )
-        .await
-        .is_ok()
-    );
+    assert!(put(
+        &mut client,
+        standalone_field_association(&namespace, "after-timeout", pb::EntityKind::Document, leaf),
+        ""
+    )
+    .await
+    .is_ok());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -4985,8 +4984,8 @@ async fn independent_native_same_key_creates_require_an_explicit_incarnation_cho
 
 #[tokio::test(flavor = "multi_thread")]
 async fn native_graph_work_overflow_is_scoped_to_baseline_or_branch_authorized_lens() {
-    use support::two_tenants::{ACME_TOKEN, BETA_TOKEN, authed_branch};
-    use trogon_atlas_store::{Store, WriteContext, store::MutationOp};
+    use support::two_tenants::{authed_branch, ACME_TOKEN, BETA_TOKEN};
+    use trogon_atlas_store::{store::MutationOp, Store, WriteContext};
     let (mut client, _, store) = fixture_with_store().await;
     let visible = client
         .register_namespace(authed(
@@ -5142,6 +5141,264 @@ async fn native_claim_direction_and_message_fingerprints_retire_only_changed_occ
             assert_ne!(after.claims[0].connection_id, old);
             assert_eq!(after.claims[1], sibling);
             current = read_owner(&mut client, &saved).await;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn artifact_and_library_field_selections_remain_opaque_and_require_the_exact_incarnation() {
+    use trogon_atlas_core::{message_claims as claims, specification::content_digest};
+    let (mut client, namespace) = fixture().await;
+    let (mut spec, message, _) = targets(&mut client, &namespace).await;
+    let library = put(
+        &mut client,
+        entity(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+            id: Some(id(&namespace, "opaque")),
+            title: "Opaque types".into(),
+            files: vec![pb::ProtoSourceFile {
+                path: "opaque.proto".into(),
+                content:
+                    "syntax = \"proto3\"; package opaque.v1; message Payload { string name = 1; }"
+                        .into(),
+            }],
+            ..Default::default()
+        })),
+        "",
+    )
+    .await
+    .unwrap()
+    .entity
+    .unwrap();
+    let current = read_owner(&mut client, &spec).await;
+    let pb::entity::Kind::Specification(v) = spec.kind.as_mut().unwrap() else {
+        panic!()
+    };
+    let content = "opaque artifact";
+    v.artifacts.push(pb::ContractArtifact {
+        name: Some(pb::MemberName {
+            value: "OpaqueSource".into(),
+        }),
+        path: Some(pb::ArtifactPath {
+            value: "opaque.txt".into(),
+        }),
+        format: Some(pb::ContractFormat {
+            kind: Some(pb::contract_format::Kind::Other("opaque".into())),
+        }),
+        media_type: Some(pb::MediaType {
+            value: "text/plain".into(),
+        }),
+        content: content.into(),
+        digest: Some(content_digest(content)),
+        ..Default::default()
+    });
+    spec = put(&mut client, spec, &current.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let current = read_owner(&mut client, &spec).await;
+    let pb::entity::Kind::Specification(v) = spec.kind.as_mut().unwrap() else {
+        panic!()
+    };
+    v.schemas.push(pb::ContractSchema {
+        name: Some(pb::MemberName {
+            value: "OpaqueShape".into(),
+        }),
+        definition: Some(pb::SchemaDefinition {
+            target: Some(pb::schema_definition::Target::Artifact(
+                pb::LocalArtifactSelection {
+                    artifact_id: v.artifacts[0].member_id.clone(),
+                    expected_digest: v.artifacts[0].digest.clone(),
+                },
+            )),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    spec = put(&mut client, spec, &current.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let current = read_owner(&mut client, &spec).await;
+    let pb::entity::Kind::Specification(v) = spec.kind.as_mut().unwrap() else {
+        panic!()
+    };
+    v.messages[0].schemas = vec![
+        pb::SchemaBinding {
+            role: pb::schema_binding::Role::Payload as i32,
+            r#type: Some(pb::schema_binding::Type::LocalSchema(
+                v.schemas[0].member_id.clone().unwrap(),
+            )),
+            ..Default::default()
+        },
+        pb::SchemaBinding {
+            role: pb::schema_binding::Role::Headers as i32,
+            r#type: Some(pb::schema_binding::Type::LibraryType(
+                pb::TypeLibraryTypeRef {
+                    library: Some(pb::TypeLibraryRef {
+                        id: reference(&library).id,
+                    }),
+                    message: Some(pb::QualifiedProtoName {
+                        value: "opaque.v1.Payload".into(),
+                    }),
+                },
+            )),
+            ..Default::default()
+        },
+    ];
+    spec = put(&mut client, spec, &current.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let current = read_owner(&mut client, &spec).await;
+    let pb::entity::Kind::Specification(v) = spec.kind.as_mut().unwrap() else {
+        panic!()
+    };
+    v.messages.push(pb::ContractMessage {
+        name: Some(pb::MemberName {
+            value: "LibraryMessage".into(),
+        }),
+        schemas: vec![pb::SchemaBinding {
+            role: pb::schema_binding::Role::Payload as i32,
+            r#type: v.messages[0].schemas[1].r#type.clone(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    spec = put(&mut client, spec, &current.etag)
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let pb::entity::Kind::Specification(v) = spec.kind.as_ref().unwrap() else {
+        panic!()
+    };
+    for (index, binding) in [
+        (0, &v.messages[0].schemas[0]),
+        (2, &v.messages[2].schemas[0]),
+    ] {
+        for kind in [
+            pb::EntityKind::Component,
+            pb::EntityKind::ExternalSystem,
+            pb::EntityKind::Domain,
+        ] {
+            let mut selected_message = message.clone();
+            selected_message.member_id = v.messages[index].member_id.clone();
+            let mut raw = owner(&namespace, kind, selected_message);
+            match raw.kind.as_mut().unwrap() {
+                pb::entity::Kind::Component(v) => {
+                    v.id.as_mut().unwrap().slug = format!("opaque-{index}");
+                }
+                pb::entity::Kind::ExternalSystem(v) => {
+                    v.id.as_mut().unwrap().slug = format!("opaque-{index}");
+                }
+                pb::entity::Kind::Domain(v) => {
+                    v.id.as_mut().unwrap().slug = format!("opaque-{index}");
+                }
+                _ => unreachable!(),
+            }
+            let saved = put(&mut client, raw, "").await.unwrap().entity.unwrap();
+            let current = read_owner(&mut client, &saved).await;
+            let mut raw = saved.clone();
+            let declarations = claims::declarations_mut(&mut raw).unwrap();
+            declarations.field_selections.push(pb::ClaimFieldSelection {
+                claim_id: declarations.claims[0].connection_id.clone(),
+                binding: Some(pb::ConnectionRef {
+                    owner: Some(reference(&spec)),
+                    owner_uid: spec.system.as_ref().unwrap().uid.clone(),
+                    id: binding.connection_id.clone(),
+                }),
+                selectors: vec![pb::ClaimFieldSelector {
+                    selector: Some(pb::claim_field_selector::Selector::Opaque(
+                        pb::OpaqueTypeSelector {
+                            syntax: "json-pointer".into(),
+                            value: "/name".into(),
+                        },
+                    )),
+                }],
+                ..Default::default()
+            });
+            let saved = put(&mut client, raw, &current.etag)
+                .await
+                .unwrap()
+                .entity
+                .unwrap();
+            let current = read_owner(&mut client, &saved).await;
+            let selection = &claims::declarations(&saved).unwrap().field_selections[0];
+            assert_eq!(
+                claims::validate_field_selection(&saved, selection, &spec, None).unwrap(),
+                vec![claims::FieldSelectorVerification::OpaqueUnverified]
+            );
+            assert_eq!(current.entity.as_ref(), Some(&saved));
+            let mut invalid = saved.clone();
+            let selection = &mut claims::declarations_mut(&mut invalid)
+                .unwrap()
+                .field_selections[0];
+            selection.selectors[0].selector =
+                Some(pb::claim_field_selector::Selector::Path(pb::FieldPath {
+                    segments: vec!["name".into()],
+                }));
+            assert!(claims::validate_field_selection(
+                &invalid,
+                &claims::declarations(&invalid).unwrap().field_selections[0],
+                &spec,
+                None
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("native paths require a native Schema binding"));
+            let error = put(&mut client, invalid, &current.etag).await.unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(
+                error.message(),
+                "selected message claim target is unavailable or invalid"
+            );
+            assert_eq!(read_owner(&mut client, &saved).await, current);
+            let mut invalid = saved.clone();
+            let selection = &mut claims::declarations_mut(&mut invalid)
+                .unwrap()
+                .field_selections[0];
+            selection.binding.as_mut().unwrap().owner_uid =
+                "01930000-0000-7000-8000-000000000777".into();
+            invalid.system = None;
+            match invalid.kind.as_mut().unwrap() {
+                pb::entity::Kind::Component(v) => {
+                    v.id.as_mut().unwrap().slug = format!("invalid-incarnation-{index}");
+                }
+                pb::entity::Kind::ExternalSystem(v) => {
+                    v.id.as_mut().unwrap().slug = format!("invalid-incarnation-{index}");
+                }
+                pb::entity::Kind::Domain(v) => {
+                    v.id.as_mut().unwrap().slug = format!("invalid-incarnation-{index}");
+                }
+                _ => unreachable!(),
+            }
+            let rejected = reference(&invalid);
+            let error = put(&mut client, invalid, "").await.unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert!(
+                error
+                    .message()
+                    .contains("binding must select same Specification incarnation"),
+                "{error}"
+            );
+            assert_eq!(read_owner(&mut client, &saved).await, current);
+            assert_eq!(
+                client
+                    .get_entity(authed(
+                        pb::GetEntityRequest {
+                            kind: rejected.kind,
+                            id: rejected.id
+                        },
+                        ROOT_TOKEN
+                    ))
+                    .await
+                    .unwrap_err()
+                    .code(),
+                Code::NotFound
+            );
         }
     }
 }
