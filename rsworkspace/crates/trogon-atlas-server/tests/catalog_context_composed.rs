@@ -178,7 +178,7 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
         }),
         pb::entity::Kind::Domain(pb::Domain {
             id: Some(pb::Id {
-                version: 9007199254740993,
+                version: 9_007_199_254_740_993,
                 ..id("domain")
             }),
             title: "Domain".into(),
@@ -194,7 +194,7 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
                 id: Some(id("word")),
                 owning_domain: Some(pb::DomainRef {
                     id: Some(pb::Id {
-                        version: 9007199254740993,
+                        version: 9_007_199_254_740_993,
                         ..id("domain")
                     }),
                 }),
@@ -401,7 +401,7 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
                 .is_some_and(|owner| owner.kind == pb::EntityKind::DesignGraph as i32)
         })
         .unwrap();
-    assert!(!step.from_uid.is_empty());
+    assert_ne!(step.from_uid, "");
     assert!(step.step_id.as_ref().is_some_and(|id| !id.value.is_empty()));
     let component_index = graph
         .iter()
@@ -473,7 +473,7 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
     assert_eq!(groups.len(), 1);
     assert_eq!(groups[0].from.as_ref().unwrap().id, Some(id("agent")));
     assert!(groups[0].connection_id.is_some());
-    assert!(!groups[0].from_uid.is_empty());
+    assert_ne!(groups[0].from_uid, "");
     for (kind, slug, expected) in [
         (pb::EntityKind::Person, "person", "decision_makers"),
         (pb::EntityKind::Decision, "original", "amends"),
@@ -497,12 +497,12 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
             .filter(|r| r.from_field.contains(expected))
             .collect();
         assert_eq!(matching.len(), 1);
-        assert!(!matching[0].from_uid.is_empty());
+        assert_ne!(matching[0].from_uid, "");
         assert!(matching[0].connection_id.is_some());
         assert_eq!(matching[0].to.as_ref().unwrap().id, Some(id(slug)));
     }
     let domain_id = pb::Id {
-        version: 9007199254740993,
+        version: 9_007_199_254_740_993,
         ..id("domain")
     };
     let declarations = client
