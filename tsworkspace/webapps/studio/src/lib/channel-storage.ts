@@ -106,7 +106,7 @@ export function resolvedAttachment(model: Model, item: StorageClaimView): Entity
   const kind = typeof attachment?.owner.kind === 'string' ? wireKind(attachment.owner.kind) : undefined;
   if (!attachment || kind !== 'dataStore' || !attachment.id || !attachment.ownerUid) return undefined;
   const store = model.byKey.get(entityKey('dataStore', asId(attachment.owner.id)));
-  if (!store || store.uid !== attachment.ownerUid) return undefined;
+  if (!store || store.uid !== attachment.ownerUid || !hasUnambiguousOwnerIdentities(store)) return undefined;
   const members = Array.isArray(store.raw.attachments) ? store.raw.attachments : [];
   return members.some((member) => text(record(member).connectionId) === attachment.id) ? store : undefined;
 }
