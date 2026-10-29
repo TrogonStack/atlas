@@ -110,12 +110,32 @@ JSON object and must not invent coverage client-side.
 
 ### Incomplete validation and CLI exits
 
-Today `validate` / `validate-project` exit `1` when any Error-severity
-finding exists ([exit codes](../reference/trogon-atlas-exit-codes.md));
-warnings alone exit `0`. There is no exit for "validation ran incompletely."
-Now that coverage is reported, incomplete runs need an explicit exit distinct from
-"completed with findings," and precedence when both incomplete and Error
-findings are present must be documented before CI depends on it.
+`validate` / `validate-project` exit `1` when any Error-severity finding
+exists, `11` when there is no Error finding but coverage has a gap, and `0`
+otherwise ([validation verdicts](../reference/trogon-atlas-exit-codes.md#validation-verdicts)).
+This is a proposed default for review, not yet a settled product rule.
+
+Errors take precedence because an Error finding is definitive: examining
+more of the model cannot remove it, so a gate should fail on the finding
+rather than on a coverage question. Without errors, an empty finding list
+over a partial scan says nothing about the part that was not scanned, so it
+must not exit like a clean pass. `11` is the next code after the failure
+categories, and it is not a failure category itself because the command
+completed and reported what it saw.
+
+Absent coverage is treated as a gap rather than as complete, consistent with
+"never invent coverage client-side": a client cannot tell an older server's
+silent full run from a run that skipped suites. A CI job pointed at such a
+server exits `11` until the server reports coverage. Coverage that is
+present but lists no checks is a gap for the same reason: a default message
+proves no suite ran.
+
+A `SKIPPED` check is only a gap when the suite applied and did not run.
+Reasons that mark a suite as outside the entry point by design are not gaps;
+reasons that mark a suite as blocked, or reasons the client does not know,
+are. Failing closed on unknown reasons means a new by-design reason needs a
+client update before it stops reading as incomplete, which is preferable to
+a new "blocked" reason silently reading as a pass.
 
 ### Enforcement is a separate decision
 

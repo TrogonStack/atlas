@@ -340,7 +340,8 @@ enum Cmd {
     /// whole model in view, which `apply --dry-run` does not run, plus the
     /// strategic chain of the model's namespace (its BoundedContext, the
     /// Subdomains it realizes, their Domains, and Domains declared in the
-    /// namespace). Exits 1 when any finding is an error. With --branch,
+    /// namespace). Exits 1 when any finding is an error, otherwise 11 when
+    /// the server's coverage shows the run was incomplete. With --branch,
     /// validates the branch's view of the model.
     Validate {
         /// `<namespace>/<model>[@version]`, e.g. `shop/checkout`. Omit
@@ -352,7 +353,8 @@ enum Cmd {
     /// rules), which print once in a store-level section. Use it after
     /// editing only problem-space entities or a BoundedContext, when there
     /// may be no event model to run `validate` on. Exits 1 when any
-    /// finding is an error. With --branch, validates the branch's view.
+    /// finding is an error, otherwise 11 when the server's coverage shows
+    /// the run was incomplete. With --branch, validates the branch's view.
     #[command(group(
         clap::ArgGroup::new("scope")
             .required(true)
@@ -633,6 +635,40 @@ fn summary_json(counts: branch::SeverityCounts) -> Value {
 /// without being an error: drift a diff found, a branch's remaining
 /// conflicts. Also used by `trogon-atlas fmt --check`.
 const EXIT_FINDINGS: u8 = 1;
+
+/// Exit code for a `validate` / `validate-project` run with no Error finding
+/// whose coverage shows a suite or the snapshot was not fully examined, so a
+/// gate never mistakes "nothing found in part of the model" for a pass.
+const EXIT_VALIDATION_INCOMPLETE: u8 = 11;
+
+fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
+    match verdict {
+        validate::ValidationVerdict::Clean => ExitCode::SUCCESS,
+        validate::ValidationVerdict::Findings => ExitCode::from(EXIT_FINDINGS),
+        validate::ValidationVerdict::Incomplete => ExitCode::from(EXIT_VALIDATION_INCOMPLETE),
+    }
+}
+
+fn print_coverage_gaps(completeness: &validate::Completeness) {
+    for gap in &completeness.gaps {
+        match gap {
+            validate::CoverageGap::CoverageAbsent => {
+                println!("incomplete: the server reported no validation coverage");
+            }
+            validate::CoverageGap::NoChecks => {
+                println!("incomplete: the server's validation coverage named no checks");
+            }
+            validate::CoverageGap::SnapshotTruncated => {
+                println!("incomplete: the validated snapshot was truncated");
+            }
+            validate::CoverageGap::Check {
+                check_id,
+                state,
+                reason,
+            } => println!("incomplete: {check_id} {state} {reason}"),
+        }
+    }
+}
 
 /// A clap usage error (missing/conflicting flags) exits 2 on its own,
 /// before `main` ever runs; nothing here needs to produce it.
@@ -1920,16 +1956,20 @@ async fn run(
             let address = validate::parse_model_address(&model)?;
             let mut client =
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
-            let (id, issues) = validate::validate_event_model(&mut client, &address).await?;
+            let (id, resp) = validate::validate_event_model(&mut client, &address).await?;
+            let issues = resp.issues;
             let model = pb::canonical::id_string(pb::EntityKind::EventModel, &id);
             let severities = branch::SeverityCounts::of(&issues);
+            let completeness = validate::Completeness::of(resp.coverage.as_ref());
+            let verdict = validate::ValidationVerdict::of(severities.errors, &completeness);
             if text {
                 println!("{model}: {severities}");
                 for issue in &issues {
                     println!("{}", apply::format_issue(issue));
                 }
+                print_coverage_gaps(&completeness);
             }
-            let data = json!({
+            let mut data = json!({
                 "event_model": model,
                 "validation_summary": {
                     "errors": severities.errors,
@@ -1938,14 +1978,8 @@ async fn run(
                 },
                 "validation": issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
             });
-            Ok((
-                if severities.errors > 0 {
-                    ExitCode::from(EXIT_FINDINGS)
-                } else {
-                    ExitCode::SUCCESS
-                },
-                Some(data),
-            ))
+            validate::insert_verdict(&mut data, resp.coverage.as_ref(), verdict, &completeness);
+            Ok((exit_code_for_verdict(verdict), Some(data)))
         }
         Cmd::ValidateProject {
             namespace,
@@ -1969,17 +2003,15 @@ async fn run(
                 connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
             let resp = validate::validate_project(&mut client, &scope).await?;
             let report = ProjectValidation::of(&label, &resp);
+            let completeness = validate::Completeness::of(resp.coverage.as_ref());
+            let verdict = validate::ValidationVerdict::of(report.total.errors, &completeness);
             if text {
                 print!("{}", report.render());
+                print_coverage_gaps(&completeness);
             }
-            Ok((
-                if report.total.errors > 0 {
-                    ExitCode::from(EXIT_FINDINGS)
-                } else {
-                    ExitCode::SUCCESS
-                },
-                Some(report.to_json()),
-            ))
+            let mut data = report.to_json();
+            validate::insert_verdict(&mut data, resp.coverage.as_ref(), verdict, &completeness);
+            Ok((exit_code_for_verdict(verdict), Some(data)))
         }
         Cmd::Tree { namespace } => {
             if let Some(namespace) = &namespace {
@@ -2413,7 +2445,7 @@ mod tests {
     use trogon_atlas_client::failure::FailureCategory as Category;
     use trogon_atlas_proto as pb;
 
-    use super::{exit_code_for_category, ProjectValidation};
+    use super::{exit_code_for_category, exit_code_for_verdict, ProjectValidation};
 
     // `ExitCode` has no public accessor for the raw code, so compare
     // through `Debug` formatting against `ExitCode::from(expected)` built
@@ -2514,5 +2546,107 @@ mod tests {
             reports[1]["validation"][0]["code"],
             "DOMAIN_IN_CONTEXT_NAMESPACE"
         );
+    }
+
+    fn check(
+        check_id: &str,
+        state: pb::validation_check_result::State,
+        reason: &str,
+    ) -> pb::ValidationCheckResult {
+        pb::ValidationCheckResult {
+            check_id: check_id.into(),
+            state: state as i32,
+            reason: reason.into(),
+            subjects_examined: 1,
+        }
+    }
+
+    fn validate_exit(errors: usize, coverage: Option<&pb::ValidationCoverage>) -> String {
+        use trogon_atlas_client::validate::{Completeness, ValidationVerdict};
+        let verdict = ValidationVerdict::of(errors, &Completeness::of(coverage));
+        format!("{:?}", exit_code_for_verdict(verdict))
+    }
+
+    #[test]
+    fn validate_exit_codes_follow_findings_then_coverage() {
+        use std::process::ExitCode;
+
+        use pb::validation_check_result::State;
+        use trogon_atlas_server::validation as server;
+
+        let with =
+            |checks: Vec<pb::ValidationCheckResult>, truncated: bool| pb::ValidationCoverage {
+                checks,
+                snapshot_truncated: truncated,
+                ..Default::default()
+            };
+        let complete = with(
+            vec![check(server::CHECK_MODEL, State::Completed, "")],
+            false,
+        );
+        let partial = with(
+            vec![check(
+                server::CHECK_MODEL,
+                State::Partial,
+                "snapshot_truncated",
+            )],
+            true,
+        );
+        let errored = with(vec![check(server::CHECK_MODEL, State::Error, "")], false);
+        let truncated = with(vec![check(server::CHECK_MODEL, State::Completed, "")], true);
+        let by_design = with(
+            vec![
+                check(server::CHECK_MODEL, State::Completed, ""),
+                check(
+                    server::CHECK_STORE_HYGIENE,
+                    State::Skipped,
+                    server::REASON_WRITE_PATH,
+                ),
+                check(
+                    server::CHECK_SCENARIOS,
+                    State::Skipped,
+                    server::REASON_MERGE_PATH,
+                ),
+                check(
+                    server::CHECK_ARCHITECTURE,
+                    State::Skipped,
+                    server::REASON_KIND_NOT_APPLICABLE,
+                ),
+                check(
+                    server::CHECK_STRATEGIC,
+                    State::Skipped,
+                    "event_model_id_absent",
+                ),
+            ],
+            false,
+        );
+        let blocked = |reason| {
+            with(
+                vec![check(server::CHECK_STRATEGIC, State::Skipped, reason)],
+                false,
+            )
+        };
+        let hygiene = blocked(server::REASON_BLOCKED_BY_HYGIENE);
+        let scenarios = blocked(server::REASON_BLOCKED_BY_SCENARIOS);
+        let cases: [(&str, usize, Option<&pb::ValidationCoverage>, u8); 11] = [
+            ("clean and complete", 0, Some(&complete), 0),
+            ("errors", 1, Some(&complete), 1),
+            ("errors and incomplete", 1, Some(&partial), 1),
+            ("clean and partial", 0, Some(&partial), 11),
+            ("clean and errored check", 0, Some(&errored), 11),
+            ("clean and truncated", 0, Some(&truncated), 11),
+            ("clean and by-design skips", 0, Some(&by_design), 0),
+            ("clean and blocked by hygiene", 0, Some(&hygiene), 11),
+            ("clean and blocked by scenarios", 0, Some(&scenarios), 11),
+            ("clean and absent coverage", 0, None, 11),
+            ("errors and absent coverage", 1, None, 1),
+        ];
+        for (name, errors, coverage, expected) in cases {
+            assert_eq!(
+                validate_exit(errors, coverage),
+                format!("{:?}", ExitCode::from(expected)),
+                "{name} should exit {expected}"
+            );
+        }
     }
 }
