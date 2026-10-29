@@ -1304,6 +1304,7 @@ fn batch_mutate_failure(resp: &pb::BatchMutateResponse) -> anyhow::Error {
     anyhow::Error::new(ApplyRejected {
         failed: format!("op[{}]", resp.failed_op_index),
         issues: resp.failure.clone(),
+        coverage: resp.coverage.clone(),
     })
 }
 

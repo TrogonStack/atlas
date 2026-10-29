@@ -2395,6 +2395,7 @@ impl EventModelServiceImpl {
         mutations: &[MutationOp],
         err: trogon_atlas_store::error::StoreError,
         branch: Option<&str>,
+        coverage: &pb::ValidationCoverage,
     ) -> Result<pb::BatchMutateResponse, Status> {
         use trogon_atlas_store::error::StoreError;
         let refused = match &err {
@@ -2404,6 +2405,7 @@ impl EventModelServiceImpl {
             _ => None,
         };
         let mut resp = Self::batch_failure_response(metas, mutations, err);
+        resp.coverage = Some(coverage.clone());
         let Some((index, expected_etag)) = refused else {
             return Ok(resp);
         };
@@ -2587,6 +2589,15 @@ fn is_slice_kind(kind: pb::EntityKind) -> bool {
             | pb::EntityKind::ReadModelSlice
             | pb::EntityKind::AutomationSlice
             | pb::EntityKind::UiSlice
+    )
+}
+
+fn runs_scenarios(kind: pb::EntityKind) -> bool {
+    matches!(
+        kind,
+        pb::EntityKind::CommandSlice
+            | pb::EntityKind::ReadModelSlice
+            | pb::EntityKind::AutomationSlice
     )
 }
 
@@ -4912,12 +4923,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .check_schema(&*self.store, &entity, &[], branch.as_deref())
             .await?;
 
-        let ran_scenarios = matches!(
-            kind,
-            pb::EntityKind::CommandSlice
-                | pb::EntityKind::ReadModelSlice
-                | pb::EntityKind::AutomationSlice
-        );
+        let ran_scenarios = runs_scenarios(kind);
         let ran_strategic = is_strategic_kind(kind);
         let mut snapshot_truncated = false;
         let mut scenario_issues = if ran_scenarios {
@@ -4960,9 +4966,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             branch.as_deref(),
             1,
             validation::WriteSuites {
-                architecture: architecture_admission::is_architecture_kind(kind).then_some(1),
-                scenarios: ran_scenarios.then_some(1),
-                strategic: ran_strategic.then_some(1),
+                architecture: validation::SuiteRun::over(usize::from(
+                    architecture_admission::is_architecture_kind(kind),
+                )),
+                scenarios: validation::SuiteRun::over(usize::from(ran_scenarios)),
+                strategic: validation::SuiteRun::over(usize::from(ran_strategic)),
                 snapshot_truncated,
             },
         );
@@ -5777,7 +5785,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .filter(|m| m.is_put && architecture_admission::is_architecture_kind(m.kind))
             .count();
         let mut suites = validation::WriteSuites {
-            architecture: (architecture_subjects > 0).then(|| subject_count(architecture_subjects)),
+            architecture: validation::SuiteRun::over(architecture_subjects),
             ..Default::default()
         };
         if branch.is_none() && (has_strategic_ops || has_slice_puts) {
@@ -5788,9 +5796,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .snapshot_with_truncation(branch.as_deref(), &vis)
                 .await?;
             suites.snapshot_truncated |= truncated;
-            suites.strategic = Some(subject_count(
+            suites.strategic = validation::SuiteRun::over(
                 metas.iter().filter(|m| is_strategic_kind(m.kind)).count(),
-            ));
+            );
             let world_changes: Vec<(pb::EntityKind, &pb::Id, Option<&pb::Entity>)> = metas
                 .iter()
                 .map(|m| (m.kind, &m.id, m.entity.as_ref().filter(|_| m.is_put)))
@@ -5845,12 +5853,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .snapshot_with_truncation(branch.as_deref(), &vis)
                 .await?;
             suites.snapshot_truncated |= truncated;
-            suites.scenarios = Some(subject_count(
+            suites.scenarios = validation::SuiteRun::over(
                 metas
                     .iter()
-                    .filter(|m| m.is_put && is_slice_kind(m.kind) && m.entity.is_some())
+                    .filter(|m| m.is_put && runs_scenarios(m.kind) && m.entity.is_some())
                     .count(),
-            ));
+            );
             let mut validation_ctx: Vec<StoredEntity> = (*pre_all_for_validation).clone();
             validation_ctx.extend(metas.iter().filter(|m| m.is_put).filter_map(|m| {
                 m.entity.as_ref().map(|entity| StoredEntity {
@@ -5861,7 +5869,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let mut scenario_errors: Vec<pb::ValidationIssue> = Vec::new();
             let mut first_error_index: Option<usize> = None;
             for (i, m) in metas.iter().enumerate() {
-                if !m.is_put || !is_slice_kind(m.kind) {
+                if !m.is_put || !runs_scenarios(m.kind) {
                     continue;
                 }
                 let Some(entity) = m.entity.as_ref() else {
@@ -5881,6 +5889,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             }
             if let Some(failed_op_index) = first_error_index {
+                // A real batch admits architecture only after this gate.
+                let mut reached = suites;
+                if !dry_run && matches!(reached.architecture, validation::SuiteRun::Ran(_)) {
+                    reached.architecture =
+                        validation::SuiteRun::NotReached(validation::REASON_BLOCKED_BY_SCENARIOS);
+                }
                 return Ok(Response::new(pb::BatchMutateResponse {
                     status: pb::batch_mutate_response::Status::Failed as i32,
                     results: Vec::new(),
@@ -5891,7 +5905,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     coverage: Some(validation::write_validation_coverage(
                         branch.as_deref(),
                         subject_count(metas.len()),
-                        suites,
+                        reached,
                     )),
                 }));
             }
@@ -6072,8 +6086,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             }),
                         };
                         return Ok(Response::new(
-                            self.batch_failure(&metas, &mutations, err, branch.as_deref())
-                                .await?,
+                            self.batch_failure(
+                                &metas,
+                                &mutations,
+                                err,
+                                branch.as_deref(),
+                                &batch_coverage,
+                            )
+                            .await?,
                         ));
                     }
                     None => {
@@ -6082,8 +6102,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             source: Box::new(trogon_atlas_store::error::StoreError::NotFound),
                         };
                         return Ok(Response::new(
-                            self.batch_failure(&metas, &mutations, err, branch.as_deref())
-                                .await?,
+                            self.batch_failure(
+                                &metas,
+                                &mutations,
+                                err,
+                                branch.as_deref(),
+                                &batch_coverage,
+                            )
+                            .await?,
                         ));
                     }
                 }
@@ -6126,7 +6152,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     }))
                 }
                 Err(err) => Ok(Response::new(
-                    self.batch_failure(&metas, &mutations, err, branch.as_deref())
+                    self.batch_failure(&metas, &mutations, err, branch.as_deref(), &batch_coverage)
                         .await?,
                 )),
             }
@@ -6295,7 +6321,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 Err(err) if err.is_partial_apply() => Err(store_err(err)),
                 Err(err) => {
                     let resp = self
-                        .batch_failure(&metas, &mutations, err, branch.as_deref())
+                        .batch_failure(&metas, &mutations, err, branch.as_deref(), &batch_coverage)
                         .await?;
                     if let Some(key) = &claim_key {
                         let status = Self::batch_failure_status(&resp);
@@ -8242,9 +8268,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             validation::merge_validation_coverage(
                 &req.name,
                 validation::MergeSuites {
-                    architecture: (merge_architecture_subjects > 0)
-                        .then(|| subject_count(merge_architecture_subjects)),
-                    strategic: ran_strategic.then(|| subject_count(merge_strategic_subjects)),
+                    architecture: validation::SuiteRun::over(merge_architecture_subjects),
+                    strategic: if ran_strategic {
+                        validation::SuiteRun::over(merge_strategic_subjects)
+                    } else {
+                        validation::SuiteRun::NotReached(validation::REASON_BLOCKED_BY_HYGIENE)
+                    },
                     snapshot_truncated,
                 },
             )

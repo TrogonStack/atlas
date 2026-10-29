@@ -240,3 +240,49 @@ async fn merge_branch_reports_that_it_skips_model_and_scenarios() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_failure_after_validation_keeps_coverage() {
+    let service = service().await;
+    let ui_slice = pb::Entity {
+        kind: Some(pb::entity::Kind::UiSlice(pb::UiSlice {
+            id: Some(id("wvc-batch-fail", "browse")),
+            title: "wvc-batch-fail/browse".into(),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let stale = pb::BatchMutateOp {
+        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+            entity: Some(event("wvc-batch-fail", "missing")),
+            if_match: "1".into(),
+            ..Default::default()
+        })),
+    };
+    let response = service
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            ops: vec![put_op(ui_slice), stale],
+            validate_only: true,
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        response.status,
+        pb::batch_mutate_response::Status::Failed as i32,
+        "{response:?}"
+    );
+    let coverage = response
+        .coverage
+        .expect("a batch that failed after validation must report coverage");
+    assert_check(&coverage, "request_shape", State::Completed, "", 2);
+    assert_check(
+        &coverage,
+        "scenarios",
+        State::Skipped,
+        "kind_not_applicable",
+        0,
+    );
+    assert_write_path_skips(&coverage);
+}

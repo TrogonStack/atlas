@@ -51,12 +51,15 @@ reason `write_path`; merge coverage lists `model`, `scenarios` and
 `request_shape` as `SKIPPED` with reason `merge_path`. Suites a request's
 kinds never reach are `SKIPPED` with reason `kind_not_applicable`. When
 blocking hygiene Errors stop a merge, `strategic` is `SKIPPED` with reason
-`blocked_by_hygiene`. Merge reports the projected baseline as
+`blocked_by_hygiene`. A real batch admits architecture resources only after
+its scenario gate, so a scenario failure reports `architecture` as `SKIPPED`
+with reason `blocked_by_scenarios`. Merge reports the projected baseline as
 `effective_scope` and the merged branch as `requested_scope`.
 
 Coverage is absent on `operation_id` replays (nothing re-ran), on merge
 `STATUS_CONFLICTS` (validation was never reached), and on batch failures
-raised before validation, such as a referrer gate.
+raised before validation, such as a referrer gate. A batch that fails after
+validation, such as on a stale `if_match`, still reports the suites that ran.
 
 ### Explicit non-runs (do not overclaim)
 

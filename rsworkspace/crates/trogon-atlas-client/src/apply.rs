@@ -238,15 +238,18 @@ pub struct ApplyRejected {
     /// happen for a well-formed response).
     pub failed: String,
     pub issues: Vec<pb::ValidationIssue>,
+    pub coverage: Option<pb::ValidationCoverage>,
 }
 
 impl ApplyRejected {
     #[must_use]
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut body = json!({
             "failed": self.failed,
             "issues": self.issues.iter().map(issue_to_json).collect::<Vec<_>>(),
-        })
+        });
+        insert_coverage(&mut body, self.coverage.as_ref());
+        body
     }
 }
 
@@ -453,6 +456,7 @@ pub async fn apply(
             return Err(anyhow::Error::new(ApplyRejected {
                 failed,
                 issues: resp.failure.clone(),
+                coverage: resp.coverage.clone(),
             }));
         }
         let expected = if dry_run {
@@ -668,6 +672,7 @@ mod tests {
                 message: "missing ref".into(),
                 ..Default::default()
             }],
+            coverage: None,
         };
         let rendered = rejected.to_string();
         assert!(rendered.contains("apply failed at event:shop/order.placed@1"));
@@ -685,11 +690,39 @@ mod tests {
                 severity: pb::validation_issue::Severity::Error as i32,
                 ..Default::default()
             }],
+            coverage: None,
         };
         let json = rejected.to_json();
         assert_eq!(json["failed"], "event:shop/order.placed@1");
         assert_eq!(json["issues"][0]["code"], "ENTITY_REFERENCED");
         assert_eq!(json["issues"][0]["severity"], "error");
+    }
+
+    #[test]
+    fn apply_rejected_to_json_keeps_the_server_coverage() {
+        let rejected = ApplyRejected {
+            failed: "event:shop/order.placed@1".into(),
+            issues: Vec::new(),
+            coverage: Some(pb::ValidationCoverage {
+                checks: vec![pb::ValidationCheckResult {
+                    check_id: "scenarios".into(),
+                    state: pb::validation_check_result::State::Completed as i32,
+                    subjects_examined: 1,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        };
+        let json = rejected.to_json();
+        assert_eq!(json["coverage"]["checks"][0]["check_id"], "scenarios");
+        assert_eq!(json["coverage"]["checks"][0]["state"], "COMPLETED");
+        assert!(ApplyRejected {
+            coverage: None,
+            ..rejected
+        }
+        .to_json()
+        .get("coverage")
+        .is_none());
     }
 
     fn finding(code: &str) -> pb::ValidationIssue {
