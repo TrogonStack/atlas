@@ -1,8 +1,9 @@
 # Catalog context acceptance specification
 
-Status: acceptance requirements for the implemented native extensions. The
-[contract](catalog-context-contracts.md) and this matrix do not close the master
-coverage checklist.
+Status: verified native acceptance at integration revision
+`6e4859750e3b7d1db0b5df4f80cfdcf0db7e72ed`. The
+[contract](catalog-context-contracts.md) and assertions below establish the native
+Catalog-context boundary; they do not close unrelated coverage workstreams.
 
 Executable coverage includes [core values](../../rsworkspace/crates/trogon-atlas-core/tests/decision_document.rs),
 [Document content](../../rsworkspace/crates/trogon-atlas-core/tests/document_catalog_context.rs),
@@ -20,10 +21,12 @@ responses verify propagation; they do not measure network timeout scheduling.
 The [composed fixture](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_composed.rs)
 passes in the parent checkout. Decision transitive safety, exact provenance and
 branch-landing controls also have independent passing runs. These checks prove
-their explicit assertions, not every requirement below. Studio retained-content presentation/download has component and generated-codec
-coverage, including invalid projections and download URL cleanup. Real-browser
-verification has not run. Remaining Document restoration/pagination cases stay
-open in the [coverage status](eventcatalog-coverage.md#delivery-status).
+their explicit assertions. The boundary suite below closes the remaining native
+requirements. Studio retained-content presentation/download has component and
+generated-codec coverage, including invalid projections and download URL cleanup. Real-browser
+verification has not run; the adopted safe-review boundary is covered by actual
+codec and component assertions. Persisted restoration, incoming pagination and
+caller/snapshot token checks are exercised by the linked backend suites.
 
 [Boundary acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_boundaries_backend.rs)
 runs the real authorization layer and Store through public gRPC. It checks that
@@ -77,19 +80,41 @@ fixtures by title, array position or latest-version lookup.
 
 ## Evidence required before reporting implementation
 
-Implement value/admission tests in core, graph/reference tests in core and server,
-guarded final-view and authorization tests in backend, routing/round-trip tests
-in Store/client, and transport tests for CLI/MCP typed results and binary bytes.
-Use existing test suites as placement guidance, not evidence that the new cases
-already pass. Record actual commands, revisions and results at implementation
-time. Parent owns protobuf generation and compile queues; this task ran neither.
+Coverage spans core value/admission and reference tests, guarded final-view and
+authorization backend tests, Store/client routing and round trips, and CLI/MCP
+transport of typed results and binary bytes. Retain the executed command,
+candidate revision and result for each claimed boundary. A fixture name alone
+does not establish a passing run.
 
 Require explicit rejection evidence for conflicting multi-owner batches and
 incomplete safety checks. Verify safe review rendering without executing retained
 HTML/SVG/scripts. Inspect manifest and export byte equality and presence of pins,
 IDs and ordered associations. No EventCatalog fixture or importer is required.
 
-Unresolved design decisions are the contract's calendar-date precision, binary
-transport, category representation and amendment-check cost objections. Typed
-diagram topology and richer selectors require their separate contracts. No test
-here proves topology, source-file fidelity, approval authority or execution.
+The contract adopts calendar-day precision, exact binary retention, categories
+on Document navigation and shared amendment-check budgets. These assertions
+cover those choices. Typed diagram topology has a separate contract. No test
+here proves source-file fidelity, approval authority or execution.
+
+## Integrated verification receipt
+
+The parent executed the maintained native matrix at
+`6e4859750e3b7d1db0b5df4f80cfdcf0db7e72ed`; Rust and protobuf sources stayed
+unchanged during the run. All selected tests passed with no failures or ignored
+cases. This is a Catalog-context receipt, not a whole-workspace result.
+
+| Layer | Passing tests | Maintained fixtures |
+| --- | --- | --- |
+| Core | 47 | Calendar dates, Decision/Document values, exact reference provenance, retained content and Term ownership. |
+| Server | 90 | Decision backend and replacement diagnostics; Catalog boundaries, composed graph and faults; Document content, authorization, lifecycle, incoming pages and Source; Term ownership and Source. |
+| Client | 8 | Decision/Document manifests and transport; Term-domain transport. |
+| CLI | 5 | Decision/Document, binary content and Term-domain integration. |
+| MCP | 4 | Decision/Document, binary content and Term-domain integration. |
+| Store | 1 | Decision/Document routing. |
+| Studio | 99 | `DecisionDocumentInspector.test.tsx`, `Inspector.render.test.tsx` and the actual `decision-document-contract.test.mjs` codec fixture. |
+
+The native invocation used `mise exec -- cargo test`, the named targets above
+and `--test-threads=1`. Studio used `mise exec -- pnpm exec vitest run` with the
+listed files. The parent retained complete commands and results in its private
+run record. Requirement review checks assertion bodies as well as passing logs.
+No deployed-browser, source-file recovery or runtime execution claim follows.
