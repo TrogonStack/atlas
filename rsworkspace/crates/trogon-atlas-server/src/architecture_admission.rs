@@ -28,6 +28,12 @@ enum ArchitectureTargetAccess<'a> {
     ExactDiagnostic(&'a Lens),
 }
 
+#[derive(Default)]
+struct ResponsibilityEndpoints {
+    required: Vec<(pb::EntityKind, pb::Id)>,
+    claims: Vec<(pb::EntityKind, pb::Id)>,
+}
+
 fn admission_references(
     entity: &pb::Entity,
 ) -> Result<Vec<trogon_atlas_core::refs::OutboundRef>, Status> {
@@ -365,6 +371,9 @@ impl EventModelServiceImpl {
                     Some(pb::entity::Kind::DataStore(_)) => {
                         reference.from_field.starts_with("attachments[")
                     }
+                    Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_)) => {
+                        true
+                    }
                     _ => false,
                 };
                 let target = (kind, reference.to_id);
@@ -451,7 +460,17 @@ impl EventModelServiceImpl {
         )
         .await?;
         let mut endpoints = crate::data_product_resources::selected_endpoints(&resources, &world);
-        endpoints.extend(responsibility_endpoints(&resources, &world));
+        let responsibility = responsibility_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            responsibility.required,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        endpoints.extend(responsibility.claims);
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -724,7 +743,9 @@ impl EventModelServiceImpl {
         endpoints.extend(crate::data_product_resources::selected_endpoints(
             &resources, &world,
         ));
-        endpoints.extend(responsibility_endpoints(&resources, &world));
+        let responsibility = responsibility_endpoints(&resources, &world);
+        endpoints.extend(responsibility.required);
+        endpoints.extend(responsibility.claims);
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -1555,26 +1576,33 @@ fn selected_claim_subjects(
 fn responsibility_endpoints(
     resources: &[&pb::Entity],
     world: &HashMap<pb::EntityKey, StoredEntity>,
-) -> Vec<(pb::EntityKind, pb::Id)> {
-    resources
+) -> ResponsibilityEndpoints {
+    let mut targets = ResponsibilityEndpoints::default();
+    for subject in resources
         .iter()
         .flat_map(|entity| crate::responsibility_resources::assignments(entity))
         .filter_map(|assignment| assignment.subject.as_ref())
-        .flat_map(|subject| {
-            crate::responsibility_resources::subject_owner(subject)
-                .and_then(|reference| {
-                    Some(pb::EntityKey::new(
-                        pb::EntityKind::try_from(reference.kind).ok()?,
-                        reference.id.as_ref()?,
-                    ))
-                })
-                .and_then(|key| world.get(&key))
-                .map(|stored| {
-                    crate::responsibility_resources::selected_endpoints(subject, &stored.entity)
-                })
-                .unwrap_or_default()
-        })
-        .collect()
+    {
+        let Some(stored) = crate::responsibility_resources::subject_owner(subject)
+            .and_then(|reference| {
+                Some(pb::EntityKey::new(
+                    pb::EntityKind::try_from(reference.kind).ok()?,
+                    reference.id.as_ref()?,
+                ))
+            })
+            .and_then(|key| world.get(&key))
+        else {
+            continue;
+        };
+        let endpoints =
+            crate::responsibility_resources::selected_endpoints(subject, &stored.entity);
+        if crate::message_claims_resources::selected(subject, &stored.entity).is_some() {
+            targets.claims.extend(endpoints);
+        } else {
+            targets.required.extend(endpoints);
+        }
+    }
+    targets
 }
 
 fn catalog_endpoints(
