@@ -235,7 +235,64 @@ async fn anchors(client: &mut Client) -> (pb::Entity, pb::Entity, pb::Entity) {
 fn kind_entity(value: &pb::Entity) -> pb::entity::Kind {
     value.kind.clone().unwrap()
 }
+#[derive(Debug, PartialEq)]
+struct RefusalSnapshot {
+    owner: Option<pb::GetEntityResponse>,
+    outgoing: Vec<pb::Reference>,
+}
+
+async fn refusal_snapshot(client: &mut Client, selected: &pb::EntityRef) -> RefusalSnapshot {
+    let owner = client
+        .get_entity(request(
+            pb::GetEntityRequest {
+                kind: selected.kind,
+                id: selected.id.clone(),
+            },
+            ADMIN,
+            None,
+        ))
+        .await;
+    let owner = match owner {
+        Ok(response) => Some(response.into_inner()),
+        Err(error) => {
+            assert_eq!(error.code(), Code::NotFound);
+            None
+        }
+    };
+    let mut outgoing = Vec::new();
+    if owner.is_some() {
+        let mut token = String::new();
+        let mut tokens = std::collections::HashSet::new();
+        loop {
+            let page = client
+                .get_outgoing_references(request(
+                    pb::GetReferencesRequest {
+                        kind: selected.kind,
+                        id: selected.id.clone(),
+                        page_size: 500,
+                        page_token: token,
+                        ..Default::default()
+                    },
+                    ADMIN,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+            outgoing.extend(page.references);
+            token = page.next_page_token;
+            if token.is_empty() {
+                break;
+            }
+            assert!(tokens.insert(token.clone()), "repeated reference page");
+        }
+    }
+    RefusalSnapshot { owner, outgoing }
+}
+
 async fn reject_all(client: &mut Client, label: &str, value: pb::entity::Kind) {
+    let selected = trogon_atlas_server::conv::entity_to_ref(&entity(value.clone())).unwrap();
+    let before = refusal_snapshot(client, &selected).await;
     for preview in [false, true] {
         let body = pb::PutEntityRequest {
             entity: Some(entity(value.clone())),
@@ -247,6 +304,11 @@ async fn reject_all(client: &mut Client, label: &str, value: pb::entity::Kind) {
             .await
             .unwrap_err();
         assert_eq!(error.code(), Code::InvalidArgument, "{label}: {error}");
+        assert_eq!(
+            refusal_snapshot(client, &selected).await,
+            before,
+            "{label}: put preview={preview}"
+        );
         let error = client
             .batch_mutate(request(
                 pb::BatchMutateRequest {
@@ -262,6 +324,11 @@ async fn reject_all(client: &mut Client, label: &str, value: pb::entity::Kind) {
             .await
             .unwrap_err();
         assert_eq!(error.code(), Code::InvalidArgument, "{label}: {error}");
+        assert_eq!(
+            refusal_snapshot(client, &selected).await,
+            before,
+            "{label}: batch preview={preview}"
+        );
     }
 }
 fn parameter(name: &str, allowed: &[&str], default: Option<&str>) -> pb::AddressParameter {

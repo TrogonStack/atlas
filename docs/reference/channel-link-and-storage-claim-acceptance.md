@@ -14,6 +14,7 @@ actual codecs without a browser.
 | Another exact version selectable, same exact Channel rejected | `channel_storage_backend::channel_links_select_another_exact_version_of_the_same_slug_but_never_the_same_channel` |
 | Unchanged dangling links stay editable, new or edited ones reject | `channel_storage_backend::unchanged_dangling_channel_links_stay_editable_while_new_or_edited_unresolved_links_reject` |
 | Unchanged dangling claims stay editable on every owner kind | `channel_storage_backend::unchanged_dangling_storage_claims_stay_editable_for_every_owner_kind` |
+| Refused put and batch, normal and preview, preserve the complete owner response and every outgoing reference page; absent owners remain absent | `channel_storage_backend::reject_all` and `refusal_snapshot`, exercised by the native admission matrix |
 | Hidden and missing targets fail identically | `channel_storage_backend::hidden_and_missing_storage_targets_fail_identically` |
 | Occurrence IDs, delete and retarget guards | `channel_storage_backend::references_carry_occurrence_ids_and_guard_delete_and_retarget` |
 | Shared occurrence budgets | `channel_storage_backend::mixed_owner_inventories_share_the_occurrence_budget_across_links_and_claims` |
