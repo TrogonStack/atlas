@@ -305,7 +305,7 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
     });
     let hidden = put(&mut client, hidden).await;
     let hidden_uid = hidden.system.unwrap().uid;
-    assert!(!hidden_uid.is_empty());
+    assert_ne!(hidden_uid, "");
     let query = |page_token: String| pb::ListIncomingDocumentDeclarationsRequest {
         document: Some(selection.clone()),
         page_size: 1,
@@ -318,7 +318,7 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
         .unwrap()
         .into_inner();
     assert_eq!(unrestricted.declarations.len(), 1);
-    assert!(!unrestricted.next_page_token.is_empty());
+    assert_ne!(unrestricted.next_page_token, "");
     let restricted = client
         .list_incoming_document_declarations(request_as(query(String::new()), LIMITED, None))
         .await
@@ -358,7 +358,7 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
         .into_inner();
     assert_eq!(next.declarations.len(), 1);
     assert_ne!(next.declarations, restricted.declarations);
-    assert!(next.next_page_token.is_empty());
+    assert_eq!(next.next_page_token, "");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -412,7 +412,7 @@ async fn incoming_document_paging_surpasses_output_ceiling_with_multipage_contin
             .list_incoming_document_declarations(request(
                 pb::ListIncomingDocumentDeclarationsRequest {
                     document: Some(whole.clone()),
-                    page_size: page_size as i32,
+                    page_size: i32::try_from(page_size).expect("bounded page size"),
                     page_token: token.clone(),
                     ..Default::default()
                 },
@@ -422,7 +422,7 @@ async fn incoming_document_paging_surpasses_output_ceiling_with_multipage_contin
             .unwrap()
             .into_inner();
         assert!(!page.incomplete);
-        assert!(page.failures.is_empty());
+        assert_eq!(page.failures, vec![]);
         let scope = page.scope.as_ref().unwrap();
         let receipt = scope.page_receipt.as_ref().expect("explicit page receipt");
         assert_eq!(receipt.checked_owner_count, (REFERRERS + FILLER + 1) as u64);
@@ -438,8 +438,7 @@ async fn incoming_document_paging_surpasses_output_ceiling_with_multipage_contin
                 + scope.visited.len()
                 + scope.visited_subjects.len()
                 + scope.visited_documents.len()
-                + 1
-                <= 4_096
+                < 4_096
         );
         for owner in &scope.visited {
             assert!(
@@ -454,7 +453,7 @@ async fn incoming_document_paging_surpasses_output_ceiling_with_multipage_contin
             let mut replay = request(
                 pb::ListIncomingDocumentDeclarationsRequest {
                     document: Some(whole.clone()),
-                    page_size: page_size as i32,
+                    page_size: i32::try_from(page_size).expect("bounded page size"),
                     page_token: token.clone(),
                     ..Default::default()
                 },
@@ -489,21 +488,19 @@ async fn incoming_document_paging_surpasses_output_ceiling_with_multipage_contin
             .list_incoming_document_declarations(request(
                 pb::ListIncomingDocumentDeclarationsRequest {
                     document: Some(whole.clone()),
-                    page_size: page_size as i32,
+                    page_size: i32::try_from(page_size).expect("bounded page size"),
                     page_token: page.next_page_token.clone(),
                     related_content_role: Some(pb::RelatedContentRole::Example as i32),
-                    ..Default::default()
                 },
                 None,
             ))
             .await
-            .err()
-            .expect("role filter mismatch must refuse stale token");
+            .expect_err("role filter mismatch must refuse stale token");
         assert_eq!(err.code(), Code::InvalidArgument);
         token = page.next_page_token;
     }
     assert_eq!(seen.len(), REFERRERS);
-    assert_eq!(pages, (REFERRERS + page_size - 1) / page_size);
+    assert_eq!(pages, REFERRERS.div_ceil(page_size));
     let first_request = pb::ListIncomingDocumentDeclarationsRequest {
         document: Some(whole.clone()),
         page_size: 1,
@@ -695,7 +692,7 @@ async fn incoming_document_page_token_rejects_malformed_stale_and_out_of_range_o
     assert_eq!(err.code(), Code::InvalidArgument);
     assert!(err.message().contains("invalid page token"));
 
-    assert!(!page1.next_page_token.is_empty());
+    assert_ne!(page1.next_page_token, "");
     assert_eq!(page1.declarations.len(), 1);
     let continued = client
         .list_incoming_document_declarations(request(
@@ -842,7 +839,7 @@ async fn incoming_document_small_pages_do_not_bypass_full_scan_row_and_work_limi
         .await
         .unwrap()
         .into_inner();
-    assert!(boundary.declarations.is_empty());
+    assert_eq!(boundary.declarations, vec![]);
     assert!(!boundary.incomplete);
     seed(
         &store,
