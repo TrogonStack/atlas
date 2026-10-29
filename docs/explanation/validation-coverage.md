@@ -39,8 +39,8 @@ Inventoried at `23ade8f` (post [#263](https://github.com/TrogonStack/atlas/pull/
 
 | Entry point | Suites that run | Scope | Response today |
 | --- | --- | --- | --- |
-| `ValidateEventModel` | `model` + strategic chain for that model | Branch snapshot + visibility; in-body model or by-id | `issues[]` only |
-| `ValidateProject` | `store_hygiene` + architecture resource diagnostics once; `model` per in-scope EventModel; strategic once | Project / domain / namespace | `reports[]` + severity totals |
+| `ValidateEventModel` | `model` always; strategic chain only when `EventModel.id` is set (ID-less inline bodies skip the chain) | Branch snapshot + visibility; in-body model or by-id | `issues[]` only |
+| `ValidateProject` | `store_hygiene` + architecture resource diagnostics once (including data-product Event confirmation); `model` per in-scope EventModel; strategic once | Project / domain / namespace | `reports[]` + severity totals |
 | `PutEntity` (apply and `validate_only`) | `request_shape`; architecture admission on arch kinds; `scenarios` Errors on applicable slices; advisory `scenarios`/`strategic` | Slice/strategic use the branch snapshot | `validation[]`; hard refusals as Status |
 | `BatchMutate` (apply and `validate_only`) | Same as Put for ops; strategic and scenario on overlay | Post-lock snapshot + overlay | Per-op `validation[]` / batch failure |
 | `MergeBranch` (apply and dry-run) | Architecture landing on landed arch resources; blocking `store_hygiene` Errors; advisory `strategic` | Baseline visibility + projected post-merge world | `validation[]` + merge status |
@@ -59,9 +59,12 @@ Inventoried at `23ade8f` (post [#263](https://github.com/TrogonStack/atlas/pull/
 - **ValidateEventModel does not run** store hygiene (that is
   ValidateProject) and does not re-scan every member through full
   `SCENARIO_*` emission the way write-path `validate_scenarios` does.
-- **No validation RPC** reports suite coverage, snapshot truncation, or
-  incomplete scan. Unrelated truncation exists elsewhere (projections,
-  source coverage, delete `referrers_incomplete`).
+- **No validation RPC** reports suite coverage or snapshot truncation.
+  `ValidateProject` can still surface an incomplete Event confirmation
+  scan as the finding `DATA_PRODUCT_CONFIRMATION_INCOMPLETE` (budget or
+  discovery exhaustion), which is an issue code rather than coverage
+  metadata. Unrelated truncation exists elsewhere (projections, source
+  coverage, delete `referrers_incomplete`).
 
 ## Proposed coverage schema
 
