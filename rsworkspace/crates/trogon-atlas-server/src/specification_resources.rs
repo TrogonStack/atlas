@@ -91,11 +91,12 @@ pub(crate) fn validate_in_context_with_previous(
                     .and_then(|value| value.specification.as_ref())
                     .and_then(|value| value.id.as_ref())
                     .and_then(|id| context.find(pb::EntityKind::Specification, id));
-                if !owner.is_some_and(|owner| {
+                let resolved = owner.is_some_and(|owner| {
                     trogon_atlas_core::specification::resolve_type(owner, reference).is_ok()
-                }) && !(owner.is_none()
-                    && stable_occurrence(previous, entity, &format!("messages[{i}].schemas[{j}]")))
-                {
+                });
+                let retained_missing_owner = owner.is_none()
+                    && stable_occurrence(previous, entity, &format!("messages[{i}].schemas[{j}]"));
+                if !(resolved || retained_missing_owner) {
                     issues.push(crate::validation::issue_error(
                         "SPECIFICATION_REFERENCE_UNRESOLVED",
                         "Contract schema member, incarnation, artifact, digest or selector pin does not resolve".into(),

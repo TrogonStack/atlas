@@ -2773,7 +2773,7 @@ describe('design topology gateway response codec', () => {
     fakeClient[name] = vi.fn((_req, _meta, _opts, cb) => cb(null, decoded));
     try {
       const result = await request(app).get(`/api/catalog/${route}`).query({ request: JSON.stringify(input), branch: 'review' });
-      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(result.status).toBe(200);
       expect(result.body).toEqual(JSON.parse(JSON.stringify(decoded)));
       expect(JSON.stringify(result.body)).toContain(version);
       expect(JSON.stringify(result.body)).not.toMatch(/"version":9007/);
@@ -2800,7 +2800,7 @@ describe('design topology gateway response codec', () => {
     fakeClient.getDesignGraphDetail = vi.fn((_req, _meta, _opts, cb) => cb(null, decoded));
     try {
       const result = await request(app).get('/api/catalog/design-graph-detail').query({ request: JSON.stringify({ graph: { id: graphId } }) });
-      expect(result.status, JSON.stringify(result.body)).toBe(200);
+      expect(result.status).toBe(200);
       for (const field of ['layoutState', 'incomplete', 'failures', 'targets', 'declarations']) expect(result.body).not.toHaveProperty(field);
     } finally { delete fakeClient.getDesignGraphDetail; }
   });

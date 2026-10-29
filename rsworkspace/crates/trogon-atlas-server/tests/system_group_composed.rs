@@ -544,7 +544,7 @@ async fn capacity_case() {
             trogon_atlas_core::connections::connection_occurrences(&persisted).unwrap();
         assert_eq!(occurrences.len(), 66);
         assert!(occurrences.iter().all(|v| v.id.is_some()));
-        assert!(!persisted.system.as_ref().unwrap().uid.is_empty());
+        assert_ne!(persisted.system.as_ref().unwrap().uid, "");
         let before = store
             .get(kind, &id(&ns, "capacity-exact", 1), None)
             .await
