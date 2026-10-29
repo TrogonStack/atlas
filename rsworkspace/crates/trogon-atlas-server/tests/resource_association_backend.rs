@@ -1805,3 +1805,197 @@ async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_throug
         }
     }
 }
+
+async fn put_on(client: &mut Client, value: pb::entity::Kind, branch: &str) -> pb::Entity {
+    client
+        .put_entity(request(
+            pb::PutEntityRequest {
+                entity: Some(entity(value)),
+                ..Default::default()
+            },
+            ADMIN,
+            Some(branch),
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap()
+}
+async fn subject_outcome(
+    client: &mut Client,
+    subject: &pb::CatalogSubject,
+    token: &str,
+    branch: Option<&str>,
+) -> Result<pb::ListSubjectDecisionsResponse, (Code, String)> {
+    client
+        .list_subject_decisions(request(
+            pb::ListSubjectDecisionsRequest {
+                subject: Some(subject.clone()),
+                status: None,
+            },
+            token,
+            branch,
+        ))
+        .await
+        .map(tonic::Response::into_inner)
+        .map_err(|status| (status.code(), status.message().to_string()))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn branch_authored_links_and_claims_resolve_only_on_the_branch_and_diff_as_real_changes() {
+    let mut client = client().await;
+    claim_visible_namespace(&mut client).await;
+    let (_, _, auto) = anchors(&mut client).await;
+    let pb::entity::Kind::AutomationSlice(slice) = auto.kind.as_ref().unwrap() else {
+        panic!()
+    };
+    let observation = connection(&auto, slice.source_read_models[0].connection_id.clone());
+    channel(&mut client, "inner", &observation, None, &[], vec![]).await;
+    let composes = pb::ChannelLinkKind::Composes;
+    let hub = channel(
+        &mut client,
+        "hub",
+        &observation,
+        None,
+        &[],
+        vec![link(composes, "inner", &[]), link(composes, "inner", &[])],
+    )
+    .await;
+    let store = data_store(
+        &mut client,
+        "storage",
+        pb::data_store::AccessMode::ReadWrite,
+        &["result"],
+    )
+    .await;
+    let read = pb::StorageDirection::Read;
+    let holder = put(
+        &mut client,
+        owner_kind(
+            pb::EntityKind::Component,
+            "holder",
+            vec![claim(&store, read, Some(0)), claim(&store, read, Some(0))],
+        ),
+    )
+    .await;
+    let main_ids = (occurrence_ids(&hub), occurrence_ids(&holder));
+
+    let branch = format!("assoc-{}", uuid::Uuid::now_v7().simple());
+    client
+        .create_branch(request(
+            pb::CreateBranchRequest {
+                name: branch.clone(),
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+
+    let mut hub_edit = kind_entity(&hub);
+    let pb::entity::Kind::Channel(value) = &mut hub_edit else {
+        panic!()
+    };
+    value.links[0].doc = Some(pb::CatalogText {
+        value: "edited on branch".into(),
+    });
+    value
+        .links
+        .push(link(pb::ChannelLinkKind::RoutesTo, "inner", &[]));
+    let hub_branch = put_on(&mut client, hub_edit, &branch).await;
+    let mut grown = claims_of(&holder);
+    grown.push(claim(&store, pb::StorageDirection::Write, None));
+    let holder_branch = put_on(&mut client, with_claims(&holder, grown), &branch).await;
+    let hub_ids = occurrence_ids(&hub_branch);
+    let holder_ids = occurrence_ids(&holder_branch);
+    assert_eq!(hub_ids.len(), 3);
+    assert_eq!(holder_ids.len(), 3);
+    assert_eq!(hub_ids[..2], main_ids.0[..], "kept occurrences keep ids");
+    assert_eq!(holder_ids[..2], main_ids.1[..], "kept occurrences keep ids");
+
+    for (owner, ids) in [(&hub_branch, &hub_ids), (&holder_branch, &holder_ids)] {
+        let added = connection_subject(owner, Some(ids[2].clone()));
+        put_on(
+            &mut client,
+            decision_on(&format!("branch-pick-{}", ids[2].value), added.clone()),
+            &branch,
+        )
+        .await;
+        let on_branch = subject_decisions(&mut client, &added, READER, Some(&branch)).await;
+        assert_eq!(
+            on_branch.subject_state,
+            pb::CatalogResolutionState::Resolved as i32
+        );
+        assert_eq!(on_branch.declarations.len(), 1);
+        let on_main = subject_decisions(&mut client, &added, READER, None).await;
+        assert_eq!(
+            on_main.subject_state,
+            pb::CatalogResolutionState::Unresolved as i32,
+            "an occurrence authored on a branch is not visible on main"
+        );
+        assert!(on_main.declarations.is_empty());
+        let unseen = pb::CatalogSubject {
+            selection: Some(pb::catalog_subject::Selection::Connection(
+                pb::ConnectionRef {
+                    owner: Some(trogon_atlas_server::conv::entity_to_ref(owner).unwrap()),
+                    owner_uid: "00000000-0000-7000-8000-000000000000".into(),
+                    id: Some(ids[2].clone()),
+                },
+            )),
+        };
+        let hidden = subject_outcome(&mut client, &added, LIMITED, None).await;
+        let missing = subject_outcome(&mut client, &unseen, LIMITED, None).await;
+        assert_eq!(
+            hidden, missing,
+            "a hidden namespace answers exactly like a missing subject"
+        );
+        let refused = subject_outcome(&mut client, &added, LIMITED, Some(&branch)).await;
+        let absent = subject_outcome(&mut client, &added, LIMITED, Some("no-such-branch")).await;
+        assert_eq!(refused.as_ref().unwrap_err().0, Code::NotFound);
+        assert_eq!(
+            refused.unwrap_err(),
+            absent.unwrap_err(),
+            "a branch the caller may not see answers like one that does not exist"
+        );
+    }
+
+    let diff = client
+        .diff_branch(request(
+            pb::DiffBranchRequest {
+                name: branch.clone(),
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    for (slug, base, ours) in [
+        ("hub", &hub, &hub_branch),
+        ("holder", &holder, &holder_branch),
+    ] {
+        let entry = diff
+            .entries
+            .iter()
+            .find(|e| e.r#ref.as_ref().unwrap().id.as_ref().unwrap().slug == slug)
+            .unwrap_or_else(|| panic!("diff entry for {slug}"));
+        assert_eq!(
+            entry.status,
+            pb::branch_diff_entry::Status::Changed as i32,
+            "{slug}"
+        );
+        assert_eq!(entry.base.as_ref(), Some(base), "{slug}");
+        assert_eq!(
+            occurrence_ids(entry.ours.as_ref().unwrap()),
+            occurrence_ids(ours),
+            "{slug}"
+        );
+        assert_eq!(
+            occurrence_ids(entry.base.as_ref().unwrap()).len(),
+            2,
+            "{slug}"
+        );
+    }
+}
