@@ -1373,7 +1373,7 @@ async fn namespace_export_refuses_a_capped_listing_instead_of_returning_a_comple
     let complete_artifact = export::export_namespace(&mut complete, "export-groups")
         .await
         .unwrap();
-    assert!(complete_artifact.skipped.is_empty());
+    assert_eq!(complete_artifact.skipped, [] as [String; 0]);
     let yaml = &complete_artifact.files["system-group.yaml"];
     assert!(yaml.contains("name: first"));
     assert!(yaml.contains("name: omitted"));

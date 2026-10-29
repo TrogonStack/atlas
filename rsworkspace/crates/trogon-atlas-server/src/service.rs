@@ -3767,7 +3767,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         for ns in &req.namespaces {
             crate::conv::validate_id_component("namespaces[]", ns)?;
         }
-        let all = self.snapshot_for(branch.as_deref(), &vis).await?;
+        let (all, truncated) = self
+            .snapshot_with_truncation(branch.as_deref(), &vis)
+            .await?;
+        if truncated {
+            return Err(Status::resource_exhausted(
+                "entity listing cannot be completed within the snapshot limit",
+            ));
+        }
         // Apply kind/namespace filters and latest_versions_only in-process
         // rather than issuing a full store scan on every call. The snapshot
         // is sorted (kind, namespace, slug, version asc) by graph::load_all,
