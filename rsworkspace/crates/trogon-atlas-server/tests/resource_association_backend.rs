@@ -1653,6 +1653,31 @@ async fn subject_decisions(
         .unwrap()
         .into_inner()
 }
+async fn subject_assignments(
+    client: &mut Client,
+    subject: &pb::CatalogSubject,
+) -> pb::ListSubjectAssignmentsResponse {
+    let Some(pb::catalog_subject::Selection::Connection(connection)) = &subject.selection else {
+        panic!("connection subject")
+    };
+    client
+        .list_subject_assignments(request(
+            pb::ListSubjectAssignmentsRequest {
+                subject: Some(pb::ResponsibilitySubject {
+                    selection: Some(pb::responsibility_subject::Selection::Connection(
+                        connection.clone(),
+                    )),
+                }),
+                kind: None,
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+}
+
 fn occurrence_ids(value: &pb::Entity) -> Vec<pb::ConnectionId> {
     match value.kind.as_ref().unwrap() {
         pb::entity::Kind::Channel(v) => v
@@ -1733,7 +1758,9 @@ async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_throug
             .await,
         );
     }
+    let mut assignees = Vec::new();
     for (position, owner) in owners.iter().enumerate() {
+        let mut owner_assignees = Vec::new();
         let ids = occurrence_ids(owner);
         assert_eq!(ids.len(), 3);
         for (index, connection_id) in ids.iter().enumerate() {
@@ -1743,6 +1770,32 @@ async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_throug
                 decision_on(&format!("pick-{position}-{index}"), selected.clone()),
             )
             .await;
+            let Some(pb::catalog_subject::Selection::Connection(connection)) = &selected.selection
+            else {
+                panic!("connection subject")
+            };
+            owner_assignees.push(
+                put(
+                    &mut client,
+                    pb::entity::Kind::Team(pb::Team {
+                        id: Some(id(&format!("assigned-{position}-{index}"))),
+                        title: Some(pb::DirectoryDisplayName {
+                            value: format!("Assignee {position}/{index}"),
+                        }),
+                        responsibilities: vec![pb::Responsibility {
+                            kind: pb::ResponsibilityKind::Maintainer as i32,
+                            subject: Some(pb::ResponsibilitySubject {
+                                selection: Some(pb::responsibility_subject::Selection::Connection(
+                                    connection.clone(),
+                                )),
+                            }),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                )
+                .await,
+            );
         }
         for (index, connection_id) in ids.iter().enumerate() {
             let selected = connection_subject(owner, Some(connection_id.clone()));
@@ -1763,7 +1816,48 @@ async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_throug
                 panic!("subject provenance");
             };
             assert_eq!(association.subject.as_ref(), Some(&selected));
+            let assignments = subject_assignments(&mut client, &selected).await;
+            assert_eq!(
+                assignments.subject_state,
+                pb::ResponsibilityResolutionState::Resolved as i32
+            );
+            assert_eq!(assignments.assignments.len(), 1);
+            assert!(!assignments.incomplete);
+            let expected = &owner_assignees[index];
+            let pb::entity::Kind::Team(team) = expected.kind.as_ref().unwrap() else {
+                panic!("team")
+            };
+            assert_eq!(
+                assignments.assignments[0].assignee_uid,
+                expected.system.as_ref().unwrap().uid
+            );
+            assert_eq!(
+                assignments.assignments[0].assignment.as_ref(),
+                Some(&team.responsibilities[0])
+            );
+            assert_eq!(
+                assignments.assignments[0].state,
+                pb::ResponsibilityResolutionState::Resolved as i32
+            );
         }
+        let owner_assignments = client
+            .list_subject_assignments(request(
+                pb::ListSubjectAssignmentsRequest {
+                    subject: Some(pb::ResponsibilitySubject {
+                        selection: Some(pb::responsibility_subject::Selection::Entity(
+                            trogon_atlas_server::conv::entity_to_ref(owner).unwrap(),
+                        )),
+                    }),
+                    kind: None,
+                },
+                READER,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(owner_assignments.assignments.len(), 0);
+        assignees.push(owner_assignees);
     }
 
     for (position, owner) in owners.iter().enumerate() {
@@ -1793,6 +1887,20 @@ async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_throug
             pb::CatalogResolutionState::Unresolved as i32,
             "{position}: a removed occurrence no longer resolves"
         );
+        let assignments = subject_assignments(&mut client, &removed).await;
+        assert_eq!(
+            assignments.subject_state,
+            pb::ResponsibilityResolutionState::Unresolved as i32
+        );
+        assert_eq!(assignments.assignments.len(), 1);
+        assert_eq!(
+            assignments.assignments[0].assignee_uid,
+            assignees[position][0].system.as_ref().unwrap().uid
+        );
+        assert_eq!(
+            assignments.assignments[0].state,
+            pb::ResponsibilityResolutionState::Unresolved as i32
+        );
         for connection_id in &ids[1..] {
             let kept = connection_subject(&after, Some(connection_id.clone()));
             let found = subject_decisions(&mut client, &kept, READER, None).await;
@@ -1802,6 +1910,16 @@ async fn catalog_subject_listing_selects_exact_link_and_claim_occurrences_throug
                 "{position}: surviving occurrences keep resolving"
             );
             assert_eq!(found.declarations.len(), 1, "{position}");
+            let assignments = subject_assignments(&mut client, &kept).await;
+            assert_eq!(
+                assignments.subject_state,
+                pb::ResponsibilityResolutionState::Resolved as i32
+            );
+            assert_eq!(assignments.assignments.len(), 1);
+            assert_eq!(
+                assignments.assignments[0].state,
+                pb::ResponsibilityResolutionState::Resolved as i32
+            );
         }
     }
 }

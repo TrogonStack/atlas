@@ -371,6 +371,8 @@ it.each(['claims', 'routes', 'triggers', 'fieldSelections'])(
     const owner = model.entities[3];
     const subject = selection(owner, 'claim-a');
     expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('claim-a');
+    owner.raw.messageClaims = { [field]: [{ connectionId: { value: 'independent-claim' } }] };
+    expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('claim-a');
     owner.raw.messageClaims = { [field]: [{ connectionId: { value: 'claim-a' } }] };
     expect(resolveAssociationSubject(model, subject)).toBeUndefined();
   },
@@ -382,6 +384,39 @@ it('refuses a composed product storage selector that collides with a resource as
   owner.uid = 'product-uid';
   const subject = selection(owner, 'product-claim');
   expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('product-claim');
+  owner.raw.resourceAssociations = [{ connectionId: { value: 'independent-association' } }];
+  expect(resolveAssociationSubject(model, subject)?.connectionId).toBe('product-claim');
   owner.raw.resourceAssociations = [{ connectionId: { value: 'product-claim' } }];
   expect(resolveAssociationSubject(model, subject)).toBeUndefined();
+});
+
+it('hydrates exact attachments independently of decoded owner order without retaining unloaded targets', () => {
+  const source = fixture();
+  const component = source.entities[3];
+  const store = source.entities[2];
+  const componentWire = wireEntity({ component: component.raw, system: { uid: component.uid } });
+  const storeWire = wireEntity({ dataStore: store.raw, system: { uid: store.uid } });
+  const ownerOnly = buildModel([componentWire]);
+  const { rerender } = render(
+    <ChannelStorageDetails entity={ownerOnly.entities[0]} model={ownerOnly} onSelect={vi.fn()} />,
+  );
+  expect(screen.getByText('Unavailable exact attachment')).toBeDefined();
+  for (const rows of [
+    [componentWire, storeWire],
+    [storeWire, componentWire],
+  ]) {
+    const loaded = buildModel(rows);
+    const owner = loaded.byKey.get(component.key);
+    expect(owner).toBeDefined();
+    if (!owner) throw new Error('Decoded Component missing');
+    rerender(<ChannelStorageDetails entity={owner} model={loaded} onSelect={vi.fn()} />);
+    expect(screen.queryByText('Unavailable exact attachment')).toBeNull();
+    expect(storageClaims(owner)[0].attachment).toEqual({
+      owner: { kind: 'ENTITY_KIND_DATA_STORE', id: id('warehouse') },
+      ownerUid: 'store-uid',
+      id: 'attachment-a',
+    });
+  }
+  rerender(<ChannelStorageDetails entity={ownerOnly.entities[0]} model={ownerOnly} onSelect={vi.fn()} />);
+  expect(screen.getByText('Unavailable exact attachment')).toBeDefined();
 });
