@@ -923,3 +923,191 @@ fn decision_extension_collection_bounds_are_inclusive() {
     });
     assert!(catalog::validate_values(&value).is_err());
 }
+
+fn subject_for(slug: &str) -> pb::SubjectAssociation {
+    let mut association = subject();
+    let Some(pb::catalog_subject::Selection::Entity(reference)) =
+        association.subject.as_mut().unwrap().selection.as_mut()
+    else {
+        unreachable!()
+    };
+    reference.id = Some(id(slug));
+    association
+}
+
+fn whole_document(slug: &str) -> pb::DocumentSelection {
+    pb::DocumentSelection {
+        selection: Some(pb::document_selection::Selection::Document(
+            pb::DocumentRef { id: Some(id(slug)) },
+        )),
+    }
+}
+
+fn rejection(candidate: &Entity) -> String {
+    catalog::validate_values(candidate).unwrap_err().to_string()
+}
+
+#[test]
+fn document_owner_inventory_is_bound_by_collection_limits_before_the_combined_ceiling() {
+    let mut candidate = document();
+    let value = doc_mut(&mut candidate);
+    value.subjects = (0..catalog::MAX_SUBJECTS)
+        .map(|i| subject_for(&format!("subject-{i}")))
+        .collect();
+    value.navigation = (0..128)
+        .map(|i| pb::DocumentNavigation {
+            document: Some(whole_document(&format!("navigation-{i}"))),
+            ..Default::default()
+        })
+        .collect();
+    value.related_content = (0..128)
+        .map(|i| pb::RelatedContent {
+            document: Some(whole_document(&format!("related-{i}"))),
+            role: pb::RelatedContentRole::Attachment as i32,
+            ..Default::default()
+        })
+        .collect();
+    let reachable = value.subjects.len() + value.navigation.len() + value.related_content.len();
+    assert_eq!(reachable, 1_280);
+    assert!(reachable < catalog::MAX_ASSOCIATIONS);
+    catalog::validate_values(&candidate).unwrap();
+
+    let mut excessive = candidate.clone();
+    doc_mut(&mut excessive)
+        .subjects
+        .push(subject_for("one-more"));
+    assert_eq!(rejection(&excessive), "subject collection outside bounds");
+    let mut excessive = candidate.clone();
+    doc_mut(&mut excessive)
+        .navigation
+        .push(pb::DocumentNavigation {
+            document: Some(whole_document("navigation-extra")),
+            ..Default::default()
+        });
+    assert_eq!(rejection(&excessive), "document collection limit exceeded");
+    let mut excessive = candidate;
+    doc_mut(&mut excessive)
+        .related_content
+        .push(pb::RelatedContent {
+            document: Some(whole_document("related-extra")),
+            role: pb::RelatedContentRole::Attachment as i32,
+            ..Default::default()
+        });
+    assert_eq!(rejection(&excessive), "related content limit exceeded");
+}
+
+#[test]
+fn decision_owner_inventory_is_bound_by_collection_limits_before_the_combined_ceiling() {
+    let mut candidate = prepare_entity(None, &decision()).unwrap();
+    let value = choice_mut(&mut candidate);
+    value.status = pb::DecisionStatus::Superseded as i32;
+    value.selected_option = value.options[0].option_id.clone();
+    value.consequences.push(pb::DecisionConsequence {
+        kind: pb::decision_consequence::Kind::Risk as i32,
+        text: Some(text("Delivery may fail")),
+    });
+    value.replaced_by = Some(pb::DecisionReplacement {
+        decision: Some(pb::DecisionRef {
+            id: Some(id("replacement")),
+        }),
+        ..Default::default()
+    });
+    value.subjects = (0..catalog::MAX_SUBJECTS)
+        .map(|i| subject_for(&format!("subject-{i}")))
+        .collect();
+    value.decision_makers = (0..128)
+        .map(|i| pb::DecisionMaker {
+            assignee: Some(pb::decision_maker::Assignee::Person(pb::PersonRef {
+                id: Some(id(&format!("maker-{i}"))),
+            })),
+            ..Default::default()
+        })
+        .collect();
+    value.amends = (0..128)
+        .map(|i| pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: Some(id(&format!("amended-{i}"))),
+            }),
+            ..Default::default()
+        })
+        .collect();
+    value.related_decisions = (0..128)
+        .map(|i| pb::RelatedDecision {
+            decision: Some(pb::DecisionRef {
+                id: Some(id(&format!("related-{i}"))),
+            }),
+            ..Default::default()
+        })
+        .collect();
+    value.documents = (0..128)
+        .map(|i| pb::SupportingDocument {
+            document: Some(whole_document(&format!("supporting-{i}"))),
+            ..Default::default()
+        })
+        .collect();
+    let reachable = value.subjects.len()
+        + value.decision_makers.len()
+        + value.amends.len()
+        + value.related_decisions.len()
+        + value.documents.len()
+        + 1;
+    assert_eq!(reachable, 1_537);
+    assert!(reachable < catalog::MAX_ASSOCIATIONS);
+    catalog::validate_values(&candidate).unwrap();
+
+    let mut excessive = candidate.clone();
+    choice_mut(&mut excessive)
+        .subjects
+        .push(subject_for("one-more"));
+    assert_eq!(rejection(&excessive), "subject collection outside bounds");
+    let mut excessive = candidate.clone();
+    choice_mut(&mut excessive)
+        .decision_makers
+        .push(pb::DecisionMaker {
+            assignee: Some(pb::decision_maker::Assignee::Team(pb::TeamRef {
+                id: Some(id("maker-extra")),
+            })),
+            ..Default::default()
+        });
+    assert_eq!(
+        rejection(&excessive),
+        "decision relationship limit exceeded"
+    );
+    let mut excessive = candidate.clone();
+    choice_mut(&mut excessive)
+        .amends
+        .push(pb::DecisionAmendment {
+            decision: Some(pb::DecisionRef {
+                id: Some(id("amended-extra")),
+            }),
+            ..Default::default()
+        });
+    assert_eq!(
+        rejection(&excessive),
+        "decision relationship limit exceeded"
+    );
+    let mut excessive = candidate.clone();
+    choice_mut(&mut excessive)
+        .related_decisions
+        .push(pb::RelatedDecision {
+            decision: Some(pb::DecisionRef {
+                id: Some(id("related-extra")),
+            }),
+            ..Default::default()
+        });
+    assert_eq!(
+        rejection(&excessive),
+        "decision relationship limit exceeded"
+    );
+    let mut excessive = candidate;
+    choice_mut(&mut excessive)
+        .documents
+        .push(pb::SupportingDocument {
+            document: Some(whole_document("supporting-extra")),
+            ..Default::default()
+        });
+    assert_eq!(
+        rejection(&excessive),
+        "decision relationship limit exceeded"
+    );
+}

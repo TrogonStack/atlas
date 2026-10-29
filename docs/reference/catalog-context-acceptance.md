@@ -25,6 +25,20 @@ coverage, including invalid projections and download URL cleanup. Real-browser
 verification has not run. Remaining Document restoration/pagination cases stay
 open in the [coverage status](eventcatalog-coverage.md#delivery-status).
 
+[Boundary acceptance](../../rsworkspace/crates/trogon-atlas-server/tests/catalog_context_boundaries_backend.rs)
+runs the real authorization layer and Store through public gRPC. It checks that
+resource revisions leave an authored CHANGELOG Document unchanged, that
+RetainedContent bytes admit exactly 262,144 and reject 0 and 262,145 bytes with
+correct digests (distinct from the retained-text limit), and that an EXAMPLE
+Document keeps its exact Specification MESSAGE selector and related association
+identities without a validated payload. It also checks `related_content` at 128
+and 129, the derived 1,280 Document owner maximum, and amendment traversal
+exhausting one shared 10,000 work budget at 38 and 39 middle Decisions, alone and
+across a batch, with no partial writes. The combined 2,048 owner association
+limit is unreachable for Documents (1,024 subjects, 128 navigation, 128 related)
+and Decisions (1,537), so the [core tests](../../rsworkspace/crates/trogon-atlas-core/tests/decision_document.rs)
+check those reachable maxima and that each collection limit rejects first.
+
 ## Fixtures and executable acceptance targets
 
 Use isolated native fixtures in an authorized branch: exact-version Decisions A,
