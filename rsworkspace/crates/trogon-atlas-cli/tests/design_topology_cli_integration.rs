@@ -427,6 +427,111 @@ async fn authenticated_design_topology_cli_returns_exact_queries_exports_without
         "flow"
     );
 
+    let described = |entity: &str| -> Value {
+        let text = ok(
+            &endpoint,
+            READER,
+            None,
+            &["--format", "json", "describe", entity],
+        );
+        serde_json::from_str::<Value>(&text).unwrap()["data"].clone()
+    };
+    let rows = |described: &Value, side: &str| -> Vec<(String, String, Option<String>)> {
+        described[side]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["field"].as_str().unwrap().to_owned(),
+                    row["entity"].as_str().unwrap().to_owned(),
+                    row["provenance"]["stepId"]["value"]
+                        .as_str()
+                        .map(str::to_owned),
+                )
+            })
+            .collect()
+    };
+    let flow = described(&format!("design_graph/{ns}/flow@1"));
+    let flow_entity = format!("design_graph:{ns}/flow@1");
+    let outgoing = rows(&flow, "outgoing");
+    assert_eq!(
+        outgoing,
+        vec![
+            (
+                "steps[0].target.component".to_owned(),
+                format!("component:{ns}/checkout@1"),
+                Some(ids[0].clone())
+            ),
+            (
+                "steps[1].target.subflow".to_owned(),
+                format!("design_graph:{ns}/callee@1"),
+                Some(ids[1].clone())
+            ),
+            (
+                "subjects[0].subject.entity".to_owned(),
+                format!("component:{ns}/checkout@1"),
+                None
+            ),
+            (
+                "steps[0].transitions[0]".to_owned(),
+                flow_entity.clone(),
+                Some(ids[0].clone())
+            ),
+            (
+                "steps[0].transitions[1]".to_owned(),
+                flow_entity.clone(),
+                Some(ids[0].clone())
+            ),
+        ],
+        "generic discovery lists external, subject and parallel transition rows"
+    );
+    let owner_uid = flow["outgoing"][0]["provenance"]["fromUid"]
+        .as_str()
+        .unwrap();
+    assert_ne!(owner_uid, "");
+    for row in flow["outgoing"].as_array().unwrap() {
+        assert_eq!(row["provenance"]["fromUid"], json!(owner_uid));
+    }
+    for (index, transition) in flow["outgoing"].as_array().unwrap()[3..].iter().enumerate() {
+        assert_eq!(
+            transition["provenance"]["connectionId"]["value"],
+            json!(connections[index])
+        );
+        assert_eq!(
+            transition["provenance"]["targetStepId"]["value"],
+            json!(ids[1])
+        );
+    }
+    assert_eq!(
+        flow["outgoing"][2]["provenance"]["connectionId"]["value"],
+        json!(subject_connection)
+    );
+    assert_eq!(
+        rows(&flow, "incoming").len(),
+        2,
+        "incoming holds only the two same-owner transition rows"
+    );
+
+    let callee = described(&format!("design_graph/{ns}/callee@1"));
+    assert_eq!(callee["outgoing"].as_array().unwrap().len(), 0);
+    assert_eq!(
+        rows(&callee, "incoming"),
+        vec![(
+            "steps[1].target.subflow".to_owned(),
+            flow_entity,
+            Some(ids[1].clone())
+        )]
+    );
+    let checkout = described(&format!("component/{ns}/checkout@1"));
+    assert_eq!(
+        rows(&checkout, "incoming")
+            .iter()
+            .map(|row| row.0.as_str())
+            .collect::<Vec<_>>(),
+        ["steps[0].target.component", "subjects[0].subject.entity"]
+    );
+
     let traversed = query(
         &endpoint,
         READER,
