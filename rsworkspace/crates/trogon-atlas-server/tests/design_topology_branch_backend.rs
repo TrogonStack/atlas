@@ -188,10 +188,7 @@ async fn baseline_flow(client: &mut Client, slug: &str) -> pb::Entity {
         .collect();
     let value = graph_mut(&mut entity);
     value.entry_steps = vec![ids[0].clone(), ids[1].clone()];
-    value.steps[0].transitions = vec![
-        transition(&ids[1], "forward"),
-        transition(&ids[2], "skip"),
-    ];
+    value.steps[0].transitions = vec![transition(&ids[1], "forward"), transition(&ids[2], "skip")];
     value.steps[1].transitions = vec![transition(&ids[2], "onward")];
     value.steps[2].transitions = vec![transition(&ids[0], "back")];
     put(client, entity, false).await
@@ -262,7 +259,11 @@ async fn merge(client: &mut Client, dry_run: bool) -> pb::MergeBranchResponse {
 }
 
 async fn restoration_renews_only_restored_identities(take_theirs: bool) {
-    let slug = if take_theirs { "take-theirs" } else { "keep-ours" };
+    let slug = if take_theirs {
+        "take-theirs"
+    } else {
+        "keep-ours"
+    };
     let mut client = client().await;
     let original = baseline_flow(&mut client, slug).await;
     let before = identities(&original);

@@ -1,7 +1,7 @@
 use prost::Message;
 use sha2::{Digest, Sha256};
 
-use super::{EventModelServiceImpl, Status, Visibility, pb, store_err};
+use super::{pb, store_err, EventModelServiceImpl, Status, Visibility};
 
 impl EventModelServiceImpl {
     pub(super) async fn term_domains(

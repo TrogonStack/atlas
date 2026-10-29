@@ -124,34 +124,32 @@ async fn batch_put_referrers(
     while index < start + count {
         let end = (index + CHUNK).min(start + count);
         let ops = (index..end)
-            .map(|n| {
-                pb::BatchMutateOp {
-                    op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
-                        entity: Some(pb::Entity {
-                            kind: Some(pb::entity::Kind::Document(pb::Document {
-                                id: Some(id(&format!("referrer-{n}"))),
-                                title: Some(pb::CatalogTitle {
-                                    value: format!("referrer-{n}"),
-                                }),
-                                subjects: vec![pb::SubjectAssociation {
-                                    subject: Some(subject()),
-                                    ..Default::default()
-                                }],
-                                body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
-                                    value: format!("https://example.com/referrer-{n}"),
-                                })),
-                                related_content: vec![pb::RelatedContent {
-                                    role: pb::RelatedContentRole::Diagram as i32,
-                                    document: Some(hub.clone()),
-                                    ..Default::default()
-                                }],
+            .map(|n| pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(pb::Entity {
+                        kind: Some(pb::entity::Kind::Document(pb::Document {
+                            id: Some(id(&format!("referrer-{n}"))),
+                            title: Some(pb::CatalogTitle {
+                                value: format!("referrer-{n}"),
+                            }),
+                            subjects: vec![pb::SubjectAssociation {
+                                subject: Some(subject()),
                                 ..Default::default()
+                            }],
+                            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                                value: format!("https://example.com/referrer-{n}"),
                             })),
+                            related_content: vec![pb::RelatedContent {
+                                role: pb::RelatedContentRole::Diagram as i32,
+                                document: Some(hub.clone()),
+                                ..Default::default()
+                            }],
                             ..Default::default()
-                        }),
+                        })),
                         ..Default::default()
-                    })),
-                }
+                    }),
+                    ..Default::default()
+                })),
             })
             .collect();
         let result = client
@@ -179,29 +177,27 @@ async fn batch_put_filler_documents(client: &mut Client, start: usize, count: us
     while index < start + count {
         let end = (index + CHUNK).min(start + count);
         let ops = (index..end)
-            .map(|n| {
-                pb::BatchMutateOp {
-                    op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
-                        entity: Some(pb::Entity {
-                            kind: Some(pb::entity::Kind::Document(pb::Document {
-                                id: Some(id(&format!("filler-{n}"))),
-                                title: Some(pb::CatalogTitle {
-                                    value: format!("filler-{n}"),
-                                }),
-                                subjects: vec![pb::SubjectAssociation {
-                                    subject: Some(subject()),
-                                    ..Default::default()
-                                }],
-                                body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
-                                    value: format!("https://example.com/filler-{n}"),
-                                })),
+            .map(|n| pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(pb::Entity {
+                        kind: Some(pb::entity::Kind::Document(pb::Document {
+                            id: Some(id(&format!("filler-{n}"))),
+                            title: Some(pb::CatalogTitle {
+                                value: format!("filler-{n}"),
+                            }),
+                            subjects: vec![pb::SubjectAssociation {
+                                subject: Some(subject()),
                                 ..Default::default()
+                            }],
+                            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                                value: format!("https://example.com/filler-{n}"),
                             })),
                             ..Default::default()
-                        }),
+                        })),
                         ..Default::default()
-                    })),
-                }
+                    }),
+                    ..Default::default()
+                })),
             })
             .collect();
         let result = client

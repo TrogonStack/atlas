@@ -15,10 +15,9 @@
 
 pub mod agent_metadata;
 pub mod architectural_relationships;
-pub mod business_data;
 pub mod authored_date;
+pub mod business_data;
 pub mod communication_intent;
-pub mod message_claims;
 pub mod connection_persistence;
 pub mod connections;
 pub mod content_hash;
@@ -30,6 +29,7 @@ pub mod design_topology;
 mod design_topology_refs;
 pub mod document_catalog_context;
 pub mod id_component;
+pub mod message_claims;
 pub mod namespace;
 pub mod operation_id;
 pub mod refs;

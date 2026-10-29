@@ -9,8 +9,8 @@ use pb::{
     event_model_service_server::EventModelServiceServer,
 };
 use prost::Message;
-use tonic::{Code, Request, transport::Channel};
-use trogon_atlas_core::document_catalog_context::{COLLECTION, bytes_content_digest};
+use tonic::{transport::Channel, Code, Request};
+use trogon_atlas_core::document_catalog_context::{bytes_content_digest, COLLECTION};
 use trogon_atlas_proto as pb;
 
 const ADMIN: &str = "document-source-admin-token-aaaa";

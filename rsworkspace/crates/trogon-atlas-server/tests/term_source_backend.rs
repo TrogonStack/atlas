@@ -6,7 +6,7 @@ use pb::{
     event_model_service_client::EventModelServiceClient,
     event_model_service_server::EventModelServiceServer,
 };
-use tonic::{Code, Request, transport::Channel};
+use tonic::{transport::Channel, Code, Request};
 use trogon_atlas_proto as pb;
 use trogon_atlas_server::{
     auth::{BearerAuth, RegistryFile, TokenRegistry},

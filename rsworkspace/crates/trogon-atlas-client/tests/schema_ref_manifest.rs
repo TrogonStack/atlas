@@ -72,7 +72,10 @@ fn schema_ref_shorthand_fills_namespace_and_version_without_inventing_a_connecti
     };
     assert_eq!(schema.aggregate_root, Some(false));
     assert!(schema.identifiers[0].connection_id.is_none());
-    assert_eq!(schema.identifiers[0].property.as_ref().unwrap().segments[0].repeated, false);
+    assert_eq!(
+        schema.identifiers[0].property.as_ref().unwrap().segments[0].repeated,
+        false
+    );
     let target = schema.property_relationships[0]
         .target_entity
         .as_ref()
@@ -111,6 +114,13 @@ fn schema_ref_shorthand_fills_namespace_and_version_without_inventing_a_connecti
     assert_eq!(target.namespace, "other");
     assert_eq!(target.slug, "product");
     assert_eq!(target.version, 9_007_199_254_740_993);
-    assert!(schema.property_relationships[0].source.as_ref().unwrap().segments[0].repeated);
+    assert!(
+        schema.property_relationships[0]
+            .source
+            .as_ref()
+            .unwrap()
+            .segments[0]
+            .repeated
+    );
     assert!(schema.property_relationships[0].connection_id.is_none());
 }

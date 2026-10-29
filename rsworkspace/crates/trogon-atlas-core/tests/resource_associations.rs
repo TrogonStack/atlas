@@ -37,7 +37,10 @@ fn schema_binding(environments: &[&str], is_default: Option<bool>) -> SchemaBind
     }
 }
 
-fn specification(bindings: Vec<SchemaBinding>, channels: Vec<MessageChannelDeclaration>) -> Specification {
+fn specification(
+    bindings: Vec<SchemaBinding>,
+    channels: Vec<MessageChannelDeclaration>,
+) -> Specification {
     let schema = member();
     Specification {
         id: Some(id("orders")),
@@ -68,9 +71,14 @@ fn specification(bindings: Vec<SchemaBinding>, channels: Vec<MessageChannelDecla
     }
 }
 
-fn stored_spec(bindings: Vec<SchemaBinding>, channels: Vec<MessageChannelDeclaration>) -> Specification {
+fn stored_spec(
+    bindings: Vec<SchemaBinding>,
+    channels: Vec<MessageChannelDeclaration>,
+) -> Specification {
     let entity = Entity {
-        kind: Some(entity::Kind::Specification(specification(bindings, channels))),
+        kind: Some(entity::Kind::Specification(specification(
+            bindings, channels,
+        ))),
         system: None,
     };
     let stored = prepare_entity(None, &entity).unwrap();
@@ -131,7 +139,10 @@ fn product(associations: Vec<ProductResourceAssociation>) -> DataProduct {
     value
 }
 
-fn event_association(direction: i32, contract: Option<ProductResourceContract>) -> ProductResourceAssociation {
+fn event_association(
+    direction: i32,
+    contract: Option<ProductResourceContract>,
+) -> ProductResourceAssociation {
     ProductResourceAssociation {
         direction,
         target: Some(product_resource_association::Target::Event(EventRef {
@@ -178,7 +189,9 @@ fn default_binding_cannot_name_environments() {
 #[test]
 fn environment_names_reject_65_bytes_controls_and_intra_binding_duplicates() {
     let long = "a".repeat(65);
-    assert!(validate_specification(&stored_spec(vec![schema_binding(&[&long], None)], vec![])).is_err());
+    assert!(
+        validate_specification(&stored_spec(vec![schema_binding(&[&long], None)], vec![])).is_err()
+    );
     assert!(validate_specification(&stored_spec(
         vec![schema_binding(&["prod\u{0001}"], None)],
         vec![]

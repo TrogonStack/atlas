@@ -7,7 +7,7 @@ use pb::{
     event_model_service_server::EventModelServiceServer,
 };
 use tokio::net::TcpListener;
-use tonic::{Code, Request, service::interceptor::InterceptedService, transport::Channel};
+use tonic::{service::interceptor::InterceptedService, transport::Channel, Code, Request};
 use trogon_atlas_proto as pb;
 use trogon_atlas_server::{
     auth::{AuthzLayer, BearerAuth, TokenRegistry},
@@ -1744,7 +1744,7 @@ async fn domain_declaration_conflict_requires_guarded_choice_between_clear_and_e
 }
 
 async fn seed_native_rows(store: &trogon_atlas_store::NatsStore, rows: Vec<pb::Entity>) {
-    use trogon_atlas_store::{Store, WriteContext, store::MutationOp};
+    use trogon_atlas_store::{store::MutationOp, Store, WriteContext};
     for chunk in rows.chunks(128) {
         let ops: Vec<_> = chunk
             .iter()

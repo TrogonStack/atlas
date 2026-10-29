@@ -600,9 +600,10 @@ async fn source_title_and_disposed_unrelated_fields_preserve_local_topology_exac
                         })),
                         subjects: vec![pb::SubjectAssociation {
                             subject: Some(pb::CatalogSubject {
-                                selection: Some(pb::catalog_subject::Selection::Entity(
-                                    owner(&fixture.namespace, "adopted"),
-                                )),
+                                selection: Some(pb::catalog_subject::Selection::Entity(owner(
+                                    &fixture.namespace,
+                                    "adopted",
+                                ))),
                             }),
                             ..Default::default()
                         }],
@@ -647,8 +648,14 @@ async fn source_title_and_disposed_unrelated_fields_preserve_local_topology_exac
         .unwrap();
     assert_eq!(graph(&persisted).title, Some(title("Source title")));
     assert_eq!(graph(&persisted).steps, graph(&native_entity).steps);
-    assert_eq!(graph(&persisted).entry_steps, graph(&native_entity).entry_steps);
-    assert_eq!(graph(&persisted).profile, pb::DesignGraphProfile::Flow as i32);
+    assert_eq!(
+        graph(&persisted).entry_steps,
+        graph(&native_entity).entry_steps
+    );
+    assert_eq!(
+        graph(&persisted).profile,
+        pb::DesignGraphProfile::Flow as i32
+    );
     assert!(graph(&persisted).layout_document.is_none());
 
     let widened = reapply(
@@ -682,7 +689,10 @@ async fn source_title_and_disposed_unrelated_fields_preserve_local_topology_exac
     );
     assert_eq!(graph(&persisted).layout_document, Some(layout_ref));
     assert_eq!(graph(&persisted).steps, graph(&native_entity).steps);
-    assert_eq!(graph(&persisted).entry_steps, graph(&native_entity).entry_steps);
+    assert_eq!(
+        graph(&persisted).entry_steps,
+        graph(&native_entity).entry_steps
+    );
 
     for closed in [
         vec![pb::SourceOwnedField::Steps],
@@ -780,11 +790,7 @@ async fn whole_owner_source_preview_rejects_current_and_cleared_incoming_topolog
     .unwrap();
     let native = authored(&mut server.client, &fixture.namespace, "whole-owner").await;
     let native_entity = native.entity.clone().unwrap();
-    for (name, mutate) in [
-        ("identical", 0),
-        ("cleared", 1),
-        ("replaced", 2),
-    ] {
+    for (name, mutate) in [("identical", 0), ("cleared", 1), ("replaced", 2)] {
         let mut incoming = native_entity.clone();
         match mutate {
             1 => {

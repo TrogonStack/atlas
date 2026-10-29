@@ -170,14 +170,12 @@ async fn mcp_model_export_diff_and_reapply_preserve_full_native_identity_at_u64_
     let parsed = trogon_atlas_client::manifest::parse_str(&yaml, "export.yaml").unwrap();
     assert_eq!(parsed.len(), 4);
     for entry in &parsed {
-        assert!(
-            before
-                .iter()
-                .any(|native| trogon_atlas_core::semantically_equal(
-                    native.entity.as_ref().unwrap(),
-                    &entry.entity
-                ))
-        );
+        assert!(before
+            .iter()
+            .any(|native| trogon_atlas_core::semantically_equal(
+                native.entity.as_ref().unwrap(),
+                &entry.entity
+            )));
     }
     let diff = native_tool(
         &client,
@@ -228,12 +226,10 @@ async fn mcp_model_export_diff_and_reapply_preserve_full_native_identity_at_u64_
     )
     .await;
     assert_eq!(changed_diff["changed"], true);
-    assert!(
-        changed_diff["diff"]
-            .as_str()
-            .unwrap()
-            .contains("owningDomain")
-    );
+    assert!(changed_diff["diff"]
+        .as_str()
+        .unwrap()
+        .contains("owningDomain"));
     let selection = |slug: &str| serde_json::json!({"kind":"term","namespace":"term-export","slug":slug,"version":u64::MAX});
     let diff = native_tool(
         &client,

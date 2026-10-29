@@ -1078,12 +1078,8 @@ async fn incoming_document_declarations_drop_after_referrer_force_delete() {
         .put_entity(request(
             pb::PutEntityRequest {
                 entity: Some({
-                    let mut entity = link_document(
-                        &visible_ns,
-                        "referrer-owner",
-                        &visible_ns,
-                        "Referrer owner",
-                    );
+                    let mut entity =
+                        link_document(&visible_ns, "referrer-owner", &visible_ns, "Referrer owner");
                     if let Some(pb::entity::Kind::Document(doc)) = &mut entity.kind {
                         doc.related_content = vec![related_content_entry(
                             &visible_ns,
@@ -1151,8 +1147,7 @@ async fn incoming_document_declarations_drop_after_referrer_force_delete() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn branch_opposing_related_content_removal_restores_with_selective_connection_renewal(
-) {
+async fn branch_opposing_related_content_removal_restores_with_selective_connection_renewal() {
     let mut client = client().await;
     let (visible_ns, _) = register_pair(&mut client).await;
     put_receipt(&mut client, &visible_ns).await;
@@ -1173,12 +1168,8 @@ async fn branch_opposing_related_content_removal_restores_with_selective_connect
         .put_entity(request(
             pb::PutEntityRequest {
                 entity: Some({
-                    let mut entity = link_document(
-                        &visible_ns,
-                        "restore-owner",
-                        &visible_ns,
-                        "Restore owner",
-                    );
+                    let mut entity =
+                        link_document(&visible_ns, "restore-owner", &visible_ns, "Restore owner");
                     if let Some(pb::entity::Kind::Document(doc)) = &mut entity.kind {
                         doc.related_content = vec![
                             related_content_entry(
@@ -1436,9 +1427,7 @@ async fn branch_opposing_related_content_removal_restores_with_selective_connect
         .filter(|d| d.field.starts_with("related_content["))
         .collect();
     assert_eq!(related_declarations.len(), 2);
-    assert!(
-        related_declarations
-            .iter()
-            .all(|d| d.state == pb::CatalogResolutionState::Resolved as i32)
-    );
+    assert!(related_declarations
+        .iter()
+        .all(|d| d.state == pb::CatalogResolutionState::Resolved as i32));
 }

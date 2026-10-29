@@ -131,14 +131,12 @@ async fn cli_model_export_diff_and_reapply_preserve_full_native_identity_at_u64_
     let parsed = trogon_atlas_client::manifest::parse_str(&model.manifests, "model.yaml").unwrap();
     assert_eq!(parsed.len(), 4);
     for entry in &parsed {
-        assert!(
-            before
-                .iter()
-                .any(|native| trogon_atlas_core::semantically_equal(
-                    native.entity.as_ref().unwrap(),
-                    &entry.entity
-                ))
-        );
+        assert!(before
+            .iter()
+            .any(|native| trogon_atlas_core::semantically_equal(
+                native.entity.as_ref().unwrap(),
+                &entry.entity
+            )));
     }
     let export = directory.path().join("export");
     cli(
@@ -198,11 +196,9 @@ async fn cli_model_export_diff_and_reapply_preserve_full_native_identity_at_u64_
         "{}",
         String::from_utf8_lossy(&drift.stderr)
     );
-    assert!(
-        String::from_utf8(drift.stdout)
-            .unwrap()
-            .contains("owningDomain")
-    );
+    assert!(String::from_utf8(drift.stdout)
+        .unwrap()
+        .contains("owningDomain"));
     for ((kind, slug, version), expected) in keys.into_iter().zip(before) {
         let actual = authoritative
             .get_entity(pb::GetEntityRequest {
