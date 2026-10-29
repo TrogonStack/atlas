@@ -167,14 +167,19 @@ the preserved backend, branch and Source suites
 | Traversal output budget | `traversal_output_budget_exhausts_on_the_expansion_that_crosses_4096_rows` |
 | Explicit subjects, target-only negative, Reader query and denied mutation | `subject_listing_matches_explicit_subjects_only_and_readers_query_but_cannot_mutate` |
 | Reference multiplicity, hidden safe delete, recreation staleness | `references_keep_parallel_multiplicity_hidden_referrers_block_delete_and_recreation_is_stale` |
-| Storyboard control unchanged | `storyboard_slices_and_traces_stay_unchanged_when_design_graphs_are_added` |
+| Storyboard control with a persisted trace revisiting one slice, unchanged | `storyboard_slices_and_traces_stay_unchanged_when_design_graphs_are_added` |
+| Outgoing references and impact for every external kind, with owner UID, field path, step ID and parallel multiplicity | `outgoing_references_and_impact_name_every_external_kind_with_uid_field_step_and_multiplicity` |
+| Graph recreation stales step and transition selectors while exact subflows follow the new UID and etag | `recreating_a_graph_owner_stales_step_and_transition_selectors_while_exact_subflows_follow` |
+| DIAGRAM profile with actor, component and external-system inline targets and a layout document | `diagram_profile_fixture_keeps_inline_actor_and_external_targets_with_layout_document` |
 
 Client and surface evidence:
 
 | Surface | Executed test |
 | --- | --- |
-| CLI authenticated apply, exact detail, subject, traversal and incoming queries, export, diff, reapply, owned branch apply and merge | `authenticated_design_topology_cli_returns_exact_queries_exports_without_drift_and_follows_branches` in [`design_topology_cli_integration.rs`](../../rsworkspace/crates/trogon-atlas-cli/tests/design_topology_cli_integration.rs) |
+| CLI authenticated apply, exact detail, subject, outgoing and incoming reference discovery, traversal and incoming queries, export, diff, reapply, owned branch apply and merge | `authenticated_design_topology_cli_returns_exact_queries_exports_without_drift_and_follows_branches` in [`design_topology_cli_integration.rs`](../../rsworkspace/crates/trogon-atlas-cli/tests/design_topology_cli_integration.rs) |
 | MCP apply, exact detail, subject listing, traversal and incoming subflows | `design_topology_mcp_apply_inspect_traverse_and_incoming` in [`design_topology_mcp_integration.rs`](../../rsworkspace/crates/trogon-atlas-mcp/tests/design_topology_mcp_integration.rs) |
+| MCP branch forwarding to every query | `design_topology_mcp_branch_adapter_forwards_the_branch_to_every_query` in the same file |
+| MCP authenticated roles, outgoing and incoming references, impact, export, diff, persisted no-op reapply, Reader refusal and hidden principal | `authenticated_design_topology_mcp_forwards_roles_and_keeps_identities_through_export_and_reapply` in the same file |
 | Studio gateway response identities, presence and unavailable states through the production codec | `design topology gateway response codec` in [`index.test.mjs`](../../tsworkspace/webapps/studio/server/index.test.mjs) |
 
 ## Proof boundaries
@@ -194,9 +199,9 @@ Client and surface evidence:
   reads: `branch create`, `diff` and `merge` reject owned branch names on the
   client, so creation, diff and merge are driven through the public gRPC
   service in the same test.
-- The MCP test runs against an unauthenticated server. MCP Reader discovery of
-  the four tools depends on the tool policy rows in the MCP server and is
-  proved separately by that crate's role map test.
+- MCP tool discovery by role depends on the tool policy rows in the MCP
+  server and is proved separately by that crate's role map test. The
+  authenticated MCP test proves role forwarding on calls, not discovery.
 - System grouping (union arm 10) is a dependency of the separate system
   grouping contract and is not integrated or tested here.
 - Browser rendering with an authenticated backend is not proved. No maintained
