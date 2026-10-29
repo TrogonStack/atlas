@@ -105,6 +105,7 @@ fn missing() -> Status {
 fn source_error(error: core::SourceError) -> Status {
     match error {
         core::SourceError::Budget => Status::resource_exhausted("source work budget exhausted"),
+        core::SourceError::NativeSchemaVariants => Status::invalid_argument(error.to_string()),
         _ => invalid(),
     }
 }
@@ -3003,6 +3004,17 @@ async fn apply_source_run_attempt(
         }));
     }
     live_publication_bases(&doc.state, index)?;
+    for operation in &plan.operations {
+        let Some(pb::source_native_operation::Operation::Put(put)) = &operation.operation else {
+            continue;
+        };
+        let previous = doc.state.runs[index].values.iter()
+            .find(|value| value.mapping_id == operation.mapping_id)
+            .ok_or_else(conflict)?;
+        bounded(core::validate_native_schema_variants(
+            previous.entity.as_ref(), put.entity.as_ref().ok_or_else(conflict)?,
+        ))?;
+    }
     let mut publication = SourcePublication {
         registration: doc.key.clone(),
         control_revision: doc.revision,

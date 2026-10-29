@@ -2,7 +2,7 @@
 
 mod support;
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use support::two_tenants::{authed, make_registry, serve_with_registry, ROOT_TOKEN};
 use tonic::{transport::Channel, Code, Status};
@@ -117,16 +117,18 @@ impl Fixture {
             namespace,
             registration,
         };
-        fixture
-            .put(pb::Entity {
-                kind: Some(pb::entity::Kind::Schema(pb::Schema {
-                    id: Some(fixture.id("payload")),
-                    title: "Payload".into(),
+        for slug in ["payload", "payload-other"] {
+            fixture
+                .put(pb::Entity {
+                    kind: Some(pb::entity::Kind::Schema(pb::Schema {
+                        id: Some(fixture.id(slug)),
+                        title: "Payload".into(),
+                        ..Default::default()
+                    })),
                     ..Default::default()
-                })),
-                ..Default::default()
-            })
-            .await;
+                })
+                .await;
+        }
         fixture
     }
     fn id(&self, slug: &str) -> pb::Id {
@@ -215,48 +217,50 @@ impl Fixture {
             .mapping
             .unwrap()
     }
-    async fn map(
-        &mut self,
-        key: &str,
+    fn map<'a>(
+        &'a mut self,
+        key: &'a str,
         policy: pb::SourceFieldOwnership,
-        native: Option<&pb::PutEntityResponse>,
-    ) -> Result<pb::SourceMapping, Status> {
-        self.client
-            .create_source_mapping(authed(
-                pb::CreateSourceMappingRequest {
-                    registration_revision: self.registration.revision.clone(),
-                    mapping: Some(pb::SourceMapping {
-                        id: key.into(),
-                        source: Some(self.source(key)),
-                        selection: Some(pb::SourceSelection {
-                            selection: Some(pb::source_selection::Selection::Entity(
-                                self.owner(key),
-                            )),
-                        }),
-                        ownership: Some(policy),
-                        adoption: native.map(|native| pb::SourceAdoption {
-                            authorized_adoption: true,
-                            observed: Some(pb::SourceObservedOwner {
-                                owner: Some(self.owner(key)),
-                                uid: native
-                                    .entity
-                                    .as_ref()
-                                    .unwrap()
-                                    .system
-                                    .as_ref()
-                                    .unwrap()
-                                    .uid
-                                    .clone(),
-                                etag: native.etag.clone(),
+        native: Option<&'a pb::PutEntityResponse>,
+    ) -> impl Future<Output = Result<pb::SourceMapping, Status>> + 'a {
+        Box::pin(async move {
+            self.client
+                .create_source_mapping(authed(
+                    pb::CreateSourceMappingRequest {
+                        registration_revision: self.registration.revision.clone(),
+                        mapping: Some(pb::SourceMapping {
+                            id: key.into(),
+                            source: Some(self.source(key)),
+                            selection: Some(pb::SourceSelection {
+                                selection: Some(pb::source_selection::Selection::Entity(
+                                    self.owner(key),
+                                )),
                             }),
+                            ownership: Some(policy),
+                            adoption: native.map(|native| pb::SourceAdoption {
+                                authorized_adoption: true,
+                                observed: Some(pb::SourceObservedOwner {
+                                    owner: Some(self.owner(key)),
+                                    uid: native
+                                        .entity
+                                        .as_ref()
+                                        .unwrap()
+                                        .system
+                                        .as_ref()
+                                        .unwrap()
+                                        .uid
+                                        .clone(),
+                                    etag: native.etag.clone(),
+                                }),
+                            }),
+                            ..Default::default()
                         }),
-                        ..Default::default()
-                    }),
-                },
-                ROOT_TOKEN,
-            ))
-            .await
-            .map(|response| response.into_inner().mapping.unwrap())
+                    },
+                    ROOT_TOKEN,
+                ))
+                .await
+                .map(|response| response.into_inner().mapping.unwrap())
+        })
     }
     async fn preview(
         &mut self,
@@ -427,6 +431,11 @@ async fn source_message_and_title_updates_preserve_exact_local_variants_and_plai
             value.messages[0].doc = Some("Source message documentation".into());
             value.messages[0].schemas[0].doc = Some("Binding documentation".into());
             value.messages[0].schemas[2].doc = Some("Ordinary plain binding".into());
+            value.messages[0].schemas[2].r#type =
+                Some(pb::schema_binding::Type::Schema(pb::SchemaRef {
+                    id: Some(f.id("payload-other")),
+                }));
+            value.messages[0].schemas[2].connection_id = None;
             let mut added = value.messages[0].schemas[2].clone();
             added.connection_id = None;
             added.role = pb::schema_binding::Role::Headers as i32;
@@ -465,15 +474,27 @@ async fn source_message_and_title_updates_preserve_exact_local_variants_and_plai
             for (binding, before) in value.messages[0]
                 .schemas
                 .iter()
+                .take(2)
                 .zip(&old.messages[0].schemas)
             {
                 assert_eq!(binding.environments, before.environments);
                 assert_eq!(binding.is_default, before.is_default);
                 assert_eq!(binding.connection_id, before.connection_id);
             }
+            assert_eq!(
+                value.messages[0].schemas[2].r#type,
+                Some(pb::schema_binding::Type::Schema(pb::SchemaRef {
+                    id: Some(f.id("payload-other"))
+                }))
+            );
+            assert!(value.messages[0].schemas[2].connection_id.is_some());
+            assert_ne!(
+                value.messages[0].schemas[2].connection_id,
+                old.messages[0].schemas[2].connection_id
+            );
             assert!(value.messages[0].schemas[3].connection_id.is_some());
             assert_eq!(value.messages[0].schemas[3].is_default, None);
-            assert!(value.messages[0].schemas[3].environments.is_empty());
+            assert_eq!(value.messages[0].schemas[3].environments, []);
         }
     }
     let key = "local-drift";
@@ -666,4 +687,51 @@ async fn source_messages_cannot_add_remove_or_reassign_native_variant_occurrence
         bypasses.is_empty(),
         "Source changed native variant occurrences: {bypasses:?}"
     );
+}
+
+#[tokio::test]
+async fn retained_source_preview_cannot_overwrite_a_later_local_native_variant() {
+    let mut f = Fixture::new().await;
+    let key = "preview-race";
+    let native = f.put(f.entity(key, &variant(&[], None))).await;
+    let mapping = f
+        .map(
+            key,
+            fields(&[pb::SourceOwnedField::Messages]),
+            Some(&native),
+        )
+        .await
+        .unwrap();
+    let mut incoming = native.entity.clone().unwrap();
+    specification_mut(&mut incoming).messages[0].doc = Some("Pending Source change".into());
+    let run = f.preview(key, "pending", incoming).await.unwrap();
+    let mut local = native.entity.unwrap();
+    let binding = &mut specification_mut(&mut local).messages[0].schemas[0];
+    binding.environments = variant(&["Local", "second"], None).environments;
+    binding.is_default = Some(false);
+    binding.connection_id = None;
+    f.put(local).await;
+    let before = f.get(key).await;
+    let sequence = f.store.current_change_seq().await.unwrap();
+    let error = f
+        .client
+        .apply_source_run(authed(
+            pb::ApplySourceRunRequest {
+                registration_id: f.registration.id.clone(),
+                run_id: run.id,
+                if_match: run.revision,
+                preview_digest: run.preview_digest,
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert!(
+        error.message().contains("not active in this owner"),
+        "{error}"
+    );
+    assert_eq!(f.get(key).await, before);
+    assert_eq!(f.mapping(key).await, mapping);
+    assert_eq!(f.store.current_change_seq().await.unwrap(), sequence);
 }

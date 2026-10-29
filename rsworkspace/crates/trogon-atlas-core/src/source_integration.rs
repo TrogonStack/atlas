@@ -17,6 +17,8 @@ pub enum SourceError {
     MissingOwnership,
     #[error("source ownership unit is unsupported for this native kind")]
     UnsupportedUnit,
+    #[error("schema variants support native authoring only")]
+    NativeSchemaVariants,
     #[error("source ownership units overlap")]
     OverlappingUnits,
     #[error("source native identity differs")]
@@ -439,6 +441,64 @@ fn charge_value(value: &Value, budget: &mut RunBudget) -> Result<(), SourceError
     Ok(())
 }
 
+#[derive(PartialEq)]
+struct NativeSchemaVariant<'a> {
+    message: Option<&'a trogon_atlas_proto::ContractMemberId>,
+    binding: Option<&'a trogon_atlas_proto::ConnectionId>,
+    role: i32,
+    target: Option<&'a trogon_atlas_proto::schema_binding::Type>,
+    environments: &'a [trogon_atlas_proto::EnvironmentName],
+    is_default: Option<bool>,
+}
+
+fn native_schema_variants(entity: Option<&Entity>) -> Vec<NativeSchemaVariant<'_>> {
+    let Some(trogon_atlas_proto::entity::Kind::Specification(specification)) =
+        entity.and_then(|entity| entity.kind.as_ref())
+    else {
+        return Vec::new();
+    };
+    let mut variants: Vec<_> = specification
+        .messages
+        .iter()
+        .flat_map(|message| {
+            message
+                .schemas
+                .iter()
+                .filter(|binding| !binding.environments.is_empty() || binding.is_default.is_some())
+                .map(|binding| NativeSchemaVariant {
+                    message: message.member_id.as_ref(),
+                    binding: binding.connection_id.as_ref(),
+                    role: binding.role,
+                    target: binding.r#type.as_ref(),
+                    environments: &binding.environments,
+                    is_default: binding.is_default,
+                })
+        })
+        .collect();
+    variants.sort_by(|left, right| {
+        (
+            left.message.map(|id| &id.value),
+            left.binding.map(|id| &id.value),
+        )
+            .cmp(&(
+                right.message.map(|id| &id.value),
+                right.binding.map(|id| &id.value),
+            ))
+    });
+    variants
+}
+
+/// Enclosing Source field authority excludes native variant occurrences.
+pub fn validate_native_schema_variants(
+    current: Option<&Entity>,
+    proposed: &Entity,
+) -> Result<(), SourceError> {
+    if native_schema_variants(current) != native_schema_variants(Some(proposed)) {
+        return Err(SourceError::NativeSchemaVariants);
+    }
+    Ok(())
+}
+
 pub fn plan_merge(
     base_source: &Entity,
     base_native: &Entity,
@@ -505,6 +565,7 @@ pub fn plan_merge_with_comparator<E: From<SourceError>>(
         budget.charge(BudgetWork::ResultRecords, 1)?;
         plan.decisions.push(UnitDecision { unit, disposition });
     }
+    validate_native_schema_variants(Some(current), &plan.proposed)?;
     Ok(plan)
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
