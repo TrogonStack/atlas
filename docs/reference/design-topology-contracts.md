@@ -1,11 +1,11 @@
 # Design graph topology contracts
 
-Status: proposed native contract, not implemented. This document defines a bounded
-authored flow and design topology separate from behavioral storyboards, document
-body prose, diagram layout bytes and workflow execution. It changes no schema,
-API, validation or runtime behavior today. The
-[acceptance requirements](design-topology-acceptance.md) are implementation
-obligations, not executed coverage.
+Status: native contract implemented on the integration branch, with the
+exceptions listed under [Shipped versus proposed summary](#shipped-versus-proposed-summary).
+This document defines a bounded authored flow and design topology separate from
+behavioral storyboards, document body prose, diagram layout bytes and workflow
+execution. The [acceptance requirements](design-topology-acceptance.md) map each
+requirement to executed tests and name the boundaries that remain unproved.
 
 ## Scope and existing representations
 
@@ -45,7 +45,7 @@ Storyboard and DesignGraph may reference the same catalog subjects through
 independent `subjects` or step targets. Neither resource implies the other,
 executable order or Swimlane lifecycle.
 
-## Proposed entity shape
+## Entity shape
 
 Propose `proto/trogonatlas/eventmodel/v1alpha1/design_topology.proto`
 (with generated code following existing entity patterns). Implementation must
@@ -194,7 +194,7 @@ Extend the closed `CatalogSubject` inventory to allow DesignGraph entity refs
 where other catalog resources already allow exact entity kinds. DesignGraph step
 targets do not automatically become `CatalogSubject` entries.
 
-## Proposed public queries
+## Public queries
 
 Propose `proto/trogonatlas/api/eventmodel/v1alpha1/design_topology_queries.proto`
 with read-only RPCs on `EventModelService` (exact names may shift during
@@ -237,7 +237,7 @@ be validated, without disclosing hidden titles.
 
 Extend existing shared ceilings wherever these surfaces apply:
 
-| Ceiling | Proposed application |
+| Ceiling | Application |
 | --- | --- |
 | 5,000 resource rows | Visible DesignGraph discovery lists. |
 | 10,000 examined occurrences | Traversal subflow expansion, subject resolution and nested owner hydration share one request budget. |
@@ -279,7 +279,9 @@ validates the other automatically.
 | Item | Status |
 | --- | --- |
 | Storyboard, Document, Specification, CatalogSubject | Shipped |
-| DesignGraph entity, topology messages, reference extraction, RPCs, Source guards | Proposed |
+| DesignGraph entity, topology messages, reference extraction, four read RPCs, Source guards, CLI and MCP surfaces, Studio gateway routes | Implemented, with executed coverage in the acceptance map |
+| System grouping step target (union arm 10) | Depends on the separate system grouping contract; not integrated here |
+| Authenticated browser rendering of a native graph | Not proved; no maintained authenticated browser fixture exists |
 | EventCatalog import, `.ecstudio` parser, layout renderer, workflow execution | Explicitly out of scope |
 
 ## Open objections
