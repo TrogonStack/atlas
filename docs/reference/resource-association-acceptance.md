@@ -1,15 +1,12 @@
 # Resource association acceptance requirements
 
-Status: proposed requirements for the
-[resource association contracts](resource-association-contracts.md). None of the
-proposed fields exists, so no executable coverage is linked and no requirement
-below has run. Logical fixture names are not manifest syntax, submitted
-occurrence IDs or predicted owner UIDs. Passing tests for the shipped
-[communication intent](communication-intent-acceptance.md),
-[Channel and DataStore](channel-and-datastore-acceptance.md),
-[Specification](specification-and-api-acceptance.md) and
-[DataProduct](data-product-acceptance.md) fixtures do not satisfy these
-requirements.
+Status: native acceptance requirements. MessageClaims has implemented schema,
+core, backend and connected-client fixtures linked in
+[MessageClaims executable evidence](#messageclaims-executable-evidence).
+Requirements for other extensions retain their independent acceptance ownership.
+Logical fixture names are not manifest syntax, submitted occurrence IDs or
+predicted owner UIDs. Shipped communication, Channel, Specification or DataProduct
+tests alone do not satisfy the MessageClaims requirements.
 
 All fixtures use native authoring only. No EventCatalog file, project or
 provider is read, converted or synchronized.
@@ -50,9 +47,9 @@ another.
 | Direction | SEND and RECEIVE are accepted. Absence, zero and unknown numbers are rejected. |
 | Message selector | Missing owner UID or member ID, a non-MESSAGE kind, a stale UID, an absent member, `expected_digest` and a nonexact Specification Id reject atomically. A different version never resolves. |
 | Group label | Labels are display only. Equal labels render together within one owner and direction. Blank and 257-byte labels reject; 256 bytes succeed. No claim can select a group. |
-| Route | Selects a local claim. Declared parameter names and allowed values are accepted, including an empty string value. Unknown parameter names, disallowed values, any parameter on a Channel with no address and a claim ID from another owner reject. Omitting a required parameter is accepted and reported as unbound. Delivery mode absence stays undeclared. A repeated route to the same Channel is a separate occurrence. |
+| Route | Selects a local claim. Declared parameter names and allowed values are accepted, including an empty string value. Unknown parameter names, disallowed values, any parameter on a Channel with no address and a claim ID from another owner reject. Required parameters without authored defaults must be supplied; parameters with authored defaults may remain omitted. Delivery mode absence stays undeclared. A repeated route to the same Channel is a separate occurrence. |
 | Trigger | Accepts a RECEIVE claim and rejects a SEND claim. Rejects the claim's own message selector and non-MESSAGE targets. Accepts a trigger cycle between two claims. Condition absence differs from present condition prose. No predicate is evaluated and no Processor, Command or slice is created or required. |
-| Field selection | Accepts PAYLOAD bindings of the claim's own message in the same Specification incarnation. Rejects HEADERS, another message's binding and a binding from another incarnation. Valid nested native paths succeed. A nonexistent segment, a 33-segment path, a 257th selector and a 1,025-byte opaque value reject. Artifact and unresolved bindings accept opaque selectors only, labeled unverified. An empty selector list is valid and does not mean all fields. A second selection for the same claim and binding rejects. |
+| Field selection | Accepts PAYLOAD bindings of the claim's own message in the same Specification incarnation. Rejects HEADERS, another message's binding and a binding from another incarnation. Valid nested native paths succeed. A nonexistent segment, a 33-segment path, a 257th selector and a 1,025-byte opaque value reject. Artifact and TypeLibrary bindings accept opaque selectors only, labeled unverified. New or edited native Schema selections still require the exact authorized Schema even for opaque selectors; retained dangling selections remain inspectable. An empty selector list is valid and does not mean all fields. A second selection for the same claim and binding rejects. |
 | No fan-out | A claim with several routes, triggers and selections reports each separately. No cross product appears anywhere in reads, references or export. |
 | Behavioral separation | Claims, routes and triggers bind no slice, Processor, Channel observation or API provider, and change no Channel anchor, ChannelOperationBinding or runtime path. |
 | Identity | Editing `group`, `doc`, `condition`, `parameter_values`, `delivery_mode` or selectors preserves IDs. Changing direction, message, `claim_id`, channel, triggered message or binding requires a fresh ID. Reordering preserves IDs. Equal siblings never substitute for a selected ID. |
@@ -209,10 +206,9 @@ Isolated native implementations now have core, backend, manifest, CLI, MCP and
 Studio fixtures. Product and Specification correction tests pass independently,
 including exact message-member admission, unchanged dangling declarations,
 caller-bound pagination and scan exhaustion. MessageClaims has separate
-authenticated admission and connected-client fixtures. These results do not
-establish the combined Channel inverse query: Specification declarations, claim
-routes and operation bindings still need integrated authority and provenance
-verification. Channel composition and storage claims remain separate workstreams.
+authenticated admission and connected-client fixtures. Combined Channel inverse authority and provenance, Channel composition and
+storage claims have separate acceptance ownership. MessageClaims-specific
+results do not establish their closure.
 
 The following inventory describes the required verification boundaries. Promote
 each fixture to linked parent coverage after its implementation is integrated
@@ -233,3 +229,45 @@ inventory. This document does not establish production-scale or deployed
 browser readiness, and no proposal here implies behavioral binding, predicate
 evaluation, message-to-Event or Command equivalence, connectors or portable
 migration.
+
+## MessageClaims executable evidence
+
+The native backend suite is
+[`message_claims_acceptance.rs`](../../rsworkspace/crates/trogon-atlas-server/tests/message_claims_acceptance.rs).
+Each named fixture below exercises authenticated gRPC backed by NatsStore.
+The row and graph overflow fixtures seed larger populations through the real
+Store API before querying through authenticated gRPC. The Schema hydration
+fixture delegates to NatsStore and observes exact reads; its timeout control
+injects an elapsed deadline at that Store boundary. These are local acceptance
+fixtures, not deployed browser or production-scale evidence.
+
+| Requirement | Substantive MessageClaims fixture |
+| --- | --- |
+| Declaration coexistence and required peer separation | `native_claims_and_peer_declarations_coexist_without_inferred_peer_references` checks independent occurrence IDs and peer references, removal of only the claim and refusal of a peerless shipped declaration after clearing its occurrence ID, with the specific required-peer diagnostic. |
+| Direction, exact message selectors and UTF-8 group labels | `native_claim_direction_message_and_utf8_matrix_is_atomic_on_every_owner` checks all native owner kinds, malformed selectors, another existing exact version, 256-byte groups and overflows, with full entity and etag readback after refusals. |
+| RECEIVE cycles and field selection shape | `native_receive_cycles_empty_selections_and_selector_boundaries_are_explicit` checks a descriptive cycle, self-trigger rejection, empty selectors, duplicate claim/binding rejection and 256/257 selectors. SEND trigger rejection, HEADERS and wrong-message binding controls remain in `authenticated_native_claim_authoring_keeps_flat_identity_and_exact_field_validation`. |
+| Real native path depth | `native_field_path_depth32_is_validated_against_real_inline_schema` builds an inline native Schema and accepts 32 segments while rejecting 33. Missing paths and opaque selectors have separate controls in the authoring and `opaque_selector_still_requires_its_exact_native_schema_target` fixtures. |
+| Opaque binding targets and incarnation | `artifact_and_library_field_selections_remain_opaque_and_require_the_exact_incarnation` constructs artifact-backed local schemas and real TypeLibrary bindings. Authenticated writes on every claim-owner kind accept opaque selectors, preserve them on read, and reject native paths without changing stored state. Core verification labels each accepted selector `OpaqueUnverified`. A new-owner control with an otherwise valid binding ID rejects a mismatched Specification owner UID with the incarnation diagnostic and leaves the rejected key absent. |
+| Descriptor fingerprints and intent | `native_fingerprints_reorder_retirement_preview_retry_and_owner_incarnations` covers all descriptive fields, list reorder, route/trigger/selection fingerprint changes, preview IDs, original-intent retry, separate removal/re-add, clone, new version and owner recreation. `native_claim_direction_and_message_fingerprints_retire_only_changed_occurrences` covers claim identity changes with surviving equal siblings on every native owner kind. |
+| Complete owner limits | `native_owner_public_count_and_prepared_byte_limits_leave_complete_state_unchanged` publishes and reads complete 1,024-claim, 4,096-occurrence and 1 MiB prepared owners on every native owner kind, then refuses each overflow without changing stored content or etag. Component and ExternalSystem relationships share the occurrence cap. Aggregate size uses legal per-field values rather than exceeding a smaller text limit. |
+| Exact subjects for every leaf | `exact_subject_queries_distinguish_every_claim_leaf_from_equal_siblings` selects each claim, route, trigger and field selection through Assignment, Decision and Document queries, with equal-endpoint sibling controls. Standalone native field associations additionally check Schema removal, hidden targets, branch overlays and tombstones. |
+| Schema read cache and shared rows | `native_schema_hydration_is_once_per_request_and_timeouts_remain_errors` observes one Schema read across native owners and standalone associations in a request. `independent_domain_claim_rows_obey_exact_shared_discovery_row_boundary` checks the same native Schema consumes the remaining shared row at the 5,000-row boundary. |
+| Graph work and authorization lens | `native_graph_work_overflow_is_scoped_to_baseline_or_branch_authorized_lens` checks incoming/impact overflow with a broad lens and success with a smaller authorized lens in baseline and branch views. |
+| Operational errors | Schema timeout, decode and authorization controls preserve errors. `decode_and_store_outages_remain_operational_errors_and_never_authorize_deletion` also checks safe-delete refusal during decode failure and Store outage. |
+| Branch identity | `native_claim_branch_rebase_and_owner_deletion_restore_exact_identity`, `independent_native_same_key_creates_require_an_explicit_incarnation_choice` and `explicit_branch_restoration_renews_retired_claims_and_revalidates_remote_targets` cover rebase, owner deletion/restoration, independent creates and opposing-side occurrence removal. Ordering is controlled by awaited public responses and recorded diff state; stale expected-state resolution rejects after the baseline advances, without sleeps. |
+| Source and writer floors | `source_integration_backend::message_claims_source_rpc_isolation_covers_every_owner_and_supported_policy` exercises real Source RPCs for every native owner and supported policy, including WholeOwner current/proposed/clear refusal and TITLE preservation. Client `compat::tests::revision_19_refuses_an_older_writer_before_mutation` checks revision and both floors remain 19 and refuses incompatible writers/servers before client mutation. |
+| Independent Domain authority | `independent_domain_routes_support_exact_references_impact_and_guarded_retarget` preserves independent authored declarations and unchanged domain listing semantics, with exact route provenance and guarded retarget. |
+| Complete inventories and query limits | `selected_claim_budget_includes_identified_resource_group_any_leaves`, `selected_claim_inventories_share_exact_work_budget_without_charging_unselected_claims` and `exact_claim_subject_output_boundary_keeps_equal_siblings_separate` check shared inventories, 10,000 examined occurrences and 4,096 output records, including scope receipts. |
+
+Connected native surface evidence is maintained separately:
+
+- [`message_claim_manifest.rs`](../../rsworkspace/crates/trogon-atlas-client/tests/message_claim_manifest.rs) exercises typed manifests and exact values.
+- [`message_claims_cli_integration.rs`](../../rsworkspace/crates/trogon-atlas-cli/tests/message_claims_cli_integration.rs) exercises native authoring, staged local IDs, preview, inspect, diff, export, no-op reapply, numeric version limits and lifecycle controls.
+- [`message_claims_mcp_authenticated.rs`](../../rsworkspace/crates/trogon-atlas-mcp/tests/message_claims_mcp_authenticated.rs) exercises authenticated MCP authoring and inspection against the same backend, provenance, guards and reapply.
+- [`MessageClaimsDetails.test.tsx`](../../tsworkspace/webapps/studio/src/components/MessageClaimsDetails.test.tsx) and [`message-claims-contract.test.mjs`](../../tsworkspace/webapps/studio/server/message-claims-contract.test.mjs) exercise read-only rendering and actual protobuf codecs, including partial subjects, optional presence and exact large versions. They do not constitute browser evidence.
+
+Source policy fixtures and writer-floor regressions continue to run with these
+fixtures. MessageClaims
+does not own Specification variants, Product associations or the combined Channel
+inverse CLI/MCP contract. Evidence for those independent surfaces must be assessed
+by their owners before the overall resource-association matrix closes.

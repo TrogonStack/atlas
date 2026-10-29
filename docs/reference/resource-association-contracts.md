@@ -1,15 +1,10 @@
 # Resource association contracts
 
-Status: proposed native contract, not implemented. It reconciles the
-EventCatalog-derived [coverage gaps](eventcatalog-coverage.md) for communication
-claims, channel composition, storage access, data product targets and schema
-variants against the shipped [communication intent](communication-intent-contracts.md),
-[Channel and DataStore](channel-and-datastore-contracts.md),
-[Specification](specification-and-api-contracts.md) and
-[DataProduct](data-product-contracts.md) contracts. It changes no schema, API,
-validation or runtime behavior. The
-[acceptance requirements](resource-association-acceptance.md) are implementation
-obligations, not executed coverage.
+Status: native contract with implemented MessageClaims schema, core, backend
+and connected authoring and inspection surfaces. The
+[acceptance requirements](resource-association-acceptance.md#messageclaims-executable-evidence)
+link the MessageClaims verification boundaries. Other resource-association
+extensions have independent implementation and acceptance ownership.
 
 The scope is Atlas native declarations only. No EventCatalog reader, importer,
 migration, provider synchronization or federation is introduced, and no
@@ -23,16 +18,17 @@ extraction and admission code named in the evidence table.
 
 ## Disposition by concept
 
-Each concept has a supported part, an actual gap and a proposed extension. A
-gap is recorded only where no shipped field can hold the authored fact.
+The table separates native support, behavioral limits and independent extension
+work. MessageClaims entries describe implemented support; other entries retain
+their design context for their acceptance owners to reconcile.
 
 | Concept | Supported now | Actual gap | Proposed extension |
 | --- | --- | --- | --- |
-| Communication claims | Owner-local [CommunicationDeclaration](communication-intent-contracts.md) on Component and ExternalSystem: direction, required peer, exact MESSAGE member, label, condition prose. | A claim that an owner sends or receives a message without naming a peer. No per-claim channel routes, delivery mode, payload field selection, display group or receive-triggers-message relationship. Domain has no communication field. | `MessageClaims` container on Component, ExternalSystem and Domain. See [message claims](#message-claims). |
-| Domain-level claims | Domain-scoped listing already enumerates member boundaries without authored membership. | Domain has no claim field. | Authored `Domain.message_claims`, independent of member claims and namespace-derived views. Neither declaration is inferred from the other. |
-| Triggers | Condition prose on a communication declaration. `Processor.doc_trigger` describes firing intent. | A received message cannot name the message it may cause with its own condition prose. | `ClaimTrigger`, descriptive only. No executable trigger. |
-| Field groups | None. Message schema bindings select whole types. | Payload field subsets and display groups. | `ClaimFieldSelection` and a descriptive group label. |
-| Channel bindings on a claim | Channel bindings select exact AutomationSlice observations. ChannelOperationBinding selects a Channel for an operation. | A claim cannot say which Channel carries it, with which address parameter values or delivery mode. | `ClaimRoute`. |
+| Communication claims | Peer-directed CommunicationDeclaration and independent MessageClaims on Component and ExternalSystem; independent MessageClaims on Domain. | No implicit peer or executable behavior. | [Message claims](#message-claims) is implemented independently of peer-directed declarations. |
+| Domain-level claims | Authored Domain.message_claims, independent of derived member views. | No member roll-up is inferred. | Existing domain-scoped listing semantics remain separate. |
+| Triggers | ClaimTrigger names an exact message from a local RECEIVE claim, with optional condition prose. | No executable trigger. | No Processor or slice is inferred. |
+| Field groups | ClaimFieldSelection selects exact PAYLOAD bindings and field selectors; group is descriptive. | Opaque selectors remain unverified. | Native inline paths resolve against exact Schema state. |
+| Channel bindings on a claim | ClaimRoute selects an exact Channel with parameter values and optional delivery mode. | No transport is instantiated. | Required parameters without authored defaults must be supplied. |
 | Channel composition and routes | Channel retains protocols, address parameters and observation bindings. The contract says composition is outside the first release. | No Channel-to-Channel relation, no routes, no parameter binding on a target Channel. | `ChannelLink`. See [channel links](#channel-links). |
 | Channel message list | None, and none is needed. | EventCatalog retains an authored message list on a channel. | Inverse listing may be derived, but Specification MESSAGE members need independent identified message-to-channel declarations when no boundary claim exists. |
 | Service and product storage access | DataStore attaches ReadModels. DataProduct OUTPUT access can select a store attachment. | Component, ExternalSystem and DataProduct cannot declare that they read or write a store. A ReadModel attachment is not that claim. | `StorageAccessClaim`. See [storage access claims](#storage-access-claims). |
@@ -98,13 +94,14 @@ Processor fires, and does not prove delivery. Query-kind and command-kind
 source messages have no special native form: they are Specification messages
 until separate message-to-behavior equivalence is designed.
 
-### Wire proposal
+### Wire contract
 
-Component, ExternalSystem and Domain each gain one field of type `MessageClaims`. Domain tag7 is reserved for message_claims; tag8 for authored members in the system-structure contract. Field
-tags are allocated at implementation after rechecking the schema and every other
-pending proposal; the human interaction proposal already names Component tag
-10 for UI hosting. This document reserves none. Tags inside new messages are
-fresh and final once accepted.
+`Component.message_claims` uses tag 11, `ExternalSystem.message_claims` tag 9
+and `Domain.message_claims` tag 7. Component tag 10 remains available for UI
+hosting and Domain tag 8 remains reserved for authored members. MessageClaims uses flat
+identified lists; it does not add an entity kind or union arm. Shared
+`ClaimDeliveryMode` lives in `resource_association_values.proto` with
+UNSPECIFIED 0, PUSH 1, PULL 2 and PUSH_PULL 3. Optional absence stays absent.
 
 ```proto
 message MessageClaims {
@@ -193,13 +190,14 @@ that selected the claim survive refinement.
 | `group` | A display label only. Equal labels within one owner and direction render together. It has no identity, membership record or selector, and no claim can reference a group. Nonblank, at most 256 UTF-8 bytes when present. |
 | ClaimRoute | `claim_id` selects a claim in the same owner. The Channel must resolve exactly. Each parameter name must be declared in the Channel's address, each value must belong to its allowed set when one is declared, and an empty string is a valid value. A Channel with no address accepts no parameter values. Required parameters without defaults must be supplied. Omitted parameters with authored defaults retain those defaults; the route does not instantiate transport. `delivery_mode` absence means undeclared; no `push` default is synthesized. Repeated routes to the same Channel are separate occurrences. |
 | ClaimTrigger | `claim_id` must select a RECEIVE claim. Reject on SEND. The triggered message must differ from the claim's own message selector. It need not equal any SEND claim of the same owner, and no corroboration status is reported. Cycles among triggers are legal and descriptive. Condition absence means none documented, not unconditional. |
-| ClaimFieldSelection | `binding` must be a SchemaBinding on the same Specification incarnation as the claim's message, on that exact message, with role PAYLOAD. Reject HEADERS, another message's binding and a binding from another incarnation. At most one selection per claim and binding pair. Native `path` selectors are valid only when the binding resolves, within one hop and without expanding dependencies, to an exact native Schema, and every segment must exist in the resolved fields, nested through object fields. Bindings that resolve to an artifact, a TypeLibrary type or an opaque selector accept only `opaque` selectors, which stay labeled unverified. An empty selector list is valid and means no subset declared, not all fields selected. |
+| ClaimFieldSelection | `binding` must be a SchemaBinding on the same Specification incarnation as the claim's message, on that exact message, with role PAYLOAD. Reject HEADERS, another message's binding and a binding from another incarnation. At most one selection per claim and binding pair. Native `path` selectors are valid only when the binding resolves, within one hop and without expanding dependencies, to an exact native Schema, and every segment must exist in the resolved fields, nested through object fields. Bindings that resolve to an artifact, a TypeLibrary type or an opaque selector accept only `opaque` selectors, which stay labeled unverified. New or edited selections of a native Schema require that exact Schema to be authorized and available even when the selectors are opaque. Unchanged dangling declarations remain inspectable and do not veto unrelated edits. An empty selector list is valid and means no subset declared, not all fields selected. |
 | Fan-out | A claim never expands into a cross product of routes, triggers and field selections. Each association is independent. |
 
 ### Bounds
 
-At most 1,024 claims per owner. At most 4,096 identified occurrences across all
-four lists of one owner. At most 256 field selectors per selection, each opaque
+At most 1,024 claims per owner. At most 4,096 identified occurrences in the
+complete owner inventory, including the MessageClaims lists, existing
+relationships, communications and identified ResourceGroup metadata. At most 256 field selectors per selection, each opaque
 value at most 1,024 UTF-8 bytes and each native path at most 32 segments. At most
 1 MiB for the complete prepared owner, including communications, relationships
 and metadata. Lower existing limits win. Exceeding any ceiling rejects the whole
@@ -449,19 +447,18 @@ mapping-base publication.
 
 ## Compatibility
 
-A contract revision above the existing writer floor raises both mutation floors
-when these fields ship. The current floor is 18; integration rechecks it before
-generation. Older writers are refused before they could drop a
-collection, claim container, link, storage claim, input alternative or variant
-field. Implementation records the number and the migration note in the wire
-compatibility document at that time. Development data may be recreated under the
-current greenfield policy; no legacy compatibility layer is proposed.
+The contract revision and both mutation floors are 19. Native MessageClaims
+writers require that floor so an older client cannot silently drop the claim
+container or its identified lists. The maintained manifest schema matches the
+current descriptors. Further breaking writer extensions require a coordinated
+revision and floor update, recorded in the wire compatibility document.
+Development data may be recreated under the current greenfield policy.
 
-## Open objections
+## Design decisions and remaining objections
 
-| Objection | Why it is open | Default if unanswered |
+| Concern | Design context | Disposition |
 | --- | --- | --- |
-| Domain-authored claims | The source domain has its own send and receive lists, but Domain is pure strategic knowledge and has no behavior. Storing claims there requires Domain admission, subject inventories and Source guards, and invites roll-up disagreement with member boundaries. | Required: Domain gains independent MessageClaims and all reference, subject, budget and Source obligations. Derived member views remain separate. |
+| Domain-authored claims | Authored claims could disagree with derived member views. | Resolved: Domain.message_claims is independently authored with admission, subject inventories, budgets and Source guards. Derived member views remain separate. |
 | Peerless claim versus optional peer | One collection with an optional peer would be smaller, but it changes shipped admission, fingerprint and acceptance. | Separate `MessageClaims`. |
 | Group as label | A label has no identity, so a group cannot be selected or assigned. | Label only, matching how the source uses it. |
 | Event as DataProduct output | Verified ports remain read data, while an authored association is descriptive. | Required in the separate ProductResourceAssociation layer; no producing behavior is inferred. |
@@ -498,9 +495,14 @@ fields, Specification SchemaBinding occurrences with PAYLOAD and HEADERS roles,
 DataProduct ReadModel and Event inputs, ReadModel outputs, exact contract pins
 and local declared lineage.
 
-Proposed and not implemented: `MessageClaims` with its routes, triggers and field
-selections, `ChannelLink`, `StorageAccessClaim`, ProductResourceAssociation, independent Specification message/channel declarations
-and the `EnvironmentName` and `is_default` fields on SchemaBinding.
+Implemented MessageClaims: independent claims, routes, descriptive triggers
+and exact PAYLOAD field selections on Component, ExternalSystem and Domain.
+Native authoring, exact occurrence references, subjects, Source isolation and
+connected inspection are covered by the linked acceptance fixtures.
+
+Channel links, storage claims, product associations, independent Specification
+message-channel declarations and SchemaBinding variants have separate acceptance
+ownership; MessageClaims evidence does not establish their coverage.
 
 No proposal makes a trigger executable, widens the runtime grammar, establishes
 message-to-Event or Command equivalence, infers delivery, or reads, migrates or
