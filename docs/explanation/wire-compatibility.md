@@ -178,7 +178,8 @@ drift.
 The current contract revision is 19, with both mutation compatibility floors
 at 19. Native catalog context writers preserve Decision dates, makers and
 amendments, Term domain ownership, and Document content and classifications.
-CalendarDate uses the shared type package with descriptor break acknowledgments.
+CalendarDate uses the shared type package. It requires no breaking-change
+acknowledgment against the main baseline.
 Upgrade clients and server together before authoring these fields to prevent
 lossy writes.
 
