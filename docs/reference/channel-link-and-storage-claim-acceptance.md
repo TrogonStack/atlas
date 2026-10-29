@@ -11,6 +11,9 @@ actual codecs without a browser.
 | --- | --- |
 | Link target, parameter and self-key admission | `resource_association_backend::channel_links_admit_exact_targets_and_reject_invalid_parameter_shapes` |
 | Claims on every owner kind, attachment and port rules | `resource_association_backend::storage_claims_admit_exact_stores_attachments_and_ports_for_every_owner_kind` |
+| Another exact version selectable, same exact Channel rejected | `resource_association_backend::channel_links_select_another_exact_version_of_the_same_slug_but_never_the_same_channel` |
+| Unchanged dangling links stay editable, new or edited ones reject | `resource_association_backend::unchanged_dangling_channel_links_stay_editable_while_new_or_edited_unresolved_links_reject` |
+| Unchanged dangling claims stay editable on every owner kind | `resource_association_backend::unchanged_dangling_storage_claims_stay_editable_for_every_owner_kind` |
 | Hidden and missing targets fail identically | `resource_association_backend::hidden_and_missing_storage_targets_fail_identically` |
 | Occurrence IDs, delete and retarget guards | `resource_association_backend::references_carry_occurrence_ids_and_guard_delete_and_retarget` |
 | Shared occurrence budgets | `resource_association_backend::mixed_owner_inventories_share_the_occurrence_budget_across_links_and_claims` |

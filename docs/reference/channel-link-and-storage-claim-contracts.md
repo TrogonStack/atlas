@@ -25,6 +25,12 @@ The Channel anchor observation requirement is unchanged.
 Writing a link requires write access to the source Channel and read access to
 the target. A hidden target and a missing target fail identically.
 
+A new or edited link must resolve. A link that is unchanged from the stored or
+landing base occurrence, with the same connection ID and every field equal, stays
+retained and editable even when its target is now missing or hidden, so unrelated
+edits to the owner are not blocked. Changing any field, including `doc`,
+makes it an edited occurrence that must resolve again.
+
 ## Storage access claims
 
 | Field | Contract |
@@ -41,6 +47,10 @@ The store's declared `access_mode` is not admission authority. Each owner keeps
 at most 1024 claims, and a DataProduct also stays within its 4096-association
 ceiling. Removing a DataProduct port must remove or replace its dependent claim
 in the same guarded mutation.
+
+The same rule applies to claims: a claim unchanged from its base occurrence stays
+retained when its store or attachment no longer resolves, and a new or edited
+claim must resolve its store, attachment and port.
 
 ## Identity, references and budgets
 
