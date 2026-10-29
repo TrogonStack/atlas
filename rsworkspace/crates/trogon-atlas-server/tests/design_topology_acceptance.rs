@@ -2719,6 +2719,29 @@ async fn storyboard_slices_and_traces_stay_unchanged_when_design_graphs_are_adde
                     id: Some(slice.clone()),
                 },
             ],
+            traces: vec![pb::StoryboardTrace {
+                id: "revisit-order".into(),
+                title: "Revisit order".into(),
+                steps: vec![
+                    pb::TraceStep {
+                        slice: Some(pb::SliceRef {
+                            id: Some(slice.clone()),
+                        }),
+                        execution: Some(pb::trace_step::Execution::Automation(
+                            pb::AutomationStepExec::default(),
+                        )),
+                    },
+                    pb::TraceStep {
+                        slice: Some(pb::SliceRef {
+                            id: Some(slice.clone()),
+                        }),
+                        execution: Some(pb::trace_step::Execution::Automation(
+                            pb::AutomationStepExec::default(),
+                        )),
+                    },
+                ],
+                ..Default::default()
+            }],
             ..Default::default()
         })))
         .await;
@@ -2783,6 +2806,12 @@ async fn storyboard_slices_and_traces_stay_unchanged_when_design_graphs_are_adde
         "a revisited slice keeps both positions"
     );
     assert_eq!(body.slices[0], body.slices[1]);
+    assert_eq!(body.traces.len(), 1, "the persisted trace is untouched");
+    assert_eq!(body.traces[0].steps.len(), 2);
+    assert_eq!(
+        body.traces[0].steps[0].slice, body.traces[0].steps[1].slice,
+        "a trace revisiting one slice keeps both steps"
+    );
     let refs_after = scope
         .client
         .get_outgoing_references(request(
@@ -2818,4 +2847,447 @@ async fn storyboard_slices_and_traces_stay_unchanged_when_design_graphs_are_adde
             .slug,
         "second-flow"
     );
+}
+
+async fn impact_of(scope: &mut Scope, root: &pb::Entity) -> pb::GetImpactResponse {
+    let token = scope.token.clone();
+    scope
+        .client
+        .get_impact(request(
+            pb::GetImpactRequest {
+                root: Some(reference(root)),
+                max_depth: 4,
+                ..Default::default()
+            },
+            &token,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+}
+
+fn graph_node<'a>(impact: &'a pb::GetImpactResponse, slug: &str) -> Vec<&'a pb::ImpactNode> {
+    impact
+        .nodes
+        .iter()
+        .filter(|node| {
+            let found = node.entity.as_ref().unwrap();
+            found.kind == pb::EntityKind::DesignGraph as i32
+                && found.id.as_ref().unwrap().slug == slug
+        })
+        .collect()
+}
+
+fn layout_of(scope: &Scope, slug: &str) -> pb::DocumentRef {
+    pb::DocumentRef {
+        id: Some(id_in(&scope.ns, slug, 1)),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn outgoing_references_and_impact_name_every_external_kind_with_uid_field_step_and_multiplicity(
+) {
+    let mut scope = scope("kinds").await;
+    let a = anchors(&mut scope).await;
+    scope
+        .put(scope.graph("callee", vec![step("Work", None)]))
+        .await;
+    let mut graph = scope.graph(
+        "all-kinds",
+        vec![
+            step("Api", Some(Selection::Component(reference(&a.component)))),
+            step("Events", Some(Selection::Channel(reference(&a.channel)))),
+            step(
+                "Events again",
+                Some(Selection::Channel(reference(&a.channel))),
+            ),
+            step(
+                "Store",
+                Some(Selection::DataStore(reference(&a.data_store))),
+            ),
+            step(
+                "Product",
+                Some(Selection::DataProduct(reference(&a.data_product))),
+            ),
+            step("Member", Some(Selection::CatalogMessage(a.member()))),
+            step("Call", Some(scope.subflow("callee"))),
+        ],
+    );
+    body_mut(&mut graph).layout_document = Some(layout_of(&scope, "checkout-layout"));
+    let created = scope.put(graph).await;
+    let etag = created.etag;
+    let created = created.entity.unwrap();
+    let ids: Vec<_> = (0..7).map(|i| step_id(&created, i)).collect();
+    let mut wired = created.clone();
+    body_mut(&mut wired).steps[0]
+        .transitions
+        .push(link(&ids[1], "first"));
+    body_mut(&mut wired).steps[0]
+        .transitions
+        .push(link(&ids[2], "second"));
+    let wired = scope.guarded(wired, &etag).await.entity.unwrap();
+    let owner_uid = uid(&wired);
+    assert_eq!(owner_uid, uid(&created), "wiring keeps the incarnation");
+
+    let graph_ref = reference(&wired);
+    let rows = scope.outgoing("all-kinds").await.references;
+    assert!(rows
+        .iter()
+        .all(|row| { row.from.as_ref() == Some(&graph_ref) && row.from_uid == owner_uid }));
+    let external: Vec<_> = rows
+        .iter()
+        .filter(|row| row.target_step_id.is_none())
+        .map(|row| {
+            (
+                row.from_field.clone(),
+                row.step_id.clone(),
+                row.to.clone().unwrap(),
+            )
+        })
+        .collect();
+    let steps = &body(&wired).steps;
+    let sid = |index: usize| steps[index].step_id.clone();
+    assert_eq!(
+        external,
+        vec![
+            (
+                "steps[0].target.component".to_string(),
+                sid(0),
+                reference(&a.component)
+            ),
+            (
+                "steps[1].target.channel".to_string(),
+                sid(1),
+                reference(&a.channel)
+            ),
+            (
+                "steps[2].target.channel".to_string(),
+                sid(2),
+                reference(&a.channel)
+            ),
+            (
+                "steps[3].target.data_store".to_string(),
+                sid(3),
+                reference(&a.data_store)
+            ),
+            (
+                "steps[4].target.data_product".to_string(),
+                sid(4),
+                reference(&a.data_product)
+            ),
+            (
+                "steps[5].target.catalog_message.member.specification".to_string(),
+                sid(5),
+                reference(&a.specification)
+            ),
+            (
+                "steps[6].target.subflow".to_string(),
+                sid(6),
+                pb::EntityRef {
+                    kind: pb::EntityKind::DesignGraph as i32,
+                    id: Some(scope.id("callee")),
+                }
+            ),
+            ("layout_document".to_string(), None, reference(&a.document)),
+        ],
+        "two steps naming one Channel stay two rows; the layout row has no step"
+    );
+    let internal: Vec<_> = rows
+        .iter()
+        .filter(|row| row.target_step_id.is_some())
+        .collect();
+    assert_eq!(internal.len(), 2);
+    for (index, row) in internal.iter().enumerate() {
+        assert_eq!(row.to, row.from, "transitions stay inside the owner");
+        assert_eq!(row.step_id, sid(0));
+        assert_eq!(row.from_field, format!("steps[0].transitions[{index}]"));
+        assert_eq!(row.connection_id, steps[0].transitions[index].connection_id);
+        assert_eq!(
+            row.target_step_id,
+            steps[0].transitions[index].target_step_id
+        );
+    }
+
+    let roots: Vec<(&pb::Entity, &str, Option<pb::LocalValueId>)> = vec![
+        (&a.component, "steps[0].target.component", sid(0)),
+        (&a.channel, "steps[1].target.channel", sid(1)),
+        (&a.data_store, "steps[3].target.data_store", sid(3)),
+        (&a.data_product, "steps[4].target.data_product", sid(4)),
+        (
+            &a.specification,
+            "steps[5].target.catalog_message.member.specification",
+            sid(5),
+        ),
+        (&a.document, "layout_document", None),
+    ];
+    for (root, field, step) in roots {
+        let impact = impact_of(&mut scope, root).await;
+        let found = graph_node(&impact, "all-kinds");
+        assert_eq!(found.len(), 1, "{field}: one node however many steps refer");
+        assert_eq!(found[0].depth, 1, "{field}");
+        assert_eq!(found[0].path.len(), 1, "{field}");
+        let hop = &found[0].path[0];
+        assert_eq!(hop.from, Some(graph_ref.clone()), "{field}");
+        assert_eq!(hop.to, Some(reference(root)), "{field}");
+        assert_eq!(hop.from_field, field);
+        assert_eq!(hop.step_id, step, "{field}");
+        assert_eq!(hop.from_uid, owner_uid, "{field}");
+    }
+    let callee = scope.get("callee").await.unwrap().entity.unwrap();
+    let impact = impact_of(&mut scope, &callee).await;
+    let found = graph_node(&impact, "all-kinds");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].path[0].from_field, "steps[6].target.subflow");
+    assert_eq!(found[0].path[0].step_id, sid(6));
+    let closure = impact_of(&mut scope, &wired).await;
+    let kinds: Vec<_> = closure
+        .nodes
+        .iter()
+        .filter(|node| node.depth == 1)
+        .map(|node| reference_key(node.entity.as_ref().unwrap()))
+        .collect();
+    for expected in [
+        &a.component,
+        &a.channel,
+        &a.data_store,
+        &a.data_product,
+        &a.specification,
+        &a.document,
+    ] {
+        assert_eq!(
+            kinds
+                .iter()
+                .filter(|key| **key == reference_key(&reference(expected)))
+                .count(),
+            1,
+            "{expected:?} appears once however many steps name it"
+        );
+    }
+    assert_eq!(
+        graph_node(&closure, "all-kinds").len(),
+        1,
+        "transitions inside the owner add no second root"
+    );
+}
+
+fn reference_key(value: &pb::EntityRef) -> (i32, String) {
+    (value.kind, value.id.as_ref().unwrap().slug.clone())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recreating_a_graph_owner_stales_step_and_transition_selectors_while_exact_subflows_follow()
+{
+    let mut scope = scope("recreate").await;
+    let (created, etag) = staged(&mut scope, "callee", &["Start", "Finish"]).await;
+    let old_steps: Vec<_> = (0..2).map(|i| step_id(&created, i)).collect();
+    let mut wired = created.clone();
+    body_mut(&mut wired).steps[0]
+        .transitions
+        .push(link(&old_steps[1], "next"));
+    let wired = scope.guarded(wired, &etag).await;
+    let old_etag = wired.etag;
+    let wired = wired.entity.unwrap();
+    let old_uid = uid(&wired);
+    let old_connection = body(&wired).steps[0].transitions[0]
+        .connection_id
+        .clone()
+        .unwrap();
+    scope
+        .put(scope.graph("caller", vec![step("Call", Some(scope.subflow("callee")))]))
+        .await;
+    let before = scope.detail("caller").await.unwrap();
+    let owner = before.targets[0].owner.clone().unwrap();
+    assert_eq!(owner.uid, old_uid);
+    assert_eq!(owner.etag, old_etag);
+
+    let ns = scope.ns.clone();
+    force_delete(
+        &mut scope,
+        pb::EntityKind::DesignGraph,
+        id_in(&ns, "callee", 1),
+    )
+    .await;
+    let (recreated, new_etag) = staged(&mut scope, "callee", &["Start", "Finish"]).await;
+    let new_steps: Vec<_> = (0..2).map(|i| step_id(&recreated, i)).collect();
+    let new_uid = uid(&recreated);
+    assert_ne!(new_uid, old_uid, "recreation assigns a new incarnation");
+    assert_ne!(new_steps, old_steps, "step identities are not reused");
+    assert_ne!(new_etag, old_etag);
+
+    let mut stale_transition = recreated.clone();
+    body_mut(&mut stale_transition).steps[0]
+        .transitions
+        .push(link(&old_steps[1], "stale"));
+    let status = scope
+        .try_write(stale_transition, &new_etag)
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::InvalidArgument, "{status}");
+
+    let mut stale_connection = recreated.clone();
+    let mut reused = link(&new_steps[1], "reused");
+    reused.connection_id = Some(old_connection.clone());
+    body_mut(&mut stale_connection).steps[0]
+        .transitions
+        .push(reused);
+    let status = scope
+        .try_write(stale_connection, &new_etag)
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), Code::InvalidArgument, "{status}");
+    let selector = pb::CatalogSubject {
+        selection: Some(pb::catalog_subject::Selection::Connection(
+            pb::ConnectionRef {
+                owner: Some(reference(&recreated)),
+                id: Some(old_connection.clone()),
+                owner_uid: new_uid.clone(),
+            },
+        )),
+    };
+    let mut annotated = scope.graph("annotated", vec![step("Note", None)]);
+    body_mut(&mut annotated).subjects = associate(&[selector]);
+    let status = scope.try_write(annotated, "").await.unwrap_err();
+    assert_eq!(status.code(), Code::InvalidArgument, "{status}");
+
+    let wired_again = {
+        let mut next = recreated.clone();
+        body_mut(&mut next).steps[0]
+            .transitions
+            .push(link(&new_steps[1], "next"));
+        scope.guarded(next, &new_etag).await
+    };
+    let new_connection = body(wired_again.entity.as_ref().unwrap()).steps[0].transitions[0]
+        .connection_id
+        .clone()
+        .unwrap();
+    assert_ne!(new_connection, old_connection);
+    let after = scope.detail("caller").await.unwrap();
+    assert_eq!(
+        state(after.targets[0].state),
+        pb::CatalogResolutionState::Resolved
+    );
+    let owner = after.targets[0].owner.clone().unwrap();
+    assert_eq!(owner.uid, new_uid, "the exact-key subflow follows the key");
+    assert_eq!(owner.etag, wired_again.etag);
+    let walked = scope.traverse("caller", true, 8).await.unwrap();
+    let callee_nodes: Vec<_> = walked.nodes.iter().filter(|node| node.depth == 1).collect();
+    assert_eq!(callee_nodes.len(), 2);
+    assert!(callee_nodes
+        .iter()
+        .all(|node| node.graph.as_ref().unwrap().uid == new_uid));
+    assert_eq!(
+        walked.nodes[1..]
+            .iter()
+            .map(|node| node.step_id.clone().unwrap())
+            .collect::<Vec<_>>(),
+        new_steps
+    );
+    let incoming = scope.incoming("callee").await.unwrap();
+    assert_eq!(incoming.references.len(), 1);
+    assert_eq!(
+        state(incoming.graph_state),
+        pb::CatalogResolutionState::Resolved
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn diagram_profile_fixture_keeps_inline_actor_and_external_targets_with_layout_document() {
+    let mut scope = scope("diagram").await;
+    let a = anchors(&mut scope).await;
+    let mut diagram = graph_in(
+        &scope.ns,
+        "system-context",
+        pb::DesignGraphProfile::Diagram,
+        vec![
+            step(
+                "Customer",
+                Some(Selection::Actor(pb::TopologyActor {
+                    name: Some(title("Customer")),
+                    summary: Some(text("Places orders")),
+                })),
+            ),
+            step(
+                "Checkout",
+                Some(Selection::Component(reference(&a.component))),
+            ),
+            step(
+                "Payments",
+                Some(Selection::ExternalSystem(pb::TopologyExternalSystem {
+                    name: Some(title("Payments gateway")),
+                    summary: None,
+                    url: "https://example.com/psp".into(),
+                })),
+            ),
+        ],
+    );
+    body_mut(&mut diagram).layout_document = Some(layout_of(&scope, "checkout-layout"));
+    let created = scope.put(diagram).await;
+    let etag = created.etag;
+    let created = created.entity.unwrap();
+    let ids: Vec<_> = (0..3).map(|i| step_id(&created, i)).collect();
+    let mut wired = created.clone();
+    body_mut(&mut wired).entry_steps = vec![ids[0].clone()];
+    body_mut(&mut wired).steps[0]
+        .transitions
+        .push(link(&ids[1], "orders"));
+    body_mut(&mut wired).steps[1]
+        .transitions
+        .push(link(&ids[2], "charges"));
+    let wired = scope.guarded(wired, &etag).await.entity.unwrap();
+    assert_eq!(body(&wired).profile, pb::DesignGraphProfile::Diagram as i32);
+
+    let stored = scope.get("system-context").await.unwrap().entity.unwrap();
+    assert_eq!(stored.kind, wired.kind);
+    let read = scope.detail("system-context").await.unwrap();
+    assert_eq!(
+        body(read.entity.as_ref().unwrap()).profile,
+        pb::DesignGraphProfile::Diagram as i32
+    );
+    assert_eq!(
+        state(read.layout_state),
+        pb::CatalogResolutionState::Resolved
+    );
+    assert_eq!(read.targets.len(), 3);
+    assert!(read
+        .targets
+        .iter()
+        .all(|t| state(t.state) == pb::CatalogResolutionState::Resolved));
+    assert!(read.targets[0].owner.is_none() && read.targets[2].owner.is_none());
+    assert_eq!(
+        read.targets[1].owner.as_ref().unwrap().uid,
+        uid(&a.component)
+    );
+    assert!(matches!(
+        read.targets[0].target.as_ref().unwrap().selection,
+        Some(Selection::Actor(_))
+    ));
+    assert_eq!(
+        read.targets[2].target,
+        body(&wired).steps[2].target,
+        "the external system is returned exactly as authored"
+    );
+
+    let fields: Vec<_> = scope
+        .outgoing("system-context")
+        .await
+        .references
+        .into_iter()
+        .map(|row| row.from_field)
+        .collect();
+    assert_eq!(
+        fields,
+        vec![
+            "steps[1].target.component",
+            "layout_document",
+            "steps[0].transitions[0]",
+            "steps[1].transitions[0]",
+        ],
+        "inline actor and external targets create no catalog references"
+    );
+    let walked = scope.traverse("system-context", false, 0).await.unwrap();
+    assert_eq!(walked.nodes.len(), 3);
+    assert_eq!(walked.edges.len(), 2);
+    let impact = impact_of(&mut scope, &a.document).await;
+    assert_eq!(graph_node(&impact, "system-context").len(), 1);
 }
