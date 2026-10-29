@@ -131,7 +131,7 @@ test('authenticated native DesignGraph identities survive the production bridge'
       const detail = section
         .locator('section')
         .filter({ has: page.getByRole('heading', { name: 'Design graph detail', exact: true }) });
-      await expect(detail).toContainText('unresolved');
+      await expect(detail).toContainText('CATALOG_RESOLUTION_STATE_UNAVAILABLE');
       await expect(detail).not.toContainText('Unavailable fixture target');
       await expect(section.getByRole('alert')).toHaveCount(0);
       await expect(section).toContainText(graph.layoutDocument.id.slug);
