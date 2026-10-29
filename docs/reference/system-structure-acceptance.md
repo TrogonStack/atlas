@@ -63,7 +63,7 @@ members), `plat_v2`, `plat_db`, `plat_sf`, `store_ck`, `store_plat`,
 | Reference queries | Outgoing and incoming results list each occurrence once and terminate. `store_plat` and `plat_sf` appear exactly once each. |
 | Impact | Reverse traversal from `checkout@1` terminates under existing bounds across the cycle, carries occurrence provenance on every path hop and makes no runtime-dependency claim. |
 | Validation | Proposed advisory findings report the `platform` and `storefront` cycle, the `retail` and `fulfilment` cycle and the exact repeat `plat_a`/`plat_b`, citing readable ConnectionRef paths. A caller who cannot read a participant sees a finding without the hidden participant. |
-| Client expansion | A fixture client expands `platform` using a visited set, expands `checkout@1` once though reachable twice, and marks `store_plat` as a back edge. |
+| Client expansion | `system_group_acceptance::fixture_client_expands_exact_members_once_and_marks_back_edges` uses authenticated native reads to expand `platform` with a visited set, expands `checkout@1` once though reachable twice, keeps `checkout@2` distinct, and marks the exact `store_plat` occurrence as a back edge. |
 | Findings do not block | Writes proceed with advisory findings present. Clearing a finding must not delete the authored cycle. |
 
 ## Actors and Event Modeling boundaries

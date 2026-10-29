@@ -934,3 +934,135 @@ async fn restricted_caller_is_blocked_by_a_hidden_member_edge_without_learning_a
         .await
         .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fixture_client_expands_exact_members_once_and_marks_back_edges() {
+    let mut client = serve().await;
+    let ns = register(&mut client, ROOT_TOKEN, "member-expansion").await;
+    let checkout = put(&mut client, ROOT_TOKEN, component(&ns, "checkout"), "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let mut next = component(&ns, "checkout");
+    if let Some(pb::entity::Kind::Component(body)) = next.kind.as_mut() {
+        body.id.as_mut().unwrap().version = 2;
+    }
+    let checkout_v2 = put(&mut client, ROOT_TOKEN, next, "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let platform = put(&mut client, ROOT_TOKEN, group(&ns, "platform", vec![]), "")
+        .await
+        .unwrap()
+        .entity
+        .unwrap();
+    let group_member = |target: &pb::Entity| pb::SystemGroupMembership {
+        member: Some(pb::SystemGroupMember {
+            target: Some(pb::system_group_member::Target::SystemGroup(
+                pb::SystemGroupRef {
+                    id: reference(target).id,
+                },
+            )),
+        }),
+        ..Default::default()
+    };
+    let storefront = put(
+        &mut client,
+        ROOT_TOKEN,
+        group(
+            &ns,
+            "storefront",
+            vec![group_member(&platform), component_member(&checkout)],
+        ),
+        "",
+    )
+    .await
+    .unwrap()
+    .entity
+    .unwrap();
+    let store_plat = members(&storefront)[0].connection_id.clone().unwrap();
+    let platform = put(
+        &mut client,
+        ROOT_TOKEN,
+        group(
+            &ns,
+            "platform",
+            vec![
+                group_member(&storefront),
+                component_member(&checkout),
+                component_member(&checkout_v2),
+            ],
+        ),
+        "",
+    )
+    .await
+    .unwrap()
+    .entity
+    .unwrap();
+    let mut pending = vec![(reference(&platform), Vec::<pb::EntityRef>::new())];
+    let mut expanded = Vec::new();
+    let mut back_edges = Vec::new();
+    let mut repeated = Vec::new();
+    while let Some((selected, mut ancestors)) = pending.pop() {
+        if expanded.contains(&selected) {
+            repeated.push(selected);
+            continue;
+        }
+        let read = client
+            .get_entity(authed(
+                pb::GetEntityRequest {
+                    kind: selected.kind,
+                    id: selected.id.clone(),
+                },
+                ROOT_TOKEN,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .entity
+            .unwrap();
+        assert_eq!(reference(&read), selected);
+        expanded.push(selected.clone());
+        ancestors.push(selected.clone());
+        let outgoing = client
+            .get_outgoing_references(authed(
+                pb::GetReferencesRequest {
+                    kind: selected.kind,
+                    id: selected.id.clone(),
+                    page_size: 100,
+                    ..Default::default()
+                },
+                ROOT_TOKEN,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(outgoing.next_page_token, "");
+        for edge in outgoing
+            .references
+            .into_iter()
+            .rev()
+            .filter(|edge| edge.from_field.starts_with("members["))
+        {
+            let target = edge.to.unwrap();
+            if ancestors.contains(&target) {
+                back_edges.push(edge.connection_id.unwrap());
+            } else {
+                pending.push((target, ancestors.clone()));
+            }
+        }
+    }
+    assert_eq!(expanded.len(), 4);
+    assert_eq!(
+        expanded
+            .iter()
+            .filter(|selected| **selected == reference(&checkout))
+            .count(),
+        1
+    );
+    assert!(expanded.contains(&reference(&checkout_v2)));
+    assert_eq!(repeated, vec![reference(&checkout)]);
+    assert_eq!(back_edges, vec![store_plat]);
+}
