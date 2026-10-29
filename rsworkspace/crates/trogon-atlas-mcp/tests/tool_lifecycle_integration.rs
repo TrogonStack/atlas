@@ -848,6 +848,6 @@ async fn mcp_schema_json_preserves_business_presence_and_exact_version() {
         "hasMany"
     );
     assert!(schema.property_relationships[0].connection_id.is_some());
-    assert!(!entity.system.unwrap().uid.is_empty());
+    assert_ne!(entity.system.unwrap().uid, "");
     mcp_service.cancel().await.unwrap();
 }

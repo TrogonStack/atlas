@@ -1392,7 +1392,7 @@ async fn branch_opposing_related_content_removal_restores_with_selective_connect
                         pb::document_selection::Selection::Document(r) => {
                             r.id.as_ref().unwrap().slug.clone()
                         }
-                        pb::document_selection::Selection::RelatedContent(_) => String::new(),
+                        pb::document_selection::Selection::Anchor(_) => String::new(),
                     })
                     .unwrap_or_default(),
                 entry.connection_id.clone().expect("connection"),
