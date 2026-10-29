@@ -14,10 +14,10 @@ fn id(slug: &str) -> pb::Id {
         version: 1,
     }
 }
-fn title(value: &str) -> Option<pb::CatalogTitle> {
-    Some(pb::CatalogTitle {
+fn title(value: &str) -> pb::CatalogTitle {
+    pb::CatalogTitle {
         value: value.into(),
-    })
+    }
 }
 fn component(slug: &str) -> pb::Entity {
     pb::Entity {
@@ -78,7 +78,7 @@ fn member_group(slug: &str) -> pb::SystemGroupMembership {
 fn relationship(slug: &str, label: Option<&str>) -> pb::SystemGroupRelationship {
     pb::SystemGroupRelationship {
         target: Some(pb::SystemGroupRef { id: Some(id(slug)) }),
-        label: label.and_then(title),
+        label: label.map(title),
         ..Default::default()
     }
 }
@@ -91,7 +91,7 @@ fn actor(
             target: Some(target),
         }),
         direction: direction as i32,
-        label: title("uses"),
+        label: Some(title("uses")),
         ..Default::default()
     }
 }
@@ -891,7 +891,7 @@ async fn retained_dangling_curation_never_blocks_unrelated_writes_but_new_or_edi
         rejected(&|entity| {
             group_mut(entity)
                 .relationships
-                .push(relationship("ghost-group", None))
+                .push(relationship("ghost-group", None));
         }),
         rejected(&|entity| {
             let link = &mut group_mut(entity).relationships[0];
@@ -915,7 +915,7 @@ async fn retained_dangling_curation_never_blocks_unrelated_writes_but_new_or_edi
                     id: Some(id("ghost-persona")),
                 }),
                 pb::SystemActorDirection::Inbound,
-            ))
+            ));
         }),
     ];
     for attempt in attempts {
@@ -1424,7 +1424,6 @@ async fn subject_assignments(
         .list_subject_assignments(Request::new(pb::ListSubjectAssignmentsRequest {
             subject: Some(subject.clone()),
             kind: kind.map(|kind| kind as i32),
-            ..Default::default()
         }))
         .await
         .map(tonic::Response::into_inner)

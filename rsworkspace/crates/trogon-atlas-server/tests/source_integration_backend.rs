@@ -6098,10 +6098,10 @@ fn member_connection_ids(entity: &pb::Entity) -> Vec<Option<pb::ConnectionId>> {
 
 #[tokio::test]
 async fn system_group_source_lifecycle_keeps_native_members_and_refuses_whole_owner_atomically() {
-    curated_source_case(false).await;
+    Box::pin(curated_source_case(false)).await;
 }
 
 #[tokio::test]
 async fn domain_source_lifecycle_keeps_native_members_and_refuses_whole_owner_atomically() {
-    curated_source_case(true).await;
+    Box::pin(curated_source_case(true)).await;
 }

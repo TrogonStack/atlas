@@ -115,11 +115,13 @@ fn group_mut(entity: &mut trogon_atlas_proto::Entity) -> &mut trogon_atlas_proto
     value
 }
 
-fn id_of(value: &str) -> Option<trogon_atlas_proto::ConnectionId> {
-    Some(trogon_atlas_proto::ConnectionId {
+fn id_of(value: &str) -> trogon_atlas_proto::ConnectionId {
+    trogon_atlas_proto::ConnectionId {
         value: value.into(),
-    })
+    }
 }
+
+type Mutation = Box<dyn Fn(&mut trogon_atlas_proto::SystemGroup)>;
 
 #[test]
 fn group_diff_is_exact_for_every_persisted_member_relationship_and_actor_field() {
@@ -143,7 +145,7 @@ fn group_diff_is_exact_for_every_persisted_member_relationship_and_actor_field()
             }),
         })
     };
-    let mutations: Vec<(&str, Box<dyn Fn(&mut pb::SystemGroup)>)> = vec![
+    let mutations: Vec<(&str, Mutation)> = vec![
         ("title", Box::new(|g| g.title.push('!'))),
         (
             "scope",
@@ -192,7 +194,7 @@ fn group_diff_is_exact_for_every_persisted_member_relationship_and_actor_field()
         (
             "member connection id",
             Box::new(|g| {
-                g.members[0].connection_id = id_of("01930000-0000-7000-8000-0000000000ff");
+                g.members[0].connection_id = Some(id_of("01930000-0000-7000-8000-0000000000ff"));
             }),
         ),
         ("member removed", Box::new(|g| drop(g.members.pop()))),
@@ -225,7 +227,8 @@ fn group_diff_is_exact_for_every_persisted_member_relationship_and_actor_field()
         (
             "relationship connection id",
             Box::new(|g| {
-                g.relationships[0].connection_id = id_of("01930000-0000-7000-8000-0000000000fe");
+                g.relationships[0].connection_id =
+                    Some(id_of("01930000-0000-7000-8000-0000000000fe"));
             }),
         ),
         (
@@ -261,7 +264,7 @@ fn group_diff_is_exact_for_every_persisted_member_relationship_and_actor_field()
         (
             "actor connection id",
             Box::new(|g| {
-                g.actors[0].connection_id = id_of("01930000-0000-7000-8000-0000000000fd");
+                g.actors[0].connection_id = Some(id_of("01930000-0000-7000-8000-0000000000fd"));
             }),
         ),
         ("actor removed", Box::new(|g| g.actors.clear())),
