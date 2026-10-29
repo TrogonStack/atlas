@@ -5111,7 +5111,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
     ) -> Result<Response<pb::PutEntityResponse>, Status> {
         let vis = Self::visibility_of(&req);
         let author = Self::author_from_metadata(&req);
-        let branch = Self::branch_from_metadata(&req)?;
+        let branch = Self::branch_from_metadata(&req);
         let principal = Self::principal_from_metadata(&req);
         let req = req.into_inner();
         operation_receipts::reject_operation_id_with_dry_run(&req.operation_id, req.validate_only)?;
@@ -5120,6 +5120,24 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .ok_or_else(|| Status::invalid_argument("entity is required"))?;
         let kind = entity_kind(&entity)?;
         let id = entity_id(&entity)?.clone();
+        // A hidden branch must not override a namespace denial or claim a new namespace.
+        if branch
+            .as_ref()
+            .is_err_and(|status| status.code() == tonic::Code::NotFound)
+            && principal
+                .as_ref()
+                .is_some_and(|principal| principal.parent.is_some())
+        {
+            let namespace = NamespaceId::parse(&id.namespace)
+                .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if matches!(
+                self.authorizer.may_write(&vis, &namespace).await?,
+                WriteVerdict::Denied { .. }
+            ) {
+                return Err(Status::permission_denied("namespace is not writable"));
+            }
+        }
+        let branch = branch?;
         self.authorize_write(
             principal.as_ref(),
             branch.as_deref(),

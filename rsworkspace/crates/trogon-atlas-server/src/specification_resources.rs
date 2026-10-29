@@ -93,11 +93,9 @@ pub(crate) fn validate_in_context_with_previous(
                     .and_then(|id| context.find(pb::EntityKind::Specification, id));
                 if !owner.is_some_and(|owner| {
                     trogon_atlas_core::specification::resolve_type(owner, reference).is_ok()
-                }) && !stable_occurrence(
-                    previous,
-                    entity,
-                    &format!("messages[{i}].schemas[{j}]"),
-                ) {
+                }) && !(owner.is_none()
+                    && stable_occurrence(previous, entity, &format!("messages[{i}].schemas[{j}]")))
+                {
                     issues.push(crate::validation::issue_error(
                         "SPECIFICATION_REFERENCE_UNRESOLVED",
                         "Contract schema member, incarnation, artifact, digest or selector pin does not resolve".into(),

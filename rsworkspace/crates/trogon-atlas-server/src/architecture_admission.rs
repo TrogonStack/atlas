@@ -376,6 +376,10 @@ impl EventModelServiceImpl {
                     }
                     _ => false,
                 };
+                if matches!(entity.kind, Some(pb::entity::Kind::Specification(_))) {
+                    self.require_visible(vis, &reference.to_id.namespace)
+                        .await?;
+                }
                 let target = (kind, reference.to_id);
                 if is_anchor {
                     anchors.push(target.clone());
@@ -993,7 +997,16 @@ impl EventModelServiceImpl {
                 complete.insert(pb::EntityKey::new(entity_kind(&stored.entity)?, id), stored);
             }
         }
-        Ok(complete.into_values().collect())
+        let mut complete: Vec<_> = complete.into_iter().collect();
+        complete.sort_by(|(a, _), (b, _)| {
+            (a.kind as i32, &a.namespace, &a.slug, a.version).cmp(&(
+                b.kind as i32,
+                &b.namespace,
+                &b.slug,
+                b.version,
+            ))
+        });
+        Ok(complete.into_iter().map(|(_, stored)| stored).collect())
     }
 
     async fn load_architecture_targets(
