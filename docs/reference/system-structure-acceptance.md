@@ -1,11 +1,12 @@
 # System grouping, membership and actor acceptance requirements
 
-Status: proposed requirements for the
-[system structure contract](system-structure-contracts.md), not implemented or
-executed coverage. No passing fixture, schema change or deployed readiness is
-claimed. Logical names below are not manifest syntax, predicted owner UIDs or
-submitted occurrence IDs. Test file names under
-[Proposed fixtures](#proposed-fixtures) do not exist yet.
+Status: acceptance requirements for the implemented
+[system structure contract](system-structure-contracts.md). Native fixtures
+exercise admission, identity, references, branch lifecycle, authorization,
+Source isolation and connected clients. Final composed verification remains
+pending. Logical names below are not manifest syntax, predicted owner UIDs or
+submitted occurrence IDs. The [fixture inventory](#fixture-inventory) retains
+the original acceptance organization.
 
 ## Fixture and receipts
 
@@ -152,12 +153,12 @@ callers, and hidden referrers outside the visible listing.
 - Namespace-derived domain scope is unchanged by authored membership.
 - Empty collections prove only that nothing is authored in the checked view.
 
-## Proposed fixtures
+## Fixture inventory
 
-None of these exist. Each would cover a different boundary and its result must be
-recorded separately.
+These maintained fixtures cover different boundaries. Record their results
+separately at the composed candidate.
 
-| Proposed fixture | Boundary |
+| Fixture | Boundary |
 | --- | --- |
 | `rsworkspace/crates/trogon-atlas-core/tests/system_group.rs` | Value validation, member-kind closure, fingerprints, resolver roles, extraction, cycles and Source restrictions. |
 | `rsworkspace/crates/trogon-atlas-server/tests/system_group_backend.rs` | Persistence, final-overlay admission, references, delete guards, branches, budgets and operational failures. |

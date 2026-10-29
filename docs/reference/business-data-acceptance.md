@@ -1,9 +1,10 @@
 # Business data acceptance requirements
 
-Status: proposed requirements for the [business data contract](business-data-contracts.md).
-Nothing here is implemented or executed. No proto change, fixture run or
-checklist completion is claimed. Logical names below are not manifest syntax,
-predicted owner UIDs or submitted occurrence IDs.
+Status: acceptance requirements for the implemented
+[business data contract](business-data-contracts.md). Native backend, CLI, MCP
+and Studio codec fixtures exist. Final composed execution and requirement
+review remain necessary before checklist closure. Logical names below are not
+manifest syntax, predicted owner UIDs or submitted occurrence IDs.
 
 ## Fixture sketch
 
