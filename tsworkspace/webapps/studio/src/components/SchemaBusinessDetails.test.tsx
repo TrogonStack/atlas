@@ -32,7 +32,12 @@ function model() {
         identifiers: [
           {
             connectionId: { value: '11111111-1111-4111-8111-111111111111' },
-            property: { segments: [{ name: 'customer', repeated: false }, { name: 'id', repeated: false }] },
+            property: {
+              segments: [
+                { name: 'customer', repeated: false },
+                { name: 'id', repeated: false },
+              ],
+            },
             role: 'BUSINESS_IDENTIFIER_ROLE_PRIMARY',
           },
         ],
@@ -77,9 +82,7 @@ it('shows unset aggregate intent as unspecified and keeps a type ref beside a re
 });
 
 it('distinguishes a stored false aggregate intent from an omitted one', () => {
-  const present = buildModel([
-    { schema: { id: id('order', '1'), title: 'Order', aggregateRoot: false, fields: [] } },
-  ]);
+  const present = buildModel([{ schema: { id: id('order', '1'), title: 'Order', aggregateRoot: false, fields: [] } }]);
   const { rerender } = render(<SchemaBusinessDetails entity={present.entities[0]} model={present} />);
   expect(screen.getByText(/Aggregate root intent:/).textContent).toContain('false');
   const storedTrue = buildModel([

@@ -57,10 +57,6 @@ function validateMessage(type, input, at) {
       } else if (typeof value !== "string" || !/^[0-9]+$/.test(value) || BigInt(value) > 18446744073709551615n) {
         return reject(`${path}: expected an exact uint64`);
       }
-    } else if (field.type === "uint32") {
-      if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 4294967295) {
-        return reject(`${path}: expected an exact uint32`);
-      }
     } else {
       return reject(`${path}: unsupported request scalar`);
     }

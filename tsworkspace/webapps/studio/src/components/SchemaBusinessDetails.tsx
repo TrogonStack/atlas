@@ -48,9 +48,7 @@ function pathResolves(fields: RawField[], path: RawPath | undefined): boolean {
 function pathLabel(path: RawPath | undefined): string {
   const segments = path?.segments ?? [];
   if (segments.length === 0) return 'empty path';
-  return segments
-    .map((segment) => `${segment.name ?? ''}${segment.repeated ? ' (repeated)' : ''}`)
-    .join(' / ');
+  return segments.map((segment) => `${segment.name ?? ''}${segment.repeated ? ' (repeated)' : ''}`).join(' / ');
 }
 
 function schemaIdLabel(id: RawId | undefined): string {
@@ -161,7 +159,11 @@ export function SchemaBusinessDetails({ entity, model }: { entity: Entity; model
         return (
           <section key={`relationship-${index}`} className="flex flex-col gap-1 rounded border p-2">
             <p>{pathLabel(item.source)}</p>
-            <p>{sourceResolves ? 'source path resolves in this loaded schema' : 'source path does not resolve in this loaded schema'}</p>
+            <p>
+              {sourceResolves
+                ? 'source path resolves in this loaded schema'
+                : 'source path does not resolve in this loaded schema'}
+            </p>
             <p>{schemaIdLabel(item.targetEntity?.id)}</p>
             <p>{item.label?.value && item.label.value.trim() ? item.label.value : 'no label'}</p>
             <p>{item.targetProperty ? pathLabel(item.targetProperty) : 'no target property'}</p>
