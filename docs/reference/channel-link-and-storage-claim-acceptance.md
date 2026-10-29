@@ -23,11 +23,14 @@ actual codecs without a browser.
 | Manifest schema equality | `committed_schema_file_matches_generator` and `trogon-atlas-client/tests/association_manifest.rs` |
 | CLI authoring, export, no-op reapply | `trogon-atlas-cli/tests/association_cli_integration.rs` |
 | MCP authoring, inspect, diff, export, reapply | `association_mcp_native_authoring_inspect_diff_export_and_reapply_preserve_identity` |
+| Native CLI exact u64 authoring, attachments, parameter maps, changed diff, atomic refusals | `association_cli_authors_exact_u64_attachments_and_parameter_maps_diffs_real_changes_and_refuses_invalid_input` |
+| Native MCP attachments, parameter maps, real changed diff, refusals | `association_mcp_round_trips_attachments_and_parameter_maps_diffs_real_changes_and_refuses_invalid_input` |
+| CatalogSubject listing selects exact link and claim occurrences through add, remove and equal siblings, on every owner kind | `resource_association_backend::catalog_subject_listing_selects_exact_link_and_claim_occurrences_through_their_lifecycle` |
+| Branch-authored occurrences resolve only on the branch, hidden namespace and hidden branch answer like missing ones, native DiffBranch reports changed owners with kept ids | `resource_association_backend::branch_authored_links_and_claims_resolve_only_on_the_branch_and_diff_as_real_changes` |
 | Studio read-only codecs and Inspector | `ChannelStorageDetails.test.tsx` |
+| Studio diff component shows changed associations (component evidence only, not a native receipt) | `ConflictInspector.test.tsx` |
 
 ## Remaining acceptance
 
-- Branch-specific visibility and hydration order for links and claims.
-- Explicit CatalogSubject listing tests for link and claim connection subjects.
-- A Studio-visible diff and an end-to-end diff test of links and claims.
+- Hydration order for links and claims in Studio beyond the component tests above.
 - Deployed browser evidence.

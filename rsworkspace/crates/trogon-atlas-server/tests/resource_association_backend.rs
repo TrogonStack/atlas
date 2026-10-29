@@ -1935,7 +1935,7 @@ async fn branch_authored_links_and_claims_resolve_only_on_the_branch_and_diff_as
             pb::CatalogResolutionState::Unresolved as i32,
             "an occurrence authored on a branch is not visible on main"
         );
-        assert!(on_main.declarations.is_empty());
+        assert_eq!(on_main.declarations.len(), 0);
         let unseen = pb::CatalogSubject {
             selection: Some(pb::catalog_subject::Selection::Connection(
                 pb::ConnectionRef {
