@@ -413,9 +413,8 @@ fn generic_retarget_moves_the_field_ref_and_the_relationship_and_renews_only_tha
         .iter()
         .any(|field| field == "property_relationships[0].target_entity"));
     connections::renew_retargeted_connection_ids(&prepared, &mut retargeted).unwrap();
-    let schema = match &retargeted.kind {
-        Some(entity::Kind::Schema(schema)) => schema,
-        _ => panic!("schema"),
+    let Some(entity::Kind::Schema(schema)) = &retargeted.kind else {
+        panic!("schema")
     };
     let field_target = match &schema.fields[2].r#type.as_ref().unwrap().kind {
         Some(field_type::Kind::Ref(value)) => match &value.r#ref.as_ref().unwrap().r#ref {
@@ -544,9 +543,8 @@ fn source_cannot_own_business_declarations_or_select_their_occurrences() {
         &mut source_integration::RunBudget::new(source_integration::profile_budgets()).unwrap(),
     )
     .unwrap();
-    let proposed = match plan.proposed.kind {
-        Some(entity::Kind::Schema(schema)) => schema,
-        _ => panic!("schema"),
+    let Some(entity::Kind::Schema(proposed)) = plan.proposed.kind else {
+        panic!("schema")
     };
     assert_eq!(proposed.title, "Renamed");
     assert_eq!(proposed.aggregate_root, Some(false));
@@ -647,9 +645,8 @@ fn a_named_field_does_not_become_an_identifier_occurrence() {
     schema.fields.push(string_field("order_id", false));
     let entity = entity_of(schema);
     business_data::validate_entity(&entity).unwrap();
-    assert!(
-        connection_occurrences(&prepare_entity(None, &entity).unwrap())
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        connection_occurrences(&prepare_entity(None, &entity).unwrap()).unwrap(),
+        vec![]
     );
 }
