@@ -1,16 +1,15 @@
 # Business data contracts
 
-Status: proposed native contract, not implemented. Shipped Schema, FieldSpec,
-type references, Swimlane state and identity annotations keep their current
-meaning. This document adds no schema, API, validation or runtime behavior.
-The [acceptance requirements](business-data-acceptance.md) are implementation
-obligations, not executed coverage. It does not close the EventCatalog coverage
-checklist and does not admit an importer, a migration, provider sync or
-federation.
+Status: implemented native contract for addressable Schema declarations.
+FieldSpec, type references, Swimlane state and identity annotations retain
+their existing meaning. The [acceptance requirements](business-data-acceptance.md)
+define the verification boundary; final composed verification and checklist
+closure remain separate. No importer, migration, provider sync or federation
+is included.
 
 ## Shipped representations
 
-These behaviors exist in the current tree. The proposal below does not
+These behaviors exist in the current tree. The declarations below do not
 reinterpret them.
 
 | Shipped representation | Current meaning and boundary |
@@ -23,7 +22,7 @@ reinterpret them.
 | [DerivedFieldAnnotation](../../proto/trogonatlas/eventmodel/v1alpha1/annotations.proto), [DomainTagAnnotation](../../proto/trogonatlas/eventmodel/v1alpha1/annotations.proto), [PersonalDataAnnotation](../../proto/trogonatlas/eventmodel/v1alpha1/annotations.proto) | Field metadata for derivation, a shared domain tag or erasure. Metadata references are not indexed as graph edges. |
 | `ReadModel.key` | Names that identify a projection row. Each name must exist on that read model's schema fields. |
 | [ConnectionRef](connection-identity.md) | Exact owner kind and version, server-owned incarnation UID, and local `ConnectionId`. Diagnostic index paths are not selectors. |
-| Contract revision | Shipped `CONTRACT_REVISION` is 17. This proposal does not bump it. |
+| Contract revision | Contract revision and both mutation floors are 19. The client gate refuses older writers before mutation. |
 
 `schema_fields` returns only `Schema.fields`. A packed Any whose type is a
 TypeLibrary message yields descriptor fields and no business declarations.
@@ -62,10 +61,9 @@ them.
 
 Extend the addressable Schema entity only. Do not add an entity kind. Shipped
 `ENTITY_KIND_SCHEMA` is 19. Shipped Schema fields 1 through 6 stay as they are.
-At this reading the next Schema field numbers are 7, 8 and 9. Recheck those
-tags before generation; this document does not edit the proto file.
+Schema fields 7, 8 and 9 carry the native declarations.
 
-| Proposed Schema field | Meaning |
+| Schema field | Meaning |
 | --- | --- |
 | `optional bool aggregate_root = 7` | Author intent with presence. Unset, `true` and `false` are three states. |
 | `identifiers = 8` | Repeated `BusinessIdentifier` occurrences. |
@@ -86,7 +84,7 @@ separate authoring act. A `FieldType.ref` to a Schema reuses that shape and
 does not copy `aggregate_root`, identifiers or relationships onto the using
 field or the using schema.
 
-## Proposed messages
+## Native messages
 
 `fields.proto` may import `connection_id.proto`. It must not import
 `decision_document.proto`: that file reaches `fields.proto` again through
@@ -99,8 +97,7 @@ triggers buf FILE breaking rules: follow the
 actual findings in the maintained acknowledged-breaking-changes.txt file and
 coordinating advertised revision floors with the combined change. Studio loads
 vendored proto files separately and must be checked against the new import graph. Generated Rust and JavaScript
-paths are an implementation concern. This task does not move the messages or
-generate code.
+paths follow maintained generation. The shared leaf is `catalog_values.proto`.
 
 ```protobuf
 message PropertySegment {
@@ -401,12 +398,13 @@ repairs or replaces native business declarations to make its update pass.
 Rejection publishes neither the native Schema nor a mapping base. Remote
 connectors and portable rebinding of incarnation-bound selectors stay deferred.
 
-## Deferred work
+## Verification and separate work
 
-Implementation still owes the leaf `CatalogTitle` extraction, tag rechecks,
-contract-revision bump, reference walker, connection fingerprints, subject
-inventory, Source rejection and the acceptance fixtures. Parent owns proto
-generation and Cargo or JavaScript builds. This proposal does not perform them.
+The shared value leaf, revision floors, reference walk, fingerprints, subject
+inventory and Source guards are implemented. Native backend, CLI, MCP and
+Studio codec fixtures exercise these declarations. The acceptance requirements
+remain authoritative for final composed verification; isolated passing runs
+do not close the coverage checklist.
 
 Still outside this contract: entity-to-service and entity-to-domain membership,
 channel and storage claims, flow topology, agent metadata, executable slices,

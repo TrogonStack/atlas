@@ -1,9 +1,9 @@
 # System grouping, membership and actor contracts
 
-Status: proposed native contract, not implemented. Nothing here changes a
-schema, API, validation rule, revision floor or runtime behavior. The
-[acceptance requirements](system-structure-acceptance.md) are implementation
-obligations, not executed coverage. It addresses the first item of the
+Status: implemented native contract. The
+[acceptance requirements](system-structure-acceptance.md) define verification
+obligations; final composed execution and checklist closure remain separate.
+It addresses the system structure item of the
 [EventCatalog checklist](eventcatalog-coverage.md#remaining-model-checklist):
 higher-level system grouping, authored domain, system and service memberships,
 and system-level actor relationships. It reads no external catalog and adds no
@@ -30,8 +30,7 @@ grouping side and Atlas must not derive them from namespaces:
 
 Service and Actor remain non-kinds. A source "service" maps to Component only
 when the deployable meaning holds; otherwise it is uncovered, not coerced. Human actors select exact Personas; software actors select explicit native boundaries. Neither is inferred from an inline name, directory entry or principal.
-This proposal replaces the earlier deferral of abstract systems only, and only
-if accepted. The other deferrals in the
+This contract replaces the earlier deferral of abstract systems. The other deferrals in the
 [relationship contract](system-relationship-contracts.md#scope-and-existing-representations)
 stay in force.
 
@@ -45,7 +44,7 @@ stay in force.
 | Persona | Shipped | Human only, descriptive `role`. [Slice edges](../../proto/trogonatlas/eventmodel/v1alpha1/slices.proto) keep issuing and display meaning. |
 | `Component.ui_hostings`, `InspectHumanInteraction` | Proposed in [human interaction contracts](human-interaction-contracts.md) | Neither implemented nor changed here. See [hosting reconciliation](#reconciliation-with-ui-hosting). |
 | Source integration | Shipped | Native-only for everything below; see [Source isolation](#source-isolation). |
-| SystemGroup, `Domain.members`, memberships, group relationships, actor links | **Proposed** | Defined below. |
+| SystemGroup, `Domain.members`, memberships, group relationships, actor links | Implemented | Defined below. |
 
 Event Modeling stays the behavioral foundation, per the
 [Event Modeling principle](../explanation/principles/event-modeling.md). A
@@ -77,7 +76,7 @@ Dispositions describe Atlas representations and exclusions, not parity.
 | Subdomain parentage as authored reference, graph allowed | [subdomain guide](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/docs/development/guides/domains/03-model-subdomains.md#L51-L69) | Shared parents and cycles are legal in `Domain.members`; see [Cycles](#cycles). |
 | `detailsPanel` visibility flags | systems and domains schemas above | View policy, outside this contract. |
 
-## Proposed wire shape
+## Native wire shape
 
 Proposed new file `proto/trogonatlas/eventmodel/v1alpha1/system_group.proto`.
 Tags below are proposals; recheck availability before controlled generation.
@@ -356,7 +355,7 @@ spread to an equal sibling.
 | Retarget | Guarded exact-key retarget renews the IDs of changed occurrences. Existing selectors do not follow. |
 | Safe and force delete | The complete incoming-reference guard sees every new reference. Safe delete protects hidden referrers. Force delete leaves selectors unresolved without cascading. |
 | Native surfaces | Guarded put and batch, validation, diff, branch operations, preview, native manifest, export and snapshot recovery preserve fields, order and returned identities. Manifest typed-field shorthand follows the [parser](../../rsworkspace/crates/trogon-atlas-client/src/manifest.rs): omitted namespace uses the manifest's, omitted version is `1`, and shorthand never reconstructs a ConnectionRef. |
-| Revision | Advance contract and mutation floors beyond current revision 17 at implementation, so older writers are refused before they can drop the new kind or `Domain.members`. This proposal bumps nothing. |
+| Revision | Contract and both mutation floors are 19. The client mutation gate refuses older writers before they can drop the new kind or `Domain.members`. |
 
 ## Admission, visibility and bounds
 
@@ -404,10 +403,10 @@ contract](system-relationship-contracts.md#subjects-references-and-native-operat
 | Validation rules | Advisory cycle, duplicate and scope-mix findings. | Core extraction. |
 | Grounding recipe | Client-assembled evidence for INBOUND links. | Hosting and `InspectHumanInteraction` implemented. Not required for authoring. |
 
-### Current code consequences
+### Implementation integration obligations
 
-Observed in the working tree while preparing this proposal. Each is an
-obligation, not shipped support:
+The design identified the following integration obligations. Implementations
+must preserve these paths when composing new native kinds and collections:
 
 | Observation | Consequence |
 | --- | --- |
