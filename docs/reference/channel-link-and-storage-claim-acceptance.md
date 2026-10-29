@@ -2,8 +2,8 @@
 
 Status: coverage for the
 [channel link and storage claim contract](channel-link-and-storage-claim-contracts.md).
-Real-backend tests use the shared NATS test support. Studio tests use the
-actual codecs without a browser.
+Real-backend tests use the shared NATS test support. Studio codec and component
+tests remain separate from the authenticated native browser fixture.
 
 ## Executable coverage
 
@@ -33,10 +33,15 @@ actual codecs without a browser.
 | Composed MessageClaims and Product association IDs cannot make an ambiguous storage selector resolve | `ChannelStorageDetails.test.tsx` |
 | Decoded attachment hydration preserves exact identity in either owner order and becomes unavailable when the target is unloaded | `ChannelStorageDetails.test.tsx` |
 | Studio diff component shows changed associations (component evidence only, not a native receipt) | `ConflictInspector.test.tsx` |
+| Public collection limits, prepared byte ceilings including SystemMeta and assigned IDs, DataProduct aggregate occurrence limits and atomic refusal | `channel_storage_capacity_backend.rs`: `collection_capacity`, `prepared_byte_capacity`, `product_total_capacity` |
+| Authenticated native browser inspection through the production bridge, exact repeated selectors, attachment incarnation, inert text and loaded scope | `e2e/channel-storage.native.spec.ts` with `channel_storage_browser_fixture.rs` |
 
-## Remaining acceptance
+## Verification boundaries
 
-- Deployed browser evidence.
-
-Hydration assertions exercise the actual protobuf codec and component model.
-They do not establish deployed-browser behavior.
+The browser fixture uses a disposable authenticated native backend and the real
+Studio bridge. It establishes the named inspection assertions, not deployed
+readiness. Hydration assertions also exercise the actual protobuf codec and
+component model independently. Capacity fixtures use public gRPC writes and
+real Store readback, including unchanged owner bytes, UID, etag, references and
+change sequence after refusal. Final coverage closure retains the composed
+execution receipts separately from this assertion inventory.
