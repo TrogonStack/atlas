@@ -411,6 +411,26 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
+        tool: "get_design_graph_detail",
+        rpcs: &["GetDesignGraphDetail"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_subject_design_graphs",
+        rpcs: &["ListSubjectDesignGraphs"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "traverse_design_graph_topology",
+        rpcs: &["TraverseDesignGraphTopology"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_incoming_design_graph_subflows",
+        rpcs: &["ListIncomingDesignGraphSubflows"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
         tool: "list_subject_assignments",
         rpcs: &["ListSubjectAssignments"],
         min_role: ToolRole::Reader,
