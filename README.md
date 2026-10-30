@@ -12,4 +12,6 @@
 
 To try Atlas, [run it locally with Docker Compose](docs/tutorials/run-atlas-locally.md) and load the example model.
 
+For managed NATS infrastructure in production, we recommend <a href="https://synadia.com"><img src="docs/assets/synadia-logo.png" alt="Synadia" width="20" style="vertical-align: middle;"> Synadia</a>.
+
 Read the [Atlas principles](docs/explanation/principles/README.md) for the ideas behind the product, its modeling language, and its codebase. The [documentation](docs/README.md) connects those ideas to design explanations, task guides, and technical contracts.
