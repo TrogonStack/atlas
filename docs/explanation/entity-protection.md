@@ -38,7 +38,11 @@ unchanged but which newly protects the identity is not a no-op: it records a
 changeset and its receipt names it. An `operation_id` settles only once the
 protection has landed, so when the registry fails after the content write, a
 retry with the same id runs again and finishes protecting instead of
-replaying a success that never protected anything. Anyone else's annotation,
+replaying a success that never protected anything. A `BatchMutate` that
+protected some identities before the registry failed resumes the same way:
+the retry is not refused by protections its own earlier attempt set, because
+the claim's digest proves it carries the same writes, and it protects the
+identities the first attempt never reached. Anyone else's annotation,
 and every annotation that arrives through `import-git`, is dropped without
 effect.
 
@@ -53,7 +57,11 @@ identity it would touch, one key per identity, inside the section where it
 already holds the mutation lock. Nothing scans the registry and no lock is
 held longer than the write already held it. `ProtectEntity` takes the same
 lock for its own read and write, so a protect and a write cannot interleave:
-whichever goes first wins, and the other sees its result.
+whichever goes first wins, and the other sees its result. Under the lock
+it re-reads the version it found beforehand, and when a delete removed it
+in between it looks up that identity's latest version again, failing with
+`NOT_FOUND` when nothing is left, so a delete that wins the race does not
+leave a protection behind on an identity with nothing stored.
 
 | Route | Refused when |
 | --- | --- |

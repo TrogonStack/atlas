@@ -2416,6 +2416,50 @@ impl EventModelServiceImpl {
         Ok(Some(StoredProtection { record, revision }))
     }
 
+    /// Identities among `requested` that an earlier, failed attempt of this
+    /// same `BatchMutate` already protected. That attempt landed its content
+    /// writes and settled `NotApplied` when a later protection failed; the
+    /// claim's digest proves the retry carries the very same writes, so they
+    /// change nothing on these identities and the retry may run to finish
+    /// the remaining protections. Each lookup is per identity.
+    async fn protections_resumed_by(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        operation_id: &str,
+        author: &str,
+        requested: &[(EntityIdentity, ProtectionReason, u64)],
+    ) -> std::collections::BTreeSet<EntityIdentity> {
+        let mut resumed = std::collections::BTreeSet::new();
+        let Some(attempt) = attempt.filter(|_| !requested.is_empty()) else {
+            return resumed;
+        };
+        match self.store.get_operation(&attempt.claim_key).await {
+            Ok(Some(record))
+                if record.status == OperationStatus::NotApplied
+                    && record.digest == attempt.digest
+                    && record.rpc == "BatchMutate"
+                    && record.branch.is_none() => {}
+            _ => return resumed,
+        }
+        for (identity, _, _) in requested {
+            let ProtectionState::Protected(stored) = self.protection_state(identity).await else {
+                continue;
+            };
+            let Ok(changeset) = self.store.get_changeset(&stored.record.changeset_id).await else {
+                continue;
+            };
+            if changeset.rpc == "BatchMutate"
+                && changeset.branch.is_none()
+                && changeset.author == author
+                && stored.record.protected_by == author
+                && changeset.operation_id.as_deref() == Some(operation_id)
+            {
+                resumed.insert(identity.clone());
+            }
+        }
+        resumed
+    }
+
     /// The latest stored version of `identity` on baseline, through the
     /// caller's lens.
     async fn latest_of(
@@ -3379,12 +3423,22 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         )
         .await?;
         let lens = self.lens(&vis).await?;
-        let latest = self
+        let found = self
             .latest_of(&lens, &identity)
             .await?
             .ok_or_else(|| Status::not_found(format!("{identity} has no stored version")))?;
 
         let _guard = self.lock_mutations().await;
+        // A delete may have landed between the lookup and the lock; re-read
+        // this one identity so protection never lands on nothing stored.
+        let latest = match self.store.get(identity.kind(), &found, None).await {
+            Ok(_) => found,
+            Err(trogon_atlas_store::error::StoreError::NotFound) => self
+                .latest_of(&lens, &identity)
+                .await?
+                .ok_or_else(|| Status::not_found(format!("{identity} has no stored version")))?,
+            Err(e) => return Err(store_err(e)),
+        };
         match self.protection_state(&identity).await {
             ProtectionState::Unprotected => {}
             ProtectionState::Protected(existing) => {
@@ -6146,9 +6200,43 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Serialize against every other writer: dry-run applies and rolls
         // back, so nothing may interleave with it, and concurrent batches
         // must not interleave with each other.
+        let attempt = if req.operation_id.is_empty() {
+            None
+        } else {
+            let principal_name = principal
+                .as_ref()
+                .map_or(UNAUTHENTICATED_PRINCIPAL, |p| p.name.as_ref());
+            let digest_req = pb::BatchMutateRequest {
+                ops: req.ops.clone(),
+                validate_only: false,
+                operation_id: String::new(),
+            };
+            Some(operation_receipts::OperationAttempt::new(
+                principal_name,
+                &req.operation_id,
+                "BatchMutate",
+                branch.as_deref(),
+                "trogonatlas.api.eventmodel.v1alpha1.BatchMutateRequest",
+                &digest_req,
+            )?)
+        };
+
         let _guard = self.lock_mutations().await;
-        self.refuse_protected(metas.iter().map(|m| (m.kind, &m.id)))
-            .await?;
+        let resumed = self
+            .protections_resumed_by(
+                attempt.as_ref(),
+                &req.operation_id,
+                &author.name,
+                &protect_requests,
+            )
+            .await;
+        self.refuse_protected(
+            metas
+                .iter()
+                .filter(|m| EntityIdentity::of(m.kind, &m.id).is_none_or(|i| !resumed.contains(&i)))
+                .map(|m| (m.kind, &m.id)),
+        )
+        .await?;
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
@@ -6576,27 +6664,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 )),
             }
         } else {
-            let attempt = if req.operation_id.is_empty() {
-                None
-            } else {
-                let principal_name = principal
-                    .as_ref()
-                    .map_or(UNAUTHENTICATED_PRINCIPAL, |p| p.name.as_ref());
-                let digest_req = pb::BatchMutateRequest {
-                    ops: req.ops.clone(),
-                    validate_only: false,
-                    operation_id: String::new(),
-                };
-                Some(operation_receipts::OperationAttempt::new(
-                    principal_name,
-                    &req.operation_id,
-                    "BatchMutate",
-                    branch.as_deref(),
-                    "trogonatlas.api.eventmodel.v1alpha1.BatchMutateRequest",
-                    &digest_req,
-                )?)
-            };
-
             let claim_key = match &attempt {
                 None => None,
                 Some(attempt) => {
