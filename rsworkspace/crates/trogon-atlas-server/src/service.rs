@@ -32,7 +32,8 @@ use trogon_atlas_semconv::semconv::attribute;
 use trogon_atlas_store::{
     store::{ChangeRecord, ListFilter, MutationOp, MutationOutcome, OperationStatus, WriterStatus},
     ChangeKind, ChangesetOp, ChangesetPage, ChangesetRecord, ChangesetRef, ChangesetScope,
-    EntityRevisionRecord, NamespaceTenure, RevisionPage, Store, StoredEntity, WriteContext,
+    ChangesetValidation, EntityRevisionRecord, NamespaceTenure, RevisionPage, Store, StoredEntity,
+    UnvalidatedReason, WriteContext,
 };
 
 use crate::{
@@ -251,6 +252,7 @@ struct PendingChangeset {
     /// that interrupts this write still leaves `nats_journal`'s recovery
     /// pass a way to find and settle the claim it left pending.
     operation_key: Option<String>,
+    validation: ChangesetValidation,
 }
 
 impl PendingChangeset {
@@ -263,7 +265,18 @@ impl PendingChangeset {
             ops: Vec::new(),
             operation_id: None,
             operation_key: None,
+            validation: ChangesetValidation::Unvalidated(UnvalidatedReason::NoDeclaredCoverage),
         }
+    }
+
+    /// Record what validation the write declared. Only paths that report
+    /// coverage call this; every other changeset stays unvalidated.
+    fn validated_by<'a>(
+        &mut self,
+        coverage: &pb::ValidationCoverage,
+        issues: impl IntoIterator<Item = &'a pb::ValidationIssue>,
+    ) {
+        self.validation = crate::changeset_receipt::receipt(coverage, issues);
     }
 
     /// Attach the `operation_id` this mutation carried, so it ends up on
@@ -339,6 +352,7 @@ impl PendingChangeset {
             branch: self.branch,
             ops: self.ops,
             operation_id: self.operation_id,
+            validation: self.validation,
         }
     }
 }
@@ -5199,6 +5213,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // and the record's `branch` field keeps it distinguishable.
         if written.wrote {
             changeset.record_put(kind, &id);
+            changeset.validated_by(&put_coverage, &scenario_issues);
             self.record_changeset(
                 changeset,
                 git_mirror::commit_message(kind, &id.namespace, &id.slug, id.version, verb),
@@ -6273,6 +6288,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         .await;
                     }
                     changeset.record_batch(&metas, &outcomes);
+                    changeset.validated_by(&batch_coverage, per_op_validation.iter().flatten());
                     self.record_changeset(
                         changeset,
                         git_mirror::batch_commit_message(outcomes.len()),
@@ -8344,7 +8360,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Real merge: land verbatim, then validate the *actual* post-merge
         // world. If invalid, nothing was persisted -- `land_branch_merge`
         // has not been called yet, so there is nothing to roll back.
-        let (strategic_findings, merge_snapshot_truncated) = {
+        let (merge_findings, merge_snapshot_truncated) = {
             let (pre_all, snapshot_truncated) = self.snapshot_with_truncation(None, &vis).await?;
             let mut projected: Vec<StoredEntity> = (*pre_all).clone();
             let mut by_key: std::collections::HashMap<pb::EntityKey, usize> =
@@ -8392,7 +8408,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     projected.push(se);
                 }
             }
-            let validation_issues = validation::validate_store_hygiene(&projected);
+            let mut validation_issues = validation::validate_store_hygiene(&projected);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
@@ -8407,10 +8423,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     ..landed.into_response()
                 }));
             }
-            (
-                merge_strategic_findings(&op_metas, &pre_all, &projected),
-                snapshot_truncated,
-            )
+            validation_issues.extend(merge_strategic_findings(&op_metas, &pre_all, &projected));
+            (validation_issues, snapshot_truncated)
         };
 
         // Claimed here, past every validation failure above (conflicts,
@@ -8522,6 +8536,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             operation_receipts::settle_applied(&*self.store, key, &merge_changeset_id).await;
         }
         changeset.record_batch(&op_metas, &outcomes);
+        changeset.validated_by(
+            &merge_coverage(merge_snapshot_truncated, true),
+            &merge_findings,
+        );
         self.record_changeset(
             changeset,
             format!(
@@ -8548,7 +8566,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         Ok(Response::new(pb::MergeBranchResponse {
             status: pb::merge_branch_response::Status::Applied as i32,
-            validation: strategic_findings,
+            validation: merge_findings,
             operation_receipt: claim_key
                 .as_ref()
                 .map(|_| operation_receipts::fresh_receipt(&req.operation_id, &merge_changeset_id)),
@@ -9704,6 +9722,7 @@ fn changeset_to_proto(record: ChangesetRecord) -> pb::Changeset {
             })
             .collect(),
         operation_id: record.operation_id.unwrap_or_default(),
+        validation: record.validation.to_proto(),
     }
 }
 

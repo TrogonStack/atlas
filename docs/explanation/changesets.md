@@ -53,6 +53,8 @@ message Changeset {
   string branch = 5;             // empty = baseline
   repeated ChangesetOp ops = 6;  // every entity this RPC actually wrote
   string rpc = 7;                // "PutEntity", "BatchMutate", "MergeBranch", ...
+  string operation_id = 8;
+  ChangesetValidation validation = 9;  // what was checked when it landed
 }
 ```
 
@@ -116,6 +118,56 @@ the ordinary write RPCs, so both were attributed before.
   trail.
 - **`validate_only` calls.** Nothing was written.
 - **Nothing about reads.** The log is a write log.
+
+## What was checked when it landed
+
+A changeset records the validation its write declared, so a reviewer
+reading history can tell a change that passed every check from one that
+landed while a check was skipped or never ran. Recomputing validation
+later answers a different question: it judges the change against today's
+rules and today's model, not the ones it was written against.
+
+`validation` holds one of two outcomes:
+
+- **`validated`**: the write reported validation coverage. The receipt
+  carries the finding counts by severity, whether coverage was complete,
+  the checks that were not, and `rule_catalog_digest`, the identity of the
+  rule catalogue that ran. `PutEntity`, `BatchMutate` and `MergeBranch`
+  record this.
+- **`unvalidated`**: the write declared no coverage, and the receipt says
+  so with a reason token instead of claiming zero findings. Deletes,
+  bulk rewrites, reverts, branch resolutions, imports and source
+  publication record `no_declared_coverage`. A changeset reconstructed
+  from a write journal during recovery records `recovered`, because the
+  original findings were not journalled.
+
+A changeset written before receipts existed has no `validation` at all.
+Readers must treat that as unknown, never as clean.
+
+A check counts as complete only when it completed, or was skipped for a
+by-design reason such as not applying to the entity kind. A check skipped
+because another suite blocked it, or for any reason the server does not
+recognise counts as incomplete, so an unfamiliar state can never read as
+a pass.
+
+The rule catalogue digest is a SHA-256 over every rule, prose included,
+sorted by code. Any edit to the catalogue, even rewording a description,
+yields a new digest. That is deliberately strict: two receipts with the
+same digest ran exactly the same catalogue, and nothing weaker is
+promised.
+
+Default chosen: writes that declare no coverage record `unvalidated`
+rather than zero counts, and unrecognised skip reasons count as
+incomplete. Both keep a receipt from overstating what was checked.
+
+### Why the receipt has no snapshot id
+
+A receipt does not name the [snapshot](snapshot-identity.md) the write
+produced. Computing one hashes the whole projection, which would put an
+O(model) cost on every write. The changeset id already orders the
+transition, and an [as-of read](#as-of-reads-the-board-after-a-past-changeset)
+followed by `GetSnapshotId` recovers the state on demand when it is
+needed.
 
 ## Ordering: the writes commit first
 

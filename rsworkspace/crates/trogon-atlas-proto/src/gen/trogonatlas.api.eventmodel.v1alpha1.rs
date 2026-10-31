@@ -4335,12 +4335,13 @@ pub struct MergeBranchResponse {
     pub conflicts: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::BranchDiffEntry>,
     /// Post-merge validation findings. Blocking errors (the store-level checks
     /// of the post-merge world) produce STATUS_INVALID and carry the findings
-    /// that blocked the merge. Strategic findings about bounded contexts,
-    /// domains and subdomains, including those a landed deletion leaves behind,
-    /// ride along without blocking, at any severity, exactly as they do on
-    /// PutEntityResponse: STATUS_VALIDATED (a dry run) and STATUS_APPLIED carry
-    /// them, so a reviewer sees what the merge leaves behind without a separate
-    /// validation call.
+    /// that blocked the merge. Non-blocking store-level warnings and strategic
+    /// findings about bounded contexts, domains and subdomains, including those
+    /// a landed deletion leaves behind, ride along without blocking, at any
+    /// severity, exactly as they do on PutEntityResponse: STATUS_VALIDATED (a
+    /// dry run) and STATUS_APPLIED carry them, so a reviewer sees what the merge
+    /// leaves behind without a separate validation call. The merge changeset's
+    /// validation receipt counts the same findings.
     #[prost(message, repeated, tag="3")]
     pub validation: ::prost::alloc::vec::Vec<ValidationIssue>,
     /// Number of non-CONVERGED entries actually landed on baseline, or that a

@@ -324,6 +324,123 @@ pub struct ChangesetOp {
     pub entity_ref: EntityRef,
 }
 
+/// What validation backed a changeset when it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangesetValidation {
+    /// Recorded before receipts existed. Nothing is known, which is not the
+    /// same as a clean result.
+    NotRecorded,
+    /// No validation coverage was declared for the write, so no issue
+    /// counts are recorded.
+    Unvalidated(UnvalidatedReason),
+    Validated(ValidationReceipt),
+}
+
+impl ChangesetValidation {
+    /// The wire receipt. `None` for [`ChangesetValidation::NotRecorded`], so
+    /// an old changeset keeps reading as "nothing known".
+    #[must_use]
+    pub fn to_proto(&self) -> Option<trogon_atlas_proto::ChangesetValidation> {
+        use trogon_atlas_proto::changeset_validation::Outcome;
+        let outcome = match self {
+            Self::NotRecorded => return None,
+            Self::Unvalidated(reason) => {
+                Outcome::Unvalidated(trogon_atlas_proto::ChangesetUnvalidated {
+                    reason: reason.as_str().to_owned(),
+                })
+            }
+            Self::Validated(receipt) => {
+                Outcome::Validated(trogon_atlas_proto::ChangesetValidated {
+                    coverage_complete: receipt.coverage == ReceiptCoverage::Complete,
+                    incomplete_checks: match &receipt.coverage {
+                        ReceiptCoverage::Complete => Vec::new(),
+                        ReceiptCoverage::Incomplete(checks) => checks.clone(),
+                    },
+                    error_count: receipt.issues.errors,
+                    warning_count: receipt.issues.warnings,
+                    info_count: receipt.issues.infos,
+                    rule_catalog_digest: receipt.rule_catalog.as_str().to_owned(),
+                })
+            }
+        };
+        Some(trogon_atlas_proto::ChangesetValidation {
+            outcome: Some(outcome),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnvalidatedReason {
+    /// The write path reports no validation coverage.
+    NoDeclaredCoverage,
+    /// Reconstructed by crash recovery, which cannot know what ran.
+    Recovered,
+    /// A reason written by a newer server. Kept verbatim rather than mapped
+    /// onto a known one.
+    Unrecognized(String),
+}
+
+impl UnvalidatedReason {
+    const NO_DECLARED_COVERAGE: &'static str = "no_declared_coverage";
+    const RECOVERED: &'static str = "recovered";
+
+    #[must_use]
+    pub fn parse(token: &str) -> Self {
+        match token {
+            Self::NO_DECLARED_COVERAGE => Self::NoDeclaredCoverage,
+            Self::RECOVERED => Self::Recovered,
+            other => Self::Unrecognized(other.to_owned()),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::NoDeclaredCoverage => Self::NO_DECLARED_COVERAGE,
+            Self::Recovered => Self::RECOVERED,
+            Self::Unrecognized(token) => token,
+        }
+    }
+}
+
+/// The result of the suites a write path ran before its changeset landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationReceipt {
+    pub coverage: ReceiptCoverage,
+    pub issues: IssueCounts,
+    pub rule_catalog: RuleCatalogDigest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiptCoverage {
+    Complete,
+    /// Check ids that applied but did not complete, sorted.
+    Incomplete(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IssueCounts {
+    pub errors: u32,
+    pub warnings: u32,
+    pub infos: u32,
+}
+
+/// Identity of the rule catalogue a validation ran with, as lowercase hex.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleCatalogDigest(String);
+
+impl RuleCatalogDigest {
+    #[must_use]
+    pub fn new(hex: String) -> Self {
+        Self(hex)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Durable record of one mutation RPC: what landed together, who did it,
 /// when.
 ///
@@ -349,6 +466,7 @@ pub struct ChangesetRecord {
     /// The `operation_id` the mutation carried, if any. See
     /// `ChangesetRef::operation_id`.
     pub operation_id: Option<String>,
+    pub validation: ChangesetValidation,
 }
 
 /// One entity as it stood on either side of one changeset's write.
@@ -1379,6 +1497,7 @@ mod tests {
             branch: None,
             ops,
             operation_id: None,
+            validation: ChangesetValidation::NotRecorded,
         }
     }
 

@@ -10,7 +10,7 @@
 
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
-    store::{ChangesetOp, ChangesetPage, ChangesetRecord},
+    store::{ChangesetOp, ChangesetPage, ChangesetRecord, ChangesetValidation},
     ChangeKind, ChangesetRef, ChangesetScope, Store, StoreError, WriteContext,
 };
 
@@ -53,6 +53,7 @@ fn record(id: &str, author: &str, branch: Option<&str>, slug: &str) -> Changeset
             entity_ref: entity_ref("shop", slug, 1),
         }],
         operation_id: None,
+        validation: ChangesetValidation::NotRecorded,
     }
 }
 
@@ -95,6 +96,46 @@ async fn append_then_get_roundtrips_every_field() {
         got.ops[1].entity_ref,
         entity_ref("shop", "order-cancelled", 2)
     );
+}
+
+/// The receipt round-trips in each of its shapes, and an absent receipt
+/// stays absent instead of decoding as a validated write with zero issues.
+#[tokio::test(flavor = "multi_thread")]
+async fn validation_receipt_roundtrips_every_shape() {
+    use trogon_atlas_store::{
+        IssueCounts, ReceiptCoverage, RuleCatalogDigest, UnvalidatedReason, ValidationReceipt,
+    };
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let shapes = [
+        ChangesetValidation::NotRecorded,
+        ChangesetValidation::Unvalidated(UnvalidatedReason::NoDeclaredCoverage),
+        ChangesetValidation::Unvalidated(UnvalidatedReason::Recovered),
+        ChangesetValidation::Unvalidated(UnvalidatedReason::Unrecognized("future".into())),
+        ChangesetValidation::Validated(ValidationReceipt {
+            coverage: ReceiptCoverage::Complete,
+            issues: IssueCounts {
+                errors: 0,
+                warnings: 2,
+                infos: 1,
+            },
+            rule_catalog: RuleCatalogDigest::new("ab".repeat(32)),
+        }),
+        ChangesetValidation::Validated(ValidationReceipt {
+            coverage: ReceiptCoverage::Incomplete(vec!["strategic".into()]),
+            issues: IssueCounts::default(),
+            rule_catalog: RuleCatalogDigest::new("cd".repeat(32)),
+        }),
+    ];
+    for validation in shapes {
+        let id = uuid::Uuid::now_v7().to_string();
+        let mut rec = record(&id, "dana", None, "receipt");
+        rec.validation = validation.clone();
+        store.append_changeset(&rec).await.unwrap();
+        assert_eq!(
+            store.get_changeset(&id).await.unwrap().validation,
+            validation
+        );
+    }
 }
 
 /// A baseline changeset stores no branch. Round-tripping must not turn the
