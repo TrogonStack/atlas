@@ -1,4 +1,4 @@
-# Test a historical client against native contract revision 19
+# Test a historical client against the current native contract
 
 Use a disposable, isolated checkout containing the acceptance test and Docker
 for the real JetStream backend. Reserve its build queue. Do not edit files while
@@ -53,13 +53,13 @@ a hash mismatch, and an incompatible executable fail the explicit run.
 
 ## Assess the assertions
 
-`historical_18_apply_refuses_native_19_without_writes` seeds a Specification and
+`historical_18_apply_refuses_native_current_without_writes` seeds a Specification and
 Schema using current CLI apply through BearerAuth and AuthzLayer over NatsStore.
 The native binding contains ordered `Blue`, `green` environments and explicitly
 present `isDefault: false`. It exports returned member identities before proposing
 a title edit, so the proposal has valid caller intent.
 
-- The exact historical error identifies client 18, required revision 19, and the
+- The exact historical error identifies client 18, required revision 20, and the
   instruction to upgrade this client. This exercises historical `ensure_can_mutate`
   through the CLI's public apply command.
 - The recorded HTTP RPC paths equal only `GetServerInfo`. No mutation RPC reaches

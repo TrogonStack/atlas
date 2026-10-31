@@ -36,7 +36,7 @@ async fn apply(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires a verified frozen revision 18 CLI; see docs/how-to/test-historical-native-client.md"]
-async fn historical_18_apply_refuses_native_19_without_writes() {
+async fn historical_18_apply_refuses_native_current_without_writes() {
     let binary = std::path::PathBuf::from(
         std::env::var("ATLAS_HISTORICAL_CLI").expect("ATLAS_HISTORICAL_CLI required"),
     );
@@ -51,7 +51,7 @@ async fn historical_18_apply_refuses_native_19_without_writes() {
     assert_eq!(actual, expected, "artifact hash mismatch");
     assert_eq!(
         (pb::CONTRACT_REVISION, pb::MIN_CLIENT_CONTRACT_REVISION),
-        (19, 19)
+        (20, 20)
     );
     let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
     let service = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
@@ -145,7 +145,7 @@ async fn historical_18_apply_refuses_native_19_without_writes() {
     let refused = apply(&binary, &endpoint, &path).await;
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert!(!refused.status.success());
-    assert!(stderr.contains("client contract revision 18 is older than revision 19 the server requires; upgrade this client before mutating"), "{stderr}");
+    assert!(stderr.contains("client contract revision 18 is older than revision 20 the server requires; upgrade this client before mutating"), "{stderr}");
     assert_eq!(*calls.lock().unwrap(), [DISCOVERY]);
     let after = store
         .get(pb::EntityKind::Specification, &id, None)
@@ -187,7 +187,7 @@ async fn historical_18_apply_refuses_native_19_without_writes() {
         .iter()
         .any(|path| path.ends_with("/BatchMutate")));
     eprintln!(
-        "current19 control persisted title and preserved variants/UID; RPCs={:?}",
+        "current20 control persisted title and preserved variants/UID; RPCs={:?}",
         calls.lock().unwrap()
     );
     server.abort();
