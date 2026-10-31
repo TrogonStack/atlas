@@ -2805,3 +2805,63 @@ describe('design topology gateway response codec', () => {
     } finally { delete fakeClient.getDesignGraphDetail; }
   });
 });
+
+describe('native human interaction gateway', () => {
+  const version = '9007199254740993';
+  const id = (slug) => ({ namespace: 'review', slug, version });
+  const selected = (kind, slug, value) => ({ owner: { kind, id: id(slug) }, ownerUid: `${slug}-uid`, id: { value } });
+  const hosting = selected('ENTITY_KIND_COMPONENT', 'portal', 'hosting-a');
+  const input = {
+    hosting,
+    display: {
+      persona: selected('ENTITY_KIND_UI_SLICE', 'display', 'persona-a'),
+      ui: selected('ENTITY_KIND_UI_SLICE', 'display', 'ui-a'),
+      sourceReadModel: selected('ENTITY_KIND_UI_SLICE', 'display', 'observation-b'),
+    },
+  };
+  it('forwards only the supplied tuple with auth/branch and preserves checked response through real codecs', async () => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const root = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(root, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [root] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find((value) => value.path.endsWith('/InspectHumanInteraction'));
+    const reqCodec = definitions['trogonatlas.api.eventmodel.v1alpha1.InspectHumanInteractionRequest'];
+    const output = {
+      request: input, state: 'CATALOG_RESOLUTION_STATE_UNAVAILABLE',
+      consistency: 'HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET',
+      scope: { branch: 'reviewer/check', revision: 'read-set-digest', authorizedNamespaces: ['review'], visited: [{ owner: hosting.owner, uid: hosting.ownerUid, etag: 'component-revision' }] },
+      edges: [{ role: 'HUMAN_INTERACTION_ROLE_READ_MODEL', selection: input.display.sourceReadModel, field: 'source_read_models[1]', target: { kind: 'ENTITY_KIND_READ_MODEL', id: id('summary') }, state: 'CATALOG_RESOLUTION_STATE_UNAVAILABLE' }],
+    };
+    fakeClient.inspectHumanInteraction = vi.fn((body, _meta, _opts, cb) => {
+      expect(reqCodec.deserialize(method.requestSerialize(body))).toEqual(input);
+      cb(null, method.responseDeserialize(method.responseSerialize(output)));
+    });
+    process.env.TROGON_ATLAS_AUTH_PASSTHROUGH = 'true';
+    const module = await import('./index.mjs?t=human-interaction-passthrough');
+    delete process.env.TROGON_ATLAS_AUTH_PASSTHROUGH;
+    try {
+      const response = await request(module.app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input), branch: 'reviewer/check' }).set('Authorization', 'Bearer caller-token');
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual(output);
+      expect(fakeClient.inspectHumanInteraction.mock.calls[0][1].get('authorization')).toEqual(['Bearer caller-token']);
+      expect(fakeClient.inspectHumanInteraction.mock.calls[0][1].get('x-trogon-atlas-branch')).toEqual(['reviewer/check']);
+      expect(response.body.edges[0]).not.toHaveProperty('checkedTarget');
+      expect(response.body).not.toHaveProperty('snapshotId');
+    } finally { delete fakeClient.inspectHumanInteraction; }
+  });
+  it.each([
+    ['multiple paths', { ...input, issuance: { persona: input.display.persona, ui: input.display.ui, command: input.display.sourceReadModel } }],
+    ['numeric lossy version', { ...input, hosting: { ...hosting, owner: { ...hosting.owner, id: { ...id('portal'), version: 9007199254740993 } } } }],
+    ['unknown nested property', { ...input, hosting: { ...hosting, title: 'discarded' } }],
+  ])('refuses %s without calling the backend', async (_name, body) => {
+    fakeClient.inspectHumanInteraction = vi.fn();
+    try {
+      const response = await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(body) });
+      expect(response.status).toBe(400);
+      expect(fakeClient.inspectHumanInteraction).not.toHaveBeenCalled();
+    } finally { delete fakeClient.inspectHumanInteraction; }
+  });
+  it('does not allow historical hydration or mutation through this inspection route', async () => {
+    expect((await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input), asOf: 'old' })).status).toBe(400);
+    expect((await request(app).post('/api/catalog/human-interaction').send(input)).status).toBe(403);
+  });
+});
