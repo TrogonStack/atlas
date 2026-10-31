@@ -65,3 +65,5 @@ pub use refs::{entity_id, entity_kind, outbound_refs, retarget_refs, OutboundRef
 pub use semantic_eq::semantically_equal;
 pub use system_meta::stamp_system;
 pub use writer_lease::{Epoch, ParseWriterRoleError, WriterRole};
+
+pub mod ui_hosting;
