@@ -11,8 +11,15 @@ pub fn validate_values(entity: &Entity) -> Result<(), ConnectionError> {
         return Ok(());
     };
     let reject = |message: &str| ConnectionError::Catalog(message.into());
-    if component.ui_hostings.len() > MAX_HOSTINGS || entity.encoded_len() > MAX_ENCODED_BYTES {
-        return Err(reject("UI hosting owner exceeds limits"));
+    if component.ui_hostings.len() > MAX_HOSTINGS {
+        return Err(reject(&format!(
+            "UI hosting owner exceeds limits: at most {MAX_HOSTINGS} hostings"
+        )));
+    }
+    if entity.encoded_len() > MAX_ENCODED_BYTES {
+        return Err(reject(&format!(
+            "UI hosting owner exceeds limits: at most {MAX_ENCODED_BYTES} encoded bytes"
+        )));
     }
     for hosting in &component.ui_hostings {
         if let Some(id) = &hosting.connection_id {
