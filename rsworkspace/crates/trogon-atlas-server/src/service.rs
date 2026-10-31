@@ -2598,6 +2598,33 @@ impl EventModelServiceImpl {
         Some((changeset_id, outcomes))
     }
 
+    /// Whether applying `op` to `id` on baseline would leave what is stored
+    /// there exactly as it is. Anything that cannot be confirmed counts as a
+    /// change.
+    async fn rewrite_leaves_unchanged(&self, id: &pb::Id, op: &MutationOp) -> bool {
+        let kind = match op {
+            MutationOp::Create { kind, .. }
+            | MutationOp::Put { kind, .. }
+            | MutationOp::Delete { kind, .. } => *kind,
+        };
+        let current = match self.store.get(kind, id, None).await {
+            Ok(current) => Some(current.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(_) => return false,
+        };
+        match (op, current) {
+            (MutationOp::Put { force: true, .. }, _) | (MutationOp::Put { .. }, None) => false,
+            (MutationOp::Put { entity, .. }, Some(current)) => {
+                trogon_atlas_core::connection_persistence::prepare_entity(Some(&current), entity)
+                    .is_ok_and(|prepared| {
+                        trogon_atlas_core::semantically_equal(&current, &prepared)
+                    })
+            }
+            (MutationOp::Create { .. }, current) => current.is_some(),
+            (MutationOp::Delete { .. }, current) => current.is_none(),
+        }
+    }
+
     /// The latest stored version of `identity` on baseline, through the
     /// caller's lens.
     async fn latest_of(
@@ -6502,6 +6529,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             self.batch_landed_by(attempt.as_ref(), &req.operation_id, &author.name, &metas)
                 .await
         };
+        // Falling back to a full rewrite must not change an identity this
+        // operation already protected, so those ops face the protection
+        // again unless rewriting them leaves the store as it is.
+        if landed.is_none() && !resumed.is_empty() {
+            let mut rewritten = Vec::new();
+            for (m, op) in metas.iter().zip(&mutations) {
+                if EntityIdentity::of(m.kind, &m.id).is_some_and(|i| resumed.contains_key(&i))
+                    && !self.rewrite_leaves_unchanged(&m.id, op).await
+                {
+                    rewritten.push((m.kind, &m.id));
+                }
+            }
+            self.refuse_protected(rewritten).await?;
+        }
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;

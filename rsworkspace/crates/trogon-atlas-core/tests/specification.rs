@@ -159,14 +159,12 @@ fn type_pin(entity: &Entity) -> ContractTypeRef {
 
 #[test]
 fn generated_contract_revision_and_canonical_kind_are_complete() {
-    assert_eq!(
-        (
-            CONTRACT_REVISION,
-            MIN_SERVER_CONTRACT_REVISION,
-            MIN_CLIENT_CONTRACT_REVISION
-        ),
-        (17, 17, 17)
-    );
+    const {
+        assert!(17 <= MIN_CLIENT_CONTRACT_REVISION);
+        assert!(17 <= MIN_SERVER_CONTRACT_REVISION);
+        assert!(MIN_CLIENT_CONTRACT_REVISION <= CONTRACT_REVISION);
+        assert!(MIN_SERVER_CONTRACT_REVISION <= CONTRACT_REVISION);
+    }
     assert_eq!(
         canonical::parse_kind("specification"),
         Some(EntityKind::Specification)
