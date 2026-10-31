@@ -17,7 +17,8 @@ pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
                 .relationships
                 .len()
                 .saturating_add(value.communications.len())
-                .saturating_add(value.storage_claims.len()),
+                .saturating_add(value.storage_claims.len())
+                .saturating_add(value.ui_hostings.len()),
             Some(pb::entity::Kind::ExternalSystem(value)) => value
                 .relationships
                 .len()

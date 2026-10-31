@@ -1000,6 +1000,7 @@ fn native_relationships_only(
                 || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
                 || !trogon_atlas_core::channel_links::links(entity).is_empty()
                 || !trogon_atlas_core::storage_claims::claims(entity).is_empty()
+                || matches!(&entity.kind, Some(pb::entity::Kind::Component(value)) if !value.ui_hostings.is_empty())
                 || trogon_atlas_core::design_topology::graph(entity)
                     .is_some_and(|graph| !graph.steps.is_empty() || !graph.entry_steps.is_empty())
                 || trogon_atlas_core::agent_metadata::has_native_additions(entity)

@@ -54,7 +54,8 @@ fn admission_references(
                 && (!architectural
                     || reference.from_field.starts_with("relationships[")
                     || reference.from_field.starts_with("communications[")
-                    || reference.from_field.starts_with("storage_claims["))
+                    || reference.from_field.starts_with("storage_claims[")
+                    || reference.from_field.starts_with("ui_hostings["))
         })
         .collect())
 }
@@ -143,6 +144,7 @@ fn charge_claim_selections(
 enum Occurrence {
     Link(pb::ChannelLink),
     Claim(pb::StorageAccessClaim),
+    Hosting(pb::UiHosting),
 }
 
 fn occurrences(entity: &pb::Entity) -> Vec<(String, Option<String>, Occurrence)> {
@@ -174,7 +176,23 @@ fn occurrences(entity: &pb::Entity) -> Vec<(String, Option<String>, Occurrence)>
                 )
             })
             .collect(),
-        Some(pb::entity::Kind::Component(value)) => claims(&value.storage_claims),
+        Some(pb::entity::Kind::Component(value)) => {
+            let mut values: Vec<_> = claims(&value.storage_claims);
+            values.extend(
+                value
+                    .ui_hostings
+                    .iter()
+                    .enumerate()
+                    .map(|(index, hosting)| {
+                        (
+                            format!("ui_hostings[{index}]"),
+                            id(hosting.connection_id.as_ref()),
+                            Occurrence::Hosting(hosting.clone()),
+                        )
+                    }),
+            );
+            values
+        }
         Some(pb::entity::Kind::ExternalSystem(value)) => claims(&value.storage_claims),
         Some(pb::entity::Kind::DataProduct(value)) => claims(&value.storage_claims),
         _ => Vec::new(),
@@ -252,7 +270,8 @@ impl EventModelServiceImpl {
         let Some(selected) = selected else {
             return Ok(());
         };
-        if trogon_atlas_core::message_claims::declarations(selected).is_none() {
+        let has_hostings = matches!(&selected.kind, Some(pb::entity::Kind::Component(value)) if !value.ui_hostings.is_empty());
+        if trogon_atlas_core::message_claims::declarations(selected).is_none() && !has_hostings {
             return Ok(());
         }
         let restored = trogon_atlas_core::connection_persistence::prepare_resolution(
@@ -389,9 +408,14 @@ impl EventModelServiceImpl {
             return Ok(());
         }
         let mut catalog_budget = crate::decision_document_resources::CatalogBudget::default();
-        if resources.iter().any(|entity| {
-            is_catalog(entity) || trogon_atlas_core::message_claims::has_content(entity)
-        }) {
+        let hosting_writes = resources.iter().any(|entity| {
+            matches!(&entity.kind, Some(pb::entity::Kind::Component(value)) if !value.ui_hostings.is_empty())
+        });
+        if hosting_writes
+            || resources.iter().any(|entity| {
+                is_catalog(entity) || trogon_atlas_core::message_claims::has_content(entity)
+            })
+        {
             for entity in &resources {
                 catalog_budget.owner(entity)?;
             }
@@ -651,6 +675,21 @@ impl EventModelServiceImpl {
             )?;
             claim_prepared.insert(pb::EntityKey::new(kind, id), prepared);
         }
+        if hosting_writes {
+            let mut rows = HashSet::new();
+            for entity in resources
+                .iter()
+                .copied()
+                .chain(world.values().map(|row| &row.entity))
+            {
+                rows.insert(pb::EntityKey::new(entity_kind(entity)?, entity_id(entity)?));
+                if rows.len() > 5_000 {
+                    return Err(Status::resource_exhausted(
+                        "hosting resource budget exceeded",
+                    ));
+                }
+            }
+        }
         let context: Vec<_> = world.into_values().collect();
         let event_products: Vec<_> = resources
             .iter()
@@ -694,6 +733,9 @@ impl EventModelServiceImpl {
                     prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
                 };
             super::validate_entity_content(&prepared)?;
+            if hosting_writes {
+                catalog_budget.owner(&prepared)?;
+            }
             let unchanged = unchanged_occurrences(
                 &prepared,
                 &baselines(&proposal, kind, id, previous.as_ref()),

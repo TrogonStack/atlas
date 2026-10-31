@@ -433,6 +433,15 @@ fn retained_links(previous: &pb::Entity, entity: &pb::Entity) -> HashSet<String>
                 |link| (link.connection_id.as_ref(), link.target.as_ref()),
             );
         }
+        (Some(pb::entity::Kind::Component(before)), Some(pb::entity::Kind::Component(after))) => {
+            retain_unchanged(
+                &mut retained,
+                "ui_hostings",
+                "ui",
+                (&before.ui_hostings, &after.ui_hostings),
+                |hosting| (hosting.connection_id.as_ref(), Some(hosting)),
+            );
+        }
         (Some(pb::entity::Kind::Domain(before)), Some(pb::entity::Kind::Domain(after))) => {
             retain_unchanged(
                 &mut retained,
@@ -532,6 +541,20 @@ fn validate_shipped_in_context(
     };
     match entity.kind.as_ref() {
         Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_)) => {
+            if let Some(pb::entity::Kind::Component(value)) = &entity.kind {
+                checks.value(
+                    trogon_atlas_core::ui_hosting::validate_values(entity).is_ok(),
+                    "ui_hostings",
+                );
+                for (index, hosting) in value.ui_hostings.iter().enumerate() {
+                    checks.target(
+                        pb::EntityKind::Ui,
+                        hosting.ui.as_ref().and_then(|ui| ui.id.as_ref()),
+                        context,
+                        &format!("ui_hostings[{index}].ui"),
+                    );
+                }
+            }
             checks.value(
                 trogon_atlas_core::architectural_relationships::validate_values(entity).is_ok(),
                 "relationships",
