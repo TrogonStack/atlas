@@ -30,7 +30,10 @@ use trogon_atlas_core::{
 use trogon_atlas_proto as pb;
 use trogon_atlas_semconv::semconv::attribute;
 use trogon_atlas_store::{
-    store::{ChangeRecord, ListFilter, MutationOp, MutationOutcome, OperationStatus, WriterStatus},
+    store::{
+        ChangeRecord, ListFilter, MutationOp, MutationOutcome, OperationRecord, OperationStatus,
+        WriterStatus,
+    },
     ChangeKind, ChangesetOp, ChangesetPage, ChangesetRecord, ChangesetRef, ChangesetScope,
     EntityIdentity, EntityRevisionRecord, NamespaceTenure, ProtectionReason, ProtectionRecord,
     ProtectionRevision, ProtectionState, ProtectionUnknown, RevisionPage, Store, StoredEntity,
@@ -256,6 +259,9 @@ struct PendingChangeset {
     /// that interrupts this write still leaves `nats_journal`'s recovery
     /// pass a way to find and settle the claim it left pending.
     operation_key: Option<String>,
+    /// The receipt settles only after work that follows the store write;
+    /// see `WriteContext::with_deferred_settlement`.
+    settlement_deferred: bool,
 }
 
 impl PendingChangeset {
@@ -268,6 +274,7 @@ impl PendingChangeset {
             ops: Vec::new(),
             operation_id: None,
             operation_key: None,
+            settlement_deferred: false,
         }
     }
 
@@ -288,6 +295,12 @@ impl PendingChangeset {
         self
     }
 
+    #[must_use]
+    fn deferring_settlement(mut self, deferred: bool) -> Self {
+        self.settlement_deferred = deferred;
+        self
+    }
+
     /// Write context for every store call this RPC makes: the branch scope
     /// plus the attribution.
     fn write_ctx(&self) -> WriteContext<'_> {
@@ -297,9 +310,14 @@ impl PendingChangeset {
             rpc: self.rpc,
             operation_id: self.operation_id.as_deref(),
         });
-        match self.operation_key.as_deref() {
+        let ctx = match self.operation_key.as_deref() {
             Some(key) => ctx.with_operation_key(key),
             None => ctx,
+        };
+        if self.settlement_deferred {
+            ctx.with_deferred_settlement()
+        } else {
+            ctx
         }
     }
 
@@ -2410,51 +2428,64 @@ impl EventModelServiceImpl {
         let revision = match self.store.put_protection(&record).await {
             Ok(revision) => revision,
             Err(trogon_atlas_store::error::StoreError::AlreadyExists) => return Ok(None),
-            Err(e) => return Err(store_err(e)),
+            Err(e) => match self.protection_state(&record.identity).await {
+                // The registry write timed out or failed after landing.
+                ProtectionState::Protected(stored)
+                    if stored.record.changeset_id == changeset.id =>
+                {
+                    stored.revision
+                }
+                _ => return Err(store_err(e)),
+            },
         };
         changeset.record_protection(ChangeKind::Protect, &record.identity, version);
         Ok(Some(StoredProtection { record, revision }))
     }
 
-    /// Identities among `requested` that an earlier, failed attempt of this
-    /// same `BatchMutate` already protected. That attempt landed its content
-    /// writes and settled `NotApplied` when a later protection failed; the
-    /// claim's digest proves the retry carries the very same writes, so they
-    /// change nothing on these identities and the retry may run to finish
-    /// the remaining protections. Each lookup is per identity.
+    /// Identities among `requested` that an earlier attempt of this same
+    /// operation protected, each with the changeset that attempt recorded.
+    /// The claim's digest proves the retry carries the very same writes, so
+    /// they change nothing on these identities. A `NotApplied` attempt
+    /// landed its content and then failed or could not confirm a protection
+    /// step, so the retry may run to finish the job; an `Applied` one is
+    /// replayed rather than refused by its own protection. Each lookup is
+    /// per identity.
     async fn protections_resumed_by(
         &self,
         attempt: Option<&operation_receipts::OperationAttempt>,
+        rpc: &str,
         operation_id: &str,
         author: &str,
-        requested: &[(EntityIdentity, ProtectionReason, u64)],
-    ) -> std::collections::BTreeSet<EntityIdentity> {
-        let mut resumed = std::collections::BTreeSet::new();
+        requested: &[&EntityIdentity],
+    ) -> std::collections::BTreeMap<EntityIdentity, String> {
+        let mut resumed = std::collections::BTreeMap::new();
         let Some(attempt) = attempt.filter(|_| !requested.is_empty()) else {
             return resumed;
         };
         match self.store.get_operation(&attempt.claim_key).await {
             Ok(Some(record))
-                if record.status == OperationStatus::NotApplied
-                    && record.digest == attempt.digest
-                    && record.rpc == "BatchMutate"
+                if matches!(
+                    record.status,
+                    OperationStatus::NotApplied | OperationStatus::Applied
+                ) && record.digest == attempt.digest
+                    && record.rpc == rpc
                     && record.branch.is_none() => {}
             _ => return resumed,
         }
-        for (identity, _, _) in requested {
+        for &identity in requested {
             let ProtectionState::Protected(stored) = self.protection_state(identity).await else {
                 continue;
             };
             let Ok(changeset) = self.store.get_changeset(&stored.record.changeset_id).await else {
                 continue;
             };
-            if changeset.rpc == "BatchMutate"
+            if changeset.rpc == rpc
                 && changeset.branch.is_none()
                 && changeset.author == author
                 && stored.record.protected_by == author
                 && changeset.operation_id.as_deref() == Some(operation_id)
             {
-                resumed.insert(identity.clone());
+                resumed.insert(identity.clone(), changeset.id);
             }
         }
         resumed
@@ -2529,6 +2560,54 @@ impl EventModelServiceImpl {
             operation_receipt: None,
             coverage: None,
         }
+    }
+
+    /// A replayed `BatchMutate` is reported Applied with no per-op results
+    /// rather than reconstructing one result per original op: the batch is
+    /// one unit of idempotency, and `changeset_id` is enough for the caller
+    /// to confirm it already landed.
+    fn batch_replay(
+        operation_id: &str,
+        record: &OperationRecord,
+    ) -> Result<Response<pb::BatchMutateResponse>, Status> {
+        if record.status == OperationStatus::Rejected {
+            return Err(operation_receipts::replay_rejected_status(record));
+        }
+        Ok(Response::new(pb::BatchMutateResponse {
+            status: pb::batch_mutate_response::Status::Applied as i32,
+            results: Vec::new(),
+            failed_op_index: 0,
+            failure: Vec::new(),
+            precondition_failure: None,
+            operation_receipt: Some(operation_receipts::replay_receipt(operation_id, record)),
+            coverage: None,
+        }))
+    }
+
+    /// A replayed `PutEntity` reconstructs the current state rather than a
+    /// byte-identical response: the entity may have moved on since the
+    /// original call, and GetEntity-shaped data is the only honest answer to
+    /// "what does it look like now". It re-ran no write-path suites.
+    async fn put_replay(
+        &self,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        branch: Option<&str>,
+        operation_id: &str,
+        record: &OperationRecord,
+    ) -> Result<Response<pb::PutEntityResponse>, Status> {
+        if record.status == OperationStatus::Rejected {
+            return Err(operation_receipts::replay_rejected_status(record));
+        }
+        let current = self.store.get(kind, id, branch).await.map_err(store_err)?;
+        Ok(Response::new(pb::PutEntityResponse {
+            no_op: false,
+            etag: current.etag,
+            entity: Some(current.entity),
+            validation: Vec::new(),
+            operation_receipt: Some(operation_receipts::replay_receipt(operation_id, record)),
+            coverage: None,
+        }))
     }
 
     /// The best available `Status` for a `batch_failure_response`, used only
@@ -5406,8 +5485,54 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // `if_match` see a stable view and report the same typed refusal as a
         // real write. The lock is released when this call returns; a preview
         // is never a reservation.
+        let attempt = if req.operation_id.is_empty() {
+            None
+        } else {
+            let principal_name = principal
+                .as_ref()
+                .map_or(UNAUTHENTICATED_PRINCIPAL, |p| p.name.as_ref());
+            let digest_req = pb::PutEntityRequest {
+                entity: Some(requested_entity),
+                create_only: req.create_only,
+                if_match: req.if_match.clone(),
+                validate_only: false,
+                force: req.force,
+                operation_id: String::new(),
+            };
+            Some(operation_receipts::OperationAttempt::new(
+                principal_name,
+                &req.operation_id,
+                "PutEntity",
+                branch.as_deref(),
+                "trogonatlas.api.eventmodel.v1alpha1.PutEntityRequest",
+                &digest_req,
+            )?)
+        };
+
         let _guard = self.lock_mutations().await;
-        self.refuse_protected([(kind, &id)]).await?;
+        let settled = operation_receipts::settled(&*self.store, attempt.as_ref()).await;
+        let resumed = match (&protect_reason, EntityIdentity::of(kind, &id)) {
+            (Some(_), Some(identity)) => self
+                .protections_resumed_by(
+                    attempt.as_ref(),
+                    "PutEntity",
+                    &req.operation_id,
+                    &author.name,
+                    &[&identity],
+                )
+                .await
+                .into_values()
+                .next(),
+            _ => None,
+        };
+        if resumed.is_none() {
+            self.refuse_protected([(kind, &id)]).await?;
+        }
+        if let Some(record) = settled {
+            return self
+                .put_replay(kind, &id, branch.as_deref(), &req.operation_id, &record)
+                .await;
+        }
 
         if req.validate_only {
             self.validate_architecture_write(&entity, branch.as_deref(), &vis)
@@ -5456,30 +5581,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .await?;
         }
 
-        let attempt = if req.operation_id.is_empty() {
-            None
-        } else {
-            let principal_name = principal
-                .as_ref()
-                .map_or(UNAUTHENTICATED_PRINCIPAL, |p| p.name.as_ref());
-            let digest_req = pb::PutEntityRequest {
-                entity: Some(requested_entity),
-                create_only: req.create_only,
-                if_match: req.if_match.clone(),
-                validate_only: false,
-                force: req.force,
-                operation_id: String::new(),
-            };
-            Some(operation_receipts::OperationAttempt::new(
-                principal_name,
-                &req.operation_id,
-                "PutEntity",
-                branch.as_deref(),
-                "trogonatlas.api.eventmodel.v1alpha1.PutEntityRequest",
-                &digest_req,
-            )?)
-        };
-
         let claim_key = match &attempt {
             None => None,
             Some(attempt) => {
@@ -5493,36 +5594,37 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 {
                     operation_receipts::Claim::Proceed => Some(attempt.claim_key.clone()),
                     operation_receipts::Claim::Replay(record) => {
-                        if record.status == OperationStatus::Rejected {
-                            return Err(operation_receipts::replay_rejected_status(&record));
-                        }
-                        // Applied: the replay reconstructs the current state
-                        // rather than replaying a byte-identical response --
-                        // the entity may have moved on since the original
-                        // call, and GetEntity-shaped data is the only honest
-                        // answer to "what does it look like now".
-                        let current = self
-                            .store
-                            .get(kind, &id, branch.as_deref())
-                            .await
-                            .map_err(store_err)?;
-                        return Ok(Response::new(pb::PutEntityResponse {
-                            no_op: false,
-                            etag: current.etag,
-                            entity: Some(current.entity),
-                            validation: Vec::new(),
-                            operation_receipt: Some(operation_receipts::replay_receipt(
-                                &req.operation_id,
-                                &record,
-                            )),
-                            // Replay reconstructs current state; it did not
-                            // re-run write-path suites for this call.
-                            coverage: None,
-                        }));
+                        return self
+                            .put_replay(kind, &id, branch.as_deref(), &req.operation_id, &record)
+                            .await;
                     }
                 }
             }
         };
+
+        // An earlier attempt of this operation wrote the content and
+        // protected the identity, then could not confirm the protection and
+        // settled not-applied. Writing again would only trip its own
+        // `create_only` or `if_match`, so finish by settling what landed.
+        if let (Some(key), Some(changeset_id)) = (&claim_key, &resumed) {
+            operation_receipts::settle_applied(&*self.store, key, changeset_id).await;
+            let current = self
+                .store
+                .get(kind, &id, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+            return Ok(Response::new(pb::PutEntityResponse {
+                no_op: false,
+                etag: current.etag,
+                entity: Some(current.entity),
+                validation: scenario_issues,
+                operation_receipt: Some(operation_receipts::fresh_receipt(
+                    &req.operation_id,
+                    changeset_id,
+                )),
+                coverage: Some(put_coverage),
+            }));
+        }
 
         if let Err(status) = self
             .validate_architecture_write(&entity, branch.as_deref(), &vis)
@@ -6222,21 +6324,31 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         };
 
         let _guard = self.lock_mutations().await;
+        let settled = operation_receipts::settled(&*self.store, attempt.as_ref()).await;
         let resumed = self
             .protections_resumed_by(
                 attempt.as_ref(),
+                "BatchMutate",
                 &req.operation_id,
                 &author.name,
-                &protect_requests,
+                &protect_requests
+                    .iter()
+                    .map(|(identity, _, _)| identity)
+                    .collect::<Vec<_>>(),
             )
             .await;
         self.refuse_protected(
             metas
                 .iter()
-                .filter(|m| EntityIdentity::of(m.kind, &m.id).is_none_or(|i| !resumed.contains(&i)))
+                .filter(|m| {
+                    EntityIdentity::of(m.kind, &m.id).is_none_or(|i| !resumed.contains_key(&i))
+                })
                 .map(|m| (m.kind, &m.id)),
         )
         .await?;
+        if let Some(record) = settled {
+            return Self::batch_replay(&req.operation_id, &record);
+        }
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
@@ -6677,27 +6789,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     {
                         operation_receipts::Claim::Proceed => Some(attempt.claim_key.clone()),
                         operation_receipts::Claim::Replay(record) => {
-                            if record.status == OperationStatus::Rejected {
-                                return Err(operation_receipts::replay_rejected_status(&record));
-                            }
-                            // Applied: a replayed batch is reported Applied
-                            // with no per-op results rather than
-                            // reconstructing one result per original op --
-                            // the batch is one unit of idempotency, and
-                            // `changeset_id` is enough for the caller to
-                            // confirm it already landed.
-                            return Ok(Response::new(pb::BatchMutateResponse {
-                                status: pb::batch_mutate_response::Status::Applied as i32,
-                                results: Vec::new(),
-                                failed_op_index: 0,
-                                failure: Vec::new(),
-                                precondition_failure: None,
-                                operation_receipt: Some(operation_receipts::replay_receipt(
-                                    &req.operation_id,
-                                    &record,
-                                )),
-                                coverage: None,
-                            }));
+                            return Self::batch_replay(&req.operation_id, &record);
                         }
                     }
                 }
@@ -6744,7 +6836,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
             let mut changeset = PendingChangeset::mint("BatchMutate", &author, branch.as_deref())
                 .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
-                .with_operation_key(claim_key.as_deref());
+                .with_operation_key(claim_key.as_deref())
+                .deferring_settlement(!protect_requests.is_empty());
             match self
                 .store
                 .batch_apply(&mutations, changeset.write_ctx())

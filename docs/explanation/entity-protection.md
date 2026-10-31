@@ -42,7 +42,12 @@ replaying a success that never protected anything. A `BatchMutate` that
 protected some identities before the registry failed resumes the same way:
 the retry is not refused by protections its own earlier attempt set, because
 the claim's digest proves it carries the same writes, and it protects the
-identities the first attempt never reached. Anyone else's annotation,
+identities the first attempt never reached. A `PutEntity` whose protection
+landed but could not be confirmed finishes on retry from what landed instead
+of writing again, and replaying a settled write is not refused by the
+protection that write set. When a server stops after a protecting batch's
+content is durable, batch recovery leaves its `operation_id` not applied so
+a retry completes the protections. Anyone else's annotation,
 and every annotation that arrives through `import-git`, is dropped without
 effect.
 
@@ -139,8 +144,8 @@ answered from the same log as every content change. See
   of a protected identity is allowed, because it leaves the identity as it
   is.
 - Default chosen for review: replaying an `operation_id` that targets an
-  identity protected since the first attempt is refused rather than
-  answered from the stored result. `DeleteEntity` is the exception: it
+  identity protected since the first attempt by anything other than that
+  operation is refused rather than answered from the stored result. `DeleteEntity` is the exception: it
   answers a replay from its receipt, because protection cannot apply to a
   delete that already happened.
 
