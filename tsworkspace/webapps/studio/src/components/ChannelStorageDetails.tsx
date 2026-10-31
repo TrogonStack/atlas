@@ -127,9 +127,15 @@ function ReferenceRows({
         </dd>
         <dt>Parameter values</dt>
         <dd>
-          {item.parameterValues.length
-            ? item.parameterValues.map(([name, value]) => <span key={name}>{`${name}=${value}`}</span>)
-            : 'None'}
+          {item.parameterValues.length ? (
+            <ul className="flex flex-wrap gap-2">
+              {item.parameterValues.map(([name, value]) => (
+                <li key={name}>{`${name}=${value}`}</li>
+              ))}
+            </ul>
+          ) : (
+            'None'
+          )}
         </dd>
       </>
     );

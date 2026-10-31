@@ -101,8 +101,7 @@ export function AgentAnnotationDetails({ annotation }: { annotation: Annotation 
       {view.tools.length > 0 ? (
         <ol className="mt-2 list-decimal space-y-1 pl-4" data-testid="agent-tools">
           {view.tools.map((tool) => (
-            // oxlint-disable-next-line react/no-array-index-key -- tool rows have no stable server id in read-only projection
-            <li key={`${tool.name}:${tool.type}:${tool.url ?? ''}:${tool.description ?? ''}`}>
+            <li key={JSON.stringify([tool.name, tool.type, tool.url, tool.description, tool.icon])}>
               <div className="flex flex-wrap items-center gap-1">
                 <span className="font-semibold">{tool.name}</span>
                 <Badge variant="outline">{tool.type}</Badge>
