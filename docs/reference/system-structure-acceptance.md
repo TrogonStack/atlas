@@ -35,7 +35,7 @@ batch. Do not predict a new owner's UID.
 Occurrences used by name below: `plat_a` and `plat_b` (the equal `checkout@1`
 members), `plat_v2`, `plat_db`, `plat_sf`, `store_ck`, `store_plat`,
 `act_in`, `act_out`, `act_rev`, `rel_pay`, `dom_sys`, `dom_cmp`, `dom_sub`,
-`dom_dp`, `ful_ret`. Each must have a distinct returned ID.
+`dom_dp`, `fulfillment_returns`. Each must have a distinct returned ID.
 
 ## Native identity and shape
 

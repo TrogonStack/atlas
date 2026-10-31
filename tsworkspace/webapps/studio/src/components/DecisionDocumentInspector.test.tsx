@@ -305,7 +305,7 @@ describe('retained native content presentation', () => {
   }
 
   it('presents recognized text from base64 JSON as an inert pre and downloads the exact bytes', async () => {
-    const literal = 'caf\u00e9 \u20ac\r\nline\0nul\n<script>alert(1)</script>\n';
+    const literal = 'café \u20ac\r\nline\0nul\n<script>alert(1)</script>\n';
     const bytes = new TextEncoder().encode(literal);
     const { container } = render(
       <DecisionDocumentInspector

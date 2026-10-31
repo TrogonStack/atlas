@@ -547,7 +547,7 @@ async fn source_create_with_each_native_extension_rejects_under_title_only_polic
             NativeExtension::BinaryOnly => "crt-title-bin",
             NativeExtension::CollectionOnly => "crt-title-col",
             NativeExtension::Purpose => "crt-title-pur",
-            NativeExtension::Filename => "crt-title-nam",
+            NativeExtension::Filename => "crt-title-name",
             NativeExtension::RelatedContent => "crt-title-rel",
         };
         assert_create_rejects(&mut fixture, extension, title_only(), key).await;
@@ -569,7 +569,7 @@ async fn source_create_with_each_native_extension_rejects_under_whole_owner_poli
             NativeExtension::BinaryOnly => "crt-whole-bin",
             NativeExtension::CollectionOnly => "crt-whole-col",
             NativeExtension::Purpose => "crt-whole-pur",
-            NativeExtension::Filename => "crt-whole-nam",
+            NativeExtension::Filename => "crt-whole-name",
             NativeExtension::RelatedContent => "crt-whole-rel",
         };
         assert_create_rejects(&mut fixture, extension, whole_owner(), key).await;
