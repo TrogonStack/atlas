@@ -245,3 +245,29 @@ fn explicit_empty_hosting_identity_rejects_before_branch_normalization() {
     assert!(prepare_resolution(None, None, &prepared).is_ok());
     assert!(prepare_landing(None, Some(&prepared), &prepared).is_ok());
 }
+
+#[test]
+fn hosting_limit_errors_identify_the_exhausted_capacity() {
+    let mut count = owner();
+    let Some(entity::Kind::Component(component)) = &mut count.kind else {
+        panic!("component")
+    };
+    component.ui_hostings.resize(
+        trogon_atlas_core::ui_hosting::MAX_HOSTINGS + 1,
+        component.ui_hostings[0].clone(),
+    );
+    let error = trogon_atlas_core::ui_hosting::validate_values(&count).unwrap_err();
+    assert!(error.to_string().contains("1024 hostings"), "{error}");
+
+    let mut bytes = owner();
+    let Some(entity::Kind::Component(component)) = &mut bytes.kind else {
+        panic!("component")
+    };
+    component.title = "x".repeat(trogon_atlas_core::ui_hosting::MAX_ENCODED_BYTES);
+    assert!(bytes.encoded_len() > trogon_atlas_core::ui_hosting::MAX_ENCODED_BYTES);
+    let error = trogon_atlas_core::ui_hosting::validate_values(&bytes).unwrap_err();
+    assert!(
+        error.to_string().contains("1048576 encoded bytes"),
+        "{error}"
+    );
+}
