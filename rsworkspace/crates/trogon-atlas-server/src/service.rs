@@ -5977,18 +5977,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 return Err(status);
             }
         };
-        // A no-op write (e.g. `put` with content identical to what is
-        // already stored) never gets recorded as a changeset, so a receipt
-        // for it must not point at a changeset id nothing ever persisted.
-        let receipt_changeset_id = if written.wrote {
-            changeset.id.clone()
-        } else {
-            String::new()
-        };
-        if let Some(key) = &claim_key {
-            operation_receipts::settle_applied(&*self.store, key, &receipt_changeset_id).await;
-        }
-
         // A skipped write changed nothing: no side effects, no mirror
         // commit. When it did write, every side effect sees the entity AS
         // STORED (system stamp included) so the git mirror stays
@@ -6009,10 +5997,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             changeset.record_put(kind, &id);
             changeset.validated_by(&put_coverage, &scenario_issues);
         }
-        if let (Some(reason), Some(identity)) = (protect_reason, EntityIdentity::of(kind, &id)) {
-            self.protect_identity(identity, reason, id.version, &mut changeset)
-                .await?;
-        }
+        // The operation settles only once protection has landed too, so a
+        // registry failure leaves the id free for a retry to finish the job.
+        let protected = match (protect_reason, EntityIdentity::of(kind, &id)) {
+            (Some(reason), Some(identity)) => self
+                .protect_identity(identity, reason, id.version, &mut changeset)
+                .await
+                .map(|stored| stored.is_some()),
+            _ => Ok(false),
+        };
+        let changed = written.wrote || matches!(protected, Ok(true));
+        // A no-op write (e.g. `put` with content identical to what is
+        // already stored, and no new protection) never gets recorded as a
+        // changeset, so a receipt for it must not point at a changeset id
+        // nothing ever persisted.
+        let receipt_changeset_id = if changed {
+            changeset.id.clone()
+        } else {
+            String::new()
+        };
         if !changeset.ops.is_empty() {
             self.record_changeset(
                 changeset,
@@ -6039,8 +6042,18 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await;
         }
 
+        if let Err(status) = protected {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            }
+            return Err(status);
+        }
+        if let Some(key) = &claim_key {
+            operation_receipts::settle_applied(&*self.store, key, &receipt_changeset_id).await;
+        }
+
         Ok(Response::new(pb::PutEntityResponse {
-            no_op: !written.wrote,
+            no_op: !changed,
             etag: written.etag,
             entity: Some(written.entity),
             validation: scenario_issues,
@@ -7162,19 +7175,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         referrers_incomplete,
                     );
                     let receipt_changeset_id = changeset.id.clone();
-                    if let Some(key) = &claim_key {
-                        operation_receipts::settle_applied(
-                            &*self.store,
-                            key,
-                            &receipt_changeset_id,
-                        )
-                        .await;
-                    }
                     changeset.record_batch(&metas, &outcomes);
                     changeset.validated_by(&batch_coverage, per_op_validation.iter().flatten());
+                    let mut protected = Ok(());
                     for (identity, reason, version) in protect_requests {
-                        self.protect_identity(identity, reason, version, &mut changeset)
-                            .await?;
+                        if let Err(status) = self
+                            .protect_identity(identity, reason, version, &mut changeset)
+                            .await
+                        {
+                            protected = Err(status);
+                            break;
+                        }
                     }
                     self.record_changeset(
                         changeset,
@@ -7191,6 +7202,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             .await;
                         self.invalidate_snapshot().await;
                     }
+                    // Settled only after every requested protection landed,
+                    // so a registry failure leaves the id free for a retry.
+                    if let Some(key) = &claim_key {
+                        match &protected {
+                            Ok(()) => {
+                                operation_receipts::settle_applied(
+                                    &*self.store,
+                                    key,
+                                    &receipt_changeset_id,
+                                )
+                                .await;
+                            }
+                            Err(status) => {
+                                operation_receipts::settle_for_status(&*self.store, key, status)
+                                    .await;
+                            }
+                        }
+                    }
+                    protected?;
                     Ok(Response::new(pb::BatchMutateResponse {
                         status: pb::batch_mutate_response::Status::Applied as i32,
                         results,
