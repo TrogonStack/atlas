@@ -45,6 +45,13 @@ message CommunicationDeclaration {
 // documented. Members are a curated listing (same pattern as EventModel:
 // flat keyspace stays canonical, the component only points). Grouping is
 // implementation intent and never affects model-semantics validation.
+message UiHosting {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  UIRef ui = 2;
+  CatalogTitle label = 3;
+  CatalogText doc = 4;
+}
+
 message Component {
   trogonatlas.type.v1alpha1.Id id = 1;
   string title = 2;
@@ -55,6 +62,7 @@ message Component {
   trogonatlas.type.v1alpha1.Id supersedes = 7;
   repeated ArchitecturalRelationship relationships = 8;
   repeated CommunicationDeclaration communications = 9;
+  repeated UiHosting ui_hostings = 10;
   MessageClaims message_claims = 11;
   repeated StorageAccessClaim storage_claims = 12;
 }
