@@ -70,14 +70,14 @@ describe('design topology inspector', () => {
       ['Incoming subflow references', /steps\[0\]\.subflow/],
     ] as const) {
       const section = screen.getByRole('heading', { name: title }).closest('section');
-      expect(section).not.toBeNull();
-      const query = within(section!);
+      if (!section) throw new Error(`Missing query section: ${title}`);
+      const query = within(section);
       expect(await query.findByText(marker)).toBeTruthy();
       expect(query.queryByText(/No declarations returned/)).toBeNull();
     }
     const subjectQuery = screen.getByRole('heading', { name: 'Design graphs for exact subject' }).closest('section');
-    expect(subjectQuery).not.toBeNull();
-    expect(await within(subjectQuery!).findByText(/No declarations returned/)).toBeTruthy();
+    if (!subjectQuery) throw new Error('Missing subject query section');
+    expect(await within(subjectQuery).findByText(/No declarations returned/)).toBeTruthy();
   });
   it('recognizes the kind and title and issues exact branch-scoped read queries', async () => {
     const entity = graph();

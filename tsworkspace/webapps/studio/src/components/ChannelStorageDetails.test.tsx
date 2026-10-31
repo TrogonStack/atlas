@@ -191,7 +191,11 @@ it('keeps an empty channel parameter distinct from the following name and value'
   render(<ChannelStorageDetails entity={hub} model={model} onSelect={vi.fn()} />);
   const parameters = screen.getByText('Parameter values').nextElementSibling as HTMLElement;
   const values = within(parameters).getByRole('list');
-  expect(within(values).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['tenant=', 'region=eu']);
+  expect(
+    within(values)
+      .getAllByRole('listitem')
+      .map((item) => item.textContent),
+  ).toEqual(['tenant=', 'region=eu']);
 });
 
 it('keeps READ and WRITE claims distinct, with exact attachment and DataProduct port, and loaded-only incoming rows', () => {

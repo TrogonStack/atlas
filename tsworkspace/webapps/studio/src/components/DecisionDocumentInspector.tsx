@@ -49,7 +49,8 @@ export function Query({ title, load }: { title: string; load: (signal: AbortSign
           <Exact value={result.data.scope} />
           {result.data.scope?.pageReceipt && (
             <p>
-              Checked owners cover this page and the selected Document. The revision identifies the full checked scan.
+              Checked owners cover this page and the selected query context. The revision identifies the full checked
+              scan.
             </p>
           )}
           {!result.data.scope && <p>Checked scope unavailable; complete absence remains unproven.</p>}
@@ -61,7 +62,7 @@ export function Query({ title, load }: { title: string; load: (signal: AbortSign
             </>
           )}
           <Exact value={result.data} />
-          {!result.data.declarations?.length && (
+          {Array.isArray(result.data.declarations) && result.data.declarations.length === 0 && (
             <p>No declarations returned. Interpret this only within the reported checked scope and completeness.</p>
           )}
         </>
