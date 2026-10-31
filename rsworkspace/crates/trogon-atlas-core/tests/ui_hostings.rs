@@ -164,3 +164,31 @@ fn hosting_reference_lifecycle_preserves_occurrence_provenance(
     assert!(responsibility::resolve_subject(&subject, &changed).is_err());
     Ok(())
 }
+
+#[test]
+fn source_cannot_create_or_clear_native_hostings() {
+    use trogon_atlas_core::source_integration::{validate_create_ownership, validate_ownership};
+    use trogon_atlas_proto::{SourceFieldOwnership, SourceOwnedField, SourceOwnedFields, SourceWholeOwnerOwnership, source_field_ownership::Policy};
+    let title = SourceFieldOwnership { policy: Some(Policy::Fields(SourceOwnedFields { fields: vec![SourceOwnedField::Title as i32] })) };
+    let whole = SourceFieldOwnership { policy: Some(Policy::WholeOwner(SourceWholeOwnerOwnership {})) };
+    let entity = owner();
+    assert!(validate_create_ownership(&entity, &title).is_err(), "title-only creates copy all incoming content");
+    assert!(validate_create_ownership(&entity, &whole).is_err());
+    assert!(validate_ownership(&entity, &whole).is_err());
+    assert!(validate_ownership(&entity, &title).is_ok());
+    use trogon_atlas_core::source_integration::{plan_merge, RunBudget, profile_budgets};
+    let mut empty = entity.clone();
+    let Some(entity::Kind::Component(component)) = empty.kind.as_mut() else { panic!("component") };
+    component.ui_hostings.clear();
+    let mut budget = RunBudget::new(profile_budgets()).unwrap();
+    assert!(plan_merge(&empty, &empty, &empty, &entity, &whole, &mut budget).is_err());
+    let mut incoming = empty.clone();
+    let Some(entity::Kind::Component(component)) = incoming.kind.as_mut() else { panic!("component") };
+    component.title = "Updated".into();
+    let mut budget = RunBudget::new(profile_budgets()).unwrap();
+    let plan = plan_merge(&empty, &empty, &incoming, &entity, &title, &mut budget).unwrap();
+    let Some(entity::Kind::Component(component)) = &plan.proposed.kind else { panic!("component") };
+    let Some(entity::Kind::Component(original)) = &entity.kind else { panic!("component") };
+    assert_eq!(component.ui_hostings, original.ui_hostings);
+    assert_eq!(component.title, "Updated");
+}
