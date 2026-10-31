@@ -1642,6 +1642,156 @@ pub struct ConsequenceDelta {
     #[prost(string, tag="7")]
     pub after_snapshot_id: ::prost::alloc::string::String,
 }
+// ---------- Change assessment ------------------------------------------------
+//
+// The server's advisory verdict on landing a branch, computed from the merge
+// dry run's own evidence by server-owned rules. Advisory only: MergeBranch
+// does not consult it, and no caller-supplied threshold changes it. A verdict
+// is only meaningful against the inputs in `binding`; when any of them moves,
+// assess again. See docs/explanation/change-assessment.md.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChangeAssessment {
+    #[prost(enumeration="change_assessment::Verdict", tag="1")]
+    pub verdict: i32,
+    /// Every reason that applies, in enum order. Empty only for VERDICT_LAND.
+    #[prost(enumeration="change_assessment::Reason", repeated, tag="2")]
+    pub reasons: ::prost::alloc::vec::Vec<i32>,
+    /// The inputs the verdict was computed from.
+    #[prost(message, optional, tag="3")]
+    pub binding: ::core::option::Option<AssessmentBinding>,
+}
+/// Nested message and enum types in `ChangeAssessment`.
+pub mod change_assessment {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Verdict {
+        Unspecified = 0,
+        /// Every check the server runs completed and the landing introduces,
+        /// worsens and leaves unknown no finding.
+        Land = 1,
+        /// The landing is admissible, but a person should look first; see
+        /// `reasons`.
+        NeedsReview = 2,
+        /// The merge would be refused as it stands; see `reasons`.
+        Reject = 3,
+    }
+    impl Verdict {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "VERDICT_UNSPECIFIED",
+                Self::Land => "VERDICT_LAND",
+                Self::NeedsReview => "VERDICT_NEEDS_REVIEW",
+                Self::Reject => "VERDICT_REJECT",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "VERDICT_UNSPECIFIED" => Some(Self::Unspecified),
+                "VERDICT_LAND" => Some(Self::Land),
+                "VERDICT_NEEDS_REVIEW" => Some(Self::NeedsReview),
+                "VERDICT_REJECT" => Some(Self::Reject),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Reason {
+        Unspecified = 0,
+        /// The branch conflicts with baseline. Rejects.
+        Conflicts = 1,
+        /// The landed world fails a blocking validation check. Rejects.
+        BlockingFindings = 2,
+        /// The landing introduces a finding.
+        FindingsIntroduced = 3,
+        /// The landing raises the severity of an existing finding.
+        FindingsWorsened = 4,
+        /// A finding appeared or disappeared where the scan cannot vouch for it.
+        FindingsUnknown = 5,
+        /// No consequence delta could be computed.
+        DeltaMissing = 6,
+        /// The consequence delta did not cover every applicable suite.
+        DeltaIncomplete = 7,
+        /// An invariant in scope was not evaluated or is hidden from the caller.
+        InvariantsIncomplete = 8,
+        /// A world the verdict was computed over has no snapshot id, so the
+        /// verdict cannot be bound to it.
+        Unbound = 9,
+    }
+    impl Reason {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::Conflicts => "REASON_CONFLICTS",
+                Self::BlockingFindings => "REASON_BLOCKING_FINDINGS",
+                Self::FindingsIntroduced => "REASON_FINDINGS_INTRODUCED",
+                Self::FindingsWorsened => "REASON_FINDINGS_WORSENED",
+                Self::FindingsUnknown => "REASON_FINDINGS_UNKNOWN",
+                Self::DeltaMissing => "REASON_DELTA_MISSING",
+                Self::DeltaIncomplete => "REASON_DELTA_INCOMPLETE",
+                Self::InvariantsIncomplete => "REASON_INVARIANTS_INCOMPLETE",
+                Self::Unbound => "REASON_UNBOUND",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
+                "REASON_CONFLICTS" => Some(Self::Conflicts),
+                "REASON_BLOCKING_FINDINGS" => Some(Self::BlockingFindings),
+                "REASON_FINDINGS_INTRODUCED" => Some(Self::FindingsIntroduced),
+                "REASON_FINDINGS_WORSENED" => Some(Self::FindingsWorsened),
+                "REASON_FINDINGS_UNKNOWN" => Some(Self::FindingsUnknown),
+                "REASON_DELTA_MISSING" => Some(Self::DeltaMissing),
+                "REASON_DELTA_INCOMPLETE" => Some(Self::DeltaIncomplete),
+                "REASON_INVARIANTS_INCOMPLETE" => Some(Self::InvariantsIncomplete),
+                "REASON_UNBOUND" => Some(Self::Unbound),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssessmentBinding {
+    /// The branch assessed.
+    #[prost(string, tag="1")]
+    pub branch: ::prost::alloc::string::String,
+    /// Snapshot id of the baseline the landing was compared against. Empty
+    /// when unbound.
+    #[prost(string, tag="2")]
+    pub baseline_snapshot_id: ::prost::alloc::string::String,
+    /// Snapshot id of the world the landing would produce. Empty when unbound.
+    #[prost(string, tag="3")]
+    pub landed_snapshot_id: ::prost::alloc::string::String,
+    /// Each landable entry with the baseline etag it was planned against. An
+    /// empty etag means the entry adds an entity baseline does not have.
+    #[prost(message, repeated, tag="4")]
+    pub entries: ::prost::alloc::vec::Vec<AssessmentPin>,
+    /// The caller's read scope: "*" for an unrestricted caller, otherwise
+    /// the owner boundary it is held to.
+    #[prost(string, tag="5")]
+    pub scope: ::prost::alloc::string::String,
+    /// Revision of the rule catalogue and assessment rules the verdict used.
+    #[prost(string, tag="6")]
+    pub catalogue_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AssessmentPin {
+    #[prost(message, optional, tag="1")]
+    pub r#ref: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub baseline_etag: ::prost::alloc::string::String,
+}
 // Tenant type libraries are stored as proto source text and compiled on
 // demand. These messages let a client check a library and look up the
 // compiled types before it writes anything that depends on them. Every RPC
@@ -4676,6 +4826,10 @@ pub struct MergeBranchResponse {
     /// the scope declares none. A refused write returns a typed error instead.
     #[prost(message, optional, tag="11")]
     pub invariant_check: ::core::option::Option<InvariantCheck>,
+    /// The server's advisory verdict on landing the branch. Set only on
+    /// `dry_run`; a real merge never consults it.
+    #[prost(message, optional, tag="12")]
+    pub change_assessment: ::core::option::Option<ChangeAssessment>,
 }
 /// Nested message and enum types in `MergeBranchResponse`.
 pub mod merge_branch_response {
