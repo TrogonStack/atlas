@@ -110,7 +110,7 @@ async fn unreadable_catalog_owner_cannot_be_reported_as_complete_empty_discovery
     let query = || {
         Request::new(pb::ListIncomingDocumentDeclarationsRequest {
             document: Some(target.clone()),
-            page_size: 1,
+            page_size: Some(1),
             ..Default::default()
         })
     };

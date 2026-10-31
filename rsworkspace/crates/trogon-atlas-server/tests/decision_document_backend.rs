@@ -3467,7 +3467,7 @@ async fn assert_document_authorization_fault(code: Code, message: &str) {
     let owner = put(&mut client, owner, None).await.entity.unwrap();
     let query = || pb::ListIncomingDocumentDeclarationsRequest {
         document: Some(selection.clone()),
-        page_size: 1,
+        page_size: Some(1),
         ..Default::default()
     };
     let healthy = client

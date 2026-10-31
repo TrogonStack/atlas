@@ -262,7 +262,7 @@ async fn incoming_document_page_token_binds_selection_and_paginates() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(whole.clone()),
-                page_size: 1,
+                page_size: Some(1),
                 ..Default::default()
             },
             None,
@@ -277,7 +277,7 @@ async fn incoming_document_page_token_binds_selection_and_paginates() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(whole.clone()),
-                page_size: 1,
+                page_size: Some(1),
                 page_token: continue_token,
                 ..Default::default()
             },
@@ -299,7 +299,7 @@ async fn incoming_document_page_token_binds_selection_and_paginates() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(mismatched),
-                page_size: 1,
+                page_size: Some(1),
                 page_token: page1.next_page_token.clone(),
                 ..Default::default()
             },
@@ -315,7 +315,7 @@ async fn incoming_document_page_token_binds_selection_and_paginates() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(whole.clone()),
-                page_size: 1,
+                page_size: Some(1),
                 page_token: bad_token,
                 ..Default::default()
             },
@@ -340,7 +340,7 @@ async fn incoming_document_page_token_binds_selection_and_paginates() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(whole),
-                page_size: 1,
+                page_size: Some(1),
                 page_token: forged,
                 ..Default::default()
             },
@@ -716,7 +716,7 @@ async fn incoming_document_pages_order_versions_numerically() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(whole.clone()),
-                page_size: 1,
+                page_size: Some(1),
                 ..Default::default()
             },
             None,
@@ -745,7 +745,7 @@ async fn incoming_document_pages_order_versions_numerically() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(whole.clone()),
-                page_size: 1,
+                page_size: Some(1),
                 page_token: continue_token,
                 ..Default::default()
             },
@@ -767,7 +767,7 @@ async fn incoming_document_pages_order_versions_numerically() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(mismatched),
-                page_size: 1,
+                page_size: Some(1),
                 page_token: page1.next_page_token.clone(),
                 ..Default::default()
             },
@@ -783,7 +783,7 @@ async fn incoming_document_pages_order_versions_numerically() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(whole.clone()),
-                page_size: 1,
+                page_size: Some(1),
                 page_token: bad_token,
                 ..Default::default()
             },
@@ -808,7 +808,7 @@ async fn incoming_document_pages_order_versions_numerically() {
         .list_incoming_document_declarations(request(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(whole),
-                page_size: 1,
+                page_size: Some(1),
                 page_token: forged,
                 ..Default::default()
             },
