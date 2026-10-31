@@ -54,10 +54,37 @@ spec:
   anchors: [{fragment: {value: Delivery}, label: {value: Delivery}}]
 ---
 apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Person
+metadata: {namespace: catalog-surfaces, name: maker}
+spec:
+  title: {value: Historical maker}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Team
+metadata: {namespace: catalog-surfaces, name: makers}
+spec:
+  title: {value: Historical makers}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Decision
+metadata: {namespace: catalog-surfaces, name: original}
+spec:
+  title: {value: Original choice}
+  subjects: [{subject: {entity: {kind: event, id: receipt}}}]
+  status: DECISION_STATUS_PROPOSED
+  context: {value: Original question}
+  rationale: {value: Original reasoning}
+  options: [{title: {value: Retain}, description: {value: Retain note}}]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
 kind: Decision
 metadata: {namespace: catalog-surfaces, name: choice}
 spec:
   title: {value: Delivery choice}
+  authoredOn: {value: 2024-02-29}
+  decidedOn: {value: 2024-03-01}
+  decisionMakers: [{person: maker}, {team: makers}]
+  amends: [{decision: original, doc: {value: Clarifies original}}]
   subjects: [{subject: {entity: {kind: event, id: receipt}}}]
   status: DECISION_STATUS_PROPOSED
   context: {value: Delivery question}
@@ -96,6 +123,10 @@ async fn native_catalog_cli_apply_get_query_and_unchanged_reapply() {
             serde_json::json!({"subject":subject}),
         ),
         (
+            "list-decision-amendments",
+            serde_json::json!({"decision":{"id":id("original")},"direction":"DECISION_AMENDMENT_DIRECTION_INCOMING","pageSize":1}),
+        ),
+        (
             "get-decision-detail",
             serde_json::json!({"decision":{"id":id("choice")},"followReplacement":false}),
         ),
@@ -114,6 +145,24 @@ async fn native_catalog_cli_apply_get_query_and_unchanged_reapply() {
     ] {
         let response = cli(&endpoint, &[command, "--request", &request.to_string()]);
         assert!(response.contains("scope"), "{command}: {response}");
+        if command == "get-decision-detail" {
+            let json: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                json["entity"]["decision"]["authoredOn"]["value"],
+                "2024-02-29"
+            );
+            assert_eq!(
+                json["entity"]["decision"]["decisionMakers"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+            assert!(json["entity"]["decision"]["amends"][0]["connectionId"]["value"].is_string());
+        }
+        if command == "list-decision-amendments" {
+            assert!(response.contains("Clarifies original"));
+        }
     }
 }
 #[test]

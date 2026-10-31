@@ -73,10 +73,37 @@ spec:
   anchors: [{fragment: {value: Delivery}, label: {value: Delivery}}]
 ---
 apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Person
+metadata: {namespace: catalog-surfaces, name: maker}
+spec:
+  title: {value: Historical maker}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Team
+metadata: {namespace: catalog-surfaces, name: makers}
+spec:
+  title: {value: Historical makers}
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
+kind: Decision
+metadata: {namespace: catalog-surfaces, name: original}
+spec:
+  title: {value: Original choice}
+  subjects: [{subject: {entity: {kind: event, id: receipt}}}]
+  status: DECISION_STATUS_PROPOSED
+  context: {value: Original question}
+  rationale: {value: Original reasoning}
+  options: [{title: {value: Retain}, description: {value: Retain note}}]
+---
+apiVersion: eventmodel.atlas.trogonstack.com/v1alpha1
 kind: Decision
 metadata: {namespace: catalog-surfaces, name: choice}
 spec:
   title: {value: Delivery choice}
+  authoredOn: {value: 2024-02-29}
+  decidedOn: {value: 2024-03-01}
+  decisionMakers: [{person: maker}, {team: makers}]
+  amends: [{decision: original, doc: {value: Clarifies original}}]
   subjects: [{subject: {entity: {kind: event, id: receipt}}}]
   status: DECISION_STATUS_PROPOSED
   context: {value: Delivery question}
@@ -129,6 +156,10 @@ async fn native_catalog_mcp_create_inspect_query_and_reapply() {
             serde_json::json!({"subject":subject}),
         ),
         (
+            "list_decision_amendments",
+            serde_json::json!({"decision":{"id":id("original")},"direction":"DECISION_AMENDMENT_DIRECTION_INCOMING","pageSize":1}),
+        ),
+        (
             "get_decision_detail",
             serde_json::json!({"decision":{"id":id("choice")},"followReplacement":false}),
         ),
@@ -153,7 +184,25 @@ async fn native_catalog_mcp_create_inspect_query_and_reapply() {
             .await
             .unwrap();
         assert!(!result.is_error.unwrap_or(false), "{tool}: {result:?}");
-        assert!(call_tool_result_text(&result)["scope"].is_object());
+        let json = call_tool_result_text(&result);
+        assert!(json["scope"].is_object());
+        if tool == "get_decision_detail" {
+            assert_eq!(
+                json["entity"]["decision"]["authoredOn"]["value"],
+                "2024-02-29"
+            );
+            assert_eq!(
+                json["entity"]["decision"]["decisionMakers"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2
+            );
+            assert!(json["entity"]["decision"]["amends"][0]["connectionId"]["value"].is_string());
+        }
+        if tool == "list_decision_amendments" {
+            assert!(json["declarations"][0]["amendment"]["connectionId"]["value"].is_string());
+        }
     }
     let malformed = client
         .call_tool(

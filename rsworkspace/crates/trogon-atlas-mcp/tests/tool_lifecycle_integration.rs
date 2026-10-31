@@ -741,3 +741,113 @@ spec: {{ title: Shop }}
 
     mcp_service.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_schema_json_preserves_business_presence_and_exact_version() {
+    let (client, mcp_service, _grpc) = start_mcp_client().await;
+    let namespace = "mcp-business";
+    let version = 9_007_199_254_740_993u64;
+    let product = serde_json::json!({
+        "schema": {
+            "id": {"namespace": namespace, "slug": "product", "version": "1"},
+            "title": "Product",
+            "fields": [{"name": "sku", "type": {"string": {}}}]
+        }
+    });
+    let order = serde_json::json!({
+        "schema": {
+            "id": {"namespace": namespace, "slug": "order", "version": version.to_string()},
+            "title": "Order",
+            "aggregateRoot": false,
+            "fields": [
+                {"name": "customer", "type": {"object": {"fields": [
+                    {"name": "id", "type": {"string": {}}}
+                ]}}},
+                {"name": "lines", "repeated": true, "type": {"object": {"fields": [
+                    {"name": "sku", "type": {"string": {}}}
+                ]}}},
+                {"name": "product_ref", "type": {"ref": {"ref": {"schema": {"id": {
+                    "namespace": namespace, "slug": "product", "version": "1"
+                }}}}}}
+            ],
+            "identifiers": [{
+                "property": {"segments": [
+                    {"name": "customer", "repeated": false},
+                    {"name": "id", "repeated": false}
+                ]},
+                "role": "BUSINESS_IDENTIFIER_ROLE_PRIMARY"
+            }],
+            "propertyRelationships": [{
+                "source": {"segments": [{"name": "product_ref", "repeated": false}]},
+                "targetEntity": {"id": {"namespace": namespace, "slug": "product", "version": "1"}},
+                "targetProperty": {"segments": [{"name": "sku", "repeated": false}]},
+                "label": {"value": "hasMany"}
+            }]
+        }
+    });
+    for entity in [product, order] {
+        let put = client
+            .call_tool(
+                rmcp::model::CallToolRequestParams::new("put_entity_json").with_arguments(
+                    args_obj(&[("entity_json", serde_json::json!(entity.to_string()))]),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(!put.is_error.unwrap_or(false), "{put:?}");
+    }
+    let got = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("get_entity_json").with_arguments(args_obj(&[
+                ("kind", serde_json::json!("schema")),
+                ("namespace", serde_json::json!(namespace)),
+                ("slug", serde_json::json!("order")),
+                ("version", serde_json::json!(version)),
+            ])),
+        )
+        .await
+        .unwrap();
+    assert!(!got.is_error.unwrap_or(false), "{got:?}");
+    let body = call_tool_result_text(&got);
+    assert_eq!(body["json"]["schema"]["aggregateRoot"], false);
+    let raw = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("get_entity").with_arguments(args_obj(&[
+                ("kind", serde_json::json!("schema")),
+                ("namespace", serde_json::json!(namespace)),
+                ("slug", serde_json::json!("order")),
+                ("version", serde_json::json!(version)),
+            ])),
+        )
+        .await
+        .unwrap();
+    assert!(!raw.is_error.unwrap_or(false), "{raw:?}");
+    let decoded = pb::GetEntityResponse::decode(
+        base64_decode(
+            call_tool_result_text(&raw)["binpb_base64"]
+                .as_str()
+                .unwrap(),
+        )
+        .as_slice(),
+    )
+    .unwrap();
+    let entity = decoded.entity.unwrap();
+    let pb::entity::Kind::Schema(schema) = entity.kind.unwrap() else {
+        panic!("schema");
+    };
+    assert_eq!(schema.id.unwrap().version, version);
+    assert_eq!(schema.aggregate_root, Some(false));
+    assert!(!schema.identifiers[0].property.as_ref().unwrap().segments[0].repeated);
+    assert!(schema.identifiers[0].connection_id.is_some());
+    assert_eq!(
+        schema.property_relationships[0]
+            .label
+            .as_ref()
+            .unwrap()
+            .value,
+        "hasMany"
+    );
+    assert!(schema.property_relationships[0].connection_id.is_some());
+    assert_ne!(entity.system.unwrap().uid, "");
+    mcp_service.cancel().await.unwrap();
+}
