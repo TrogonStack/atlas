@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import protobuf from 'protobufjs';
 import { afterEach, expect, it, vi } from 'vitest';
 import { buildModel, entityKey, type Entity } from '@/lib/model';
@@ -182,6 +182,16 @@ it('keeps exact link kinds, equal siblings, parameter values and inert docs with
   expect(select).toHaveBeenCalledWith(entityKey('channel', id('inner')));
   expect(screen.getByText(/do not establish routing, delivery or runtime behavior/)).toBeDefined();
   expect(model.slices).toHaveLength(0);
+});
+
+it('keeps an empty channel parameter distinct from the following name and value', () => {
+  const model = fixture();
+  const hub = model.entities[0];
+  hub.raw.links = [{ ...link('parameters'), parameterValues: { tenant: '', region: 'eu' } }];
+  render(<ChannelStorageDetails entity={hub} model={model} onSelect={vi.fn()} />);
+  const parameters = screen.getByText('Parameter values').nextElementSibling as HTMLElement;
+  const values = within(parameters).getByRole('list');
+  expect(within(values).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['tenant=', 'region=eu']);
 });
 
 it('keeps READ and WRITE claims distinct, with exact attachment and DataProduct port, and loaded-only incoming rows', () => {

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Annotation } from '@/lib/model';
 import {
@@ -86,6 +86,36 @@ describe('AgentMetadataDetails', () => {
     expect(tools.textContent?.indexOf('alpha')).toBeLessThan(tools.textContent?.indexOf('beta') ?? 0);
     const link = screen.getByRole('link', { name: /documentation/i });
     expect(link.getAttribute('href')).toBe('https://example.com/beta');
+  });
+
+  it.each([
+    ['distinct pairs containing delimiters', ['lookup:agent', 'http'], ['lookup', 'agent:http']],
+    ['icon-only differences in inspected rows', ['lookup', 'http'], ['lookup', 'http']],
+  ] as const)('keeps separate tool rows with %s through removal and reordering', (_label, firstPair, secondPair) => {
+    const tool = (pair: readonly string[], icon: string) => ({
+      name: { value: pair[0] },
+      type: { value: pair[1] },
+      icon: { value: icon },
+    });
+    const first = tool(firstPair, 'search');
+    const second = tool(secondPair, 'info');
+    const stable = tool(['stable', 'builtin'], 'check');
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const { rerender } = render(
+        <AgentAnnotationDetails annotation={ann('AgentAnnotation', { tools: [first, second, stable] })} />,
+      );
+      expect(within(screen.getByTestId('agent-tools')).getAllByRole('listitem')).toHaveLength(3);
+      rerender(<AgentAnnotationDetails annotation={ann('AgentAnnotation', { tools: [stable, second] })} />);
+      const rows = within(screen.getByTestId('agent-tools')).getAllByRole('listitem');
+      expect(rows).toHaveLength(2);
+      expect(within(rows[0]).getByText('stable')).toBeDefined();
+      expect(within(rows[1]).getByTitle('info')).toBeDefined();
+      expect(screen.queryByTitle('search')).toBeNull();
+      expect(errors.mock.calls.some(([message]) => String(message).includes('same key'))).toBe(false);
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it('shows projection issues for malformed tool rows', () => {
