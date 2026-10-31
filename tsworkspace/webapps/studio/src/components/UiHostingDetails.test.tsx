@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { buildModel, entityKey } from '@/lib/model';
+import { buildModel } from '@/lib/model';
 import { hasUnambiguousOwnerIdentities, responsibilitySubjects } from '@/lib/responsibility';
 import { Inspector } from './Inspector';
 
@@ -25,9 +25,9 @@ afterEach(cleanup);
 
 it('shows native hosting occurrence identities and inert authored wording without inferring interactions', () => {
   const model = fixture();
-  render(<Inspector model={model} selectedKey={entityKey('component', id('portal'))} onSelect={vi.fn()} />);
+  render(<Inspector model={model} entity={model.entities[0]} onClose={vi.fn()} onSelect={vi.fn()} />);
   expect(screen.getByRole('heading', { name: 'UI hosting and human interaction' })).toBeTruthy();
-  expect(screen.getByText('component-uid')).toBeTruthy();
+  expect(screen.getAllByText('component-uid').length).toBeGreaterThanOrEqual(2);
   expect(screen.getByText('hosting-a')).toBeTruthy();
   expect(screen.getByText('hosting-b')).toBeTruthy();
   expect(screen.getAllByText('Review portal 🦜')).toHaveLength(2);
@@ -53,7 +53,7 @@ it('rejects incomplete hosting identities alongside existing roles', () => {
 
 it('does not infer a hosting from a raw Component member', () => {
   const model = buildModel([{ component: { id: id('portal'), title: 'Portal', members: [{ kind: 'ENTITY_KIND_UI', id: id('review') }] }, system: { uid: 'component-uid' } }]);
-  render(<Inspector model={model} selectedKey={model.entities[0].key} onSelect={vi.fn()} />);
+  render(<Inspector model={model} entity={model.entities[0]} onClose={vi.fn()} onSelect={vi.fn()} />);
   expect(screen.getByText('No UI hosting assertions in this loaded owner.')).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Check selected interaction' })).toBeNull();
 });
