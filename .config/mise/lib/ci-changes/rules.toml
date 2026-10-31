@@ -32,6 +32,11 @@ areas = ["rust"]
 paths = ["docs/reference/mcp-tools.md"]
 
 [[rules]]
+reason = "embeds the MCP client example and is checked by its tests"
+areas = ["rust"]
+paths = ["docs/how-to/connect-an-mcp-client.md"]
+
+[[rules]]
 reason = "Rust workspace and the fixtures its tests read"
 areas = ["rust"]
 paths = ["rsworkspace/", "examples/", ".config/mise/tasks/rust/"]
