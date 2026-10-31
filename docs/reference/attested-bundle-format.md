@@ -119,8 +119,8 @@ not.
 
 ## Verification
 
-`trogon-atlas verify` accepts a bundle when all of these hold, and reports
-the first that does not:
+`trogon-atlas verify` and the `verify_attested_bundle` MCP tool accept a
+bundle when all of these hold, and report the first that does not:
 
 - The saved JSON parses with no unknown field.
 - `format` is one of the identifiers above, and `signature` is absent under

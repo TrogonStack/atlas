@@ -35,6 +35,7 @@ Solve a specific problem:
 Look up exact behavior:
 
 - [Attested bundle format](reference/attested-bundle-format.md)
+- [Attested export MCP tools](reference/attested-export-mcp-tools.md)
 - [Failure reasons](reference/failure-reasons.md)
 - [Finding evidence](reference/finding-evidence.md)
 - [Connection identity](reference/connection-identity.md)

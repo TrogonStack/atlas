@@ -196,5 +196,7 @@ Key setup is in [sign attested bundles](../how-to/sign-attested-bundles.md).
 - **Not proof the model is correct.** It proves which findings a given
   catalogue produced for a given state. Findings with Error severity are
   still in the bundle and still errors.
-- **Not available through MCP yet.** The RPC and the CLI are the supported
-  surfaces.
+- **Not an authenticity check through MCP.** The MCP tools export and
+  verify bundles, but `verify_attested_bundle` holds no trusted keys, so it
+  reports a signature as present and not checked. Authenticate a signature
+  with the CLI and `--trusted-key`.

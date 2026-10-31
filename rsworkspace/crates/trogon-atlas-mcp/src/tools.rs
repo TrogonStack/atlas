@@ -1310,3 +1310,36 @@ pub struct SourceRequestParams {
     )]
     pub request_json: JsonPayload,
 }
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportAttestedModelParams {
+    pub namespace: String,
+    pub slug: String,
+    #[schemars(description = "EventModel version (>0). Call get_latest_version for the newest.")]
+    pub version: u64,
+    #[schemars(
+        description = "Changeset id from list_changesets. Describes baseline as it stood right after that changeset landed instead of its current state. Not allowed with a branch."
+    )]
+    #[serde(default)]
+    pub as_of_changeset: Option<String>,
+    #[schemars(
+        description = "Return a bundle that does not cover its whole scope, marked incomplete with its reasons and unresolved entities, instead of refusing with EXPORT_INCOMPLETE. Defaults to false."
+    )]
+    #[serde(default)]
+    pub allow_incomplete: bool,
+    #[schemars(
+        description = "Include the sealed bundle as proto3 JSON in bundle_json, the input verify_attested_bundle takes. Off by default because a bundle carries every manifest and finding; a bundle over 4 MiB is left out and bundle_omitted says so."
+    )]
+    #[serde(default)]
+    pub include_bundle: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyAttestedBundleParams {
+    #[schemars(
+        description = "The bundle's proto3 JSON, as export_attested_model returns in bundle_json or trogon-atlas export-attested saves. At most 4 MiB."
+    )]
+    pub bundle_json: String,
+}
