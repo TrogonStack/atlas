@@ -3448,6 +3448,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .map(Response::new)
     }
 
+    async fn inspect_human_interaction(
+        &self,
+        _req: Request<pb::InspectHumanInteractionRequest>,
+    ) -> Result<Response<pb::InspectHumanInteractionResponse>, Status> {
+        Err(Status::unimplemented("human interaction inspection is not implemented"))
+    }
+
     async fn get_design_graph_detail(
         &self,
         req: Request<pb::GetDesignGraphDetailRequest>,

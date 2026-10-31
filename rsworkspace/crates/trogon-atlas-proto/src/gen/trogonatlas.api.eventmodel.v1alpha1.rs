@@ -1196,6 +1196,133 @@ impl BusinessPropertyReferenceStatus {
         }
     }
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HumanIssuanceSelection {
+    #[prost(message, optional, tag="1")]
+    pub persona: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+    #[prost(message, optional, tag="2")]
+    pub ui: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+    #[prost(message, optional, tag="3")]
+    pub command: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HumanDisplaySelection {
+    #[prost(message, optional, tag="1")]
+    pub persona: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+    #[prost(message, optional, tag="2")]
+    pub ui: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+    #[prost(message, optional, tag="3")]
+    pub source_read_model: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InspectHumanInteractionRequest {
+    #[prost(message, optional, tag="1")]
+    pub hosting: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+    #[prost(oneof="inspect_human_interaction_request::Path", tags="2, 3")]
+    pub path: ::core::option::Option<inspect_human_interaction_request::Path>,
+}
+/// Nested message and enum types in `InspectHumanInteractionRequest`.
+pub mod inspect_human_interaction_request {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Path {
+        #[prost(message, tag="2")]
+        Issuance(super::HumanIssuanceSelection),
+        #[prost(message, tag="3")]
+        Display(super::HumanDisplaySelection),
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HumanInteractionCheckedEdge {
+    #[prost(enumeration="HumanInteractionRole", tag="1")]
+    pub role: i32,
+    #[prost(message, optional, tag="2")]
+    pub selection: ::core::option::Option<super::super::super::eventmodel::v1alpha1::ConnectionRef>,
+    #[prost(string, tag="3")]
+    pub field: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub target: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(enumeration="CatalogResolutionState", tag="5")]
+    pub state: i32,
+    #[prost(message, optional, tag="6")]
+    pub checked_target: ::core::option::Option<CatalogCheckedOwner>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InspectHumanInteractionResponse {
+    #[prost(message, optional, tag="1")]
+    pub request: ::core::option::Option<InspectHumanInteractionRequest>,
+    #[prost(enumeration="CatalogResolutionState", tag="2")]
+    pub state: i32,
+    #[prost(message, repeated, tag="3")]
+    pub edges: ::prost::alloc::vec::Vec<HumanInteractionCheckedEdge>,
+    #[prost(message, optional, tag="4")]
+    pub scope: ::core::option::Option<CatalogCheckedScope>,
+    #[prost(enumeration="HumanInteractionConsistency", tag="5")]
+    pub consistency: i32,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum HumanInteractionRole {
+    Unspecified = 0,
+    HostedUi = 1,
+    Persona = 2,
+    SliceUi = 3,
+    Command = 4,
+    ReadModel = 5,
+}
+impl HumanInteractionRole {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "HUMAN_INTERACTION_ROLE_UNSPECIFIED",
+            Self::HostedUi => "HUMAN_INTERACTION_ROLE_HOSTED_UI",
+            Self::Persona => "HUMAN_INTERACTION_ROLE_PERSONA",
+            Self::SliceUi => "HUMAN_INTERACTION_ROLE_SLICE_UI",
+            Self::Command => "HUMAN_INTERACTION_ROLE_COMMAND",
+            Self::ReadModel => "HUMAN_INTERACTION_ROLE_READ_MODEL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "HUMAN_INTERACTION_ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+            "HUMAN_INTERACTION_ROLE_HOSTED_UI" => Some(Self::HostedUi),
+            "HUMAN_INTERACTION_ROLE_PERSONA" => Some(Self::Persona),
+            "HUMAN_INTERACTION_ROLE_SLICE_UI" => Some(Self::SliceUi),
+            "HUMAN_INTERACTION_ROLE_COMMAND" => Some(Self::Command),
+            "HUMAN_INTERACTION_ROLE_READ_MODEL" => Some(Self::ReadModel),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum HumanInteractionConsistency {
+    Unspecified = 0,
+    PerOwnerCheckedReadSet = 1,
+}
+impl HumanInteractionConsistency {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "HUMAN_INTERACTION_CONSISTENCY_UNSPECIFIED",
+            Self::PerOwnerCheckedReadSet => "HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "HUMAN_INTERACTION_CONSISTENCY_UNSPECIFIED" => Some(Self::Unspecified),
+            "HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET" => Some(Self::PerOwnerCheckedReadSet),
+            _ => None,
+        }
+    }
+}
 // ---------- Denormalized projections (the "fast map" view) -------------------
 //
 // A projection returns a focal entity plus every entity reachable from it
