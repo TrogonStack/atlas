@@ -166,8 +166,10 @@ pub struct Description {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DocumentContentDescription {
-    pub media_type: String,
-    pub sha256: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
     pub filename: Option<String>,
 }
 
@@ -272,24 +274,25 @@ pub fn describe(
         fields,
         metadata,
         document_content: match &entity.kind {
-            Some(pb::entity::Kind::Document(document)) => match &document.body {
-                Some(pb::document::Body::RetainedContent(content)) => {
-                    Some(DocumentContentDescription {
-                        media_type: content
-                            .media_type
-                            .as_ref()
-                            .map(|v| v.value.clone())
-                            .unwrap_or_default(),
-                        sha256: content
-                            .digest
-                            .as_ref()
-                            .map(|v| v.sha256.clone())
-                            .unwrap_or_default(),
+            Some(pb::entity::Kind::Document(document)) => {
+                let retained = match &document.body {
+                    Some(pb::document::Body::Retained(content)) => {
+                        Some((content.media_type.as_ref(), content.digest.as_ref()))
+                    }
+                    Some(pb::document::Body::RetainedContent(content)) => {
+                        Some((content.media_type.as_ref(), content.digest.as_ref()))
+                    }
+                    _ => None,
+                };
+                (retained.is_some() || document.filename.is_some()).then(|| {
+                    let (media_type, digest) = retained.unwrap_or_default();
+                    DocumentContentDescription {
+                        media_type: media_type.map(|v| v.value.clone()),
+                        sha256: digest.map(|v| v.sha256.clone()),
                         filename: document.filename.as_ref().map(|v| v.value.clone()),
-                    })
-                }
-                _ => None,
-            },
+                    }
+                })
+            }
             _ => None,
         },
         outgoing: outgoing
@@ -309,8 +312,12 @@ pub fn render_description(d: &Description) -> String {
         let _ = writeln!(out, "Metadata: {annotation}");
     }
     if let Some(content) = &d.document_content {
-        let _ = writeln!(out, "Media type: {}", content.media_type);
-        let _ = writeln!(out, "SHA256: {}", content.sha256);
+        if let Some(media_type) = &content.media_type {
+            let _ = writeln!(out, "Media type: {media_type}");
+        }
+        if let Some(sha256) = &content.sha256 {
+            let _ = writeln!(out, "SHA256: {sha256}");
+        }
         if let Some(filename) = &content.filename {
             let _ = writeln!(out, "Filename: {filename}");
         }
