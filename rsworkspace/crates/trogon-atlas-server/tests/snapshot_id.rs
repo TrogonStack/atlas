@@ -338,3 +338,72 @@ async fn identity_survives_delete_and_recreate() {
         "a new uid is provenance, not content"
     );
 }
+
+/// The response names the scope the id covers, normalized, so two callers
+/// can tell whether their ids are comparable before comparing them.
+#[tokio::test(flavor = "multi_thread")]
+async fn response_reports_the_normalized_scope_and_format() {
+    let mut c = client(&start_server().await).await;
+    let (a, b) = ("snapid-envelope-a", "snapid-envelope-b");
+
+    let messy = c
+        .get_snapshot_id(pb::GetSnapshotIdRequest {
+            namespaces: vec![b.into(), a.into(), b.into()],
+            include_entries: false,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let tidy = c
+        .get_snapshot_id(pb::GetSnapshotIdRequest {
+            namespaces: vec![a.into(), b.into()],
+            include_entries: false,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(messy.snapshot_id, tidy.snapshot_id);
+    assert_eq!(messy.identity_version, 2);
+    let scope = messy.scope.unwrap();
+    assert_eq!(scope.namespaces, [a, b]);
+    assert_eq!(scope.owner, "");
+    assert_eq!(scope.branch, "");
+
+    let readable = c
+        .get_snapshot_id(pb::GetSnapshotIdRequest {
+            namespaces: vec![],
+            include_entries: false,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(readable.scope.unwrap().namespaces, Vec::<String>::new());
+}
+
+/// Two empty namespaces hold identical (empty) content, but they are two
+/// different questions, so they get two different ids.
+#[tokio::test(flavor = "multi_thread")]
+async fn identical_content_under_distinct_scopes_differs() {
+    let mut c = client(&start_server().await).await;
+    let left = snapshot(&mut c, "snapid-empty-l").await;
+    let right = snapshot(&mut c, "snapid-empty-r").await;
+    assert_eq!((left.entity_count, right.entity_count), (0, 0));
+    assert_ne!(left.snapshot_id, right.snapshot_id);
+}
+
+/// A malformed namespace used to match nothing and return the id of an
+/// empty scope, which reads as "this namespace is empty".
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_namespaces_are_refused() {
+    let mut c = client(&start_server().await).await;
+    for bad in ["", "has space", ".hidden"] {
+        let err = c
+            .get_snapshot_id(pb::GetSnapshotIdRequest {
+                namespaces: vec![bad.into()],
+                include_entries: false,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument, "{bad:?}");
+    }
+}

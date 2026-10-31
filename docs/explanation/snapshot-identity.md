@@ -27,12 +27,13 @@ Three things follow from having nothing to name:
 
 ## What a snapshot id is
 
-A snapshot id is a SHA-256 over the set of `(storage key, entity content
-hash)` pairs in scope, and an entity content hash is a SHA-256 over that
-entity's canonical JSON. Both live in
+A snapshot id is a SHA-256 over the declared scope and the set of
+`(storage key, entity content hash)` pairs in it, and an entity content
+hash is a SHA-256 over that entity's canonical JSON. Both live in
 `rsworkspace/crates/trogon-atlas-core/src/content_hash.rs`.
 
-Equal ids mean equal content. Unequal ids mean something changed.
+Equal ids mean equal content under the same scope. Unequal ids mean the
+content or the scope differs.
 
 ## Why the hash is over JSON, not over the stored bytes
 
@@ -84,18 +85,55 @@ computed for one purpose cannot be mistaken for the other.
 
 ## Scope is part of the identity
 
-`GetSnapshotIdRequest.namespaces` bounds what the id covers. An empty list
-means every namespace.
+An id answers a question: "what does this reader see in these
+namespaces?" The question is hashed with the answer, so two ids are only
+equal when both match. An earlier format hashed the content alone, which
+left "compare only over the same scope" as a caller obligation: two empty
+namespaces, or a tenant's empty view of a namespace it cannot read, all
+produced the same id.
 
-**Two ids are comparable only when taken over the same scope.** An id over
-one namespace is not an id for the store. The scope is not recorded inside
-the id, so this is a caller obligation, and it is the one sharp edge in the
-API.
+What goes into the digest:
 
-Branch scope travels the usual way, on the `x-trogon-atlas-branch` metadata
-header, so a branch's merged view has its own identity. An untouched branch
-has the same id as its baseline, which is the honest answer: it is the same
-state.
+- **The namespace selection.** `GetSnapshotIdRequest.namespaces`, parsed as
+  namespace names, sorted and with repeats dropped, so `["b", "a", "b"]`
+  and `["a", "b"]` are one question. An empty list means every namespace
+  the reader can see, which is its own selection, distinct from any
+  explicit list. A name that is not a valid namespace name, including the
+  empty string, is `INVALID_ARGUMENT` rather than a filter that matches
+  nothing.
+- **The reader's owner boundary.** A reader bound to an owner sees only
+  that owner's namespaces, so the same request can mean different content
+  for different readers. Binding the owner keeps one tenant's id from ever
+  matching another's, even when both views are empty. A reader with no
+  owner boundary hashes as such.
+
+What stays out of the digest and travels in the response envelope instead:
+
+- **The branch.** Branch scope travels the usual way, on the
+  `x-trogon-atlas-branch` metadata header, and the response reports it in
+  `scope.branch`. It is not hashed, because an untouched branch is the same
+  state as its baseline and should say so. Where the branch diverges, the
+  content differs and so does the id.
+- **The principal.** Two readers under the same owner see the same
+  namespaces, so the principal name would only split identical answers.
+
+The response carries the normalized scope in `scope` (owner, namespaces
+and branch) and the format in `identity_version`, so a caller can see what
+an id covers without reconstructing the request.
+
+### Format version
+
+`identity_version` is 2. Version 1 hashed content without the scope; a
+version 1 id never equals a version 2 id over the same content, because
+the snapshot domain tag changed with the format. Ids are not durable
+across format versions: re-pin after an upgrade rather than comparing an
+old id to a new one.
+
+Default chosen: the owner boundary is part of the id even when a caller
+names explicit namespaces, so an id computed by an unbounded operator
+never matches the same namespace read by its owner. That gives up
+cross-reader comparison in exchange for never letting two different views
+share an id.
 
 ## Truncation
 
@@ -130,7 +168,9 @@ already answers "which entities differ" without it.
 ```text
 # Pin the state a report describes.
 GetSnapshotId(namespaces: ["billing"])
-  -> snapshot_id: "9f2c...", entity_count: 412, truncated: false
+  -> snapshot_id: "9f2c...", entity_count: 412, truncated: false,
+     scope: { owner: "", namespaces: ["billing"], branch: "" },
+     identity_version: 2
 
 # Later: did anything change?
 GetSnapshotId(namespaces: ["billing"])

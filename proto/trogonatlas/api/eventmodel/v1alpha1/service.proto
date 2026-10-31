@@ -952,9 +952,11 @@ message WhoAmIResponse {
 // model from a manifest reproduces its snapshot id.
 
 message GetSnapshotIdRequest {
-  // Restrict the snapshot to these namespaces. Empty means every namespace.
-  // Two snapshot ids are comparable only when computed over the same
-  // namespace scope.
+  // Restrict the snapshot to these namespaces. Empty means every namespace
+  // the caller can read. Order and repeats do not matter; an entry that is
+  // not a valid namespace name is INVALID_ARGUMENT. The normalized list is
+  // part of the id, so the same content under two different lists has two
+  // different ids.
   repeated string namespaces = 1;
   // Include the per-entity hashes in the response. Off by default: the
   // whole point of the id is that change detection needs one string. Turn
@@ -963,9 +965,9 @@ message GetSnapshotIdRequest {
 }
 
 message GetSnapshotIdResponse {
-  // Lowercase hex SHA-256 over the whole `(key, content_hash)` set. Equal
-  // ids mean equal content under the same namespace scope; unequal ids mean
-  // something changed.
+  // Lowercase hex SHA-256 over the scope and the whole `(key, content_hash)`
+  // set. Equal ids mean equal content under the same scope; unequal ids mean
+  // the content or the scope differs.
   string snapshot_id = 1;
   uint32 entity_count = 2;
   // True when the server's view hit its entity cap, so this id names a
@@ -973,6 +975,23 @@ message GetSnapshotIdResponse {
   bool truncated = 3;
   // Populated only when `include_entries` was set. Sorted by `key`.
   repeated trogonatlas.catalog.v1alpha1.SnapshotEntry entries = 4;
+  // The scope the id was computed over, as normalized by the server.
+  SnapshotIdScope scope = 5;
+  // Version of the identity format. Ids from different versions are never
+  // comparable, even over identical content.
+  uint32 identity_version = 6;
+}
+
+message SnapshotIdScope {
+  // The owner boundary of the reader, part of the id. Empty when the reader
+  // has no owner boundary.
+  string owner = 1;
+  // The normalized namespace list, sorted and without repeats, part of the
+  // id. Empty means every namespace the reader can see.
+  repeated string namespaces = 2;
+  // The branch read, empty for baseline. Not part of the id: a branch
+  // nobody has written to has the baseline's id.
+  string branch = 3;
 }
 
 // ---------- Branching (Phase 1: Isolation) -----------------------------------

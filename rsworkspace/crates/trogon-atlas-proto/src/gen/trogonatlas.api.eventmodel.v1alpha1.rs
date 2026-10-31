@@ -4221,9 +4221,11 @@ pub struct WhoAmIResponse {
 
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetSnapshotIdRequest {
-    /// Restrict the snapshot to these namespaces. Empty means every namespace.
-    /// Two snapshot ids are comparable only when computed over the same
-    /// namespace scope.
+    /// Restrict the snapshot to these namespaces. Empty means every namespace
+    /// the caller can read. Order and repeats do not matter; an entry that is
+    /// not a valid namespace name is INVALID_ARGUMENT. The normalized list is
+    /// part of the id, so the same content under two different lists has two
+    /// different ids.
     #[prost(string, repeated, tag="1")]
     pub namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     /// Include the per-entity hashes in the response. Off by default: the
@@ -4234,9 +4236,9 @@ pub struct GetSnapshotIdRequest {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetSnapshotIdResponse {
-    /// Lowercase hex SHA-256 over the whole `(key, content_hash)` set. Equal
-    /// ids mean equal content under the same namespace scope; unequal ids mean
-    /// something changed.
+    /// Lowercase hex SHA-256 over the scope and the whole `(key, content_hash)`
+    /// set. Equal ids mean equal content under the same scope; unequal ids mean
+    /// the content or the scope differs.
     #[prost(string, tag="1")]
     pub snapshot_id: ::prost::alloc::string::String,
     #[prost(uint32, tag="2")]
@@ -4248,6 +4250,28 @@ pub struct GetSnapshotIdResponse {
     /// Populated only when `include_entries` was set. Sorted by `key`.
     #[prost(message, repeated, tag="4")]
     pub entries: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::SnapshotEntry>,
+    /// The scope the id was computed over, as normalized by the server.
+    #[prost(message, optional, tag="5")]
+    pub scope: ::core::option::Option<SnapshotIdScope>,
+    /// Version of the identity format. Ids from different versions are never
+    /// comparable, even over identical content.
+    #[prost(uint32, tag="6")]
+    pub identity_version: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SnapshotIdScope {
+    /// The owner boundary of the reader, part of the id. Empty when the reader
+    /// has no owner boundary.
+    #[prost(string, tag="1")]
+    pub owner: ::prost::alloc::string::String,
+    /// The normalized namespace list, sorted and without repeats, part of the
+    /// id. Empty means every namespace the reader can see.
+    #[prost(string, repeated, tag="2")]
+    pub namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// The branch read, empty for baseline. Not part of the id: a branch
+    /// nobody has written to has the baseline's id.
+    #[prost(string, tag="3")]
+    pub branch: ::prost::alloc::string::String,
 }
 // ---------- Branching (Phase 1: Isolation) -----------------------------------
 //

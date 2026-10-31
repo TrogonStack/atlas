@@ -3198,20 +3198,22 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
+        let selection = trogon_atlas_core::NamespaceSelection::from_requested(&req.namespaces)
+            .map_err(|e| Status::invalid_argument(format!("namespaces: {e}")))?;
+        let reader = vis.owner().cloned().map_or(
+            trogon_atlas_core::SnapshotReader::Everything,
+            trogon_atlas_core::SnapshotReader::Owner,
+        );
+        let scope = trogon_atlas_core::SnapshotScope::new(reader, selection);
         let (all, truncated) = self
             .snapshot_with_truncation(branch.as_deref(), &vis)
             .await?;
-
-        // Empty means every namespace. A set rather than a scan per entity so
-        // a wide filter stays linear.
-        let scope: std::collections::BTreeSet<&str> =
-            req.namespaces.iter().map(String::as_str).collect();
 
         let mut hasher = trogon_atlas_core::SnapshotHasher::new();
         let mut entries = Vec::new();
         for se in all.iter() {
             let id = entity_id(&se.entity)?;
-            if !scope.is_empty() && !scope.contains(id.namespace.as_str()) {
+            if !scope.namespaces().admits(&id.namespace) {
                 continue;
             }
             let kind = entity_kind(&se.entity)?;
@@ -3246,10 +3248,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         entries.sort_by(|a, b| a.key.cmp(&b.key));
 
         Ok(Response::new(pb::GetSnapshotIdResponse {
-            snapshot_id: hasher.finish().to_hex(),
+            snapshot_id: hasher.finish(&scope).to_hex(),
             entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
             truncated,
             entries,
+            scope: Some(pb::SnapshotIdScope {
+                owner: vis
+                    .owner()
+                    .map(|o| o.as_str().to_owned())
+                    .unwrap_or_default(),
+                namespaces: scope.namespaces().names(),
+                branch: branch.unwrap_or_default(),
+            }),
+            identity_version: trogon_atlas_core::SNAPSHOT_IDENTITY_VERSION,
         }))
     }
 

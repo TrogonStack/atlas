@@ -39,8 +39,8 @@ pub mod transcode;
 pub mod writer_lease;
 
 pub use content_hash::{
-    canonical_json, entity_content_hash, ContentHash, ContentHashError, SnapshotHasher,
-    CONTENT_HASH_LEN,
+    canonical_json, entity_content_hash, ContentHash, ContentHashError, NamespaceSelection,
+    SnapshotHasher, SnapshotReader, SnapshotScope, CONTENT_HASH_LEN, SNAPSHOT_IDENTITY_VERSION,
 };
 pub use id_component::{is_safe_id_component, validate_id_component, IdComponentError};
 pub use namespace::{
