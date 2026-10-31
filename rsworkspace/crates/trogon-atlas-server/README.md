@@ -38,6 +38,7 @@ for the full list. The key ones:
 | `--protect-baseline-namespaces`   | `TROGON_ATLAS_PROTECT_BASELINE_NAMESPACES` | (unset)            |
 | `--mcp`                           | `TROGON_ATLAS_MCP`                     | `false`                |
 | `--mcp-allowed-hosts`             | `TROGON_ATLAS_MCP_ALLOWED_HOSTS`       | `localhost,127.0.0.1,::1` |
+| `--mcp-profile`                   | `TROGON_ATLAS_MCP_PROFILE`             | unset                  |
 | `--git-mirror`                    | `TROGON_ATLAS_GIT_MIRROR`              | (off)                  |
 
 `--nats-url` accepts credentials as userinfo
@@ -65,6 +66,10 @@ header.
 accepts, guarding against DNS rebinding; it has no effect on gRPC. Add
 every name clients use to reach the listener. Entries without a port match
 any port; `*` disables the check.
+
+`TROGON_ATLAS_MCP_PROFILE` fixes every MCP session to one
+[tool profile](../../../docs/reference/mcp-tool-profiles.md). An unknown
+name stops the server from starting.
 
 ## Run Jev field inference
 

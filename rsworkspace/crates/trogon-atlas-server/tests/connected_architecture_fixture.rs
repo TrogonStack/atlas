@@ -1098,6 +1098,7 @@ async fn serve_connected_architecture_fixture() {
         Some(Duration::from_secs(30)),
         36 * 1024 * 1024,
         "127.0.0.1".parse().unwrap(),
+        None,
     )
     .unwrap();
     let seconds = std::env::var("ATLAS_CONNECTED_FIXTURE_SECONDS")

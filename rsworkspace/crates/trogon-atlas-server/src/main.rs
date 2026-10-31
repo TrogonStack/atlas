@@ -112,6 +112,12 @@ struct Args {
         default_value = "localhost,127.0.0.1,::1"
     )]
     mcp_allowed_hosts: trogon_atlas_server::mcp::AllowedHosts,
+    /// Fix every MCP session to one tool profile: authoring, repair,
+    /// review, source-integration or read-only. Unset, a request may pick
+    /// its own with `x-trogon-atlas-profile`; set, a request naming another
+    /// profile is refused.
+    #[arg(long, env = "TROGON_ATLAS_MCP_PROFILE")]
+    mcp_profile: Option<trogon_atlas_server::mcp::ToolProfile>,
     /// Shared bearer token required on every RPC. Deprecated in favor of
     /// `--auth-tokens-file`. When set without a tokens file, the token is
     /// treated as belonging to a synthetic principal named "legacy-admin" with
@@ -1081,6 +1087,7 @@ async fn run(
             rpc_timeout,
             args.max_message_bytes,
             args.mcp_allowed_hosts.clone(),
+            args.mcp_profile,
         )?;
         let merged = routes.axum_router_mut().clone().merge(mcp_router);
         *routes.axum_router_mut() = merged;

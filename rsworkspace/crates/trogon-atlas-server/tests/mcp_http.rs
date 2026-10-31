@@ -22,7 +22,10 @@ use rmcp::{
 use tokio::net::TcpListener;
 use tonic::transport::{server::TcpIncoming, Server};
 use tonic_health::pb::{health_client::HealthClient, HealthCheckRequest};
-use trogon_atlas_mcp::server::{ToolRole, TOOL_POLICIES};
+use trogon_atlas_mcp::{
+    profile::{ToolProfile, PROFILE_HEADER},
+    server::{McpServer, ToolRole, PROFILE_META_KEY, TOOL_POLICIES},
+};
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
 use trogon_atlas_server::{
     auth::{BearerAuth, RegistryFile, TokenRegistry},
@@ -73,6 +76,18 @@ impl McpHttp {
     }
 
     async fn start_with_hosts(registry: TokenRegistry, allowed_hosts: AllowedHosts) -> Self {
+        Self::start_with(registry, allowed_hosts, None).await
+    }
+
+    async fn start_with_profile(registry: TokenRegistry, profile: ToolProfile) -> Self {
+        Self::start_with(registry, "127.0.0.1".parse().unwrap(), Some(profile)).await
+    }
+
+    async fn start_with(
+        registry: TokenRegistry,
+        allowed_hosts: AllowedHosts,
+        profile: Option<ToolProfile>,
+    ) -> Self {
         let store = trogon_atlas_testsupport::shared().await.store().await;
         let service = EventModelServiceServer::new(
             EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap(),
@@ -94,6 +109,7 @@ impl McpHttp {
             Some(Duration::from_secs(30)),
             4 * 1024 * 1024,
             allowed_hosts,
+            profile,
         )
         .unwrap();
         let merged = routes
@@ -126,6 +142,16 @@ impl McpHttp {
     /// An MCP client whose every request carries `auth_token` as its own
     /// `Authorization: Bearer` header.
     async fn client(&self, auth_token: Option<&str>) -> McpClient {
+        self.try_client(auth_token, None).await.unwrap()
+    }
+
+    /// An MCP client whose every request also names `profile` in
+    /// `x-trogon-atlas-profile`.
+    async fn try_client(
+        &self,
+        auth_token: Option<&str>,
+        profile: Option<&str>,
+    ) -> Result<McpClient, rmcp::service::ClientInitializeError> {
         let mut config = StreamableHttpClientTransportConfig::with_uri(format!(
             "http://{}{MCP_PATH}",
             self.addr
@@ -133,9 +159,14 @@ impl McpHttp {
         if let Some(token) = auth_token {
             config = config.auth_header(token);
         }
+        if let Some(profile) = profile {
+            config = config.custom_headers(std::collections::HashMap::from([(
+                http::HeaderName::from_static(PROFILE_HEADER),
+                http::HeaderValue::from_str(profile).unwrap(),
+            )]));
+        }
         ().serve(StreamableHttpClientTransport::from_config(config))
             .await
-            .unwrap()
     }
 
     /// Checks gRPC health on the same port `/mcp` is served from.
@@ -476,6 +507,170 @@ async fn grpc_and_mcp_share_the_same_port() {
             .unwrap(),
     );
     assert_eq!(who_am_i["role"], "admin");
+
+    http.shut_down().await;
+}
+
+/// The tools a caller of `role` should see under `profile`: the role's
+/// tools intersected with the profile's.
+fn expected_tools(role: ToolRole, profile: ToolProfile) -> HashSet<String> {
+    McpServer::registered_tools()
+        .into_iter()
+        .filter(|tool| profile.admits(tool))
+        .filter(|tool| {
+            TOOL_POLICIES
+                .iter()
+                .any(|p| p.tool == tool.name && p.min_role <= role)
+        })
+        .map(|tool| tool.name.to_string())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_profile_header_lists_the_role_and_profile_intersection() {
+    let http = McpHttp::start(authenticated_registry()).await;
+
+    for (token, role) in [
+        (READER_TOKEN, ToolRole::Reader),
+        (WRITER_TOKEN, ToolRole::Writer),
+    ] {
+        for &profile in ToolProfile::ALL {
+            let client = http
+                .try_client(Some(token), Some(profile.as_str()))
+                .await
+                .unwrap();
+            let names = tool_names(&client.list_all_tools().await.unwrap());
+            assert_eq!(
+                names,
+                expected_tools(role, profile),
+                "{role:?} under {profile}"
+            );
+        }
+    }
+    let reader_authoring = expected_tools(ToolRole::Reader, ToolProfile::Authoring);
+    assert!(!reader_authoring.contains("put_entity_json"));
+    assert!(reader_authoring.contains("get_entity_schema"));
+
+    http.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tool_outside_the_profile_is_refused_at_dispatch() {
+    let http = McpHttp::start(authenticated_registry()).await;
+    let client = http
+        .try_client(Some(ADMIN_TOKEN), Some("read-only"))
+        .await
+        .unwrap();
+
+    let err = client
+        .call_tool(tool_call(
+            "register_namespace",
+            serde_json::json!({ "namespace": "profile-hidden" }),
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("not in the `read-only` tool profile"),
+        "{err}"
+    );
+    let me = who_am_i_body(
+        &client
+            .call_tool(CallToolRequestParams::new("who_am_i"))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(me["role"], "admin");
+
+    http.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_profile_is_refused() {
+    let http = McpHttp::start(authenticated_registry()).await;
+
+    let err = http.try_client(Some(ADMIN_TOKEN), Some("everything")).await;
+    let Err(err) = err else {
+        panic!("an unknown profile must not connect");
+    };
+    assert!(
+        format!("{err:?}").contains("unknown tool profile"),
+        "{err:?}"
+    );
+
+    http.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_operator_profile_fixes_every_session_and_is_reported() {
+    let http = McpHttp::start_with_profile(authenticated_registry(), ToolProfile::Review).await;
+
+    let admin = http.client(Some(ADMIN_TOKEN)).await;
+    let names = tool_names(&admin.list_all_tools().await.unwrap());
+    assert_eq!(names, expected_tools(ToolRole::Admin, ToolProfile::Review));
+    let info = admin.peer_info().unwrap();
+    assert!(
+        info.instructions
+            .as_deref()
+            .unwrap()
+            .contains("Active tool profile: review."),
+        "{info:?}"
+    );
+    assert_eq!(
+        info.meta.as_ref().unwrap().0[PROFILE_META_KEY],
+        serde_json::json!("review")
+    );
+
+    let same = http
+        .try_client(Some(ADMIN_TOKEN), Some("review"))
+        .await
+        .unwrap();
+    assert_eq!(tool_names(&same.list_all_tools().await.unwrap()), names);
+    let err = http.try_client(Some(ADMIN_TOKEN), Some("authoring")).await;
+    let Err(err) = err else {
+        panic!("a request cannot swap the operator's profile");
+    };
+    assert!(
+        format!("{err:?}").contains("runs the `review` tool profile"),
+        "{err:?}"
+    );
+
+    http.shut_down().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_sessions_keep_their_own_profile() {
+    let http = McpHttp::start(authenticated_registry()).await;
+    let read_only = http
+        .try_client(Some(WRITER_TOKEN), Some("read-only"))
+        .await
+        .unwrap();
+    let authoring = http
+        .try_client(Some(WRITER_TOKEN), Some("authoring"))
+        .await
+        .unwrap();
+    let unprofiled = http.client(Some(WRITER_TOKEN)).await;
+
+    let (read_only_tools, authoring_tools, unprofiled_tools) = tokio::join!(
+        read_only.list_all_tools(),
+        authoring.list_all_tools(),
+        unprofiled.list_all_tools(),
+    );
+    assert_eq!(
+        tool_names(&read_only_tools.unwrap()),
+        expected_tools(ToolRole::Writer, ToolProfile::ReadOnly)
+    );
+    let authoring_tools = tool_names(&authoring_tools.unwrap());
+    assert_eq!(
+        authoring_tools,
+        expected_tools(ToolRole::Writer, ToolProfile::Authoring)
+    );
+    assert!(authoring_tools.contains("apply_manifests"));
+    let unprofiled_tools = tool_names(&unprofiled_tools.unwrap());
+    assert!(authoring_tools.is_subset(&unprofiled_tools));
+    assert!(unprofiled_tools.contains("delete_entity"));
+    assert!(read_only.peer_info().unwrap().meta.is_some());
+    assert!(unprofiled.peer_info().unwrap().meta.is_none());
 
     http.shut_down().await;
 }
