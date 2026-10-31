@@ -442,7 +442,10 @@ impl ProtectionListing {
         use std::fmt::Write as _;
         let mut out = String::new();
         if self.protections.is_empty() && self.unknown.is_empty() {
-            out.push_str("no protected identities\n");
+            out.push_str(match self.verdict() {
+                ListingVerdict::Complete => "no protected identities\n",
+                ListingVerdict::Partial => "no protected identities listed so far\n",
+            });
         }
         for p in &self.protections {
             let _ = writeln!(
@@ -697,6 +700,11 @@ mod tests {
         };
         assert_eq!(truncated.verdict(), ListingVerdict::Partial);
         assert!(truncated.render().contains("incomplete:"));
+        assert!(
+            !truncated.render().contains("no protected identities\n"),
+            "an unfinished listing must not claim nothing is protected: {}",
+            truncated.render()
+        );
 
         let json = unreadable.to_json();
         assert_eq!(json["verdict"], "partial");
