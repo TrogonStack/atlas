@@ -101,6 +101,123 @@ pub fn generate() -> Result<Value> {
     }))
 }
 
+/// One kind's manifest document schema, cut from [`generate`] so it can never
+/// disagree with the full schema: the same envelope with `kind` and `spec`
+/// narrowed to that kind, and only the `$defs` the document reaches.
+pub fn generate_for_kind(kind: pb::EntityKind) -> Result<Value> {
+    let mut full = generate()?;
+    let aliases: Vec<String> = kind_aliases(kind).into_iter().collect();
+    let spec = full["allOf"]
+        .as_array()
+        .and_then(|branches| {
+            branches
+                .iter()
+                .find(|b| b["if"]["properties"]["kind"]["enum"] == json!(aliases))
+        })
+        .map(|branch| branch["then"]["properties"]["spec"].clone())
+        .with_context(|| format!("no manifest schema branch for {kind:?}"))?;
+    let Value::Object(defs) = full["$defs"].take() else {
+        anyhow::bail!("manifest schema has no $defs");
+    };
+    let mut doc = json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": format!("trogon-atlas {} manifest", crate::export::manifest_kind(kind)),
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "apiVersion": { "const": crate::manifest::API_VERSION },
+            "kind": { "enum": aliases },
+            "metadata": def_ref(METADATA_DEF),
+            "spec": spec,
+        },
+        "required": ["apiVersion", "kind", "metadata"],
+    });
+    let reachable = reachable_defs(&doc, &defs);
+    doc["$defs"] = Value::Object(reachable);
+    Ok(doc)
+}
+
+fn reachable_defs(root: &Value, defs: &Map<String, Value>) -> Map<String, Value> {
+    let mut out = Map::new();
+    let mut pending = Vec::new();
+    collect_def_refs(root, &mut pending);
+    while let Some(name) = pending.pop() {
+        if out.contains_key(&name) {
+            continue;
+        }
+        if let Some(def) = defs.get(&name) {
+            collect_def_refs(def, &mut pending);
+            out.insert(name, def.clone());
+        }
+    }
+    out
+}
+
+fn collect_def_refs(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::Object(fields) => {
+            for (key, field) in fields {
+                match (key.as_str(), field) {
+                    ("$ref", Value::String(target)) => {
+                        if let Some(name) = target.strip_prefix("#/$defs/") {
+                            out.push(name.to_owned());
+                        }
+                    }
+                    _ => collect_def_refs(field, out),
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| collect_def_refs(item, out)),
+        _ => {}
+    }
+}
+
+/// A `metadata` value the caller must replace before a skeleton means
+/// anything. The marker is not a legal id component, so a skeleton sent
+/// unchanged is refused instead of creating an entity named after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placeholder {
+    pub metadata_field: &'static str,
+    pub marker: &'static str,
+    pub meaning: &'static str,
+}
+
+impl Placeholder {
+    /// JSON Pointer to the placeholder inside the skeleton.
+    pub fn pointer(&self) -> String {
+        format!("/metadata/{}", self.metadata_field)
+    }
+}
+
+pub const SKELETON_PLACEHOLDERS: &[Placeholder] = &[
+    Placeholder {
+        metadata_field: "namespace",
+        marker: "<namespace>",
+        meaning: "namespace (bounded context) the entity lives in",
+    },
+    Placeholder {
+        metadata_field: "name",
+        marker: "<name>",
+        meaning: "entity slug, unique within the namespace for this kind",
+    },
+];
+
+/// The smallest manifest document for `kind` that [`generate_for_kind`]
+/// accepts. It is schema-valid only: references, required context and the
+/// placeholders still decide whether the server accepts it.
+pub fn skeleton(kind: pb::EntityKind) -> Value {
+    let metadata: Map<String, Value> = SKELETON_PLACEHOLDERS
+        .iter()
+        .map(|p| (p.metadata_field.to_owned(), json!(p.marker)))
+        .collect();
+    json!({
+        "apiVersion": crate::manifest::API_VERSION,
+        "kind": crate::export::manifest_kind(kind),
+        "metadata": metadata,
+        "spec": {},
+    })
+}
+
 fn def_ref(name: &str) -> Value {
     json!({ "$ref": format!("#/$defs/{name}") })
 }
@@ -361,6 +478,49 @@ fn message_schema(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    fn compiled(schema: &Value) -> jsonschema::Validator {
+        jsonschema::validator_for(schema).expect("kind schema compiles")
+    }
+
+    #[test]
+    fn every_kind_schema_accepts_its_skeleton() {
+        for &kind in pb::canonical::ALL_KINDS {
+            let schema = generate_for_kind(kind).expect("kind schema");
+            let errors: Vec<String> = compiled(&schema)
+                .iter_errors(&skeleton(kind))
+                .map(|e| e.to_string())
+                .collect();
+            assert!(errors.is_empty(), "{kind:?} skeleton: {errors:?}");
+        }
+    }
+
+    #[test]
+    fn kind_schema_keeps_the_full_schema_definitions() {
+        let full = generate().expect("schema generation");
+        let event = generate_for_kind(pb::EntityKind::Event).expect("kind schema");
+        let defs = event["$defs"].as_object().expect("$defs");
+        assert!(defs.contains_key("trogonatlas.eventmodel.v1alpha1.Event"));
+        assert!(defs.len() < full["$defs"].as_object().expect("$defs").len());
+        for (name, def) in defs {
+            assert_eq!(def, &full["$defs"][name], "{name} drifted from generate()");
+        }
+    }
+
+    #[test]
+    fn kind_schema_refuses_another_kind_and_a_missing_required_field() {
+        let schema = generate_for_kind(pb::EntityKind::Event).expect("kind schema");
+        let validator = compiled(&schema);
+        let mut wrong_kind = skeleton(pb::EntityKind::Event);
+        wrong_kind["kind"] = json!("Command");
+        assert!(!validator.is_valid(&wrong_kind));
+        let mut nameless = skeleton(pb::EntityKind::Event);
+        nameless["metadata"]
+            .as_object_mut()
+            .expect("metadata")
+            .remove("name");
+        assert!(!validator.is_valid(&nameless));
+    }
 
     #[test]
     fn generates_without_error() {
