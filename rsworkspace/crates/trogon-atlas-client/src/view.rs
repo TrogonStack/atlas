@@ -170,6 +170,7 @@ pub struct DocumentContentDescription {
     pub media_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub filename: Option<String>,
 }
 
