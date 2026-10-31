@@ -53,7 +53,11 @@ content. A retry that finds the stored entities still exactly as that
 changeset left them skips the write and resumes at the protection step, so
 a `create_only` or `if_match` it already satisfied cannot refuse it. If
 anything moved since, the retry writes again and its preconditions judge the
-current state. Anyone else's annotation, and every annotation that arrives
+current state. That fallback still faces the protections its own earlier
+attempt set: an op on such an identity that would change what is stored
+there, including a `force` put of identical content, is refused as
+protected, so a sibling that moved can never carry a rewrite past a
+protection. Anyone else's annotation, and every annotation that arrives
 through `import-git`, is dropped without effect.
 
 Protection does not exempt admins. An admin's write to a protected identity

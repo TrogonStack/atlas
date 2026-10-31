@@ -4946,6 +4946,111 @@ async fn batch_mutate_retry_finishes_protections_after_some_already_landed() {
     assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
 }
 
+fn batch_with_moved_sibling(ns: &str, operation_id: &str, force: bool) -> pb::BatchMutateRequest {
+    let mut ops: Vec<pb::BatchMutateOp> = ["placed", "shipped"]
+        .into_iter()
+        .map(|slug| pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                force: force && slug == "placed",
+                ..protecting_put(ns, slug, "")
+            })),
+        })
+        .collect();
+    ops.push(pb::BatchMutateOp {
+        op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+            entity: Some(make_event(ns, "cart", 1)),
+            ..Default::default()
+        })),
+    });
+    pb::BatchMutateRequest {
+        operation_id: operation_id.into(),
+        ops,
+        ..Default::default()
+    }
+}
+
+async fn protect_one_then_move_a_sibling(
+    store: &Arc<FailingBatchStore>,
+    svc: &EventModelServiceImpl,
+    ns: &str,
+    request: pb::BatchMutateRequest,
+) -> String {
+    svc.batch_mutate(as_protecting_admin(request))
+        .await
+        .expect_err("the second protection failure must fail the batch");
+    assert!(is_protected(store, ns, "placed").await);
+    assert!(!is_protected(store, ns, "shipped").await);
+    let mut moved = make_event(ns, "cart", 1);
+    if let Some(pb::entity::Kind::Event(e)) = moved.kind.as_mut() {
+        e.title = "Moved".into();
+    }
+    svc.put_entity(Request::new(pb::PutEntityRequest {
+        entity: Some(moved),
+        ..Default::default()
+    }))
+    .await
+    .unwrap();
+    store
+        .inner
+        .get(pb::EntityKind::Event, &id(ns, "placed", 1), None)
+        .await
+        .unwrap()
+        .etag
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_retry_does_not_rewrite_an_identity_it_protected_once_a_sibling_moved() {
+    let store = protection_failing_store().await;
+    store
+        .protection_passes
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-resume-forced";
+    let request = || batch_with_moved_sibling(ns, "op-protect-resume-forced", true);
+    let protected_etag = protect_one_then_move_a_sibling(&store, &svc, ns, request()).await;
+
+    let refused = svc
+        .batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect_err("a forced rewrite must meet the protection its own first attempt set");
+    assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
+    let current = store
+        .inner
+        .get(pb::EntityKind::Event, &id(ns, "placed", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(current.etag, protected_etag);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_retry_finishes_when_a_sibling_moved_and_the_protected_content_holds() {
+    let store = protection_failing_store().await;
+    store
+        .protection_passes
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-resume-moved";
+    let request = || batch_with_moved_sibling(ns, "op-protect-resume-moved", false);
+    let protected_etag = protect_one_then_move_a_sibling(&store, &svc, ns, request()).await;
+
+    let retried = svc
+        .batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect("an unchanged protected identity must not refuse its own retry")
+        .into_inner();
+    assert_eq!(
+        retried.status,
+        pb::batch_mutate_response::Status::Applied as i32
+    );
+    assert!(is_protected(&store, ns, "shipped").await);
+    let current = store
+        .inner
+        .get(pb::EntityKind::Event, &id(ns, "placed", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(current.etag, protected_etag);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn put_entity_retry_finishes_a_protecting_create_whose_content_already_landed() {
     let store = protection_failing_store().await;
