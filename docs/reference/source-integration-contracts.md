@@ -195,6 +195,14 @@ inventories and required native context must validate before selection.
 | DataProduct port | `DataPortRef`: exact product, owner UID, INPUT/OUTPUT direction and port ID. Port selection does not prove data, access or lineage. |
 | Document | Whole `DocumentRef` or existing `DocumentAnchorRef` with exact owner UID, anchor ID and optional expected digest. Whole and anchor selections remain distinct. |
 
+DesignGraph topology is native only. The closed ownership inventory carries
+`PROFILE`, `STEPS`, `ENTRY_STEPS` and `LAYOUT_DOCUMENT` fields, and `STEPS` and
+`ENTRY_STEPS` are always unsupported units. Initial creates carrying steps or
+entry markers reject under every ownership policy, including title-only.
+WholeOwner writes reject when the current or proposed step or entry inventory is
+nonempty, including a proposed clear. Unrelated field-specific writes preserve
+local topology exactly.
+
 Source mappings may retain Decision option or other internal local identities
 needed to reconcile native content without adding them to any native subject
 inventory. A source relation does not become a selectable native ConnectionRef
@@ -496,6 +504,7 @@ policy/budget, reject the claim or operation rather than downgrade it silently.
 - [DataProduct](data-product-contracts.md)
 - [Responsibility](responsibility-contracts.md)
 - [Decision and Document](decision-and-document-contracts.md)
+- [Design graph topology](design-topology-contracts.md)
 - [Stale-plan guards](../explanation/stale-plans.md)
 - [Branching](../explanation/branching.md)
 - [Snapshot identity](../explanation/snapshot-identity.md)

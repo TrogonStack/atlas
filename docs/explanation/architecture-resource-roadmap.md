@@ -6,6 +6,13 @@ source reconciliation. The [coverage reference](../reference/architecture-resour
 links their field and connection contracts and separates implementation from
 acceptance evidence. The remaining design scope is described below.
 
+The [native coverage reference](../reference/eventcatalog-coverage.md) tracks
+implemented Atlas objects, fields and relationships. Native product work comes
+first. EventCatalog-specific integration is deferred to the final mile, after
+the native capabilities and workflows are complete and verified. Readers,
+importers, migration, sync, federation and format conversion are not active
+roadmap items or prerequisites. Revisit them only in a separately scoped task.
+
 ## Start with the behavioral model
 
 Architecture resources describe the same model's transport, persistence,

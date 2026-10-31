@@ -129,11 +129,28 @@ connection IDs, request/response roles and provider selections. Upgrade clients
 and server before authoring these resources; an exact entity version alone
 does not pin a mutable contract's content or member incarnation.
 
-The current contract revision is 12, with both mutation compatibility floors
-also at 12. DataProduct writers preserve independent port IDs, nested
-association IDs and exact selected access and contract pins. Upgrade clients
-and server together before authoring DataProducts; older writers cannot
-preserve the complete resource contract.
+Contract revision 12 raised both mutation compatibility floors to 12.
+DataProduct writers preserve independent port IDs, nested association IDs
+and exact selected access and contract pins. Upgrade clients and server
+together before authoring DataProducts; older writers cannot preserve the
+complete resource contract.
+
+Revisions 13 through 18 raised both floors again as later resources landed.
+Each of those releases refuses writers and servers that predate its floor.
+
+Contract revision 19 raises both mutation compatibility floors to 19.
+Addressable schemas carry aggregate intent, identifiers, and property
+relationships. An older writer would drop those fields. `GetServerInfo`
+followed by `compat::check` refuses that writer before any mutation is sent.
+Reads stay available.
+
+Contract revision 19 adds Channel links and storage access claims on Component,
+ExternalSystem and DataProduct, and raised both mutation compatibility floors to
+19. Older writers could drop these occurrences and their IDs, so they are
+refused before they can. The shared `CatalogTitle` and `CatalogText` values moved
+to `catalog_values.proto` with unchanged names and field numbers; buf reports the
+move as an acknowledged FILE break. Upgrade clients and server together before
+authoring these associations. Development data may be recreated.
 
 ## Supported combinations
 
@@ -165,3 +182,19 @@ drift.
   field or an optional RPC already covered by a feature flag: no bump.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
+
+The current contract revision is 19, with both mutation compatibility floors
+at 19. Native catalog context writers preserve Decision dates, makers and
+amendments, Term domain ownership, and Document content and classifications.
+CalendarDate uses the shared type package. It requires no breaking-change
+acknowledgment against the main baseline.
+Upgrade clients and server together before authoring these fields to prevent
+lossy writes.
+
+Revision 19 adds descriptive `DataProduct.resource_associations`, independent
+`Specification.message_channels`, and `SchemaBinding.environments` /
+`is_default`. `CONTRACT_REVISION`, `MIN_CLIENT_CONTRACT_REVISION`, and
+`MIN_SERVER_CONTRACT_REVISION` are all 19. Older writers are refused before a
+mutation because they would drop these stored fields. `DataProduct` field 9
+stays reserved for storage claims and is not part of this revision. Claim-route
+and operation-binding inverse discovery are not included.
