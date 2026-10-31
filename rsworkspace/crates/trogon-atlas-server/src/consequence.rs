@@ -2,7 +2,7 @@
 //! it would replace.
 //!
 //! Both worlds are scanned in full with the same suites, then compared by
-//! [`FindingIdentity`]. A finding missing from one side is only called
+//! `FindingIdentity`. A finding missing from one side is only called
 //! introduced or resolved when that side's scan covered the finding's suite;
 //! otherwise it is reported as unknown. See
 //! `docs/explanation/consequence-delta.md`.

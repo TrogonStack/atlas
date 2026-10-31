@@ -1425,7 +1425,8 @@ pub mod finding_change {
         Resolved = 2,
         /// Same identity on both sides with a different severity.
         SeverityChanged = 3,
-        /// The change removes the finding's subject, so the finding goes with it.
+        /// The change removes the finding's subject or origin, so the finding
+        /// goes with it.
         SubjectRemoved = 4,
         /// The finding now also appears on a newer version of its subject: the
         /// successor inherited it rather than introducing a new problem.
