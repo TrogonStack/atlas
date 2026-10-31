@@ -33,7 +33,12 @@ with it; a caller cannot name someone else as the setter.
 A `ProtectionAnnotation` in an entity's metadata is a request to protect,
 not a mark. The server always removes it from the stored entity. It honors
 it only when an authenticated admin writes on baseline, and then protects
-the identity in the same changeset as the write. Anyone else's annotation,
+the identity in the same changeset as the write. A write whose body is
+unchanged but which newly protects the identity is not a no-op: it records a
+changeset and its receipt names it. An `operation_id` settles only once the
+protection has landed, so when the registry fails after the content write, a
+retry with the same id runs again and finishes protecting instead of
+replaying a success that never protected anything. Anyone else's annotation,
 and every annotation that arrives through `import-git`, is dropped without
 effect.
 
