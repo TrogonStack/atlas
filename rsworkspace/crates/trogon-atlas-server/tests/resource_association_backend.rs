@@ -1351,7 +1351,10 @@ tokens = ["assoc-limited"]
         .unwrap(),
     )
     .unwrap();
-    let direct = service().await;
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let direct = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(0);
     let hidden_id = direct
         .register_namespace(Request::new(pb::RegisterNamespaceRequest {
             name: unique("assoc-hid"),
@@ -1375,7 +1378,9 @@ tokens = ["assoc-limited"]
         .unwrap()
         .id;
     let loaded = world_in(&direct, &hidden_id).await;
-    let implementation = service().await;
+    let implementation = EventModelServiceImpl::try_new(store, ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(0);
     let grpc = pb::event_model_service_server::EventModelServiceServer::new(implementation);
     let plane = trogon_atlas_server::mcp::data_plane(
         grpc,

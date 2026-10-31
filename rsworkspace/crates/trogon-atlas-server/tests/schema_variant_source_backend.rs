@@ -752,3 +752,122 @@ async fn retained_source_preview_cannot_overwrite_a_later_local_native_variant()
     assert_eq!(f.mapping(key).await, mapping);
     assert_eq!(f.store.current_change_seq().await.unwrap(), sequence);
 }
+
+#[tokio::test]
+async fn retained_source_preview_refuses_disagreeing_persisted_native_variants_before_publication()
+{
+    use prost::Message;
+    use trogon_atlas_store::source::SourceDocumentKey;
+
+    // Public run summaries omit retained values, so fault injection needs the persisted envelope.
+    #[derive(Clone, PartialEq, Message)]
+    struct SourceState {
+        #[prost(message, optional, tag = "1")]
+        registration: Option<pb::SourceRegistration>,
+        #[prost(message, repeated, tag = "2")]
+        snapshots: Vec<pb::SourceSnapshot>,
+        #[prost(message, repeated, tag = "3")]
+        mappings: Vec<pb::SourceMapping>,
+        #[prost(message, repeated, tag = "4")]
+        runs: Vec<StoredRun>,
+        #[prost(message, repeated, tag = "5")]
+        tombstones: Vec<pb::SourceIdentityTombstone>,
+        #[prost(bool, tag = "6")]
+        deleted: bool,
+        #[prost(message, repeated, tag = "7")]
+        overlays: Vec<StoredOverlay>,
+    }
+    #[derive(Clone, PartialEq, Message)]
+    struct StoredRun {
+        #[prost(message, optional, tag = "1")]
+        run: Option<pb::ReconciliationRun>,
+        #[prost(message, repeated, tag = "2")]
+        payloads: Vec<pb::SourceNativePayload>,
+        #[prost(message, repeated, tag = "3")]
+        values: Vec<pb::SourceCommittedValue>,
+        #[prost(uint32, tag = "4")]
+        transitions: u32,
+    }
+    #[derive(Clone, PartialEq, Message)]
+    struct StoredOverlay {
+        #[prost(string, tag = "1")]
+        snapshot_id: String,
+        #[prost(message, repeated, tag = "2")]
+        entries: Vec<pb::SourceOverlayEntry>,
+    }
+
+    let mut f = Fixture::new().await;
+    let key = "retained-variant-disagreement";
+    let native = f.put(f.entity(key, &variant(&["Blue"], Some(false)))).await;
+    let mapping = f
+        .map(
+            key,
+            fields(&[pb::SourceOwnedField::Messages]),
+            Some(&native),
+        )
+        .await
+        .unwrap();
+    let mut incoming = native.entity.unwrap();
+    specification_mut(&mut incoming).messages[0].doc = Some("Pending Source change".into());
+    let run = f.preview(key, "pending", incoming).await.unwrap();
+    assert_eq!(run.status, pb::SourceRunStatus::Previewed as i32);
+    let document_key = SourceDocumentKey::new(f.registration.id.clone()).unwrap();
+    let document = f.store.source_get(&document_key).await.unwrap().unwrap();
+    let mut state = SourceState::decode(document.bytes.as_slice()).unwrap();
+    assert_eq!(state.encode_to_vec(), document.bytes);
+    let retained = state
+        .runs
+        .iter_mut()
+        .find(|stored| stored.run.as_ref().is_some_and(|value| value.id == run.id))
+        .unwrap();
+    let original_run = retained.run.clone();
+    let previous = retained
+        .values
+        .iter_mut()
+        .find(|value| value.mapping_id == mapping.id)
+        .unwrap();
+    let previous_entity = previous.entity.as_mut().unwrap();
+    specification_mut(previous_entity).messages[0].schemas[0].environments =
+        variant(&["Retained"], Some(false)).environments;
+    assert_eq!(retained.run, original_run);
+    let poisoned = f
+        .store
+        .source_compare_and_swap(
+            &document_key,
+            Some(document.revision),
+            &state.encode_to_vec(),
+            f.registration
+                .retention
+                .as_ref()
+                .unwrap()
+                .registration_bytes,
+        )
+        .await
+        .unwrap();
+    let before = f.get(key).await;
+    let sequence = f.store.current_change_seq().await.unwrap();
+    let error = f
+        .client
+        .apply_source_run(authed(
+            pb::ApplySourceRunRequest {
+                registration_id: f.registration.id.clone(),
+                run_id: run.id,
+                if_match: run.revision,
+                preview_digest: run.preview_digest,
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+    assert_eq!(
+        error.message(),
+        "schema variants support native authoring only"
+    );
+    assert_eq!(f.get(key).await, before);
+    assert_eq!(f.mapping(key).await, mapping);
+    assert_eq!(f.store.current_change_seq().await.unwrap(), sequence);
+    let after = f.store.source_get(&document_key).await.unwrap().unwrap();
+    assert_eq!(after.bytes, poisoned.bytes);
+    assert_eq!(after.revision, poisoned.revision);
+}

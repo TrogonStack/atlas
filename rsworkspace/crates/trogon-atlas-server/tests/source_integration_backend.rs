@@ -5898,6 +5898,28 @@ async fn native_metadata_additions_stay_native_only_across_source_ownership() {
             "{label} {external} {whole}: {rejected}"
         );
         assert_eq!(
+            rejected.message(),
+            "selected extensions support native authoring only",
+            "{label} {external} {whole}: {rejected}"
+        );
+        let after = server
+            .client
+            .get_source_mapping(req(
+                ADMIN,
+                pb::GetSourceMappingRequest {
+                    registration_id: registration.id.clone(),
+                    mapping_id: mapping.id.clone(),
+                },
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .mapping
+            .unwrap();
+        assert_eq!(after, mapping, "{label} {external} {whole}");
+        assert!(after.base.is_none(), "{label} {external} {whole}");
+        assert_eq!(
             server
                 .client
                 .get_entity(req(
@@ -5922,7 +5944,6 @@ async fn native_metadata_additions_stay_native_only_across_source_ownership() {
             .await
             .unwrap();
         }
-        let _ = mapping;
     }
 }
 
