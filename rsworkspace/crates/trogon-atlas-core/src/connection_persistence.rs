@@ -15,6 +15,7 @@ use crate::{
 };
 
 fn checked_prepared_owner(entity: Entity) -> Result<Entity, ConnectionError> {
+    crate::ui_hosting::validate_values(&entity)?;
     if matches!(
         entity.kind,
         Some(
@@ -39,6 +40,7 @@ pub fn prepare_entity(
     previous: Option<&Entity>,
     proposed: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    crate::ui_hosting::validate_values(proposed)?;
     crate::business_data::reject_unassigned(proposed)
         .map_err(|error| ConnectionError::Business(error.to_string()))?;
     let mut prepared = proposed.clone();
