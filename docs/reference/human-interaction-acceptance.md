@@ -2,8 +2,8 @@
 
 Status: adopted requirements for the
 [human interaction contract](human-interaction-contracts.md). Native implementation
-and maintained fixtures exist; final candidate validation and authenticated
-browser execution remain pending. Logical names below are not manifest syntax,
+and maintained fixtures cover backend, connected-client and authenticated
+browser behavior. Logical names below are not manifest syntax,
 predicted owner UIDs or submitted occurrence IDs.
 
 ## Fixture and receipts
@@ -29,7 +29,7 @@ transport, CLI/MCP or deployed-browser receipts.
 
 | Case | Required public outcome |
 | --- | --- |
-| Create/read | Proposed fields preserve presence, Unicode and order. Equal UI assertions receive distinct IDs. Server owns Component UID. |
+| Create/read | Native fields preserve presence, Unicode and order. Equal UI assertions receive distinct IDs. Server owns Component UID. |
 | Supplied IDs | Omitted ID assigns; hosting-specific presence validation rejects explicit empty/malformed IDs before generic normalization or assignment. Assert no owner/revision publication on rejection. Duplicate IDs across hostings, relationships and communications reject atomically. |
 | Wording and reorder | Labels/docs and list order may change without renewing IDs or collapsing equal siblings. Checked wording still needs its etag. |
 | Semantic retarget | Exact UI target change requires a fresh occurrence ID; a retained old ID rejects. Old subjects do not follow the new occurrence. |

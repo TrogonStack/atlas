@@ -1,9 +1,10 @@
 # UI hosting and human interaction contracts
 
-Status: native implementation in progress. Component UI-hosting assertions and
-the read-only inspection API are implemented. The
-[acceptance requirements](human-interaction-acceptance.md) remain the completion
-boundary; final integrated verification and publication are pending.
+Status: implemented native contract. Component UI-hosting assertions and the
+read-only inspection API have maintained backend, connected-client and
+authenticated browser acceptance. The
+[acceptance requirements](human-interaction-acceptance.md) distinguish these
+checked model paths from runtime execution or deployed hosting.
 
 ## Scope and existing representations
 
