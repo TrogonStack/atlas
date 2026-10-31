@@ -62,7 +62,24 @@ trogon-atlas verify checkout.bundle.json
 | --- | --- |
 | `0` | The bundle is intact and complete. Compare the printed digest with the one you recorded. |
 | `11` | The bundle is intact but marked incomplete. Its reasons and unresolved entities are printed. |
-| `5` | The bundle is malformed or was changed after it was sealed. |
+| `5` | The bundle is malformed or was changed after it was sealed, or it failed a `--trusted-key` check. |
 
 With `--format json`, the outcome carries `bundle_digest`, `complete`,
-`incomplete_reasons` and `unresolved`, a list of `key` and `cause`.
+`incomplete_reasons`, `unresolved`, a list of `key` and `cause`,
+`authenticity` and `signing_key_id`.
+
+## Verify who signed a bundle
+
+A bundle from a server with a signing key carries a signature. Without a
+trusted key, `verify` reports `signature present, not checked`, which says
+nothing about who sealed it. Pass the server's public key, obtained through
+a channel you already trust:
+
+```sh
+trogon-atlas verify checkout.bundle.json --trusted-key atlas-signing.pub.pem
+```
+
+Repeat `--trusted-key` to accept any of several keys, for example during a
+rotation. Once a key is given, an unsigned bundle, a bundle signed by any
+other key and a signature that does not verify all exit 5. To set up the
+server's key, see [sign attested bundles](sign-attested-bundles.md).

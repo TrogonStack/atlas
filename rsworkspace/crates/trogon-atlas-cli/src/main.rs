@@ -373,10 +373,17 @@ enum Cmd {
     /// Check an attested bundle offline, without contacting a server: its
     /// digest, and that what it says about its own completeness holds.
     /// Exits 0 for a complete bundle, 11 for an intact bundle marked
-    /// incomplete, and 5 for one that is malformed or was altered.
+    /// incomplete, and 5 for one that is malformed or was altered. Without
+    /// --trusted-key a signature is not checked and nothing is
+    /// authenticated.
     Verify {
         /// Bundle file written by `export-attested`.
         bundle: PathBuf,
+        /// SPKI PEM Ed25519 public key whose signature to accept. Repeat
+        /// for several keys. When given, an unsigned bundle, a signature by
+        /// any other key or a signature that does not verify exits 5.
+        #[arg(long = "trusted-key")]
+        trusted_keys: Vec<PathBuf>,
     },
     /// Validate every event model in a namespace, domain or project, plus
     /// the strategic findings (BoundedContext, Domain, Subdomain, Project
@@ -700,6 +707,7 @@ fn attested_outcome(
             println!("wrote {}", path.display());
         }
         println!("bundle_digest: {}", verified.digest);
+        println!("authenticity: {}", verified.authenticity);
         if reasons.is_empty() {
             println!("complete");
         }
@@ -724,6 +732,8 @@ fn attested_outcome(
         "complete": reasons.is_empty(),
         "incomplete_reasons": reasons,
         "unresolved": unresolved,
+        "authenticity": verified.authenticity.as_str(),
+        "signing_key_id": verified.authenticity.key_id().map(|id| id.to_hex()),
     });
     if let Some(path) = written {
         data["output"] = json!(path.display().to_string());
@@ -2087,8 +2097,12 @@ async fn run(
                 .map_err(|e| anyhow::anyhow!("writing {}: {e}", output.display()))?;
             Ok(attested_outcome(text, &verified, Some(&output)))
         }
-        Cmd::Verify { bundle } => {
-            let verified = attested::verify_file(&bundle)?;
+        Cmd::Verify {
+            bundle,
+            trusted_keys,
+        } => {
+            let trusted = attested::read_trusted_keys(&trusted_keys)?;
+            let verified = attested::verify_file(&bundle, trusted.as_ref())?;
             Ok(attested_outcome(text, &verified, None))
         }
         Cmd::ValidateProject {

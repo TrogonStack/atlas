@@ -398,6 +398,11 @@ impl Failure {
                 ),
                 "NOT_WRITER" => (FailureCategory::Unavailable, "NOT_WRITER", None),
                 "EXPORT_INCOMPLETE" => (FailureCategory::Precondition, "EXPORT_INCOMPLETE", None),
+                "SIGNING_KEY_UNAVAILABLE" => (
+                    FailureCategory::Precondition,
+                    "SIGNING_KEY_UNAVAILABLE",
+                    None,
+                ),
                 "CURSOR_REJECTED" => (
                     FailureCategory::Validation,
                     "CURSOR_REJECTED",

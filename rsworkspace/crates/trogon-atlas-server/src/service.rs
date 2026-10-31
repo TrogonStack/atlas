@@ -416,6 +416,9 @@ pub struct EventModelServiceImpl {
     /// records a bound caller cannot see. See `change_cursor` for why a raw
     /// sequence number cannot be handed back in that case.
     change_cursor_seal: Arc<crate::change_cursor::ChangeCursorSeal>,
+    /// The key `ExportAttestedModel` signs bundles with. `None` seals them
+    /// unsigned.
+    attested_signing_key: Option<crate::attested_signing::SigningKeySource>,
     /// True when the last snapshot load hit the entity cap exactly, meaning
     /// the in-process view may be incomplete. Destructive operations
     /// (`delete_by_query`) refuse to proceed on a truncated snapshot.
@@ -594,6 +597,7 @@ impl EventModelServiceImpl {
             change_cursor_seal: Arc::new(crate::change_cursor::ChangeCursorSeal::new(
                 &crate::change_cursor::ChangeCursorKey::generate(),
             )),
+            attested_signing_key: None,
             snapshot_truncated: Arc::new(AtomicBool::new(false)),
             baseline_protection: BaselineProtection::Off,
             directory: directory.clone(),
@@ -1326,6 +1330,34 @@ impl EventModelServiceImpl {
     pub fn with_change_cursor_key(mut self, key: &crate::change_cursor::ChangeCursorKey) -> Self {
         self.change_cursor_seal = Arc::new(crate::change_cursor::ChangeCursorSeal::new(key));
         self
+    }
+
+    /// Sign every attested bundle with the key `source` names
+    /// (`--attested-signing-key-file` / `--attested-signing-key-env`). The
+    /// key is read on each export; an export whose key cannot be read is
+    /// refused with `SIGNING_KEY_UNAVAILABLE`, never sealed unsigned.
+    #[must_use]
+    pub fn with_attested_signing_key(
+        mut self,
+        source: crate::attested_signing::SigningKeySource,
+    ) -> Self {
+        self.attested_signing_key = Some(source);
+        self
+    }
+
+    fn attested_signer(
+        &self,
+    ) -> Result<Option<trogon_atlas_core::attested_signing::SigningKey>, Status> {
+        let Some(source) = self.attested_signing_key.as_ref() else {
+            return Ok(None);
+        };
+        source.load().map(Some).map_err(|e| {
+            tracing::error!(error = %e, "attested export refused: signing key unavailable");
+            crate::conv::signing_key_unavailable(
+                "this server signs attested bundles and could not load its signing key",
+                source.kind(),
+            )
+        })
     }
 
     fn author_from_metadata<T>(req: &Request<T>) -> MirrorAuthor {
@@ -4907,6 +4939,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             ));
         }
         self.require_visible(&vis, &id.namespace).await?;
+        let signer = self.attested_signer()?;
 
         // Nothing holds writes off: the export reads one snapshot, binds the
         // bundle to it, and marks whatever moved or could not be resolved.
@@ -5175,9 +5208,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             completeness: Some(attested_bundle::Completeness::from_reasons(reasons).to_proto()),
             bundle_digest: String::new(),
             unresolved: unresolved.into_rows(),
+            signature: None,
         };
-        attested_bundle::seal(&mut bundle)
-            .map_err(|e| Status::internal(format!("sealing the bundle: {e}")))?;
+        match signer.as_ref() {
+            Some(key) => attested_bundle::seal_signed(&mut bundle, key),
+            None => attested_bundle::seal(&mut bundle),
+        }
+        .map_err(|e| Status::internal(format!("sealing the bundle: {e}")))?;
         Ok(Response::new(pb::ExportAttestedModelResponse {
             bundle: Some(bundle),
         }))

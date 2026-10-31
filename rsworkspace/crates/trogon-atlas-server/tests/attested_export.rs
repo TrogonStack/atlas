@@ -11,15 +11,20 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tonic::{metadata::MetadataValue, transport::Channel};
-use trogon_atlas_core::attested_bundle::{
-    self, BundleError, Completeness, IncompleteReason, UnresolvedCause,
+use trogon_atlas_core::{
+    attested_bundle::{
+        self, Authenticity, BundleError, Completeness, IncompleteReason, UnresolvedCause,
+    },
+    attested_signing::{SigningKey, TrustedKeys},
 };
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::{
     event_model_service_client::EventModelServiceClient,
     event_model_service_server::EventModelServiceServer,
 };
-use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
+use trogon_atlas_server::{
+    attested_signing::SigningKeySource, metrics::ServerMetrics, service::EventModelServiceImpl,
+};
 
 async fn start_server(snapshot_cap: Option<usize>) -> String {
     let store = trogon_atlas_testsupport::shared().await.store().await;
@@ -176,6 +181,8 @@ async fn complete_export_verifies_and_names_the_current_state() {
     let verified = attested_bundle::verify(&bundle).unwrap();
     assert_eq!(verified.completeness, Completeness::Complete);
     assert_eq!(verified.digest.to_hex(), bundle.bundle_digest);
+    assert_eq!(bundle.format, attested_bundle::BUNDLE_FORMAT);
+    assert_eq!(verified.authenticity, Authenticity::Unsigned);
     let state = bundle.state.as_ref().unwrap();
     assert_eq!(state.mode(), pb::attested_state::Mode::Current);
     assert_eq!(state.baseline_changeset_id, boundary);
@@ -526,4 +533,134 @@ async fn exports_racing_writes_never_mix_states() {
         saw_member && saw_empty,
         "the race must observe both shapes of the model"
     );
+}
+
+fn signing_key_pem(seed: u8) -> String {
+    use ed25519_dalek::pkcs8::{spki::der::pem::LineEnding, EncodePrivateKey};
+    ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+        .to_pkcs8_pem(LineEnding::LF)
+        .unwrap()
+        .to_string()
+}
+
+async fn start_signing_server(source: SigningKeySource, snapshot_cap: Option<usize>) -> String {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let mut svc = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
+        .unwrap()
+        .with_attested_signing_key(source);
+    if let Some(cap) = snapshot_cap {
+        svc = svc.with_snapshot_cap(cap);
+    }
+    serve(svc).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signing_server_seals_bundles_its_public_key_authenticates() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_file = dir.path().join("signing.pem");
+    std::fs::write(&key_file, signing_key_pem(7)).unwrap();
+    let signer = SigningKey::from_pkcs8_pem(&signing_key_pem(7)).unwrap();
+    let endpoint = start_signing_server(SigningKeySource::File(key_file), None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-signed";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+
+    let bundle = export(&mut c, export_req(ns, "checkout")).await;
+
+    assert_eq!(bundle.format, attested_bundle::SIGNED_BUNDLE_FORMAT);
+    assert_eq!(
+        attested_bundle::verify(&bundle).unwrap().authenticity,
+        Authenticity::SignatureUnchecked(signer.key_id())
+    );
+    let trusted = TrustedKeys::new([signer.trusted_key()]).unwrap();
+    let verified = attested_bundle::verify_trusted(&bundle, &trusted).unwrap();
+    assert_eq!(
+        verified.authenticity,
+        Authenticity::Authenticated(signer.key_id())
+    );
+    assert!(verified.completeness.is_complete());
+
+    let other = SigningKey::from_pkcs8_pem(&signing_key_pem(8)).unwrap();
+    assert!(matches!(
+        attested_bundle::verify_trusted(&bundle, &TrustedKeys::new([other.trusted_key()]).unwrap()),
+        Err(BundleError::UntrustedKey(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signed_incomplete_export_stays_incomplete() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_file = dir.path().join("signing.pem");
+    std::fs::write(&key_file, signing_key_pem(9)).unwrap();
+    let signer = SigningKey::from_pkcs8_pem(&signing_key_pem(9)).unwrap();
+    let endpoint = start_signing_server(SigningKeySource::File(key_file), Some(1)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-signed-capped";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event(ns, "shipped")).await;
+    put(
+        &mut c,
+        event_model(ns, "checkout", "Checkout", &["placed", "shipped"]),
+    )
+    .await;
+
+    let refused = c
+        .export_attested_model(export_req(ns, "checkout"))
+        .await
+        .unwrap_err();
+    let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+    assert_eq!(failure.code.unwrap().as_str(), "EXPORT_INCOMPLETE");
+
+    let mut allowed = export_req(ns, "checkout");
+    allowed.allow_incomplete = true;
+    let bundle = export(&mut c, allowed).await;
+    let trusted = TrustedKeys::new([signer.trusted_key()]).unwrap();
+    let verified = attested_bundle::verify_trusted(&bundle, &trusted).unwrap();
+    assert_eq!(
+        verified.authenticity,
+        Authenticity::Authenticated(signer.key_id())
+    );
+    let Completeness::Incomplete(reasons) = verified.completeness else {
+        panic!("signing must not turn a capped export complete");
+    };
+    assert!(reasons.contains(&IncompleteReason::SnapshotTruncated));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn signing_key_that_cannot_be_loaded_fails_the_export_closed() {
+    let dir = tempfile::tempdir().unwrap();
+    let malformed = dir.path().join("malformed.pem");
+    std::fs::write(&malformed, "not a key").unwrap();
+    for (source, kind) in [
+        (
+            SigningKeySource::File(dir.path().join("absent.pem")),
+            "file",
+        ),
+        (SigningKeySource::File(malformed), "file"),
+        (
+            SigningKeySource::EnvVar("TROGON_ATLAS_TEST_SIGNING_KEY_NEVER_SET".parse().unwrap()),
+            "env",
+        ),
+    ] {
+        let endpoint = start_signing_server(source, None).await;
+        let mut c = client(&endpoint).await;
+        let ns = "attested-signing-unavailable";
+        put(&mut c, event(ns, "placed")).await;
+        put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+
+        let mut req = export_req(ns, "checkout");
+        req.allow_incomplete = true;
+        let refused = c.export_attested_model(req).await.unwrap_err();
+        assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
+        let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+        assert_eq!(failure.code.unwrap().as_str(), "SIGNING_KEY_UNAVAILABLE");
+        assert_eq!(
+            failure.category,
+            trogon_atlas_client::failure::FailureCategory::Precondition
+        );
+        let info = tonic_types::StatusExt::get_details_error_info(&refused).unwrap();
+        assert_eq!(info.metadata.get("source").map(String::as_str), Some(kind));
+        assert!(!refused.message().contains("absent.pem"), "{refused:?}");
+    }
 }

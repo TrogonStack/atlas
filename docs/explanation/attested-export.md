@@ -3,7 +3,9 @@
 `ExportAttestedModel` returns an event model's manifests, its validation
 findings and coverage, and the identity of the state both came from, as one
 bundle bound by one digest. `trogon-atlas verify` checks that digest without
-contacting a server. The bundle format is pinned in the
+contacting a server. A server configured with a signing key also signs the
+digest, so a verifier holding the matching public key can check who sealed
+the bundle. The bundle format is pinned in the
 [attested bundle format reference](../reference/attested-bundle-format.md),
 and the commands are in
 [export and verify an attested model](../how-to/export-and-verify-an-attested-model.md).
@@ -120,19 +122,64 @@ when every finding matches.
 ## Integrity, not authenticity
 
 A digest that verifies proves that the bundle is unchanged since something
-sealed it under this format. It does not prove who sealed it. Anyone can
+sealed it under its format. It does not prove who sealed it. Anyone can
 build a bundle, compute its digest and hand it over, and `verify` accepts it.
+An unsigned bundle is reported as integrity only, issuer unauthenticated.
 
-Treat a bundle as trustworthy only as far as the channel it arrived
-through. Storing the digest somewhere the producer cannot rewrite, such as a
-release record, a signed commit or a CI log, turns a later `verify` into a
-check that the bundle is the one that was recorded.
+Treat an unsigned bundle as trustworthy only as far as the channel it
+arrived through. Storing the digest somewhere the producer cannot rewrite,
+such as a release record, a signed commit or a CI log, turns a later
+`verify` into a check that the bundle is the one that was recorded.
 
-Signing is future work: a signature over the digest would let a verifier
-check which server produced a bundle without trusting the channel. The
-format leaves room for it in a later version, and an unknown field is
-refused today rather than ignored, so a signature cannot be added to a
-bundle without the verifier noticing.
+## Signed bundles move the trust boundary to a key
+
+A signed bundle carries an Ed25519 signature over its digest and the id of
+the key that made it. The signature moves trust from the channel to the
+key: a verifier who holds the server's public key, obtained through a
+channel it already trusts, can check that whoever sealed the bundle held
+the private key, however the bundle reached it.
+
+What a signature proves stops there:
+
+- **Who held the key, not that the server was honest.** A signature says
+  the bundle was sealed with that key. It does not make the findings
+  correct or the state complete, and anyone who obtains the private key
+  can sign anything.
+- **Only against keys the verifier chose.** The key id inside a bundle
+  names a key; it does not vouch for it. `verify` checks a signature only
+  against public keys passed with `--trusted-key`. A signed bundle checked
+  without them is reported as signature present, not checked, and must not
+  be described as authenticated.
+- **Never a better completeness.** The signature covers the digest, and the
+  digest covers the completeness state and reasons. A signed incomplete
+  bundle is still incomplete, and relabelling it complete breaks the
+  digest and therefore the signature.
+
+The format records whether a bundle is signed. The unsigned format refuses
+a signature and the signed format requires one, and each format digests
+behind its own domain tag. Stripping a signature therefore means
+resealing the bundle under the unsigned format, which a verifier holding
+trusted keys refuses, because it requires a signature once it is given
+any key.
+
+- Default chosen for review: signing is off unless the operator
+  configures a key, and an unsigned server's bundles are byte-for-byte
+  what they were before signing existed.
+- Default chosen for review: the server never generates or stores a
+  signing key. The operator names a key file or an environment variable,
+  and the server reads it on every export, so a replaced key file takes
+  effect without a restart.
+- Default chosen for review: a server configured to sign that cannot load
+  its key refuses the export with `SIGNING_KEY_UNAVAILABLE` instead of
+  returning an unsigned bundle, so a verifier expecting a signature never
+  receives a quiet downgrade.
+- Default chosen for review: `verify` given trusted keys refuses an
+  unsigned bundle, a signature by any other key and a signature that does
+  not verify.
+
+The formats, the signed statement and the server settings are in the
+[attested bundle format reference](../reference/attested-bundle-format.md).
+Key setup is in [sign attested bundles](../how-to/sign-attested-bundles.md).
 
 ## What this is not
 

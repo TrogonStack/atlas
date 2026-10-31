@@ -18,14 +18,17 @@ import "trogonatlas/api/eventmodel/v1alpha1/projections.proto";
 // changed while the export ran, is listed in `unresolved` and marks the
 // bundle incomplete instead of being read from a second state.
 //
-// `bundle_digest` proves the bundle was not changed after the server
-// produced it. It does not prove who produced it. See
+// `bundle_digest` proves the bundle was not changed after it was sealed.
+// It does not prove who sealed it. Under the signed format, `signature`
+// adds that proof for a verifier who trusts the signing key. See
 // docs/explanation/attested-export.md and
 // docs/reference/attested-bundle-format.md.
 
 message AttestedModelBundle {
   // Format identifier. A verifier refuses any value it does not know,
   // since the digest rules belong to the format.
+  // `trogonatlas.attested-model.v1` carries no signature;
+  // `trogonatlas.attested-model.v2` carries exactly one.
   string format = 1;
   AttestedScope scope = 2;
   AttestedState state = 3;
@@ -41,13 +44,33 @@ message AttestedModelBundle {
   repeated SkippedEntity skipped = 7;
   AttestedValidation validation = 8;
   AttestedCompleteness completeness = 9;
-  // Lowercase hex SHA-256 over the domain tag and the canonical JSON of
-  // this message with `bundle_digest` cleared. Covers every other field.
+  // Lowercase hex SHA-256 over the format's domain tag and the canonical
+  // JSON of this message with `bundle_digest` and `signature` cleared.
+  // Covers every other field.
   string bundle_digest = 10;
   // Entities the bundle needed but could not attest from its snapshot,
   // sorted by `key`, one row per key. Non-empty only when `completeness`
   // carries `REASON_UNRESOLVED_ENTITIES`.
   repeated AttestedUnresolved unresolved = 11;
+  // Detached signature over `bundle_digest`. Required by the signed
+  // format and refused by the unsigned one.
+  BundleSignature signature = 12;
+}
+
+// Who sealed a bundle, checkable by a verifier that trusts the key.
+message BundleSignature {
+  enum Algorithm {
+    ALGORITHM_UNSPECIFIED = 0;
+    // Ed25519 over the signature domain tag followed by the 32 raw bytes
+    // of `bundle_digest`.
+    ALGORITHM_ED25519 = 1;
+  }
+  Algorithm algorithm = 1;
+  // Lowercase hex SHA-256 of the raw 32-byte public key, so a verifier
+  // can pick the trusted key without trying each one.
+  string key_id = 2;
+  // The 64-byte signature.
+  bytes value = 3;
 }
 
 // One entity the snapshot could not vouch for.

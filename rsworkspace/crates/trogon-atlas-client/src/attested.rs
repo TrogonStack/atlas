@@ -1,11 +1,15 @@
 //! Attested model export (`ExportAttestedModel`) and its offline check.
-//! Verification reads only the saved bundle, so it needs no server and
-//! proves integrity, not who produced it.
+//! Verification reads only the saved bundle, so it needs no server. It
+//! proves integrity, and proves who sealed a signed bundle only against
+//! public keys the verifier supplies.
 
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use trogon_atlas_core::attested_bundle::{self, VerifiedBundle};
+use trogon_atlas_core::{
+    attested_bundle::{self, VerifiedBundle},
+    attested_signing::{TrustedKey, TrustedKeys},
+};
 use trogon_atlas_proto as pb;
 
 use crate::{
@@ -57,15 +61,40 @@ pub async fn export_attested_model(
     Ok((bundle, verified))
 }
 
-/// Read a saved bundle and verify it. A malformed or tampered file is
+/// Read SPKI PEM Ed25519 public keys a verifier trusts. `None` when no
+/// path is given, so verification checks integrity only.
+pub fn read_trusted_keys(paths: &[impl AsRef<Path>]) -> Result<Option<TrustedKeys>> {
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let keys = paths
+        .iter()
+        .map(|path| {
+            let path = path.as_ref();
+            let pem = std::fs::read_to_string(path).map_err(|e| {
+                crate::failure::invalid_input(format!("reading {}: {e}", path.display()))
+            })?;
+            TrustedKey::from_public_key_pem(&pem)
+                .map_err(|e| crate::failure::invalid_input(format!("{}: {e}", path.display())))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Some(TrustedKeys::new(keys)?))
+}
+
+/// Read a saved bundle and verify it, requiring a signature by one of
+/// `trusted` when given. A malformed, tampered or untrusted file is
 /// reported as invalid input.
-pub fn verify_file(path: &Path) -> Result<VerifiedBundle> {
+pub fn verify_file(path: &Path, trusted: Option<&TrustedKeys>) -> Result<VerifiedBundle> {
     let json =
         std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let bundle = attested_bundle::bundle_from_json(&json).map_err(|e| {
         crate::failure::invalid_input(format!("{} is not an attested bundle: {e}", path.display()))
     })?;
-    attested_bundle::verify(&bundle).map_err(|e| {
+    match trusted {
+        Some(trusted) => attested_bundle::verify_trusted(&bundle, trusted),
+        None => attested_bundle::verify(&bundle),
+    }
+    .map_err(|e| {
         crate::failure::invalid_input(format!("{} failed verification: {e}", path.display()))
     })
 }
