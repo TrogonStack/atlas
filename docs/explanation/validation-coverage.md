@@ -148,9 +148,11 @@ subset). Coverage work makes that answer observable either way.
 
 Truncation, depth, and visibility flags must use the same scope and
 snapshot identity vocabulary as coverage, so a truncated empty issue list
-cannot look complete. Consequence deltas then compare findings only within
-declared comparable scopes; an after-scan that omitted a suite or truncated
-the snapshot cannot claim a finding was resolved.
+cannot look complete. [Consequence deltas](consequence-delta.md) build on
+the same coverage: each side of the comparison carries its own coverage,
+and a finding missing from an after-scan whose suite did not complete is
+reported as unknown, never as resolved, unless its subject or origin was
+removed, in which case it is reported as subject removed.
 
 ## Where the code lives
 

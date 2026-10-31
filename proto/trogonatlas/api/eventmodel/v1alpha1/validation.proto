@@ -161,3 +161,75 @@ message ValidationCoverage {
   // May be narrower than `effective_scope` for store-wide checks.
   ValidationScope requested_scope = 4;
 }
+
+// ---------- Consequence delta ------------------------------------------------
+//
+// What a proposed change would do to the findings of the model it lands in.
+// Both worlds are scanned with the same suites over the caller's whole
+// visible snapshot, then compared by finding identity. Advisory only: a
+// delta never refuses a write. See docs/explanation/consequence-delta.md.
+
+message FindingChange {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    // Present after the change and absent before, with the before scan
+    // complete for its suite.
+    KIND_INTRODUCED = 1;
+    // Present before and absent after, with the after scan complete for its
+    // suite and the subject still present.
+    KIND_RESOLVED = 2;
+    // Same identity on both sides with a different severity.
+    KIND_SEVERITY_CHANGED = 3;
+    // The change removes the finding's subject or origin, so the finding
+    // goes with it.
+    KIND_SUBJECT_REMOVED = 4;
+    // The finding now also appears on a newer version of its subject: the
+    // successor inherited it rather than introducing a new problem.
+    KIND_CARRIED_TO_SUCCESSOR = 5;
+    // Seen on one side only, but the other side's scan could not cover the
+    // finding's suite. `before` set alone: resolution is unproven. `after`
+    // set alone: novelty is unproven. `reason` names the gap.
+    KIND_UNKNOWN = 6;
+  }
+  Kind kind = 1;
+  // Suite the finding belongs to, as on ValidationCheckResult.check_id.
+  string check_id = 2;
+  // Representative issue on each side. Unset on the side where the
+  // identity has no occurrence.
+  ValidationIssue before = 3;
+  ValidationIssue after = 4;
+  // Occurrences of this identity this change accounts for.
+  uint32 occurrences = 5;
+  // Total occurrences of the identity in each world, so repeated findings
+  // are visible as counts rather than as duplicate entries.
+  uint32 occurrences_before = 6;
+  uint32 occurrences_after = 7;
+  // Why the change is KIND_UNKNOWN. Empty for every other kind.
+  string reason = 8;
+  // The entity whose validation pass produced the finding, for suites that
+  // run once per entity (`model`, `scenarios`). Part of the finding's
+  // identity: one rule on one subject reported by two models is two
+  // findings. Absent for suites that scan the whole store.
+  trogonatlas.eventmodel.v1alpha1.EntityRef origin = 9;
+}
+
+message ConsequenceDelta {
+  // Every identity whose occurrences or severity differ, sorted by suite,
+  // code and subject.
+  repeated FindingChange changes = 1;
+  // Occurrences present on both sides with the same severity.
+  uint32 unchanged_count = 2;
+  // Coverage of the scan over the world before the change.
+  ValidationCoverage before_coverage = 3;
+  // Coverage of the scan over the candidate world.
+  ValidationCoverage after_coverage = 4;
+  // True only when every suite the delta compares completed on both sides
+  // and no applicable suite was left out. False never means "no change";
+  // it means some finding may be missing from `changes`.
+  bool complete = 5;
+  // Snapshot identity of the visible world the change was compared
+  // against, computed like GetSnapshotId with no namespace filter.
+  string before_snapshot_id = 6;
+  // Snapshot identity of the candidate world the change would produce.
+  string after_snapshot_id = 7;
+}

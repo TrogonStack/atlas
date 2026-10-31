@@ -1272,6 +1272,24 @@ fn with_coverage(
     result
 }
 
+/// Add a server-reported consequence delta to an already-built JSON tool
+/// result body. An absent delta leaves the body untouched.
+fn with_consequence_delta(
+    mut result: CallToolResult,
+    delta: Option<&pb::ConsequenceDelta>,
+) -> CallToolResult {
+    let body = result
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok());
+    if let (Some(mut body), Some(_)) = (body, delta) {
+        trogon_atlas_client::apply::insert_consequence_delta(&mut body, delta);
+        result.content[0] = ContentBlock::text(body.to_string());
+    }
+    result
+}
+
 fn with_issues(mut result: CallToolResult, issues: Vec<serde_json::Value>) -> CallToolResult {
     let body = result
         .content
@@ -3416,10 +3434,13 @@ impl McpServer {
             .map_err(tool_err("put_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope_with_issues(
-            &resp,
-            &issues_json(&resp.validation),
-            resp.coverage.as_ref(),
+        Ok(with_consequence_delta(
+            self.scoped_envelope_with_issues(
+                &resp,
+                &issues_json(&resp.validation),
+                resp.coverage.as_ref(),
+            ),
+            resp.consequence_delta.as_ref(),
         ))
     }
 
@@ -3507,10 +3528,13 @@ impl McpServer {
             .map_err(tool_err("put_entity_json"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope_with_issues(
-            &resp,
-            &issues_json(&resp.validation),
-            resp.coverage.as_ref(),
+        Ok(with_consequence_delta(
+            self.scoped_envelope_with_issues(
+                &resp,
+                &issues_json(&resp.validation),
+                resp.coverage.as_ref(),
+            ),
+            resp.consequence_delta.as_ref(),
         ))
     }
 
@@ -3557,10 +3581,13 @@ impl McpServer {
         if resp.status == pb::batch_mutate_response::Status::Failed as i32 {
             return Err(McpError::from(batch_mutate_failure(&resp)).into());
         }
-        Ok(self.scoped_envelope_with_issues(
-            &resp,
-            &batch_issues_json(&op_entities, &resp),
-            resp.coverage.as_ref(),
+        Ok(with_consequence_delta(
+            self.scoped_envelope_with_issues(
+                &resp,
+                &batch_issues_json(&op_entities, &resp),
+                resp.coverage.as_ref(),
+            ),
+            resp.consequence_delta.as_ref(),
         ))
     }
 
@@ -3732,10 +3759,13 @@ impl McpServer {
             let err: rmcp::ErrorData = McpError::from(batch_mutate_failure(&resp)).into();
             return Err(attach_operation_id(err, &operation_id));
         }
-        Ok(self.scoped_envelope_with_issues(
-            &resp,
-            &batch_issues_json(&op_entities, &resp),
-            resp.coverage.as_ref(),
+        Ok(with_consequence_delta(
+            self.scoped_envelope_with_issues(
+                &resp,
+                &batch_issues_json(&op_entities, &resp),
+                resp.coverage.as_ref(),
+            ),
+            resp.consequence_delta.as_ref(),
         ))
     }
 
@@ -4203,7 +4233,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Non-blocking validation findings, strategic ones included, come back in the `issues` array as {severity, code, subject, field, message, op_index, op_entity} (op_index is the position among the changed manifests sent, op_entity the manifest's entity id): fix every warning and error. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state.",
+        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Non-blocking validation findings, strategic ones included, come back in the `issues` array as {severity, code, subject, field, message, op_index, op_entity} (op_index is the position among the changed manifests sent, op_entity the manifest's entity id): fix every warning and error. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state. A dry run that sends a batch and has it validated also returns `consequence_delta`: which findings the change would introduce, resolve or leave unknown (advisory, never a refusal). It is absent when every manifest is unchanged (no batch is sent) or when the server could not compute it; an absent delta never means no findings changed.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -4247,6 +4277,10 @@ impl McpServer {
             "operation_id": (!operation_id.is_empty()).then_some(operation_id.as_str()),
         });
         trogon_atlas_client::apply::insert_coverage(&mut body, outcome.coverage.as_ref());
+        trogon_atlas_client::apply::insert_consequence_delta(
+            &mut body,
+            outcome.consequence_delta.as_ref(),
+        );
         Ok(CallToolResult::success(vec![ContentBlock::text(
             body.to_string(),
         )]))
@@ -4438,7 +4472,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Merge a branch onto baseline (Phase 2: Review and merge). All-or-nothing: any conflict (see conflicts) or post-merge validation Error (see validation) persists nothing. Set dry_run to run full detection and validation without persisting even on success; the result splits the landable entries into added_count, changed_count and deleted_count and lists the post-merge findings, strategic ones included, in validation and, as JSON, in `issues` (Warning and Info findings are non-blocking; fix them). keep_branch controls whether a successful, non-dry-run merge deletes the branch afterward (default: deletes it). Set auto_merge to land the combined result for edit/edit conflicts whose two sides changed different fields.",
+        description = "Merge a branch onto baseline (Phase 2: Review and merge). All-or-nothing: any conflict (see conflicts) or post-merge validation Error (see validation) persists nothing. Set dry_run to run full detection and validation without persisting even on success; the result splits the landable entries into added_count, changed_count and deleted_count and lists the post-merge findings, strategic ones included, in validation and, as JSON, in `issues` (Warning and Info findings are non-blocking; fix them). keep_branch controls whether a successful, non-dry-run merge deletes the branch afterward (default: deletes it). Set auto_merge to land the combined result for edit/edit conflicts whose two sides changed different fields. A dry run that reaches validation also returns `consequence_delta`: which findings the change would introduce, resolve or leave unknown (advisory, never a refusal). It is absent when the merge has conflicts or when the server could not compute it; an absent delta never means no findings changed.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -4465,16 +4499,19 @@ impl McpServer {
             .map_err(tool_err("merge_branch"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(with_coverage(
-            with_issues(
-                ok_response(
-                    "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
-                    &resp,
-                    p.json.unwrap_or(false),
+        Ok(with_consequence_delta(
+            with_coverage(
+                with_issues(
+                    ok_response(
+                        "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
+                        &resp,
+                        p.json.unwrap_or(false),
+                    ),
+                    issues_json(&resp.validation),
                 ),
-                issues_json(&resp.validation),
+                resp.coverage.as_ref(),
             ),
-            resp.coverage.as_ref(),
+            resp.consequence_delta.as_ref(),
         ))
     }
 

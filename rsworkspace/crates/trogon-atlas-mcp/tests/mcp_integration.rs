@@ -2169,3 +2169,36 @@ async fn communication_mcp_native_authoring_queries_and_export_preserve_occurren
     );
     service.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_entity_json_dry_run_reports_the_consequence_delta() {
+    use serde_json::json;
+    let (client, service, _) = start_mcp_client().await;
+    let model = |members: Vec<serde_json::Value>| {
+        json!({"eventModel":{"id":{"namespace":"mcp-delta","slug":"checkout","version":"1"},"title":"Checkout","members":members}}).to_string()
+    };
+    call_ok(
+        &client,
+        "put_entity_json",
+        put_entity_json_args(&model(vec![])),
+    )
+    .await;
+    let mut preview = put_entity_json_args(&model(vec![
+        json!({"kind":"ENTITY_KIND_EVENT","id":{"namespace":"mcp-delta","slug":"missing","version":"1"}}),
+    ]));
+    preview.insert("validate_only".into(), json!(true));
+
+    let body = call_tool_result_text(&call_ok(&client, "put_entity_json", preview).await);
+
+    let delta = &body["consequence_delta"];
+    assert_eq!(delta["complete"], json!(true), "{body}");
+    let introduced = delta["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|change| change["after"]["code"] == "MEMBER_NOT_FOUND")
+        .unwrap_or_else(|| panic!("{body}"));
+    assert_eq!(introduced["kind"], "KIND_INTRODUCED");
+    assert_eq!(introduced["origin"], "event_model:mcp-delta/checkout@1");
+    service.cancel().await.unwrap();
+}
