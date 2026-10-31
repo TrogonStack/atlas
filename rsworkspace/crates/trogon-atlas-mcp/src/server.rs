@@ -20,6 +20,7 @@ use trogon_atlas_proto as pb;
 use crate::{
     caller::{Caller, CallerToken},
     error::{attach_operation_id, tool_err, McpError},
+    profile::ToolProfile,
     tools::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
         BatchMutateParams, CatalogQueryParams, CompileTypeLibraryParams, CreateBranchParams,
@@ -37,6 +38,9 @@ use crate::{
         ValidateProjectParams,
     },
 };
+
+/// The `initialize` result `_meta` key naming the active tool profile.
+pub const PROFILE_META_KEY: &str = "trogon-atlas/tool-profile";
 
 pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 
@@ -237,6 +241,20 @@ impl ToolRole {
     }
 }
 
+/// The part of the service a tool works on. Tool profiles are derived from
+/// a tool's area and its effect, so this is what places a new tool in them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolArea {
+    /// Server identity, catalogues and type resolution every task needs.
+    Discovery,
+    /// Entities, their references, projections, validation and history.
+    Model,
+    Branch,
+    Source,
+    /// Bulk or cross-namespace operations no task profile offers.
+    Administration,
+}
+
 impl From<pb::Role> for ToolRole {
     fn from(role: pb::Role) -> Self {
         match role {
@@ -262,6 +280,7 @@ pub struct ToolPolicy {
     pub tool: &'static str,
     pub rpcs: &'static [&'static str],
     pub min_role: ToolRole,
+    pub area: ToolArea,
 }
 
 pub const TOOL_POLICIES: &[ToolPolicy] = &[
@@ -269,166 +288,199 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "list_source_run_operations",
         rpcs: &["ListSourceRunOperations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "create_source_registration",
         rpcs: &["CreateSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "update_source_registration",
         rpcs: &["UpdateSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_registration",
         rpcs: &["GetSourceRegistration"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_registrations",
         rpcs: &["ListSourceRegistrations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "delete_source_registration",
         rpcs: &["DeleteSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "accept_source_snapshot",
         rpcs: &["AcceptSourceSnapshot"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_snapshot",
         rpcs: &["GetSourceSnapshot"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_snapshots",
         rpcs: &["ListSourceSnapshots"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "create_source_mapping",
         rpcs: &["CreateSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "update_source_mapping",
         rpcs: &["UpdateSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_mapping",
         rpcs: &["GetSourceMapping"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_mappings",
         rpcs: &["ListSourceMappings"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "delete_source_mapping",
         rpcs: &["DeleteSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_overlay",
         rpcs: &["GetSourceOverlay"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "preview_source_run",
         rpcs: &["PreviewSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "apply_source_run",
         rpcs: &["ApplySourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "cancel_source_run",
         rpcs: &["CancelSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_run",
         rpcs: &["GetSourceRun"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_runs",
         rpcs: &["ListSourceRuns"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "recover_source_run",
         rpcs: &["RecoverSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_run_results",
         rpcs: &["ListSourceRunResults"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_subject_decisions",
         rpcs: &["ListSubjectDecisions"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_documents",
         rpcs: &["ListSubjectDocuments"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_decision_detail",
         rpcs: &["GetDecisionDetail"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_document_detail",
         rpcs: &["GetDocumentDetail"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_incoming_decision_declarations",
         rpcs: &["ListIncomingDecisionDeclarations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_incoming_document_declarations",
         rpcs: &["ListIncomingDocumentDeclarations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_assignments",
         rpcs: &["ListSubjectAssignments"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_assignee_responsibilities",
         rpcs: &["ListAssigneeResponsibilities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_team_members",
         rpcs: &["ListTeamMembers"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_person_teams",
         rpcs: &["ListPersonTeams"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_team_contacts",
         rpcs: &["GetTeamContacts"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "inspect_data_product",
@@ -438,221 +490,265 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
             "GetTypeLibraryDescriptorSet",
         ],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_server_info",
         rpcs: &["GetServerInfo"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "who_am_i",
         rpcs: &["WhoAmI"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "compile_type_library",
         rpcs: &["CompileTypeLibrary"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "resolve_type",
         rpcs: &["ResolveType"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "list_namespaces",
         rpcs: &["ListNamespaces"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "register_namespace",
         rpcs: &["RegisterNamespace"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "move_namespace",
         rpcs: &["MoveNamespace"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
     },
     ToolPolicy {
         tool: "get_snapshot_id",
         rpcs: &["GetSnapshotId"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_entities",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity",
         rpcs: &["GetEntity"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_get_entities",
         rpcs: &["BatchGetEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "search_entities",
         rpcs: &["SearchEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_versions",
         rpcs: &["ListVersions"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_latest_version",
         rpcs: &["GetLatestVersion"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_supersession_chain",
         rpcs: &["GetSupersessionChain"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_incoming_references",
         rpcs: &["GetIncomingReferences"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_outgoing_references",
         rpcs: &["GetOutgoingReferences"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_impact",
         rpcs: &["GetImpact"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "retarget_references",
         rpcs: &["RetargetReferences"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_slice_projection",
         rpcs: &["GetSliceProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_storyboard_projection",
         rpcs: &["GetStoryboardProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_event_model_projection",
         rpcs: &["GetEventModelProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "extract_subgraph",
         rpcs: &["ExtractSubgraph"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "diff_entities",
         rpcs: &["DiffEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "put_entity",
         rpcs: &["PutEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity_json",
         rpcs: &["GetEntity"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "put_entity_json",
         rpcs: &["PutEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_mutate_json",
         rpcs: &["BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "delete_entity",
         rpcs: &["DeleteEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_mutate",
         rpcs: &["BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_changes",
         rpcs: &["ListChanges"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_changesets",
         rpcs: &["ListChangesets"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_changeset",
         rpcs: &["GetChangeset"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity_history",
         rpcs: &["GetEntityHistory"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "revert_changeset",
         rpcs: &["RevertChangeset"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "validate_event_model",
         rpcs: &["ValidateEventModel"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_validation_rules",
         rpcs: &["ListValidationRules"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "validate_project",
         rpcs: &["ValidateProject"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "delete_by_query",
         rpcs: &["DeleteByQuery"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
     },
     ToolPolicy {
         tool: "list_entity_kinds",
         rpcs: &["ListEntityKinds"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "list_entities_by_domain",
         rpcs: &["ListEntitiesByDomain"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "infer_data_flow",
         rpcs: &["InferDataFlow"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "check_information_completeness",
         rpcs: &["CheckInformationCompleteness"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     // apply_manifests plans with BatchGetEntities, then writes through
     // BatchMutate (trogon_atlas_client::apply::plan / apply).
@@ -660,6 +756,7 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "apply_manifests",
         rpcs: &["BatchGetEntities", "BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     // diff_manifests only plans (trogon_atlas_client::apply::plan); it
     // never calls apply, so it never reaches BatchMutate.
@@ -667,65 +764,77 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "diff_manifests",
         rpcs: &["BatchGetEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "export_namespace",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "export_openslo",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "create_branch",
         rpcs: &["CreateBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "list_branches",
         rpcs: &["ListBranches"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "delete_branch",
         rpcs: &["DeleteBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "diff_branch",
         rpcs: &["DiffBranch"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "merge_branch",
         rpcs: &["MergeBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "update_branch",
         rpcs: &["UpdateBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "resolve_branch_entry",
         rpcs: &["ResolveBranchEntry"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "get_entity_schema",
         rpcs: &["ListValidationRules"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "get_operation",
         rpcs: &["GetOperation"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Discovery,
     },
 ];
 
-fn policy_for(tool: &str) -> Option<&'static ToolPolicy> {
+pub(crate) fn policy_for(tool: &str) -> Option<&'static ToolPolicy> {
     TOOL_POLICIES.iter().find(|p| p.tool == tool)
 }
 
@@ -758,6 +867,9 @@ pub struct McpServer {
     /// Whether every request carries `x-trogon-atlas-branch`, which a server
     /// must honor before this adapter lets an agent mutate through it.
     branch_scoped: bool,
+    /// The operator's profile on the shared instance; on a per-request copy,
+    /// the profile that request runs under.
+    profile: Option<ToolProfile>,
     // Required for `#[tool_router]` codegen; the macro reads this field
     // off `self` at dispatch time but the compiler can't prove the read
     // because the dispatch flows through trait-object indirection. The
@@ -777,8 +889,42 @@ impl McpServer {
             branch_scoped: options.branch.is_some(),
             options,
             client,
+            profile: None,
             tool_router: Self::tool_router(),
         })
+    }
+
+    /// Fix every session to `profile`. A request may still name a profile,
+    /// but only this one: a request cannot widen or swap the operator's
+    /// choice.
+    #[must_use]
+    pub fn with_profile(self, profile: Option<ToolProfile>) -> Self {
+        Self { profile, ..self }
+    }
+
+    pub fn profile(&self) -> Option<ToolProfile> {
+        self.profile
+    }
+
+    fn profile_for(
+        &self,
+        requested: Option<ToolProfile>,
+    ) -> Result<Option<ToolProfile>, rmcp::ErrorData> {
+        match (self.profile, requested) {
+            (Some(configured), Some(requested)) if configured != requested => {
+                Err(rmcp::ErrorData::invalid_request(
+                    format!(
+                        "this server runs the `{configured}` tool profile; a request cannot select `{requested}`"
+                    ),
+                    None,
+                ))
+            }
+            (configured, requested) => Ok(configured.or(requested)),
+        }
+    }
+
+    fn offers(&self, tool: &rmcp::model::Tool) -> bool {
+        self.profile.is_none_or(|profile| profile.admits(tool))
     }
 
     /// Every tool this adapter registers, whatever any caller's role.
@@ -789,6 +935,7 @@ impl McpServer {
     /// A copy of this server whose every gRPC call carries `caller`'s token
     /// and branch.
     fn for_caller(&self, caller: Caller) -> Result<Self, rmcp::ErrorData> {
+        let profile = self.profile_for(caller.profile)?;
         let options = ConnectOptions {
             branch: caller.branch.or_else(|| self.options.branch.clone()),
             ..self.options.clone()
@@ -803,6 +950,7 @@ impl McpServer {
             client,
             branch_scoped: options.branch.is_some(),
             options,
+            profile,
             ..self.clone()
         })
     }
@@ -4698,8 +4846,31 @@ impl McpServer {
 #[tool_handler]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(SERVER_INSTRUCTIONS)
+        let config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
+        match self.profile {
+            None => config.with_instructions(SERVER_INSTRUCTIONS),
+            Some(profile) => {
+                let mut config = config.with_instructions(format!(
+                    "{SERVER_INSTRUCTIONS}\n\nActive tool profile: {profile}. Tools outside it are neither listed nor callable."
+                ));
+                let mut meta = serde_json::Map::new();
+                meta.insert(PROFILE_META_KEY.to_owned(), profile.as_str().into());
+                config.meta = Some(rmcp::model::MetaObject(meta));
+                config
+            }
+        }
+    }
+
+    /// Reports the profile this request runs under, which a header may name,
+    /// so the answer reflects the request rather than the shared instance.
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::InitializeResult, rmcp::ErrorData> {
+        let session = self.for_request(&context)?;
+        context.peer.set_peer_info(request.clone());
+        session.negotiate_initialize(&request)
     }
 
     /// Runs the tool as the caller who sent this request, never as the
@@ -4710,6 +4881,21 @@ impl ServerHandler for McpServer {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let caller = self.for_request(&context)?;
+        if let Some(profile) = caller.profile {
+            let offered = self
+                .tool_router
+                .get(&request.name)
+                .is_some_and(|tool| profile.admits(tool));
+            if !offered {
+                return Err(rmcp::ErrorData::invalid_params(
+                    format!(
+                        "tool `{}` is not in the `{profile}` tool profile",
+                        request.name
+                    ),
+                    None,
+                ));
+            }
+        }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(&caller, request, context);
         self.tool_router.call(tcc).await
     }
@@ -4725,8 +4911,14 @@ impl ServerHandler for McpServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
-        let role = self.for_request(&context)?.learn_role().await;
-        let tools = self.tool_router.list_all();
+        let session = self.for_request(&context)?;
+        let role = session.learn_role().await;
+        let tools: Vec<_> = self
+            .tool_router
+            .list_all()
+            .into_iter()
+            .filter(|tool| session.offers(tool))
+            .collect();
         let tools = match role {
             None => tools,
             Some(role) => tools

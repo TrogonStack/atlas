@@ -34,6 +34,7 @@ Look up exact behavior:
 
 - [Failure reasons](reference/failure-reasons.md)
 - [MCP tool reference](reference/mcp-tools.md)
+- [MCP tool profiles](reference/mcp-tool-profiles.md)
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
 - [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)

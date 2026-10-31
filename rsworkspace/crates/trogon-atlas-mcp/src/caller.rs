@@ -2,6 +2,8 @@ use std::fmt;
 
 use rmcp::{service::RequestContext, ErrorData, RoleServer};
 
+use crate::profile::{ToolProfile, PROFILE_HEADER};
+
 pub const BRANCH_HEADER: &str = "x-trogon-atlas-branch";
 
 /// Who an MCP request acts as, and on which branch, read from that request's
@@ -10,6 +12,7 @@ pub const BRANCH_HEADER: &str = "x-trogon-atlas-branch";
 pub struct Caller {
     pub token: Option<CallerToken>,
     pub branch: Option<String>,
+    pub profile: Option<ToolProfile>,
 }
 
 impl Caller {
@@ -32,9 +35,22 @@ impl Caller {
                 Some(value.trim().to_owned()).filter(|branch| !branch.is_empty())
             }
         };
+        let profile = match headers.get(PROFILE_HEADER) {
+            None => None,
+            Some(value) => Some(
+                value
+                    .to_str()
+                    .map_err(|_| {
+                        ErrorData::invalid_request(format!("{PROFILE_HEADER} must be ASCII"), None)
+                    })?
+                    .parse::<ToolProfile>()
+                    .map_err(|e| ErrorData::invalid_request(e.to_string(), None))?,
+            ),
+        };
         Ok(Self {
             token: CallerToken::from_headers(headers)?,
             branch,
+            profile,
         })
     }
 }
