@@ -344,6 +344,24 @@ impl PendingChangeset {
     }
 }
 
+/// The cached baseline view and whether the load that produced it hit the
+/// entity cap. Kept together so readers never see one load's entities with
+/// another load's truncation flag.
+#[derive(Clone)]
+struct BaselineSnapshot {
+    entities: Arc<Vec<StoredEntity>>,
+    truncated: bool,
+}
+
+/// The caller's view of baseline as of an older changeset. `truncated` is
+/// the cap flag of the baseline load the rewind started from; `incomplete`
+/// is set when keys the rewind needed were left unfetched.
+struct AsOfView {
+    entities: Arc<Vec<StoredEntity>>,
+    truncated: bool,
+    incomplete: bool,
+}
+
 type OwnerSnapshotCache = tokio::sync::RwLock<HashMap<OwnerId, (Lens, Arc<Vec<StoredEntity>>)>>;
 
 pub struct EventModelServiceImpl {
@@ -387,7 +405,7 @@ pub struct EventModelServiceImpl {
     ///
     /// Uses `tokio::sync::RwLock` so reads and writes are async-aware and
     /// cannot block the runtime (`parking_lot::RwLock` would block the thread).
-    snapshot_cache: tokio::sync::RwLock<Option<Arc<Vec<StoredEntity>>>>,
+    snapshot_cache: tokio::sync::RwLock<Option<BaselineSnapshot>>,
     /// Entity cap of the baseline snapshot load.
     snapshot_cap: usize,
     /// Cached `ReverseIndex` co-located with the snapshot. Invalidated in
@@ -416,10 +434,6 @@ pub struct EventModelServiceImpl {
     /// records a bound caller cannot see. See `change_cursor` for why a raw
     /// sequence number cannot be handed back in that case.
     change_cursor_seal: Arc<crate::change_cursor::ChangeCursorSeal>,
-    /// True when the last snapshot load hit the entity cap exactly, meaning
-    /// the in-process view may be incomplete. Destructive operations
-    /// (`delete_by_query`) refuse to proceed on a truncated snapshot.
-    snapshot_truncated: Arc<AtomicBool>,
     /// Which namespaces refuse direct baseline writes. Mutating RPCs
     /// (`PutEntity`, `DeleteEntity`, `BatchMutate`, `RetargetReferences`,
     /// `DeleteByQuery`) reject a request that carries no
@@ -594,7 +608,6 @@ impl EventModelServiceImpl {
             change_cursor_seal: Arc::new(crate::change_cursor::ChangeCursorSeal::new(
                 &crate::change_cursor::ChangeCursorKey::generate(),
             )),
-            snapshot_truncated: Arc::new(AtomicBool::new(false)),
             baseline_protection: BaselineProtection::Off,
             directory: directory.clone(),
             authorizer: Arc::new(RegistryAuthorizer::new(directory, store_for_authorizer)),
@@ -617,6 +630,13 @@ impl EventModelServiceImpl {
     /// (~15 MB at 1500 entities × ~10 KB), which was the dominant
     /// allocation cost on the read path.
     async fn baseline_snapshot(&self) -> Result<Arc<Vec<StoredEntity>>, Status> {
+        Ok(self.baseline_snapshot_with_truncation().await?.entities)
+    }
+
+    /// [`baseline_snapshot`](Self::baseline_snapshot) together with the
+    /// truncation flag of the very load that produced it, so a concurrent
+    /// rebuild can never pair one load's entities with another's flag.
+    async fn baseline_snapshot_with_truncation(&self) -> Result<BaselineSnapshot, Status> {
         if let Some(snap) = self.snapshot_cache.read().await.clone() {
             self.metrics.record_snapshot_cache_hit();
             return Ok(snap);
@@ -637,13 +657,12 @@ impl EventModelServiceImpl {
                 .instrument(tracing::info_span!("snapshot_rebuild"))
                 .await?
         };
-        // Persist the truncation flag on the service so destructive callers
-        // (delete_by_query) can refuse to proceed on a partial view.
-        self.snapshot_truncated
-            .store(result.truncated, std::sync::atomic::Ordering::Release);
-        let all = Arc::new(result.entities);
-        *self.snapshot_cache.write().await = Some(all.clone());
-        Ok(all)
+        let snap = BaselineSnapshot {
+            entities: Arc::new(result.entities),
+            truncated: result.truncated,
+        };
+        *self.snapshot_cache.write().await = Some(snap.clone());
+        Ok(snap)
     }
 
     /// The caller's view of the store.
@@ -782,7 +801,7 @@ impl EventModelServiceImpl {
         vis: &Visibility,
         principal: Option<&crate::auth::Principal>,
         root: (pb::EntityKind, &pb::Id),
-    ) -> Result<(Arc<Vec<StoredEntity>>, bool), Status> {
+    ) -> Result<AsOfView, Status> {
         // Validates the id and turns an unknown one into NOT_FOUND before
         // any walk starts.
         let target = self
@@ -803,7 +822,10 @@ impl EventModelServiceImpl {
         }
         // Snapshot before listing: a write that lands in between is then
         // in `newer` and gets rewound, instead of leaking into the view.
-        let mut current = self.baseline_snapshot().await?;
+        let BaselineSnapshot {
+            entities: mut current,
+            truncated,
+        } = self.baseline_snapshot_with_truncation().await?;
         let lens = self.lens(vis).await?;
         let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
 
@@ -896,10 +918,16 @@ impl EventModelServiceImpl {
         };
         // Narrow with the lens the walk used: a namespace admitted only by a
         // later lookup was never rewound and would show its current state.
-        if lens.is_unrestricted() {
-            return Ok((Arc::new(rewound), incomplete));
-        }
-        Ok((Self::apply_lens(&rewound, &lens), incomplete))
+        let entities = if lens.is_unrestricted() {
+            Arc::new(rewound)
+        } else {
+            Self::apply_lens(&rewound, &lens)
+        };
+        Ok(AsOfView {
+            entities,
+            truncated,
+            incomplete,
+        })
     }
 
     /// Baseline changesets newer than `changeset_id`, newest first, with
@@ -962,8 +990,7 @@ impl EventModelServiceImpl {
     /// [`snapshot_for`](Self::snapshot_for) plus whether the view hit the
     /// entity cap.
     ///
-    /// `snapshot_for` drops the branch load's truncation flag (only the
-    /// baseline path persists one, on `snapshot_truncated`). Callers that
+    /// `snapshot_for` drops the truncation flag of the load it read. Callers that
     /// must report completeness rather than merely tolerate it -- the
     /// snapshot id names a *state*, and naming a partial state as if it
     /// were whole is the failure mode -- need both branches to answer.
@@ -973,9 +1000,9 @@ impl EventModelServiceImpl {
         vis: &Visibility,
     ) -> Result<(Arc<Vec<StoredEntity>>, bool), Status> {
         let Some(branch) = branch else {
-            let all = self.snapshot(vis).await?;
-            let truncated = self.snapshot_truncated.load(Ordering::Acquire);
-            return Ok((all, truncated));
+            let snap = self.baseline_snapshot_with_truncation().await?;
+            let all = self.narrow_baseline(snap.entities, vis).await?;
+            return Ok((all, snap.truncated));
         };
         use tracing::Instrument as _;
         let result = graph::load_all(&self.store, Some(branch))
@@ -1098,9 +1125,6 @@ impl EventModelServiceImpl {
         *self.reverse_index_cache.write().await = None;
         self.owner_snapshot_cache.write().await.clear();
         self.owner_reverse_index_cache.write().await.clear();
-        // Reset the truncation flag so the next load re-evaluates.
-        self.snapshot_truncated
-            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Returns a cached `ReverseIndex` built from the current snapshot. The index
@@ -1164,7 +1188,7 @@ impl EventModelServiceImpl {
             .read()
             .await
             .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &snap))
+            .is_some_and(|current| Arc::ptr_eq(&current.entities, &snap))
         {
             *guard = Some(idx.clone());
         }
@@ -4708,7 +4732,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             };
             (em, self.snapshot_for(branch.as_deref(), &vis).await?, false)
         } else {
-            let (all, incomplete) = self
+            let AsOfView {
+                entities: all,
+                incomplete,
+                ..
+            } = self
                 .snapshot_as_of(
                     &req.as_of_changeset,
                     &vis,
@@ -4950,7 +4978,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let (root, all, snapshot_truncated, history_incomplete, baseline_changeset_id) =
             if historical {
-                let (all, incomplete) = self
+                let AsOfView {
+                    entities: all,
+                    truncated,
+                    incomplete,
+                } = self
                     .snapshot_as_of(
                         &req.as_of_changeset,
                         &vis,
@@ -4960,7 +4992,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     .await?;
                 let root = event_model_in(&all, id)
                     .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
-                let truncated = self.snapshot_truncated.load(Ordering::Acquire);
                 (
                     root,
                     all,

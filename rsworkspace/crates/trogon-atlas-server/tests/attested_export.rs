@@ -592,6 +592,38 @@ async fn live_writes_do_not_taint_a_historical_export() {
     }
 }
 
+/// Writes that land while a capped historical export runs drop the cached
+/// snapshot; the export must still report the cap of the load it rewound.
+#[tokio::test(flavor = "multi_thread")]
+async fn writes_racing_a_capped_historical_export_keep_it_truncated() {
+    let endpoint = start_server(Some(1)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-capped";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let then = newest_changeset(&mut c).await;
+
+    let bundles = export_while_writing(&endpoint, ns, "other", || {
+        let mut req = export_req(ns, "checkout");
+        req.as_of_changeset = then.clone();
+        req.allow_incomplete = true;
+        tonic::Request::new(req)
+    })
+    .await;
+    assert_ne!(
+        bundles.len(),
+        0,
+        "the race must produce at least one export"
+    );
+    for bundle in &bundles {
+        assert!(
+            reasons_of(bundle).contains(&IncompleteReason::SnapshotTruncated),
+            "{:?}",
+            reasons_of(bundle)
+        );
+    }
+}
+
 /// A baseline write to a key the branch overlays does not change what the
 /// branch shows, so it must not mark the branch export concurrent.
 #[tokio::test(flavor = "multi_thread")]
