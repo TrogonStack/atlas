@@ -3709,6 +3709,18 @@ pub struct RetargetReferencesResponse {
     /// Count of referrers whose write failed.
     #[prost(uint32, tag="3")]
     pub failed: u32,
+    /// Populated only when dry_run is true: `from` when referrers would still
+    /// pin it after the rewrite (excluded by filter_kinds, failed to load, or
+    /// holding no rewritable pointer) and no entity declares `supersedes` on it.
+    /// Advisory: it never blocks the retarget.
+    #[prost(message, repeated, tag="4")]
+    pub unbridged_removals: ::prost::alloc::vec::Vec<UnbridgedRemoval>,
+    /// True when the dry run's referrer scan did not cover the whole model (a
+    /// truncated snapshot, a caller who cannot see every namespace, or a report
+    /// that reached its referrer budget), so `unbridged_removals` may be missing
+    /// entries.
+    #[prost(bool, tag="5")]
+    pub unbridged_removals_incomplete: bool,
 }
 /// Nested message and enum types in `RetargetReferencesResponse`.
 pub mod retarget_references_response {
@@ -3727,6 +3739,23 @@ pub mod retarget_references_response {
         #[prost(string, tag="3")]
         pub error: ::prost::alloc::string::String,
     }
+}
+/// An entity version an operation moves away from or removes while
+/// references still pin it and no entity of its kind declares `supersedes`
+/// on that exact version, so a reader following those references has no
+/// recorded way forward. A successor is never inferred from a similar slug.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UnbridgedRemoval {
+    /// The exact version left behind.
+    #[prost(message, optional, tag="1")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// References that would still point at `entity` after the operation, in
+    /// reverse index order. Only the latest version of each referring slug
+    /// counts, since older versions are history rather than live pins. A
+    /// referrer pinning it from several fields appears once per field.
+    /// `supersedes` links are not counted.
+    #[prost(message, repeated, tag="2")]
+    pub remaining_referrers: ::prost::alloc::vec::Vec<Reference>,
 }
 // ---------- Diff -------------------------------------------------------------
 //
@@ -4366,6 +4395,18 @@ pub struct MergeBranchResponse {
     /// honestly so empty `validation` is not read as a clean full-model gate.
     #[prost(message, optional, tag="9")]
     pub coverage: ::core::option::Option<ValidationCoverage>,
+    /// Populated only on a dry run that reached validation (STATUS_VALIDATED or
+    /// STATUS_INVALID): entity versions the merge deletes, or replaces on
+    /// baseline with a newer version of the same slug, that post-merge
+    /// references still pin while no post-merge entity declares `supersedes` on
+    /// them. Advisory: it never changes the status.
+    #[prost(message, repeated, tag="10")]
+    pub unbridged_removals: ::prost::alloc::vec::Vec<UnbridgedRemoval>,
+    /// True when the post-merge view behind `unbridged_removals` was truncated,
+    /// limited by the caller's visibility, or the report reached its referrer
+    /// budget, so `unbridged_removals` may be missing entries.
+    #[prost(bool, tag="11")]
+    pub unbridged_removals_incomplete: bool,
 }
 /// Nested message and enum types in `MergeBranchResponse`.
 pub mod merge_branch_response {

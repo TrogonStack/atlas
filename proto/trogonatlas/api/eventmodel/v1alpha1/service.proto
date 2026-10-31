@@ -565,6 +565,31 @@ message RetargetReferencesResponse {
   uint32 rewritten = 2;
   // Count of referrers whose write failed.
   uint32 failed = 3;
+  // Populated only when dry_run is true: `from` when referrers would still
+  // pin it after the rewrite (excluded by filter_kinds, failed to load, or
+  // holding no rewritable pointer) and no entity declares `supersedes` on it.
+  // Advisory: it never blocks the retarget.
+  repeated UnbridgedRemoval unbridged_removals = 4;
+  // True when the dry run's referrer scan did not cover the whole model (a
+  // truncated snapshot, a caller who cannot see every namespace, or a report
+  // that reached its referrer budget), so `unbridged_removals` may be missing
+  // entries.
+  bool unbridged_removals_incomplete = 5;
+}
+
+// An entity version an operation moves away from or removes while
+// references still pin it and no entity of its kind declares `supersedes`
+// on that exact version, so a reader following those references has no
+// recorded way forward. A successor is never inferred from a similar slug.
+message UnbridgedRemoval {
+  // The exact version left behind.
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 1;
+  // References that would still point at `entity` after the operation, in
+  // reverse index order. Only the latest version of each referring slug
+  // counts, since older versions are history rather than live pins. A
+  // referrer pinning it from several fields appears once per field.
+  // `supersedes` links are not counted.
+  repeated Reference remaining_referrers = 2;
 }
 
 
@@ -1082,6 +1107,16 @@ message MergeBranchResponse {
   // not run full `model` or write-path `scenarios`; coverage reports that
   // honestly so empty `validation` is not read as a clean full-model gate.
   ValidationCoverage coverage = 9;
+  // Populated only on a dry run that reached validation (STATUS_VALIDATED or
+  // STATUS_INVALID): entity versions the merge deletes, or replaces on
+  // baseline with a newer version of the same slug, that post-merge
+  // references still pin while no post-merge entity declares `supersedes` on
+  // them. Advisory: it never changes the status.
+  repeated UnbridgedRemoval unbridged_removals = 10;
+  // True when the post-merge view behind `unbridged_removals` was truncated,
+  // limited by the caller's visibility, or the report reached its referrer
+  // budget, so `unbridged_removals` may be missing entries.
+  bool unbridged_removals_incomplete = 11;
 }
 
 message UpdateBranchRequest {

@@ -501,6 +501,85 @@ pub fn supersession_descendants(
     out
 }
 
+/// Referrer entries one unbridged-removal report may carry before it stops
+/// and marks itself incomplete.
+pub const UNBRIDGED_REFERRER_BUDGET: usize = 4_096;
+
+pub struct UnbridgedReport {
+    pub removals: Vec<pb::UnbridgedRemoval>,
+    pub incomplete: bool,
+}
+
+/// Retired versions that no entity in `world` supersedes while the latest
+/// version of some other entity still references them. `world` is the store
+/// as it will be once the change lands.
+#[must_use]
+pub fn unbridged_removals(world: &[StoredEntity], retired: &[pb::EntityRef]) -> UnbridgedReport {
+    let mut bridged: HashSet<pb::EntityKey> = HashSet::new();
+    let mut latest: HashMap<(pb::EntityKind, &str, &str), u64> = HashMap::new();
+    for se in world {
+        let (Some(kind), Some(id)) = (ref_entity_kind(&se.entity), ref_entity_id(&se.entity))
+        else {
+            continue;
+        };
+        if let Some(parent) = supersedes_of(&se.entity) {
+            bridged.insert(pb::EntityKey::new(kind, parent));
+        }
+        let version = latest
+            .entry((kind, id.namespace.as_str(), id.slug.as_str()))
+            .or_default();
+        *version = (*version).max(id.version);
+    }
+    let is_live = |r: &pb::EntityRef| {
+        let (Ok(kind), Some(id)) = (pb::EntityKind::try_from(r.kind), r.id.as_ref()) else {
+            return false;
+        };
+        latest.get(&(kind, id.namespace.as_str(), id.slug.as_str())) == Some(&id.version)
+    };
+    let index = ReverseIndex::build(world);
+    let mut report = UnbridgedReport {
+        removals: Vec::new(),
+        incomplete: false,
+    };
+    let mut seen: HashSet<pb::EntityKey> = HashSet::new();
+    let mut emitted = 0;
+    for entity in retired {
+        let (Ok(kind), Some(id)) = (pb::EntityKind::try_from(entity.kind), entity.id.as_ref())
+        else {
+            continue;
+        };
+        let key = pb::EntityKey::new(kind, id);
+        if bridged.contains(&key) || !seen.insert(key) {
+            continue;
+        }
+        let referrers: Vec<pb::Reference> = index
+            .incoming(kind, id)
+            .iter()
+            .filter(|r| r.from_field != "supersedes")
+            .filter(|r| {
+                r.from
+                    .as_ref()
+                    .is_some_and(|from| from != entity && is_live(from))
+            })
+            .cloned()
+            .collect();
+        if referrers.is_empty() {
+            continue;
+        }
+        let room = UNBRIDGED_REFERRER_BUDGET - emitted;
+        if referrers.len() > room {
+            report.incomplete = true;
+            break;
+        }
+        emitted += referrers.len();
+        report.removals.push(pb::UnbridgedRemoval {
+            entity: Some(entity.clone()),
+            remaining_referrers: referrers,
+        });
+    }
+    report
+}
+
 #[must_use]
 pub fn entity_lookup(all: &[StoredEntity]) -> HashMap<pb::EntityKey, pb::Entity> {
     all.iter()
