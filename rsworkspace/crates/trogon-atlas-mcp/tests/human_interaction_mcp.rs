@@ -264,6 +264,31 @@ async fn authenticated_mcp_authors_and_inspects_exact_hosting_through_export_rea
             reference.to.as_ref().unwrap().id.as_ref().unwrap().version,
             fixture::VERSION
         );
+        assert_eq!(
+            reference.from.as_ref().unwrap().kind,
+            pb::EntityKind::Component as i32
+        );
+        assert_eq!(
+            reference.from.as_ref().unwrap().id.as_ref().unwrap().slug,
+            "portal"
+        );
+        assert_eq!(
+            reference.to.as_ref().unwrap().kind,
+            pb::EntityKind::Ui as i32
+        );
+        assert_eq!(
+            reference.to.as_ref().unwrap().id.as_ref().unwrap().slug,
+            "review"
+        );
+        let expected = match reference.from_field.as_str() {
+            "ui_hostings[0].ui" => &display["hosting"]["id"]["value"],
+            "ui_hostings[1].ui" => &issuance["hosting"]["id"]["value"],
+            field => panic!("unexpected hosting reference field {field}"),
+        };
+        assert_eq!(
+            reference.connection_id.as_ref().unwrap().value,
+            expected.as_str().unwrap()
+        );
     }
     let exported = succeed(&reader, "export_namespace", json!({"namespace":namespace})).await;
     assert!(exported["skipped"].as_array().unwrap().is_empty());
