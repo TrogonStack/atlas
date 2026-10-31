@@ -3086,6 +3086,15 @@ pub const CHECK_MODEL: &str = "model";
 pub const CHECK_STRATEGIC: &str = "strategic";
 pub const CHECK_STORE_HYGIENE: &str = "store_hygiene";
 pub const CHECK_ARCHITECTURE: &str = "architecture";
+pub const CHECK_SCENARIOS: &str = "scenarios";
+pub const CHECK_REQUEST_SHAPE: &str = "request_shape";
+
+/// Reason when a suite is not part of the write/merge gate.
+pub const REASON_WRITE_PATH: &str = "write_path";
+pub const REASON_MERGE_PATH: &str = "merge_path";
+pub const REASON_KIND_NOT_APPLICABLE: &str = "kind_not_applicable";
+pub const REASON_BLOCKED_BY_HYGIENE: &str = "blocked_by_hygiene";
+pub const REASON_BLOCKED_BY_SCENARIOS: &str = "blocked_by_scenarios";
 
 #[must_use]
 pub fn coverage_check(
@@ -3140,6 +3149,117 @@ pub fn validation_coverage(
         snapshot_truncated,
         requested_scope: Some(requested_scope),
     }
+}
+
+/// Whether a write-path suite ran for a request, and over how many subjects.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SuiteRun {
+    Ran(i32),
+    /// No subject in the request was of a kind the suite applies to.
+    #[default]
+    NotApplicable,
+    /// The suite applied but the request stopped before it ran.
+    NotReached(&'static str),
+}
+
+impl SuiteRun {
+    #[must_use]
+    pub fn over(subjects: usize) -> Self {
+        if subjects == 0 {
+            Self::NotApplicable
+        } else {
+            Self::Ran(i32::try_from(subjects).unwrap_or(i32::MAX))
+        }
+    }
+}
+
+/// What a PutEntity / BatchMutate call actually ran, so its coverage report
+/// cannot claim a suite the request never reached.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WriteSuites {
+    pub architecture: SuiteRun,
+    pub scenarios: SuiteRun,
+    pub strategic: SuiteRun,
+    pub snapshot_truncated: bool,
+}
+
+/// What a MergeBranch call ran once it reached post-merge validation.
+#[derive(Debug, Clone, Copy)]
+pub struct MergeSuites {
+    pub architecture: SuiteRun,
+    pub strategic: SuiteRun,
+    pub snapshot_truncated: bool,
+}
+
+fn suite_check(
+    check_id: &str,
+    run: SuiteRun,
+    snapshot_truncated: bool,
+) -> pb::ValidationCheckResult {
+    match run {
+        SuiteRun::Ran(n) => ran_against_snapshot(check_id, n, snapshot_truncated),
+        SuiteRun::NotApplicable => skipped_check(check_id, REASON_KIND_NOT_APPLICABLE),
+        SuiteRun::NotReached(reason) => skipped_check(check_id, reason),
+    }
+}
+
+fn skipped_check(check_id: &str, reason: &str) -> pb::ValidationCheckResult {
+    coverage_check(
+        check_id,
+        pb::validation_check_result::State::Skipped,
+        reason,
+        0,
+    )
+}
+
+fn write_scope(branch: Option<&str>) -> pb::ValidationScope {
+    pb::ValidationScope {
+        branch: branch.unwrap_or_default().to_owned(),
+        ..Default::default()
+    }
+}
+
+/// Coverage for PutEntity / BatchMutate. `request_shape` always ran to reach
+/// a response; `model` and `store_hygiene` never run on the write path.
+#[must_use]
+pub fn write_validation_coverage(
+    branch: Option<&str>,
+    subjects: i32,
+    suites: WriteSuites,
+) -> pb::ValidationCoverage {
+    let truncated = suites.snapshot_truncated;
+    let checks = vec![
+        ran_against_snapshot(CHECK_REQUEST_SHAPE, subjects, false),
+        suite_check(CHECK_ARCHITECTURE, suites.architecture, false),
+        suite_check(CHECK_SCENARIOS, suites.scenarios, truncated),
+        suite_check(CHECK_STRATEGIC, suites.strategic, truncated),
+        skipped_check(CHECK_MODEL, REASON_WRITE_PATH),
+        skipped_check(CHECK_STORE_HYGIENE, REASON_WRITE_PATH),
+    ];
+    let scope = write_scope(branch);
+    validation_coverage(checks, scope.clone(), scope, truncated)
+}
+
+/// Coverage for MergeBranch once post-merge validation ran. The examined
+/// world is the merge target, so `effective_scope` is the baseline while
+/// `requested_scope` names the merged branch.
+#[must_use]
+pub fn merge_validation_coverage(branch: &str, suites: MergeSuites) -> pb::ValidationCoverage {
+    let truncated = suites.snapshot_truncated;
+    let checks = vec![
+        suite_check(CHECK_ARCHITECTURE, suites.architecture, false),
+        ran_against_snapshot(CHECK_STORE_HYGIENE, 1, truncated),
+        suite_check(CHECK_STRATEGIC, suites.strategic, truncated),
+        skipped_check(CHECK_MODEL, REASON_MERGE_PATH),
+        skipped_check(CHECK_SCENARIOS, REASON_MERGE_PATH),
+        skipped_check(CHECK_REQUEST_SHAPE, REASON_MERGE_PATH),
+    ];
+    validation_coverage(
+        checks,
+        write_scope(None),
+        write_scope(Some(branch)),
+        truncated,
+    )
 }
 
 #[must_use]

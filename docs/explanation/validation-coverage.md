@@ -3,10 +3,11 @@
 Validation findings are lists of
 [`ValidationIssue`](../../proto/trogonatlas/api/eventmodel/v1alpha1/validation.proto).
 Coverage says which suites ran, against what scope, and whether the
-snapshot was truncated. `ValidateEventModel` and `ValidateProject` return
+snapshot was truncated. `ValidateEventModel`, `ValidateProject`,
+`PutEntity`, `BatchMutate` and `MergeBranch` return
 [`ValidationCoverage`](../../proto/trogonatlas/api/eventmodel/v1alpha1/validation.proto)
-alongside issues. Write and merge envelopes do not yet; callers must not
-invent coverage client-side when it is absent.
+alongside issues. Callers must not invent coverage client-side when it is
+absent.
 
 This page records what each entry point actually runs, and the shared
 reporting contract for coverage and truncation. It does not expand
@@ -40,10 +41,25 @@ Inventoried at `23ade8f` (post [#263](https://github.com/TrogonStack/atlas/pull/
 | --- | --- | --- | --- |
 | `ValidateEventModel` | `model` always; strategic chain only when `EventModel.id` is set (ID-less inline bodies skip the chain) | Branch snapshot + visibility; in-body model or by-id | `issues[]` + `coverage` (`model` / `strategic`, `snapshot_truncated`) |
 | `ValidateProject` | `store_hygiene` + architecture resource diagnostics once (including data-product Event confirmation); `model` per in-scope EventModel; strategic once | Project / domain / namespace | `reports[]` + severity totals + `coverage` |
-| `PutEntity` (apply and `validate_only`) | `request_shape`; architecture admission on arch kinds; `scenarios` Errors on applicable slices; advisory `scenarios`/`strategic` | Slice/strategic use the branch snapshot | `validation[]`; hard refusals as Status; **no coverage yet** |
-| `BatchMutate` (apply and `validate_only`) | Same as Put for ops; strategic and scenario on overlay | Post-lock snapshot + overlay | Per-op `validation[]` / batch failure; **no coverage yet** |
-| `MergeBranch` (apply and dry-run) | Architecture landing on landed arch resources; blocking `store_hygiene` Errors; advisory `strategic` | Baseline visibility + projected post-merge world | `validation[]` + merge status; **no coverage yet** |
-| MCP `apply_manifests` | Client plan → `BatchMutate` | Client branch/scope | Tool JSON from batch results; **no coverage yet** |
+| `PutEntity` (apply and `validate_only`) | `request_shape`; architecture admission on arch kinds; `scenarios` Errors on applicable slices; advisory `scenarios`/`strategic` | Slice/strategic use the branch snapshot | `validation[]` + `coverage`; hard refusals as Status |
+| `BatchMutate` (apply and `validate_only`) | Same as Put for ops; strategic and scenario on overlay | Post-lock snapshot + overlay | Per-op `validation[]` / batch failure + `coverage` |
+| `MergeBranch` (apply and dry-run) | Architecture landing on landed arch resources; blocking `store_hygiene` Errors; advisory `strategic` | Baseline visibility + projected post-merge world | `validation[]` + merge status + `coverage` |
+| MCP `apply_manifests` | Client plan → `BatchMutate` | Client branch/scope | Tool JSON from batch results + batch `coverage` |
+
+Write coverage always lists `model` and `store_hygiene` as `SKIPPED` with
+reason `write_path`; merge coverage lists `model`, `scenarios` and
+`request_shape` as `SKIPPED` with reason `merge_path`. Suites a request's
+kinds never reach are `SKIPPED` with reason `kind_not_applicable`. When
+blocking hygiene Errors stop a merge that lands strategic kinds, `strategic`
+is `SKIPPED` with reason `blocked_by_hygiene`. A real batch admits architecture resources only after
+its scenario gate, so a scenario failure reports `architecture` as `SKIPPED`
+with reason `blocked_by_scenarios`. Merge reports the projected baseline as
+`effective_scope` and the merged branch as `requested_scope`.
+
+Coverage is absent on `operation_id` replays (nothing re-ran), on merge
+`STATUS_CONFLICTS` (validation was never reached), and on batch failures
+raised before validation, such as a referrer gate. A batch that fails after
+validation, such as on a stale `if_match`, still reports the suites that ran.
 
 ### Explicit non-runs (do not overclaim)
 
@@ -58,8 +74,7 @@ Inventoried at `23ade8f` (post [#263](https://github.com/TrogonStack/atlas/pull/
 - **ValidateEventModel does not run** store hygiene (that is
   ValidateProject) and does not re-scan every member through full
   `SCENARIO_*` emission the way write-path `validate_scenarios` does.
-- **Write and merge RPCs** do not yet report suite coverage or snapshot
-  truncation on their envelopes. `ValidateProject` can still surface an
+- **Coverage is not a finding.** `ValidateProject` can still surface an
   incomplete Event confirmation scan as the finding
   `DATA_PRODUCT_CONFIRMATION_INCOMPLETE` (budget or discovery exhaustion),
   which is an issue code rather than coverage metadata. Unrelated
@@ -90,18 +105,37 @@ Wire fields on `ValidationCoverage` / `ValidationCheckResult` /
 | `requested_scope` | What the caller asked to validate (may be narrower than `effective_scope`) |
 | `snapshot_truncated` | Shared with [snapshot identity](snapshot-identity.md) and the truncation package |
 
-Write and dry-run envelopes (`PutEntity`, `BatchMutate`, `MergeBranch`)
-should gain the same message next. Clients (Rust, CLI, MCP) must
-propagate server fields and must not invent coverage client-side.
+Clients (Rust, CLI, MCP) propagate the server message as a `coverage`
+JSON object and must not invent coverage client-side.
 
 ### Incomplete validation and CLI exits
 
-Today `validate` / `validate-project` exit `1` when any Error-severity
-finding exists ([exit codes](../reference/trogon-atlas-exit-codes.md));
-warnings alone exit `0`. There is no exit for "validation ran incompletely."
-Once coverage lands, incomplete runs need an explicit exit distinct from
-"completed with findings," and precedence when both incomplete and Error
-findings are present must be documented before CI depends on it.
+`validate` / `validate-project` exit `1` when any Error-severity finding
+exists, `11` when there is no Error finding but coverage has a gap, and `0`
+otherwise ([validation verdicts](../reference/trogon-atlas-exit-codes.md#validation-verdicts)).
+This is a proposed default for review, not yet a settled product rule.
+
+Errors take precedence because an Error finding is definitive: examining
+more of the model cannot remove it, so a gate should fail on the finding
+rather than on a coverage question. Without errors, an empty finding list
+over a partial scan says nothing about the part that was not scanned, so it
+must not exit like a clean pass. `11` is the next code after the failure
+categories, and it is not a failure category itself because the command
+completed and reported what it saw.
+
+Absent coverage is treated as a gap rather than as complete, consistent with
+"never invent coverage client-side": a client cannot tell an older server's
+silent full run from a run that skipped suites. A CI job pointed at such a
+server exits `11` until the server reports coverage. Coverage that is
+present but lists no checks is a gap for the same reason: a default message
+proves no suite ran.
+
+A `SKIPPED` check is only a gap when the suite applied and did not run.
+Reasons that mark a suite as outside the entry point by design are not gaps;
+reasons that mark a suite as blocked, or reasons the client does not know,
+are. Failing closed on unknown reasons means a new by-design reason needs a
+client update before it stops reading as incomplete, which is preferable to
+a new "blocked" reason silently reading as a pass.
 
 ### Enforcement is a separate decision
 

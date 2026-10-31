@@ -342,3 +342,130 @@ async fn validate_project_reports_strategic_findings_in_the_store_level_section(
         .collect();
     assert!(codes.contains(&"DOMAIN_IN_CONTEXT_NAMESPACE"), "{data}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_reports_a_complete_clean_run_as_clean() {
+    let endpoint = start_server().await;
+    let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)
+        .await
+        .unwrap();
+    put(
+        &mut client,
+        pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id("cli-validate-verdict", "empty")),
+            title: "Empty".into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+
+    let json = trogon_atlas(
+        &endpoint,
+        &["--format", "json", "validate", "cli-validate-verdict/empty"],
+    );
+    assert_eq!(json.status.code(), Some(0), "{json:?}");
+    let data = ok_data(&json);
+    assert_eq!(data["verdict"], "clean", "{data}");
+    assert_eq!(data["coverage_gaps"], serde_json::json!([]), "{data}");
+    assert!(data["coverage"]["checks"].is_array(), "{data}");
+}
+
+fn partial_project_response() -> pb::ValidateProjectResponse {
+    pb::ValidateProjectResponse {
+        coverage: Some(pb::ValidationCoverage {
+            checks: vec![pb::ValidationCheckResult {
+                check_id: "model".into(),
+                state: pb::validation_check_result::State::Partial as i32,
+                reason: "snapshot_truncated".into(),
+                subjects_examined: 1,
+            }],
+            snapshot_truncated: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+async fn validate_project_against(
+    response: pb::ValidateProjectResponse,
+    format: &str,
+) -> std::process::Output {
+    let server =
+        trogon_atlas_testsupport::discovery::DiscoveryOnlyServer::start_serving_validate_project(
+            trogon_atlas_testsupport::discovery::pre_revision_server_info(),
+            response,
+        )
+        .await
+        .unwrap();
+    let endpoint = server.endpoint.clone();
+    let format = format.to_string();
+    tokio::task::spawn_blocking(move || {
+        trogon_atlas(
+            &endpoint,
+            &[
+                "--format",
+                &format,
+                "validate-project",
+                "--namespace",
+                "shop",
+            ],
+        )
+    })
+    .await
+    .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_project_exits_incomplete_when_a_suite_ran_partially() {
+    let json = validate_project_against(partial_project_response(), "json").await;
+    assert_eq!(json.status.code(), Some(11), "{json:?}");
+    let data = ok_data(&json);
+    assert_eq!(data["verdict"], "incomplete", "{data}");
+    assert_eq!(
+        data["coverage_gaps"],
+        serde_json::json!([
+            {"gap": "snapshot_truncated"},
+            {"gap": "check", "check_id": "model", "state": "PARTIAL", "reason": "snapshot_truncated"},
+        ]),
+        "{data}"
+    );
+
+    let text = validate_project_against(partial_project_response(), "text").await;
+    assert_eq!(text.status.code(), Some(11), "{text:?}");
+    assert!(
+        stdout(&text).contains("incomplete: model PARTIAL snapshot_truncated"),
+        "{}",
+        stdout(&text)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_project_exits_incomplete_when_the_server_sends_no_coverage() {
+    let json = validate_project_against(pb::ValidateProjectResponse::default(), "json").await;
+    assert_eq!(json.status.code(), Some(11), "{json:?}");
+    let data = ok_data(&json);
+    assert_eq!(data["verdict"], "incomplete", "{data}");
+    assert_eq!(
+        data["coverage_gaps"],
+        serde_json::json!([{"gap": "coverage_absent"}]),
+        "{data}"
+    );
+    assert!(data.get("coverage").is_none(), "{data}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_project_errors_outrank_incomplete_coverage() {
+    let mut response = partial_project_response();
+    response.reports = vec![pb::validate_project_response::ModelReport {
+        event_model_id: None,
+        issues: vec![pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Error as i32,
+            code: "DOMAIN_SLUG_MISMATCH".into(),
+            message: "m".into(),
+            ..Default::default()
+        }],
+    }];
+    let json = validate_project_against(response, "json").await;
+    assert_eq!(json.status.code(), Some(1), "{json:?}");
+    assert_eq!(ok_data(&json)["verdict"], "findings");
+}

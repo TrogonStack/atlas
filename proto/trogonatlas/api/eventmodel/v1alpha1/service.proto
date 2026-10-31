@@ -264,6 +264,11 @@ message PutEntityResponse {
   bool no_op = 4;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 5;
+  // Suites that ran for this write/dry-run. Absent on operation_id replay
+  // because nothing re-ran; never invent coverage client-side. Empty
+  // `validation` means only the suites listed here ran, not a full model
+  // check.
+  ValidationCoverage coverage = 6;
 }
 
 message DeleteEntityRequest {
@@ -405,6 +410,11 @@ message BatchMutateResponse {
   PreconditionFailure precondition_failure = 5;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 6;
+  // Suites that ran for this batch (or dry-run). Absent on operation_id
+  // replay and when the batch failed before validation (for example a
+  // referrer gate). Never invent coverage client-side; empty per-op
+  // `validation` is not a full-model clean bill of health.
+  ValidationCoverage coverage = 7;
 }
 
 // Bulk delete by structural query, replacing the "list every entity then
@@ -1071,6 +1081,11 @@ message MergeBranchResponse {
   uint32 added_count = 6;
   uint32 changed_count = 7;
   uint32 deleted_count = 8;
+  // Suites that ran for this merge/dry-run once validation was reached.
+  // Absent for STATUS_CONFLICTS and operation_id replay. Merge still does
+  // not run full `model` or write-path `scenarios`; coverage reports that
+  // honestly so empty `validation` is not read as a clean full-model gate.
+  ValidationCoverage coverage = 9;
 }
 
 message UpdateBranchRequest {

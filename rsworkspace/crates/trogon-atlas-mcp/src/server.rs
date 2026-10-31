@@ -891,21 +891,23 @@ impl McpServer {
 
     /// `scoped_envelope` plus the response's validation findings as a JSON
     /// `issues` array, so an agent can read non-blocking findings without
-    /// decoding the binpb.
+    /// decoding the binpb. Optional server `coverage` is passed through
+    /// when present and never invented here.
     fn scoped_envelope_with_issues<M: Message>(
         &self,
         msg: &M,
         issues: &[serde_json::Value],
+        coverage: Option<&pb::ValidationCoverage>,
     ) -> CallToolResult {
         let (scope, branch) = self.scope_fields();
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "scope": scope,
             "branch": branch,
             "issues": issues,
             "binpb_base64": encode_b64(msg),
-        })
-        .to_string();
-        CallToolResult::success(vec![ContentBlock::text(body)])
+        });
+        trogon_atlas_client::apply::insert_coverage(&mut body, coverage);
+        CallToolResult::success(vec![ContentBlock::text(body.to_string())])
     }
 
     fn scoped_response<M: Message>(
@@ -1289,6 +1291,22 @@ fn apply_issues_json(op_issues: &[trogon_atlas_client::apply::OpIssues]) -> Vec<
 
 /// Add `issues` to an already-built JSON tool result body so a response that
 /// carries findings alongside other data exposes them without a decode step.
+fn with_coverage(
+    mut result: CallToolResult,
+    coverage: Option<&pb::ValidationCoverage>,
+) -> CallToolResult {
+    let body = result
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok());
+    if let (Some(mut body), Some(_)) = (body, coverage) {
+        trogon_atlas_client::apply::insert_coverage(&mut body, coverage);
+        result.content[0] = ContentBlock::text(body.to_string());
+    }
+    result
+}
+
 fn with_issues(mut result: CallToolResult, issues: Vec<serde_json::Value>) -> CallToolResult {
     let body = result
         .content
@@ -1321,6 +1339,7 @@ fn batch_mutate_failure(resp: &pb::BatchMutateResponse) -> anyhow::Error {
     anyhow::Error::new(ApplyRejected {
         failed: format!("op[{}]", resp.failed_op_index),
         issues: resp.failure.clone(),
+        coverage: resp.coverage.clone(),
     })
 }
 
@@ -3705,7 +3724,11 @@ impl McpServer {
             .map_err(tool_err("put_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope_with_issues(&resp, &issues_json(&resp.validation)))
+        Ok(self.scoped_envelope_with_issues(
+            &resp,
+            &issues_json(&resp.validation),
+            resp.coverage.as_ref(),
+        ))
     }
 
     #[tool(
@@ -3792,7 +3815,11 @@ impl McpServer {
             .map_err(tool_err("put_entity_json"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope_with_issues(&resp, &issues_json(&resp.validation)))
+        Ok(self.scoped_envelope_with_issues(
+            &resp,
+            &issues_json(&resp.validation),
+            resp.coverage.as_ref(),
+        ))
     }
 
     #[tool(
@@ -3838,7 +3865,11 @@ impl McpServer {
         if resp.status == pb::batch_mutate_response::Status::Failed as i32 {
             return Err(McpError::from(batch_mutate_failure(&resp)).into());
         }
-        Ok(self.scoped_envelope_with_issues(&resp, &batch_issues_json(&op_entities, &resp)))
+        Ok(self.scoped_envelope_with_issues(
+            &resp,
+            &batch_issues_json(&op_entities, &resp),
+            resp.coverage.as_ref(),
+        ))
     }
 
     #[tool(
@@ -3873,7 +3904,8 @@ impl McpServer {
             .map_err(tool_err("delete_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        let mut result = self.scoped_envelope_with_issues(&resp, &issues_json(&resp.validation));
+        let mut result =
+            self.scoped_envelope_with_issues(&resp, &issues_json(&resp.validation), None);
         if resp.referrers_incomplete {
             result.content.push(ContentBlock::text(
                 "Incoming-reference report is incomplete; missing records do not prove absence or deletion safety.",
@@ -4008,7 +4040,11 @@ impl McpServer {
             let err: rmcp::ErrorData = McpError::from(batch_mutate_failure(&resp)).into();
             return Err(attach_operation_id(err, &operation_id));
         }
-        Ok(self.scoped_envelope_with_issues(&resp, &batch_issues_json(&op_entities, &resp)))
+        Ok(self.scoped_envelope_with_issues(
+            &resp,
+            &batch_issues_json(&op_entities, &resp),
+            resp.coverage.as_ref(),
+        ))
     }
 
     #[tool(
@@ -4511,15 +4547,17 @@ impl McpServer {
             attach_operation_id(rmcp::ErrorData::from(McpError::from(e)), &operation_id)
         })?;
         let (scope, branch) = self.scope_fields();
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "scope": scope,
             "branch": branch,
             "lines": outcome.lines,
             "issues": apply_issues_json(&outcome.op_issues),
             "operation_id": (!operation_id.is_empty()).then_some(operation_id.as_str()),
-        })
-        .to_string();
-        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+        });
+        trogon_atlas_client::apply::insert_coverage(&mut body, outcome.coverage.as_ref());
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
     }
 
     #[tool(
@@ -4735,13 +4773,16 @@ impl McpServer {
             .map_err(tool_err("merge_branch"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(with_issues(
-            ok_response(
-                "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
-                &resp,
-                p.json.unwrap_or(false),
+        Ok(with_coverage(
+            with_issues(
+                ok_response(
+                    "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
+                    &resp,
+                    p.json.unwrap_or(false),
+                ),
+                issues_json(&resp.validation),
             ),
-            issues_json(&resp.validation),
+            resp.coverage.as_ref(),
         ))
     }
 

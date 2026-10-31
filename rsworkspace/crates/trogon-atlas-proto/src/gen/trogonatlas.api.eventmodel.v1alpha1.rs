@@ -3794,6 +3794,12 @@ pub struct PutEntityResponse {
     /// Set only when the request carried an operation_id.
     #[prost(message, optional, tag="5")]
     pub operation_receipt: ::core::option::Option<super::super::super::catalog::v1alpha1::OperationReceipt>,
+    /// Suites that ran for this write/dry-run. Absent on operation_id replay
+    /// because nothing re-ran; never invent coverage client-side. Empty
+    /// `validation` means only the suites listed here ran, not a full model
+    /// check.
+    #[prost(message, optional, tag="6")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteEntityRequest {
@@ -3984,6 +3990,12 @@ pub struct BatchMutateResponse {
     /// Set only when the request carried an operation_id.
     #[prost(message, optional, tag="6")]
     pub operation_receipt: ::core::option::Option<super::super::super::catalog::v1alpha1::OperationReceipt>,
+    /// Suites that ran for this batch (or dry-run). Absent on operation_id
+    /// replay and when the batch failed before validation (for example a
+    /// referrer gate). Never invent coverage client-side; empty per-op
+    /// `validation` is not a full-model clean bill of health.
+    #[prost(message, optional, tag="7")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
 }
 /// Nested message and enum types in `BatchMutateResponse`.
 pub mod batch_mutate_response {
@@ -4855,6 +4867,12 @@ pub struct MergeBranchResponse {
     pub changed_count: u32,
     #[prost(uint32, tag="8")]
     pub deleted_count: u32,
+    /// Suites that ran for this merge/dry-run once validation was reached.
+    /// Absent for STATUS_CONFLICTS and operation_id replay. Merge still does
+    /// not run full `model` or write-path `scenarios`; coverage reports that
+    /// honestly so empty `validation` is not read as a clean full-model gate.
+    #[prost(message, optional, tag="9")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
 }
 /// Nested message and enum types in `MergeBranchResponse`.
 pub mod merge_branch_response {

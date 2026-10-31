@@ -682,6 +682,66 @@ async fn batch_mutate_scenario_error_reports_correct_failed_op_index() {
     );
 }
 
+/// A real batch admits architecture only after the scenario gate, so a
+/// scenario failure must not report architecture as having run.
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_scenario_error_does_not_claim_architecture_ran() {
+    let svc = seed_basics().await;
+
+    let dangling = pb::CommandScenario {
+        id: "s1".into(),
+        title: "dangling".into(),
+        given: vec![event_example("does-not-exist")],
+        when: Some(command_example("place-order")),
+        then: Some(pb::command_scenario::Then::Emit(pb::EmittedEvents {
+            events: vec![event_example("order.placed")],
+        })),
+        ..Default::default()
+    };
+    let team = pb::Entity {
+        kind: Some(pb::entity::Kind::Team(pb::Team {
+            id: Some(id("arch-gate-team", 1)),
+            title: Some(pb::DirectoryDisplayName {
+                value: "Gate team".into(),
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    let resp = svc
+        .batch_mutate(Request::new(pb::BatchMutateRequest {
+            operation_id: String::new(),
+            ops: vec![
+                put_op(team),
+                put_op(command_slice_named("arch-gate-slice", vec![dangling])),
+            ],
+            validate_only: false,
+        }))
+        .await
+        .expect("scenario failure is a Failed response, not gRPC error")
+        .into_inner();
+
+    assert_eq!(
+        resp.status,
+        pb::batch_mutate_response::Status::Failed as i32
+    );
+    let coverage = resp.coverage.expect("scenario failure reports coverage");
+    let architecture = coverage
+        .checks
+        .iter()
+        .find(|c| c.check_id == "architecture")
+        .expect("architecture suite");
+    assert_eq!(
+        (architecture.state, architecture.reason.as_str()),
+        (
+            pb::validation_check_result::State::Skipped as i32,
+            "blocked_by_scenarios"
+        ),
+        "{coverage:?}"
+    );
+}
+
 /// Branch-scoped BatchMutate shares build_op_results; warnings must survive.
 #[tokio::test(flavor = "multi_thread")]
 async fn branch_batch_mutate_preserves_scenario_warnings() {

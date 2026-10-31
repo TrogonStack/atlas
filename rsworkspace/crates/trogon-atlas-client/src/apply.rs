@@ -238,15 +238,18 @@ pub struct ApplyRejected {
     /// happen for a well-formed response).
     pub failed: String,
     pub issues: Vec<pb::ValidationIssue>,
+    pub coverage: Option<pb::ValidationCoverage>,
 }
 
 impl ApplyRejected {
     #[must_use]
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut body = json!({
             "failed": self.failed,
             "issues": self.issues.iter().map(issue_to_json).collect::<Vec<_>>(),
-        })
+        });
+        insert_coverage(&mut body, self.coverage.as_ref());
+        body
     }
 }
 
@@ -306,6 +309,51 @@ pub struct ApplyOutcome {
     /// The batch's idempotency receipt, present only when the caller passed
     /// an `operation_id` to `apply` and at least one op ran.
     pub operation_receipt: Option<pb::OperationReceipt>,
+    /// Server-reported suite coverage for the batch. Absent when no ops ran
+    /// or the server omitted it (for example operation_id replay). Never
+    /// invent coverage client-side.
+    pub coverage: Option<pb::ValidationCoverage>,
+}
+
+/// Adds server-reported coverage to a JSON object. Absent coverage stays
+/// absent so a reader never mistakes an omitted report for a full-model pass.
+pub fn insert_coverage(body: &mut Value, coverage: Option<&pb::ValidationCoverage>) {
+    if let (Some(fields), Some(coverage)) = (body.as_object_mut(), coverage) {
+        fields.insert("coverage".into(), coverage_to_json(coverage));
+    }
+}
+
+/// JSON shape for [`pb::ValidationCoverage`], for CLI/MCP structured output.
+/// Callers must pass through the server value; do not invent fields.
+#[must_use]
+pub fn coverage_to_json(coverage: &pb::ValidationCoverage) -> Value {
+    json!({
+        "snapshot_truncated": coverage.snapshot_truncated,
+        "effective_scope": coverage.effective_scope.as_ref().map(|s| json!({
+            "branch": s.branch,
+            "namespace": s.namespace,
+        })),
+        "requested_scope": coverage.requested_scope.as_ref().map(|s| json!({
+            "branch": s.branch,
+            "namespace": s.namespace,
+        })),
+        "checks": coverage.checks.iter().map(|c| json!({
+            "check_id": c.check_id,
+            "state": check_state_name(c.state),
+            "reason": c.reason,
+            "subjects_examined": c.subjects_examined,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn check_state_name(state: i32) -> &'static str {
+    match pb::validation_check_result::State::try_from(state) {
+        Ok(pb::validation_check_result::State::Completed) => "COMPLETED",
+        Ok(pb::validation_check_result::State::Skipped) => "SKIPPED",
+        Ok(pb::validation_check_result::State::Partial) => "PARTIAL",
+        Ok(pb::validation_check_result::State::Error) => "ERROR",
+        _ => "UNSPECIFIED",
+    }
 }
 
 /// Groups the findings of put and delete results by op, tagging each group
@@ -356,6 +404,7 @@ pub async fn apply(
     let mut issues = Vec::new();
     let mut op_issues = Vec::new();
     let mut operation_receipt = None;
+    let mut coverage = None;
     if !changed.is_empty() {
         let ops = changed
             .iter()
@@ -407,6 +456,7 @@ pub async fn apply(
             return Err(anyhow::Error::new(ApplyRejected {
                 failed,
                 issues: resp.failure.clone(),
+                coverage: resp.coverage.clone(),
             }));
         }
         let expected = if dry_run {
@@ -425,6 +475,7 @@ pub async fn apply(
             .iter()
             .flat_map(|o| o.issues.iter().cloned())
             .collect();
+        coverage = resp.coverage;
     }
 
     let lines = plan
@@ -436,6 +487,7 @@ pub async fn apply(
         issues,
         op_issues,
         operation_receipt,
+        coverage,
     })
 }
 
@@ -620,6 +672,7 @@ mod tests {
                 message: "missing ref".into(),
                 ..Default::default()
             }],
+            coverage: None,
         };
         let rendered = rejected.to_string();
         assert!(rendered.contains("apply failed at event:shop/order.placed@1"));
@@ -637,11 +690,39 @@ mod tests {
                 severity: pb::validation_issue::Severity::Error as i32,
                 ..Default::default()
             }],
+            coverage: None,
         };
         let json = rejected.to_json();
         assert_eq!(json["failed"], "event:shop/order.placed@1");
         assert_eq!(json["issues"][0]["code"], "ENTITY_REFERENCED");
         assert_eq!(json["issues"][0]["severity"], "error");
+    }
+
+    #[test]
+    fn apply_rejected_to_json_keeps_the_server_coverage() {
+        let rejected = ApplyRejected {
+            failed: "event:shop/order.placed@1".into(),
+            issues: Vec::new(),
+            coverage: Some(pb::ValidationCoverage {
+                checks: vec![pb::ValidationCheckResult {
+                    check_id: "scenarios".into(),
+                    state: pb::validation_check_result::State::Completed as i32,
+                    subjects_examined: 1,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        };
+        let json = rejected.to_json();
+        assert_eq!(json["coverage"]["checks"][0]["check_id"], "scenarios");
+        assert_eq!(json["coverage"]["checks"][0]["state"], "COMPLETED");
+        assert!(ApplyRejected {
+            coverage: None,
+            ..rejected
+        }
+        .to_json()
+        .get("coverage")
+        .is_none());
     }
 
     fn finding(code: &str) -> pb::ValidationIssue {
