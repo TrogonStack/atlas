@@ -33,6 +33,11 @@ Every push to `main` publishes the images tagged `canary` and with the full
 commit SHA. The image tag otherwise defaults to the chart's `appVersion`,
 which has no published image yet.
 
+The images under `ghcr.io/trogonstack/atlas/` are deprecated. They stopped
+receiving builds in October 2026, keep their last `canary` only until nothing
+pulls it, and will then be deleted. Pull from
+`ghcr.io/trogonstack/images/atlas/` instead.
+
 `helm dependency update` resolves the `file://` dependencies into
 `charts/*.tgz`; it needs rerunning whenever a subchart's `Chart.yaml`
 version changes. The `charts/` directory and `Chart.lock` it produces are
