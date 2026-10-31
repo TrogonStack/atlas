@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '@/lib/api';
 import type { CatalogInspection } from '@/lib/decision-document';
 import { buildModel } from '@/lib/model';
-import { DecisionDocumentInspector } from './DecisionDocumentInspector';
+import { DecisionDocumentInspector, Query } from './DecisionDocumentInspector';
 
 const id = { namespace: 'catalog', slug: 'note', version: '7' };
 const subject = {
@@ -71,10 +71,33 @@ describe('native catalog inspector', () => {
     render(<DecisionDocumentInspector entity={entity()} />);
     expect(
       await screen.findByText(
-        'Checked owners cover this page and the selected Document. The revision identifies the full checked scan.',
+        'Checked owners cover this page and the selected query context. The revision identifies the full checked scan.',
       ),
     ).toBeTruthy();
   });
+  it.each(['Decision detail', 'Topology traversal'])(
+    'keeps the shared receipt caption independent of the %s query kind',
+    async (title) => {
+      render(
+        <Query
+          title={title}
+          load={async () => ({
+            scope: {
+              revision: 'shared-page-revision',
+              pageReceipt: { checkedOwnerCount: '5000', totalDeclarations: '4097', startOffset: '0', endOffset: '100' },
+            },
+            incomplete: false,
+          })}
+        />,
+      );
+      expect(
+        await screen.findByText(
+          'Checked owners cover this page and the selected query context. The revision identifies the full checked scan.',
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByText(/selected Document/)).toBeNull();
+    },
+  );
   it('preserves pending and completed queries across same-context parent renders', async () => {
     let resolveDetail: ((value: CatalogInspection) => void) | undefined;
     vi.mocked(api.getDocumentDetail).mockImplementation(

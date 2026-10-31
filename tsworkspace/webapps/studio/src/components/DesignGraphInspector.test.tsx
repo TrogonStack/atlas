@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '@/lib/api';
 import { buildModel } from '@/lib/model';
@@ -39,6 +39,46 @@ afterEach(() => {
   window.history.replaceState({}, '', '/');
 });
 describe('design topology inspector', () => {
+  it('shows hydrated topology without treating absent declaration fields as empty catalog pages', async () => {
+    const scope = { branch: 'review', revision: 'checked-revision' };
+    const owner = { owner: { kind: 'ENTITY_KIND_DESIGN_GRAPH', id }, uid: 'graph-incarnation' };
+    const detail = {
+      entity: { designGraph: { id, title: { value: 'Hydrated checkout flow' } } },
+      targets: [{ stepId: { value: 'resolved-step' }, state: 'CATALOG_RESOLUTION_STATE_RESOLVED' }],
+      scope,
+      incomplete: false,
+    };
+    const traversal = {
+      nodes: [{ graph: owner, stepId: { value: 'traversed-step' } }],
+      edges: [{ graph: owner, fromStepId: { value: 'traversed-step' }, toStepId: { value: 'finish-step' } }],
+      scope,
+      incomplete: false,
+    };
+    const subflows = {
+      references: [{ owner, field: 'steps[0].subflow', state: 'CATALOG_RESOLUTION_STATE_RESOLVED' }],
+      scope,
+      incomplete: false,
+    };
+    vi.mocked(api.getDesignGraphDetail).mockResolvedValue(detail);
+    vi.mocked(api.traverseDesignGraphTopology).mockResolvedValue(traversal);
+    vi.mocked(api.listIncomingDesignGraphSubflows).mockResolvedValue(subflows);
+    vi.mocked(api.listSubjectDesignGraphs).mockResolvedValue({ scope, declarations: [], incomplete: false });
+    render(<DesignGraphInspector entity={graph()} />);
+    for (const [title, marker] of [
+      ['Design graph detail', /resolved-step/],
+      ['Topology traversal', /traversed-step/],
+      ['Incoming subflow references', /steps\[0\]\.subflow/],
+    ] as const) {
+      const section = screen.getByRole('heading', { name: title }).closest('section');
+      expect(section).not.toBeNull();
+      const query = within(section!);
+      expect(await query.findByText(marker)).toBeTruthy();
+      expect(query.queryByText(/No declarations returned/)).toBeNull();
+    }
+    const subjectQuery = screen.getByRole('heading', { name: 'Design graphs for exact subject' }).closest('section');
+    expect(subjectQuery).not.toBeNull();
+    expect(await within(subjectQuery!).findByText(/No declarations returned/)).toBeTruthy();
+  });
   it('recognizes the kind and title and issues exact branch-scoped read queries', async () => {
     const entity = graph();
     expect(entity.kind).toBe('designGraph');
