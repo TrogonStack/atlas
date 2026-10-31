@@ -252,7 +252,7 @@ async fn inspect_exact_human_paths_returns_coherent_checked_receipts() {
             .is_some_and(|row| !row.uid.is_empty() && !row.etag.is_empty())));
         let scope = response.scope.unwrap();
         assert_eq!(scope.visited.len(), 5);
-        assert!(!scope.revision.is_empty());
+        assert_ne!(scope.revision, "");
         assert_eq!(
             scope
                 .visited
@@ -292,7 +292,7 @@ async fn stale_roles_siblings_and_owner_incarnations_never_substitute() {
             0 => request.hosting.as_mut().unwrap().owner_uid = "stale-component".into(),
             1 => {
                 request.hosting.as_mut().unwrap().id.as_mut().unwrap().value =
-                    "123e4567-e89b-42d3-a456-426614174000".into()
+                    "123e4567-e89b-42d3-a456-426614174000".into();
             }
             2 => {
                 let pb::inspect_human_interaction_request::Path::Issuance(path) =
@@ -781,7 +781,7 @@ async fn endpoint_recreation_follows_exact_key_but_owner_recreation_stales_conta
         .unwrap()
         .into_inner();
     assert_eq!(stale.state, pb::CatalogResolutionState::Unresolved as i32);
-    assert!(stale.edges.is_empty());
+    assert_eq!(stale.edges, [] as [pb::HumanInteractionCheckedEdge; 0]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
