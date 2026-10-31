@@ -243,3 +243,13 @@ files together. If a second how-to is added, move both into
 `docs/how-to/`.
 
 - `RUNBOOK.md` (how-to): operations, backup/restore.
+
+Atlas requires NATS JetStream with `max_payload: 8388608` (8 MiB).
+The 1 MiB catalog owner contract covers the complete prepared Entity, including
+assigned identities and SystemMeta. KV headers and journal or branch envelopes
+need additional transport capacity. The Store checks the negotiated server capacity
+before opening buckets. Configure every server in an external NATS cluster with this
+capacity; the Helm chart does not install or configure NATS. This transport
+capacity does not increase entity validation limits. Existing stream-specific
+message limits must also permit these messages. Backups and restores retain
+the existing stream and KV formats; restore servers need the same capacity.
