@@ -902,6 +902,7 @@ struct FailingBatchStore {
     unconfirmed_protections: std::sync::atomic::AtomicUsize,
     protection_read_failures: std::sync::atomic::AtomicUsize,
     unconfirmed_protections_unreadable: std::sync::atomic::AtomicBool,
+    changeset_append_failures: std::sync::atomic::AtomicUsize,
     delete_on_get: Option<(pb::Id, Arc<std::sync::atomic::AtomicBool>)>,
 }
 
@@ -932,6 +933,7 @@ impl FailingBatchStore {
             unconfirmed_protections: std::sync::atomic::AtomicUsize::new(0),
             protection_read_failures: std::sync::atomic::AtomicUsize::new(0),
             unconfirmed_protections_unreadable: std::sync::atomic::AtomicBool::new(false),
+            changeset_append_failures: std::sync::atomic::AtomicUsize::new(0),
             delete_on_get: None,
         }
     }
@@ -1372,6 +1374,16 @@ impl Store for FailingBatchStore {
         &self,
         record: &ChangesetRecord,
     ) -> trogon_atlas_store::StoreResult<()> {
+        let failed = self.changeset_append_failures.try_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |left| left.checked_sub(1),
+        );
+        if failed.is_ok() {
+            return Err(StoreError::Backend(
+                "injected changeset append failure".into(),
+            ));
+        }
         self.inner.append_changeset(record).await
     }
 
@@ -5348,5 +5360,155 @@ async fn put_entity_retry_resumes_a_protection_the_first_attempt_could_not_confi
     assert_eq!(
         replayed.operation_receipt.unwrap().changeset_id,
         changeset_id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_retry_that_only_confirms_landed_protections_names_a_stored_changeset() {
+    let mut store = FailingBatchStore::new().await;
+    store.fail_batches = false;
+    store
+        .unconfirmed_protections
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    store
+        .unconfirmed_protections_unreadable
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let store = Arc::new(store);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-resume-batch-landed";
+    let request = || pb::BatchMutateRequest {
+        operation_id: "op-protect-resume-batch-landed".into(),
+        ops: vec![pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(protecting_put(
+                ns, "placed", "",
+            ))),
+        }],
+        ..Default::default()
+    };
+
+    svc.batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect_err("an unconfirmed protection must fail the batch");
+    assert!(is_protected(&store, ns, "placed").await);
+
+    let retried = svc
+        .batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect("a retry must finish what its first attempt landed")
+        .into_inner();
+    let changeset_id = retried.operation_receipt.unwrap().changeset_id;
+    store
+        .inner
+        .get_changeset(&changeset_id)
+        .await
+        .expect("the receipt must name a changeset that was stored");
+
+    let replayed = svc
+        .batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect("the settled operation replays")
+        .into_inner();
+    assert_eq!(
+        replayed.operation_receipt.unwrap().changeset_id,
+        changeset_id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delete_entity_refused_by_protection_can_retry_its_operation_id_once_lifted() {
+    let svc = EventModelServiceImpl::try_new(
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await),
+        ServerMetrics::default(),
+    )
+    .unwrap();
+    let ns = "protect-delete-retry";
+    svc.put_entity(as_protecting_admin(protecting_put(ns, "placed", "")))
+        .await
+        .unwrap();
+    let delete = || pb::DeleteEntityRequest {
+        operation_id: "op-protect-delete-retry".into(),
+        kind: pb::EntityKind::Event as i32,
+        id: Some(id(ns, "placed", 1)),
+        mode: pb::delete_entity_request::Mode::Force as i32,
+        if_match: String::new(),
+    };
+
+    let refused = svc
+        .delete_entity(Request::new(delete()))
+        .await
+        .expect_err("a protected identity refuses the delete");
+    assert_eq!(
+        refused.get_details_error_info().unwrap().reason,
+        reason::ENTITY_PROTECTED
+    );
+
+    svc.unprotect_entity(as_protecting_admin(pb::UnprotectEntityRequest {
+        kind: pb::EntityKind::Event as i32,
+        namespace: ns.into(),
+        slug: "placed".into(),
+        validate_only: false,
+        if_match: 0,
+    }))
+    .await
+    .unwrap();
+
+    svc.delete_entity(Request::new(delete()))
+        .await
+        .expect("once the mark is lifted the same operation_id must delete");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn replaying_a_protecting_write_whose_changeset_was_lost_returns_its_receipt() {
+    let mut store = FailingBatchStore::new().await;
+    store.fail_batches = false;
+    let store = Arc::new(store);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+
+    store
+        .changeset_append_failures
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let put = || protecting_put("protect-lost-put", "placed", "op-protect-lost-put");
+    let first = svc
+        .put_entity(as_protecting_admin(put()))
+        .await
+        .expect("a lost changeset does not fail the write")
+        .into_inner();
+    let replayed = svc
+        .put_entity(as_protecting_admin(put()))
+        .await
+        .expect("a replay must not be refused by the protection it set")
+        .into_inner();
+    assert_eq!(
+        replayed.operation_receipt.unwrap().changeset_id,
+        first.operation_receipt.unwrap().changeset_id
+    );
+
+    store
+        .changeset_append_failures
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let batch = || pb::BatchMutateRequest {
+        operation_id: "op-protect-lost-batch".into(),
+        ops: vec![pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(protecting_put(
+                "protect-lost-batch",
+                "placed",
+                "",
+            ))),
+        }],
+        ..Default::default()
+    };
+    let first = svc
+        .batch_mutate(as_protecting_admin(batch()))
+        .await
+        .expect("a lost changeset does not fail the batch")
+        .into_inner();
+    let replayed = svc
+        .batch_mutate(as_protecting_admin(batch()))
+        .await
+        .expect("a replay must not be refused by the protection it set")
+        .into_inner();
+    assert_eq!(
+        replayed.operation_receipt.unwrap().changeset_id,
+        first.operation_receipt.unwrap().changeset_id
     );
 }

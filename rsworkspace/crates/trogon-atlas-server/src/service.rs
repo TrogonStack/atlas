@@ -2462,20 +2462,32 @@ impl EventModelServiceImpl {
         let Some(attempt) = attempt.filter(|_| !requested.is_empty()) else {
             return resumed;
         };
-        match self.store.get_operation(&attempt.claim_key).await {
+        let claimed_changeset_id = match self.store.get_operation(&attempt.claim_key).await {
             Ok(Some(record))
                 if matches!(
                     record.status,
                     OperationStatus::NotApplied | OperationStatus::Applied
                 ) && record.digest == attempt.digest
                     && record.rpc == rpc
-                    && record.branch.is_none() => {}
+                    && record.branch.is_none() =>
+            {
+                record.changeset_id
+            }
             _ => return resumed,
-        }
+        };
         for &identity in requested {
             let ProtectionState::Protected(stored) = self.protection_state(identity).await else {
                 continue;
             };
+            // The claim itself names the changeset that set this mark, which
+            // holds even when that changeset's append was lost.
+            if !claimed_changeset_id.is_empty()
+                && stored.record.changeset_id == claimed_changeset_id
+                && stored.record.protected_by == author
+            {
+                resumed.insert(identity.clone(), claimed_changeset_id.clone());
+                continue;
+            }
             let Ok(changeset) = self.store.get_changeset(&stored.record.changeset_id).await else {
                 continue;
             };
@@ -6103,9 +6115,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 return Err(status);
             }
         }
+        // Protection can be lifted, so refusing on it is not a final answer
+        // for this id: release the claim, as `PutEntity` and `BatchMutate`
+        // refuse before they claim.
         if let Err(status) = self.refuse_protected([(kind, &id)]).await {
             if let Some(key) = &claim_key {
-                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                operation_receipts::settle_not_applied(&*self.store, key).await;
             }
             return Err(status);
         }
@@ -7054,7 +7069,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         &per_op_referrers,
                         referrers_incomplete,
                     );
-                    let receipt_changeset_id = changeset.id.clone();
                     let content_changeset_id = landed_changeset_id.or_else(|| {
                         changeset.record_batch(&metas, &outcomes);
                         (!changeset.ops.is_empty()).then(|| changeset.id.clone())
@@ -7069,6 +7083,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             break;
                         }
                     }
+                    // A resumed retry that only finds its protections already
+                    // landed records nothing, so its receipt names the
+                    // changeset that landed the content instead.
+                    let receipt_changeset_id = match &content_changeset_id {
+                        Some(landed) if resuming && changeset.ops.is_empty() => landed.clone(),
+                        _ => changeset.id.clone(),
+                    };
                     self.record_changeset(
                         changeset,
                         git_mirror::batch_commit_message(outcomes.len()),
