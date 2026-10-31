@@ -268,6 +268,9 @@ message PutEntityResponse {
   // How the change would move the model's findings. Set only on
   // `validate_only`; advisory, never a refusal.
   ConsequenceDelta consequence_delta = 7;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 8;
 }
 
 message DeleteEntityRequest {
@@ -321,6 +324,9 @@ message DeleteEntityResponse {
   // current view to judge.
   repeated ValidationIssue validation = 3;
   bool referrers_incomplete = 4;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 5;
 }
 
 // ---------- Batch mutation (atomic multi-entity write) -----------------------
@@ -417,6 +423,9 @@ message BatchMutateResponse {
   // How the batch would move the model's findings. Set only on
   // STATUS_VALIDATED; advisory, never a refusal.
   ConsequenceDelta consequence_delta = 8;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 9;
 }
 
 // Bulk delete by structural query, replacing the "list every entity then
@@ -456,6 +465,9 @@ message DeleteByQueryResponse {
   // When mode == MODE_DRY_RUN: nothing was deleted, but `deleted`
   // lists what WOULD have been.
   bool dry_run = 3;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 4;
 }
 
 // Static catalog of every EntityKind the system stores. Same shape and
@@ -571,6 +583,9 @@ message RetargetReferencesResponse {
   uint32 rewritten = 2;
   // Count of referrers whose write failed.
   uint32 failed = 3;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 4;
 }
 
 
@@ -671,6 +686,9 @@ message RevertChangesetResponse {
   bool dry_run = 3;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 4;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 5;
 }
 
 // See trogonatlas.catalog.v1alpha1 OperationReceipt for the durable receipt
@@ -1091,6 +1109,9 @@ message MergeBranchResponse {
   // How landing the branch would move baseline's findings. Set only on
   // `dry_run` once validation was reached; advisory, never a refusal.
   ConsequenceDelta consequence_delta = 10;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 11;
 }
 
 message UpdateBranchRequest {

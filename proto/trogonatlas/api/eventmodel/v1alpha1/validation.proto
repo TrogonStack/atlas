@@ -162,6 +162,79 @@ message ValidationCoverage {
   ValidationScope requested_scope = 4;
 }
 
+// ---------- Invariant check --------------------------------------------------
+//
+// What every invariant declared in the write's scope said about the world the
+// write would produce. Evaluated against a snapshot before the write takes the
+// mutation lock; the write then applies only if nothing in its scope was
+// written since that snapshot was read, and is refused as stale otherwise.
+// See docs/explanation/invariant-gates.md.
+
+message InvariantCheck {
+  // One per invariant declared in scope, in carrier then name order.
+  repeated InvariantOutcome outcomes = 1;
+  // Snapshot the verdict was computed against, as GetSnapshotId reports it.
+  // Empty when the snapshot has no content identity.
+  string snapshot_id = 2;
+  // The carriers and the entities the write touches, each with the etag it
+  // had in that snapshot. An empty etag records that the entity was absent.
+  repeated InvariantInput inputs = 3;
+  // True when no outcome is STATUS_UNEVALUABLE and none is redacted.
+  bool complete = 4;
+}
+
+message InvariantOutcome {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    // No forbidden finding after the write.
+    STATUS_HOLDS = 1;
+    // The write introduces a forbidden finding. Refuses the write.
+    STATUS_VIOLATED = 2;
+    // The verdict cannot be trusted; see `reason`. Refuses the write unless
+    // `advisory` is set.
+    STATUS_UNEVALUABLE = 3;
+    // Forbidden findings exist, but every one was already there before the
+    // write. Does not refuse the write.
+    STATUS_ALREADY_VIOLATED = 4;
+  }
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    // A member of the carrier is missing from the world the write produces.
+    REASON_MISSING_INPUTS = 1;
+    // The snapshot hit the entity cap, so absence proves nothing.
+    REASON_SNAPSHOT_TRUNCATED = 2;
+    // The scope declares more invariants than one evaluation may check.
+    REASON_BUDGET_EXHAUSTED = 3;
+    // The declaration cannot be decoded or forbids nothing.
+    REASON_MALFORMED_DECLARATION = 4;
+  }
+  // The EventModel declaring the invariant. Unset when `redacted`.
+  trogonatlas.eventmodel.v1alpha1.EntityRef carrier = 1;
+  // Unset when `redacted`.
+  string name = 2;
+  Status status = 3;
+  // Forbidden findings the write introduces. Set only for STATUS_VIOLATED.
+  repeated ValidationIssue violations = 4;
+  // Why the invariant could not be evaluated. Set only for
+  // STATUS_UNEVALUABLE.
+  Reason reason = 5;
+  // Members of the carrier the world lacks. Set only for
+  // REASON_MISSING_INPUTS.
+  repeated trogonatlas.eventmodel.v1alpha1.EntityRef missing = 6;
+  // True when the declaration lets an unevaluable outcome through.
+  bool advisory = 7;
+  // Forbidden findings present both before and after the write.
+  repeated ValidationIssue preexisting = 8;
+  // True when the carrier lives in a namespace the caller may not read:
+  // the status is kept and every identifying field is cleared.
+  bool redacted = 9;
+}
+
+message InvariantInput {
+  trogonatlas.eventmodel.v1alpha1.EntityRef ref = 1;
+  string etag = 2;
+}
+
 // ---------- Consequence delta ------------------------------------------------
 //
 // What a proposed change would do to the findings of the model it lands in.

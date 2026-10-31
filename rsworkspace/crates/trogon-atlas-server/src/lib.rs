@@ -12,6 +12,7 @@ pub mod fixtures;
 pub mod git_mirror;
 pub mod graph;
 pub mod health;
+pub mod invariants;
 pub mod jev;
 pub mod llm;
 pub mod llm_analysis;

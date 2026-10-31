@@ -383,6 +383,11 @@ impl Failure {
                 "ALREADY_EXISTS" => (FailureCategory::Precondition, "ALREADY_EXISTS", None),
                 "STALE_PRECONDITION" => (FailureCategory::StaleState, "STALE_PRECONDITION", None),
                 "VALIDATION_FAILED" => (FailureCategory::Validation, "VALIDATION_FAILED", None),
+                "INVARIANT_VIOLATED" => (FailureCategory::Precondition, "INVARIANT_VIOLATED", None),
+                "INVARIANT_UNEVALUABLE" => {
+                    (FailureCategory::Precondition, "INVARIANT_UNEVALUABLE", None)
+                }
+                "INVARIANT_STALE" => (FailureCategory::StaleState, "INVARIANT_STALE", None),
                 "UNAVAILABLE" => (FailureCategory::Unavailable, "UNAVAILABLE", None),
                 "PARTIAL_APPLY" => (FailureCategory::PartialApply, "PARTIAL_APPLY", None),
                 "INTERNAL" => (FailureCategory::Internal, "INTERNAL", None),
@@ -415,6 +420,8 @@ impl Failure {
                     "expected_etag": revision_detail(expected),
                     "actual_etag": revision_detail(actual),
                 }))
+            } else if code.starts_with("INVARIANT_") {
+                FailureDetails::from_json(json!(metadata))
             } else if let Some(journal) = metadata.get("journal") {
                 FailureDetails::from_json(json!({ "journal": journal }))
             } else if let Some(slugs) = metadata.get("did_you_mean") {
@@ -732,6 +739,30 @@ mod tests {
         assert_eq!(failure.code.unwrap().as_str(), "STALE_PRECONDITION");
         assert_eq!(failure.details.0["expected_etag"], json!("1"));
         assert_eq!(failure.details.0["actual_etag"], json!("2"));
+    }
+
+    #[test]
+    fn invariant_refusals_classify_by_whether_replanning_can_help() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let classify = |reason: &str, code: Code| {
+            let details = ErrorDetails::with_error_info(
+                reason,
+                SERVER_ERROR_DOMAIN,
+                HashMap::from([("invariant".to_string(), "no-dangling".to_string())]),
+            );
+            Failure::from_status(&Status::with_error_details(code, "refused", details))
+        };
+        let violated = classify("INVARIANT_VIOLATED", Code::FailedPrecondition);
+        assert_eq!(violated.category, FailureCategory::Precondition);
+        assert_eq!(violated.details.0["invariant"], json!("no-dangling"));
+        let unevaluable = classify("INVARIANT_UNEVALUABLE", Code::FailedPrecondition);
+        assert_eq!(unevaluable.category, FailureCategory::Precondition);
+        let stale = classify("INVARIANT_STALE", Code::Aborted);
+        assert_eq!(stale.category, FailureCategory::StaleState);
+        assert_eq!(stale.next_action, NextAction::Replan);
     }
 
     #[test]

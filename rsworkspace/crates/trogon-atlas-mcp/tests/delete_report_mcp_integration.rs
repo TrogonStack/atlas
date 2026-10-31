@@ -40,6 +40,7 @@ async fn incomplete_delete_report_retains_typed_flag_and_warns_without_claiming_
             } else {
                 assert!(request.uri().path().ends_with("/DeleteEntity"));
                 grpc_response(&pb::DeleteEntityResponse {
+                    invariant_check: None,
                     operation_receipt: None,
                     referrers: vec![],
                     referrers_incomplete: true,

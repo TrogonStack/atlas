@@ -184,3 +184,38 @@ message DomainTagAnnotation {
   // "acme.billing.currency-code".
   string tag = 1;
 }
+
+// Declares an invariant over the event model that carries it: a write that
+// would leave the model's own validation reporting a forbidden finding is
+// refused before anything applies. Only an EventModel may carry it, so only
+// writers of the model's namespace can add, change or remove it. See
+// docs/explanation/invariant-gates.md.
+message InvariantAnnotation {
+  // Required. Names the invariant in refusals; unique among the carrier's
+  // invariants.
+  string name = 1;
+  // Optional. Why the invariant exists, for the writer who trips it.
+  string doc = 2;
+  // Model rule codes the carrier must never report, e.g. "MEMBER_NOT_FOUND".
+  repeated string forbidden_codes = 3;
+  // Any model finding at or above this severity violates the invariant.
+  // Unspecified forbids nothing by severity.
+  Severity forbidden_severity = 4;
+  // What a write does when the invariant cannot be evaluated.
+  Unevaluable on_unevaluable = 5;
+
+  enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    SEVERITY_WARNING = 1;
+    SEVERITY_ERROR = 2;
+  }
+
+  enum Unevaluable {
+    // Treated as UNEVALUABLE_REFUSE.
+    UNEVALUABLE_UNSPECIFIED = 0;
+    // Refuse the write: an invariant that cannot be checked is not held.
+    UNEVALUABLE_REFUSE = 1;
+    // Let the write through and report the invariant as unevaluated.
+    UNEVALUABLE_ADVISE = 2;
+  }
+}

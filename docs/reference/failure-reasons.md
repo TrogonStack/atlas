@@ -38,6 +38,9 @@ instead of re-deriving category from code or reason on its own.
 | `NOT_WRITER` | `UNAVAILABLE` | `unavailable` | `role`, this process's configured role (`writer`, `standby`, or `reader`); `epoch`, the lease epoch it last observed |
 | `CURSOR_REJECTED` | `INVALID_ARGUMENT` | `validation` | none |
 | `BREAKING_CHANGE` | `FAILED_PRECONDITION` | `precondition` | none |
+| `INVARIANT_VIOLATED` | `FAILED_PRECONDITION` | `precondition` | `invariant`, `carrier`, `status`, `reason`, `snapshot_id`, `redacted`; see [invariant gates](invariant-gates.md#refusals). `PreconditionFailure` lists the introduced findings |
+| `INVARIANT_UNEVALUABLE` | `FAILED_PRECONDITION` | `precondition` | As `INVARIANT_VIOLATED`, with `reason` naming why the invariant could not be evaluated |
+| `INVARIANT_STALE` | `ABORTED` | `stale_state` | none. A write landed in the judged scope after the verdict; read again and retry |
 
 `PARTIAL_APPLY` and `UNAVAILABLE` share the `UNAVAILABLE` gRPC code on
 purpose: both mean "retry later", but only `PARTIAL_APPLY` means a batch

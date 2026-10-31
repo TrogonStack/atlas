@@ -34,6 +34,7 @@ Look up exact behavior:
 
 - [Consequence delta](reference/consequence-delta.md)
 - [Failure reasons](reference/failure-reasons.md)
+- [Invariant gates](reference/invariant-gates.md)
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
 - [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)
@@ -74,6 +75,7 @@ Understand how Atlas works and why:
 - [Branching](explanation/branching.md)
 - [Changesets](explanation/changesets.md)
 - [Consequence deltas](explanation/consequence-delta.md)
+- [Invariant gates](explanation/invariant-gates.md)
 - [Reliability overlays](explanation/reliability-overlays.md)
 - [Single-writer fencing](explanation/single-writer.md)
 - [Snapshot identity](explanation/snapshot-identity.md)
