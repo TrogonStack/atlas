@@ -122,8 +122,11 @@ other identified owner occurrences. Persisted IDs survive reorder and text/style
 edits. Changed item target requires a fresh item ID; moving an item between groups
 requires a fresh item ID. Removed IDs cannot be reused in the same incarnation.
 Group IDs survive title/item edits; a recreated group receives a fresh ID.
-Copy/new owner versions renew all local IDs. Apply the existing branch conflict,
-restore and incarnation rules documented in
+Copy/new owner versions receive a fresh owner UID and may retain supplied local
+IDs within that new identity scope. Exact local selectors include the owner UID,
+so an old selector never binds to a copied or recreated owner. Omitted IDs request
+fresh server-assigned identities. Apply the existing branch conflict, restore and
+incarnation rules documented in
 [responsibility contracts](responsibility-contracts.md#association-identity-and-lifecycle).
 
 Add explicit annotation decoding to core outbound-reference extraction and
