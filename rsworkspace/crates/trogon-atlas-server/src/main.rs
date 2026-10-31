@@ -1326,12 +1326,28 @@ async fn run_import(path: PathBuf, restore_namespaces: bool, store: Arc<dyn Stor
     let mut imported = 0usize;
     let mut skipped = 0usize;
     for entity in &entities {
+        // An import has no authenticated admin behind it, so a protection
+        // annotation in the mirror is dropped rather than honored.
+        let mut entity = entity.clone();
+        trogon_atlas_server::protection::take_request(&mut entity);
+        let entity = &entity;
         let Some(kind) = entity_kind(entity) else {
             continue;
         };
-        let Some(_id) = entity_id(entity) else {
+        let Some(id) = entity_id(entity) else {
             continue;
         };
+        if let Some(identity) = trogon_atlas_store::EntityIdentity::of(kind, id) {
+            let state = match store.get_protection(&identity).await {
+                Ok(state) => state,
+                Err(e) => trogon_atlas_store::ProtectionState::unreadable(identity.clone(), &e),
+            };
+            if !state.is_unprotected() {
+                tracing::warn!(%identity, "skipping entity whose identity is protected or whose protection is unknown");
+                skipped += 1;
+                continue;
+            }
+        }
         // Import runs outside any RPC, so there is no authenticated principal
         // to attribute the write to and no changeset is minted. The resulting
         // change events carry an empty author, which is the documented

@@ -4030,6 +4030,9 @@ pub mod get_server_info_response {
         /// CompileTypeLibrary, ResolveType, GetTypeLibraryDescriptorSet
         #[prost(bool, tag="18")]
         pub type_libraries: bool,
+        /// ProtectEntity, UnprotectEntity; writes to a protected identity refuse with ENTITY_PROTECTED, or PROTECTION_STATE_UNKNOWN when its row cannot be read; ProtectionAnnotation is never stored
+        #[prost(bool, tag="19")]
+        pub entity_protection: bool,
     }
     /// Numeric limits the server applies. Clients use these to size their
     /// requests appropriately and to know when a single call cannot return
@@ -4173,6 +4176,103 @@ pub struct MoveNamespaceRequest {
 pub struct MoveNamespaceResponse {
     #[prost(message, optional, tag="1")]
     pub namespace: ::core::option::Option<super::super::super::catalog::v1alpha1::NamespaceRecord>,
+}
+// ---------- Entity protection -------------------------------------------------
+//
+// Protecting an identity freezes it on every route: no new version, no edit,
+// no delete, whether on baseline or on a branch merging into it. Only an
+// authenticated admin may set or lift it, on baseline, and each call records
+// a changeset attributed to that admin. Protecting or unprotecting an
+// identity already in that state is a no-op that records nothing.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtectEntityRequest {
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
+    pub kind: i32,
+    #[prost(string, tag="2")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub slug: ::prost::alloc::string::String,
+    /// Why the identity is frozen. Required, so the refusal a writer later
+    /// receives can say why.
+    #[prost(string, tag="4")]
+    pub reason: ::prost::alloc::string::String,
+    /// Check authorization and existence without protecting anything.
+    #[prost(bool, tag="5")]
+    pub validate_only: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtectEntityResponse {
+    #[prost(message, optional, tag="1")]
+    pub protection: ::core::option::Option<super::super::super::catalog::v1alpha1::EntityProtection>,
+    /// False when the identity was already protected, in which case
+    /// `protection` is the existing row.
+    #[prost(bool, tag="2")]
+    pub changed: bool,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UnprotectEntityRequest {
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
+    pub kind: i32,
+    #[prost(string, tag="2")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub slug: ::prost::alloc::string::String,
+    /// Check authorization without lifting anything.
+    #[prost(bool, tag="4")]
+    pub validate_only: bool,
+    /// Lift only if the row is still at this revision (`EntityProtection.revision`
+    /// or `EntityProtectionUnknown.revision`); otherwise refuse with
+    /// `STALE_PRECONDITION`. Zero lifts whatever row is current.
+    #[prost(uint64, tag="5")]
+    pub if_match: u64,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UnprotectEntityResponse {
+    /// False when the identity was not protected.
+    #[prost(bool, tag="1")]
+    pub changed: bool,
+    /// Changeset recording the lift. Empty when nothing changed.
+    #[prost(string, tag="2")]
+    pub changeset_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetEntityProtectionRequest {
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
+    pub kind: i32,
+    #[prost(string, tag="2")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub slug: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetEntityProtectionResponse {
+    /// Set when `state` is PROTECTED.
+    #[prost(message, optional, tag="1")]
+    pub protection: ::core::option::Option<super::super::super::catalog::v1alpha1::EntityProtection>,
+    #[prost(enumeration="super::super::super::catalog::v1alpha1::ProtectionState", tag="2")]
+    pub state: i32,
+    /// Set when `state` is UNKNOWN.
+    #[prost(message, optional, tag="3")]
+    pub unknown: ::core::option::Option<super::super::super::catalog::v1alpha1::EntityProtectionUnknown>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListEntityProtectionsRequest {
+    /// Restrict to one namespace. Empty lists every namespace the caller can see.
+    #[prost(string, tag="1")]
+    pub namespace: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListEntityProtectionsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub protections: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::EntityProtection>,
+    /// Rows that exist but could not be read. Writes treat them as protected.
+    #[prost(message, repeated, tag="2")]
+    pub unknown: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::EntityProtectionUnknown>,
+    /// False when the registry could not be enumerated to the end, so an
+    /// identity missing from both lists may still be protected.
+    #[prost(bool, tag="3")]
+    pub complete: bool,
 }
 // ---------- Caller identity ---------------------------------------------------
 //

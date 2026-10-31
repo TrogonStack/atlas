@@ -60,6 +60,13 @@ One mutation RPC, one changeset. `PutEntity` records one op; `BatchMutate`,
 `DeleteByQuery`, `RetargetReferences` and `MergeBranch` record one op per
 entity that actually moved.
 
+`ProtectEntity` and `UnprotectEntity` record one op of kind `KIND_PROTECTED` or
+`KIND_UNPROTECTED`. They change no content, so as-of reads skip them, and
+`RevertChangeset` refuses a changeset that contains one: the inverse of
+protecting is `UnprotectEntity`, an admin decision, not an undo. A `PutEntity`
+from an admin that carries a `ProtectionAnnotation` records its `KIND_PUT` and
+`KIND_PROTECTED` ops in one changeset. See [entity protection](entity-protection.md).
+
 ## Why UUIDv7
 
 A UUIDv7's lexicographic order is its chronological order. That single

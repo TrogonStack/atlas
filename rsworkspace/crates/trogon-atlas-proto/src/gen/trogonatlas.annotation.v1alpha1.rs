@@ -106,4 +106,16 @@ pub struct AssumptionAnnotation {
     #[prost(string, tag="4")]
     pub created_at: ::prost::alloc::string::String,
 }
+/// A request to protect the entity's identity, carried on a write. It is a
+/// request, never stored state: the server removes it from every entity it
+/// stores. When the writer is an authenticated admin writing to baseline, the
+/// write that carried it also protects the identity, attributed to that
+/// admin. From anyone else, or on a branch, it is dropped without effect, so
+/// an imported model cannot grant itself protection. The authoritative state
+/// is trogonatlas.catalog.v1alpha1.EntityProtection.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtectionAnnotation {
+    #[prost(string, tag="1")]
+    pub reason: ::prost::alloc::string::String,
+}
 // @@protoc_insertion_point(module)

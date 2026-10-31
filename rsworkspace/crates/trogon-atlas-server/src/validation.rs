@@ -1165,6 +1165,50 @@ fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
     }
 }
 
+/// Mutable twin of [`entity_metadata`], exhaustive for the same reason.
+pub(crate) fn entity_metadata_mut(entity: &mut pb::Entity) -> Option<&mut Vec<prost_types::Any>> {
+    match entity.kind.as_mut() {
+        Some(pb::entity::Kind::Event(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Command(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ReadModel(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Processor(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Ui(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Persona(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Swimlane(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::CommandSlice(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ReadModelSlice(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::AutomationSlice(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::UiSlice(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Storyboard(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::EventModel(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Component(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ExternalSystem(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Tracker(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::BoundedContext(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Domain(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Subdomain(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Schema(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Project(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Screen(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Term(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Ambiguity(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ServiceLevelIndicator(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::ServiceLevelObjective(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::AlertPolicy(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::AlertNotificationTarget(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::TypeLibrary(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Channel(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::DataStore(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Specification(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::DataProduct(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Team(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Person(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Decision(x)) => Some(&mut x.metadata),
+        Some(pb::entity::Kind::Document(x)) => Some(&mut x.metadata),
+        None => None,
+    }
+}
+
 /// `CONTEXT_SLUG_MISMATCH`: the context's root document names its boundary,
 /// so its slug must equal its namespace (Decision #27). That keeps one
 /// context per namespace.

@@ -4455,12 +4455,14 @@ name = "trogon-atlas-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-nats",
  "async-trait",
  "axum",
  "base64 0.23.1",
  "chacha20poly1305",
  "chrono",
  "clap",
+ "futures",
  "http",
  "http-body",
  "opentelemetry",

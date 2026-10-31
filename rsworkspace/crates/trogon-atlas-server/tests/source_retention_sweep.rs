@@ -64,6 +64,30 @@ impl Store for SweepStore {
     ) -> trogon_atlas_store::StoreResult<Option<trogon_atlas_store::NamespaceRecord>> {
         panic!("unexpected unrelated Store API")
     }
+    async fn get_protection(
+        &self,
+        identity: &trogon_atlas_store::EntityIdentity,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionState> {
+        panic!("unexpected unrelated Store API")
+    }
+    async fn put_protection(
+        &self,
+        record: &trogon_atlas_store::ProtectionRecord,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionRevision> {
+        panic!("unexpected unrelated Store API")
+    }
+    async fn delete_protection(
+        &self,
+        identity: &trogon_atlas_store::EntityIdentity,
+        expected: trogon_atlas_store::ProtectionRevision,
+    ) -> trogon_atlas_store::StoreResult<()> {
+        panic!("unexpected unrelated Store API")
+    }
+    async fn list_protections(
+        &self,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionListing> {
+        panic!("unexpected unrelated Store API")
+    }
     async fn resolve_namespace(
         &self,
         parent: &trogon_atlas_core::OwnerId,

@@ -2,6 +2,7 @@ pub mod error;
 pub mod key;
 pub mod metrics;
 pub mod nats;
+pub mod protection;
 pub mod recovery;
 pub mod source;
 pub mod store;
@@ -17,6 +18,10 @@ pub use nats::{
     ConflictResolution, LegacyFieldsFinding, LegacyFieldsLocation, LegacyFieldsReport,
     LegacyFieldsShape, MigrationMode, NatsCredentials, NatsStore, NatsStoreConfig, StoreOpenMode,
     STORE_SCHEMA_MARKER,
+};
+pub use protection::{
+    EntityIdentity, ProtectionListing, ProtectionReason, ProtectionRecord, ProtectionRevision,
+    ProtectionState, ProtectionUnknown, ProtectionUnknownCause, StoredProtection,
 };
 pub use recovery::{
     BatchJournalId, BatchRecovery, BatchRecoveryReport, JournalPhase, RecoveryAction, RecoveryMode,

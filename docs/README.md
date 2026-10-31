@@ -72,6 +72,7 @@ Understand how Atlas works and why:
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)
 - [Changesets](explanation/changesets.md)
+- [Entity protection](explanation/entity-protection.md)
 - [Reliability overlays](explanation/reliability-overlays.md)
 - [Single-writer fencing](explanation/single-writer.md)
 - [Snapshot identity](explanation/snapshot-identity.md)
