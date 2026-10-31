@@ -1,10 +1,10 @@
 # UI hosting and human interaction contracts
 
-Status: proposed native contract, not implemented. This document selects an
-identified UI-hosting assertion and a read-only check of caller-selected human
-interaction paths. It changes no schema, API, validation or runtime behavior.
-The [acceptance requirements](human-interaction-acceptance.md) are implementation
-obligations, not executed coverage.
+Status: implemented native contract. Component UI-hosting assertions and the
+read-only inspection API have maintained backend, connected-client and
+authenticated browser acceptance. The
+[acceptance requirements](human-interaction-acceptance.md) distinguish these
+checked model paths from runtime execution or deployed hosting.
 
 ## Scope and existing representations
 
@@ -26,13 +26,13 @@ selected issuance or display path. It does not search for every interaction or
 infer a path from Component membership, matching labels, communication intent,
 UI navigation, Screen composition or storyboard position. No System, Service,
 Actor or interaction entity kind is introduced. ExternalSystem hosting,
-external-system-owned membership and abstract grouping remain deferred.
+external-system-owned hosting and abstract system-level interaction inspection
+remain deferred.
 
-## Proposed hosting shape
+## Native hosting shape
 
-Propose `Component.ui_hostings = 10` as repeated `UiHosting`, following current
-`communications = 9`. Implementation must recheck tag availability before
-controlled generation. Existing fields retain their meanings.
+`Component.ui_hostings = 10` contains repeated `UiHosting` values alongside
+`communications = 9`, `message_claims = 11` and `storage_claims = 12`.
 
 | UiHosting field | Type and rule |
 | --- | --- |
@@ -45,9 +45,9 @@ The containing Component is the declaration owner. Equal UI targets and wording
 may repeat as distinct occurrences; retain order without causal meaning. Empty
 means no hosting assertions in that checked owner, not no deployed interfaces.
 No direct Persona field, reverse editable list or arbitrary hosting metadata is
-added. A future implementation must advance contract and mutation floors beyond
-current revision 17 before older writers could drop these fields. This proposal
-does not bump them.
+added. Contract revision and both mutation compatibility floors are 20. The client
+compatibility gate refuses older writers before a mutation can discard hosting
+assertions.
 
 Hosting value validation must inspect `connection_id` presence before generic
 connection normalization or assignment. The current shared
@@ -108,9 +108,9 @@ or responsibility list does not create or certify a composite interaction
 subject. No new composite subject ID or automatic assignment inheritance is
 selected. Existing reference and impact results are not a human-path inspector.
 
-## Proposed checked interaction request
+## Checked interaction request
 
-Propose read-only `InspectHumanInteraction` with required hosting ConnectionRef
+Read-only `InspectHumanInteraction` requires a hosting ConnectionRef
 and exactly one typed path alternative:
 
 | Alternative | Required full ConnectionRefs and roles |
@@ -128,6 +128,19 @@ The UI selected by the slice must equal the hosting UI's exact key/version.
 The selected Persona and Command or ReadModel endpoints must also resolve.
 The operation checks one supplied tuple; it introduces no batch, pagination or
 implicit expansion to other paths.
+
+The wire API is [human_interactions.proto](../../proto/trogonatlas/api/eventmodel/v1alpha1/human_interactions.proto).
+`InspectHumanInteractionRequest.hosting` is required. Its `path` oneof contains
+`issuance` (`persona`, `ui`, `command`) or `display` (`persona`, `ui`,
+`source_read_model`). Every field is a full ConnectionRef.
+
+The response echoes `request`, reports `CatalogResolutionState`, and returns
+role-specific `edges` only when the complete supplied tuple matches. Each edge
+retains its selection, diagnostic field, authored target, resolution state and
+optional checked endpoint receipt. `scope.visited` contains readable checked
+rows with actual UIDs and etags. `consistency` is explicitly
+`PER_OWNER_CHECKED_READ_SET`; the scope revision is an opaque digest of reported
+inputs, not a snapshot guarantee.
 
 The [existing fingerprints](../../rsworkspace/crates/trogon-atlas-core/src/connections.rs)
 do not make a Persona edge a whole-path selector: CommandSlice persona anchors

@@ -161,25 +161,25 @@ coverage from exhaustive or deployed evidence. Verified behavioral binding,
 predicate execution and transport-message equivalence to native Commands/Events
 require separate contracts.
 
-## Proposed human interaction layer
+## Native human interaction inspection
 
-The [human interaction proposal](../reference/human-interaction-contracts.md)
+The [human interaction contract](../reference/human-interaction-contracts.md)
 selects identified Component declarations that a UI is presented by that
 implementation boundary. This is separate from raw membership and does not
 claim exclusive runtime deployment or ownership of a Command handler.
 
-A supplied exact hosting selection and same-slice edge tuple would support a
+A supplied exact hosting selection and same-slice edge tuple support a
 checked human issuance or display path. Persona identity alone cannot select
 the complete path. Display checks select an individual ReadModel observation,
 preserving repeated equal observations. The
 [acceptance requirements](../reference/human-interaction-acceptance.md) define
-identity, role, visibility and lifecycle obligations before implementation.
+identity, role, visibility and lifecycle obligations.
 
-This is a documentation-only proposal. No hosting field, interaction inspector
-RPC or runtime behavior is implemented. Exhaustive actor discovery, persisted
-composite interaction subjects and ExternalSystem hosting remain deferred.
-Checked per-owner revisions would describe a read set, not an atomic
-multi-owner snapshot or evidence of a human's runtime permissions.
+Native hosting and checked interaction inspection have backend, connected-client
+and authenticated browser acceptance under the linked contract. Exhaustive
+actor discovery, persisted composite interaction subjects and ExternalSystem
+hosting remain deferred. Checked per-owner revisions describe a read set, not
+an atomic multi-owner snapshot or evidence of a human's runtime permissions.
 
 ## Atlas Linter comes after the architecture resources
 

@@ -1,3 +1,4 @@
+import type { HumanInteractionRequest, HumanInteractionResponse } from '@/lib/human-interaction';
 import type { CatalogInspection, CatalogSubject, DocumentSelection } from '@/lib/decision-document';
 import { authHeaders, onUnauthenticated } from '@/lib/credential';
 import type { EntityId } from '@/lib/model';
@@ -509,6 +510,12 @@ export function listIncomingDecisionDeclarations(decision: { id: EntityId }, opt
 }
 export function listIncomingDocumentDeclarations(document: DocumentSelection, opts: FetchOptions = {}) {
   return catalogQuery('incoming-documents', { document }, opts);
+}
+export function inspectHumanInteraction(
+  request: HumanInteractionRequest,
+  opts: FetchOptions = {},
+): Promise<HumanInteractionResponse> {
+  return getJson(`/api/catalog/human-interaction?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function getDesignGraphDetail(graph: { id: EntityId }, opts: FetchOptions = {}) {
   return catalogQuery('design-graph-detail', { graph }, opts);
