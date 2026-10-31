@@ -36,10 +36,12 @@ const KINDS: Record<EntityKind, true> = {
   typeLibrary: true,
   channel: true,
   dataStore: true,
+  systemGroup: true,
   team: true,
   person: true,
   decision: true,
   document: true,
+  designGraph: true,
   dataProduct: true,
   specification: true,
 };

@@ -555,4 +555,65 @@ describe('Inspector: validation findings', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Validation/ }));
     expect(onTabChange).toHaveBeenCalledWith('validation');
   });
+
+  it('renders agent and shared metadata annotations from decoded fixtures', () => {
+    const model = buildModel([
+      { component: { id: mkId('agents', 'worker'), title: 'Worker agent' } },
+      { component: { id: mkId('tools', 'search'), title: 'Search tool target' } },
+      {
+        component: {
+          id: mkId('agents', 'router'),
+          title: 'Router agent',
+          metadata: [
+            {
+              '@type': 'type.googleapis.com/trogonatlas.eventmodel.v1alpha1.AgentAnnotation',
+              model: { provider: { value: 'Example' }, version: { value: '1.0.0' } },
+              tools: [{ name: { value: 'search' }, type: { value: 'builtin' } }],
+            },
+            {
+              '@type': 'type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation',
+              status: 'draft',
+              draft: { message: { value: 'Still wiring tools' } },
+            },
+            {
+              '@type': 'type.googleapis.com/trogonatlas.annotation.v1alpha1.BadgesAnnotation',
+              badges: [
+                {
+                  content: { value: 'Preview' },
+                  backgroundColor: { value: '#EEFF00' },
+                  textColor: { value: '#000000' },
+                },
+              ],
+            },
+            {
+              '@type': 'type.googleapis.com/trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation',
+              groups: [
+                {
+                  groupId: { value: 'grp-1' },
+                  displayLimit: { value: 1 },
+                  items: [
+                    {
+                      connectionId: { value: 'sel-a' },
+                      target: { kind: 'ENTITY_KIND_COMPONENT', id: mkId('tools', 'search') },
+                    },
+                    {
+                      connectionId: { value: 'sel-b' },
+                      target: { kind: 'ENTITY_KIND_COMPONENT', id: mkId('tools', 'search') },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ] as never);
+    const agent = mustFind(model.entities.find((e) => e.id.slug === 'router'));
+    render(<Inspector model={model} entity={agent} onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByTestId('agent-annotation')).toBeDefined();
+    expect(screen.getByText('Example')).toBeDefined();
+    expect(screen.getByText('Still wiring tools')).toBeDefined();
+    expect(screen.getByText('Preview')).toBeDefined();
+    expect(screen.getByTestId('group-items-grp-1').querySelectorAll('li')).toHaveLength(2);
+  });
 });

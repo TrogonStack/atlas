@@ -29,7 +29,15 @@ export interface CatalogInspection {
     visited?: CatalogCheckedOwner[];
     visitedSubjects?: CatalogSubject[];
     visitedDocuments?: DocumentSelection[];
+    pageReceipt?: {
+      checkedOwnerCount?: string;
+      totalDeclarations?: string;
+      startOffset?: string;
+      endOffset?: string;
+    };
   };
+  nextPageToken?: string;
+  decisionState?: string;
   incomplete?: boolean;
   failures?: { field?: string; connectionId?: { value: string }; code?: number; message?: string }[];
   selectionState?: string;
