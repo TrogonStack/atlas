@@ -129,21 +129,34 @@ fn preparation_rejects_invalid_hosting_values_before_identity_assignment() {
 }
 
 #[test]
-fn hosting_reference_lifecycle_preserves_occurrence_provenance() -> Result<(), Box<dyn std::error::Error>> {
-    use trogon_atlas_core::{outbound_refs, retarget_refs, responsibility};
-    use trogon_atlas_proto::{ConnectionRef, EntityKind, EntityRef, ResponsibilitySubject, responsibility_subject};
+fn hosting_reference_lifecycle_preserves_occurrence_provenance(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use trogon_atlas_core::{outbound_refs, responsibility, retarget_refs};
+    use trogon_atlas_proto::{
+        responsibility_subject, ConnectionRef, EntityKind, EntityRef, ResponsibilitySubject,
+    };
     let stored = prepare_entity(None, &owner())?;
     let occurrence = &connection_occurrences(&stored)?[0];
-    let selector = ConnectionRef { owner: Some(EntityRef { kind: EntityKind::Component as i32, id: trogon_atlas_core::entity_id(&stored).cloned() }), owner_uid: stored.system.as_ref().unwrap().uid.clone(), id: occurrence.id.clone().map(Into::into) };
+    let selector = ConnectionRef {
+        owner: Some(EntityRef {
+            kind: EntityKind::Component as i32,
+            id: trogon_atlas_core::entity_id(&stored).cloned(),
+        }),
+        owner_uid: stored.system.as_ref().unwrap().uid.clone(),
+        id: occurrence.id.clone().map(Into::into),
+    };
     let refs = outbound_refs(&stored);
     assert_eq!(refs.len(), 1);
     assert_eq!(refs[0].from_field, "ui_hostings[0].ui");
     assert_eq!(refs[0].to_kind, Some(EntityKind::Ui));
-    let subject = ResponsibilitySubject { selection: Some(responsibility_subject::Selection::Connection(selector)), };
+    let subject = ResponsibilitySubject {
+        selection: Some(responsibility_subject::Selection::Connection(selector)),
+    };
     responsibility::resolve_subject(&subject, &stored)?;
     let mut changed = stored.clone();
     let old = refs[0].to_id.clone();
-    let mut new = old.clone(); new.version = 2;
+    let mut new = old.clone();
+    new.version = 2;
     let paths = retarget_refs(&mut changed, EntityKind::Ui, &old, &new);
     assert_eq!(paths, vec!["ui_hostings[0].ui"]);
     let changed = prepare_entity(Some(&stored), &changed)?;
