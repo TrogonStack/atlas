@@ -121,6 +121,95 @@ fn generic_description_preserves_catalog_association_provenance_and_nested_pins(
 }
 
 #[test]
+fn description_preserves_document_text_and_binary_content_metadata() {
+    let types = TranscodePool::builtin().unwrap();
+    let digest = "a".repeat(64);
+    for (body, content) in [
+        ("retained", json!("authored text")),
+        ("retainedContent", json!("AAEC")),
+    ] {
+        let entity: pb::Entity = types
+            .message_from_json_value(
+                "trogonatlas.eventmodel.v1alpha1.Entity",
+                &json!({"document":{
+                    "id":{"namespace":"catalog","slug":"note","version":"9007199254740993"},
+                    "filename":{"value":"note.txt"},
+                    body:{"mediaType":{"value":"text/plain"},"digest":{"sha256":digest},"content":content}
+                }}),
+            )
+            .unwrap();
+        let saved = entity.clone();
+        let description = trogon_atlas_client::view::describe(&entity, &types, &[], &[]).unwrap();
+        let structured = serde_json::to_value(&description).unwrap();
+        assert_eq!(
+            structured["document_content"],
+            json!({"media_type":"text/plain","sha256":digest,"filename":"note.txt"}),
+            "{body}"
+        );
+        let rendered = trogon_atlas_client::view::render_description(&description);
+        assert!(
+            rendered.contains("Media type: text/plain\n"),
+            "{body}: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("SHA256: {digest}\n")),
+            "{body}: {rendered}"
+        );
+        assert!(
+            rendered.contains("Filename: note.txt\n"),
+            "{body}: {rendered}"
+        );
+        assert_eq!(entity, saved);
+    }
+}
+
+#[test]
+fn description_preserves_document_filename_without_inventing_content_metadata() {
+    let types = TranscodePool::builtin().unwrap();
+    for body in [
+        json!({"link":{"value":"https://example.test/note"}}),
+        json!({}),
+    ] {
+        let mut document = body;
+        document["id"] = json!({"namespace":"catalog","slug":"note","version":"1"});
+        document["filename"] = json!({"value":"note.txt"});
+        let entity: pb::Entity = types
+            .message_from_json_value(
+                "trogonatlas.eventmodel.v1alpha1.Entity",
+                &json!({"document":document}),
+            )
+            .unwrap();
+        let description = trogon_atlas_client::view::describe(&entity, &types, &[], &[]).unwrap();
+        assert_eq!(
+            serde_json::to_value(&description).unwrap()["document_content"],
+            json!({"filename":"note.txt"})
+        );
+        let rendered = trogon_atlas_client::view::render_description(&description);
+        assert!(rendered.contains("Filename: note.txt\n"));
+        assert!(!rendered.contains("Media type:"));
+        assert!(!rendered.contains("SHA256:"));
+    }
+
+    for document in [
+        json!({}),
+        json!({"link":{"value":"https://example.test/note"}}),
+    ] {
+        let entity: pb::Entity = types
+            .message_from_json_value(
+                "trogonatlas.eventmodel.v1alpha1.Entity",
+                &json!({"document":document}),
+            )
+            .unwrap();
+        let description = trogon_atlas_client::view::describe(&entity, &types, &[], &[]).unwrap();
+        assert!(description.document_content.is_none());
+        assert!(serde_json::to_value(&description)
+            .unwrap()
+            .get("document_content")
+            .is_none());
+    }
+}
+
+#[test]
 fn unchanged_native_catalog_reapply_classifies_as_unchanged_without_stripping_edits() {
     let subject = json!({"subject":{"entity":{"kind":"ENTITY_KIND_EVENT","id":"receipt"}}});
     for (kind, spec) in [
