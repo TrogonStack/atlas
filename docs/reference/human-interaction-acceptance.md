@@ -1,10 +1,10 @@
 # UI hosting and human interaction acceptance requirements
 
-Status: proposed requirements for the
-[human interaction contract](human-interaction-contracts.md), not implemented
-or executed coverage. No passing fixture, schema change or deployed readiness
-is claimed. Logical names below are not manifest syntax, predicted owner UIDs
-or submitted occurrence IDs.
+Status: adopted requirements for the
+[human interaction contract](human-interaction-contracts.md). Native implementation
+and maintained fixtures exist; final candidate validation and authenticated
+browser execution remain pending. Logical names below are not manifest syntax,
+predicted owner UIDs or submitted occurrence IDs.
 
 ## Fixture and receipts
 
@@ -106,4 +106,26 @@ Implementation completion requires maintained executable fixtures and retained
 commands/results at the candidate SHA. No exhaustive Persona/system discovery,
 ExternalSystem hosting, persisted composite interaction, abstract system level,
 portable selector rebinding, atomic snapshot or runtime interaction proof is
-claimed by this proposal.
+claimed by this contract.
+
+## Executable assertion map
+
+| Boundary | Maintained assertions |
+| --- | --- |
+| Values, identities, typed references and Source ownership | [Core hosting tests](../../rsworkspace/crates/trogon-atlas-core/tests/ui_hostings.rs) exercise omitted/invalid IDs, equal siblings, retargeting, subject context, native Source protection, branch preparation and revision 20. |
+| Public admission, limits and lifecycle | [Hosting backend](../../rsworkspace/crates/trogon-atlas-server/tests/ui_hosting_backend.rs) exercises authenticated target admission, retained dangling values, final overlays, collection/complete-owner limits, shared work/row budgets, exact subjects, hidden delete guards, previews, identity changes and explicit restoration. A metadata-only rebase retains unchanged dangling declarations; new baseline publication and renewed restoration identities require target admission. |
+| Source publication | [Hosting Source backend](../../rsworkspace/crates/trogon-atlas-server/tests/ui_hosting_source_backend.rs) asserts all-policy create refusal, WholeOwner current/incoming/clear refusal and guarded title preservation, including mapping-base readback. |
+| Checked paths and privacy | [Human interaction backend](../../rsworkspace/crates/trogon-atlas-server/tests/human_interaction_backend.rs) exercises issuance/display tuples, wrong roles/owners, reordered observations, both containing-owner and endpoint incarnations, hidden/missing parity, Reader behavior, branch isolation and combined inventory exhaustion. |
+| Operational faults and same-owner coherence | The `human_inspection_*` cases in [handler tests](../../rsworkspace/crates/trogon-atlas-server/tests/handler_tests.rs) inject real Store failures and deterministically change a slice after its first read. They assert one read per participating row, a coherent checked slice version and stale-tuple refusal after refresh. Authorization outages are also exercised in the hosting backend. |
+| Reference provenance | [Graph provenance](../../rsworkspace/crates/trogon-atlas-server/tests/ui_hosting_provenance.rs) asserts owner UID and distinct occurrence IDs through outgoing, incoming and impact APIs. Authenticated CLI and MCP assertions independently retain the exact diagnostic field and ID. |
+| Connected authoring and inspection | [Client codec/transport](../../rsworkspace/crates/trogon-atlas-client/tests/human_interaction_transport.rs), [CLI](../../rsworkspace/crates/trogon-atlas-cli/tests/human_interaction_cli.rs) and [MCP](../../rsworkspace/crates/trogon-atlas-mcp/tests/human_interaction_mcp.rs) preserve full selectors, large versions, auth/branch context, refs/subjects and persisted export/diff/reapply. |
+| Studio boundary | [Hosting rows](../../tsworkspace/webapps/studio/src/components/UiHostingDetails.test.tsx), [explicit inspection](../../tsworkspace/webapps/studio/src/components/HumanInteractionInspector.test.tsx), [partial identities](../../tsworkspace/webapps/studio/src/lib/ui-hosting.test.ts) and [actual Entity codec](../../tsworkspace/webapps/studio/server/ui-hosting-codec.test.mjs) distinguish loaded correlation, exact backend checks, unavailable values and stale async responses. The production gateway has actual request/response codec cases in [gateway tests](../../tsworkspace/webapps/studio/server/index.test.mjs). |
+| Authenticated browser | [Native browser specification](../../tsworkspace/webapps/studio/e2e/human-interaction.native.spec.ts) uses the [real Store fixture](../../rsworkspace/crates/trogon-atlas-server/tests/human_interaction_browser_fixture.rs) through the production bridge. Its execution receipt is required separately from component and mocked-gateway results. |
+
+A valid inspection tuple can read at most its Component, one slice and the
+selected UI, Persona and Command or ReadModel: the shared UI is read once.
+It emits its selected role edges and checked row receipts. The general
+5,000-row and 4,096-record ceilings cannot be reached through this bounded
+request. They remain enforced without expanding the request into discovery.
+The work fixture admits the large slice and hosting inventories separately,
+then refuses their combined inspection with RESOURCE_EXHAUSTED.
