@@ -33,6 +33,7 @@ Solve a specific problem:
 Look up exact behavior:
 
 - [Failure reasons](reference/failure-reasons.md)
+- [Finding evidence](reference/finding-evidence.md)
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
 - [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)

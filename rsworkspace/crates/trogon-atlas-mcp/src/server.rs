@@ -4906,6 +4906,60 @@ mod tests {
         assert!(bare["subject"].is_null(), "{bare}");
     }
 
+    fn issue_with_evidence() -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            code: "SLICE_STALE_REF".into(),
+            evidence: vec![pb::ValidationEvidence {
+                role: pb::validation_evidence::Role::StalePin as i32,
+                entity: Some(pb::EntityRef {
+                    kind: pb::EntityKind::CommandSlice as i32,
+                    id: Some(id_from("shop", "place", 1)),
+                }),
+                field: "command".into(),
+                target: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Command as i32,
+                    id: Some(id_from("shop", "place", 1)),
+                }),
+                occurrence: Some(pb::StoryboardOccurrence {
+                    storyboard: Some(id_from("shop", "checkout", 1)),
+                    position: 2,
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issue_json_carries_evidence() {
+        let value = issue_json(&issue_with_evidence());
+        let evidence = &value["evidence"][0];
+        assert_eq!(evidence["role"], "stale_pin", "{value}");
+        assert_eq!(evidence["entity"], "command_slice:shop/place@1");
+        assert_eq!(evidence["field"], "command");
+        assert_eq!(evidence["target"], "command:shop/place@1");
+        assert_eq!(evidence["occurrence"]["position"], 2);
+    }
+
+    #[test]
+    fn validate_json_response_carries_evidence() {
+        let resp = pb::ValidateEventModelResponse {
+            issues: vec![issue_with_evidence()],
+            ..Default::default()
+        };
+        let json = message_to_json(
+            "trogonatlas.api.eventmodel.v1alpha1.ValidateEventModelResponse",
+            &resp,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let evidence = &value["issues"][0]["evidence"][0];
+        assert_eq!(evidence["role"], "ROLE_STALE_PIN", "{value}");
+        assert_eq!(evidence["field"], "command");
+        assert_eq!(evidence["occurrence"]["position"], 2);
+        assert_eq!(evidence["target"]["id"]["slug"], "place");
+    }
+
     #[test]
     fn batch_issues_json_tags_each_finding_with_its_op_index_and_entity() {
         let put = |issues: Vec<pb::ValidationIssue>| pb::BatchMutateOpResult {
