@@ -560,6 +560,46 @@ impl TypeLibraryGate {
         Ok(Some(live.admission))
     }
 
+    /// Annotations on `entity`, at any depth, whose type neither the
+    /// built-in types nor the namespace's live type libraries declare.
+    /// `pending` are type libraries written alongside the entity. Live
+    /// libraries that do not compile together leave tenant types unresolved
+    /// instead of refusing the write.
+    ///
+    /// # Errors
+    ///
+    /// Store failures while loading the namespace's type libraries.
+    pub async fn unknown_annotation_types(
+        &self,
+        store: &dyn Store,
+        entity: &pb::Entity,
+        pending: &[&pb::TypeLibrary],
+        branch: Option<&str>,
+    ) -> Result<UnknownAnnotationTypes, Status> {
+        let builtins = self.pools.builtins();
+        let unknown = annotations_outside(builtins, entity);
+        let Some(id) = trogon_atlas_core::refs::entity_id(entity).filter(|_| !unknown.is_empty())
+        else {
+            return Ok(UnknownAnnotationTypes {
+                annotations: unknown,
+                libraries_unresolved: false,
+            });
+        };
+        match self.live_pool(store, &id.namespace, pending, branch).await {
+            Ok(live) => Ok(UnknownAnnotationTypes {
+                annotations: annotations_outside(&live.pool, entity),
+                libraries_unresolved: false,
+            }),
+            Err(status) if status.code() == Code::FailedPrecondition => {
+                Ok(UnknownAnnotationTypes {
+                    annotations: unknown,
+                    libraries_unresolved: true,
+                })
+            }
+            Err(status) => Err(status),
+        }
+    }
+
     fn is_builtin(&self, file: &FileDescriptor) -> bool {
         self.pools
             .builtins()
@@ -742,6 +782,115 @@ fn unknown_in_value(value: &Value) -> Option<String> {
         Value::Map(entries) => entries.values().find_map(unknown_in_value),
         _ => None,
     }
+}
+
+/// An annotation whose type url names no message the namespace can resolve.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownAnnotation {
+    pub type_url: String,
+    /// Structural path to the annotation inside the entity kind, e.g.
+    /// `metadata[0]` or `schema.fields[2].metadata[1]`.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownAnnotationTypes {
+    pub annotations: Vec<UnknownAnnotation>,
+    /// The namespace's live type libraries did not compile together, so
+    /// tenant types could not be consulted.
+    pub libraries_unresolved: bool,
+}
+
+const ANY_MESSAGE: &str = "google.protobuf.Any";
+const ENTITY_MESSAGE: &str = "trogonatlas.eventmodel.v1alpha1.Entity";
+
+/// Every `metadata` annotation in `entity` whose type url `pool` cannot
+/// resolve, walking into nested messages and resolvable Any payloads.
+fn annotations_outside(pool: &DescriptorPool, entity: &pb::Entity) -> Vec<UnknownAnnotation> {
+    let Some(descriptor) = pool.get_message_by_name(ENTITY_MESSAGE) else {
+        return Vec::new();
+    };
+    let Ok(mut message) = DynamicMessage::decode(descriptor, entity.encode_to_vec().as_slice())
+    else {
+        return Vec::new();
+    };
+    let mut pending: Vec<(Value, String)> = message
+        .take_fields()
+        .map(|(_, value)| (value, String::new()))
+        .collect();
+    let mut out = Vec::new();
+    while let Some((value, path)) = pending.pop() {
+        match value {
+            Value::Message(mut message) => {
+                if message.descriptor().full_name() == ANY_MESSAGE {
+                    if let Some(payload) = any_payload(pool, &mut message) {
+                        pending.push((Value::Message(payload), path));
+                    }
+                    continue;
+                }
+                for (field, value) in message.take_fields() {
+                    let child = if path.is_empty() {
+                        field.name().to_owned()
+                    } else {
+                        format!("{path}.{}", field.name())
+                    };
+                    if field.name() == "metadata" {
+                        if let Value::List(values) = &value {
+                            for (i, entry) in values.iter().enumerate() {
+                                if let Value::Message(any) = entry {
+                                    if let Some(type_url) = unresolved_type_url(pool, any) {
+                                        out.push(UnknownAnnotation {
+                                            type_url,
+                                            path: format!("{child}[{i}]"),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    pending.push((value, child));
+                }
+            }
+            Value::List(values) => pending.extend(
+                values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, value)| (value, format!("{path}[{i}]"))),
+            ),
+            Value::Map(values) => {
+                pending.extend(values.into_values().map(|value| (value, path.clone())));
+            }
+            _ => {}
+        }
+    }
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    out
+}
+
+fn any_type_url(any: &DynamicMessage) -> Option<String> {
+    match any.get_field_by_name("type_url")?.as_ref() {
+        Value::String(url) => Some(url.clone()),
+        _ => None,
+    }
+}
+
+fn unresolved_type_url(pool: &DescriptorPool, any: &DynamicMessage) -> Option<String> {
+    if any.descriptor().full_name() != ANY_MESSAGE {
+        return None;
+    }
+    let raw = any_type_url(any).unwrap_or_default();
+    let known =
+        TypeUrl::parse(&raw).is_ok_and(|url| pool.get_message_by_name(url.full_name()).is_some());
+    (!known).then_some(raw)
+}
+
+fn any_payload(pool: &DescriptorPool, any: &mut DynamicMessage) -> Option<DynamicMessage> {
+    let url = TypeUrl::parse(&any_type_url(any)?).ok()?;
+    let descriptor = pool.get_message_by_name(url.full_name())?;
+    let Some(Value::Bytes(bytes)) = any.take_field_by_name("value") else {
+        return None;
+    };
+    DynamicMessage::decode(descriptor, bytes).ok()
 }
 
 fn unknown_type(namespace: &str, type_url: &TypeUrl) -> Status {

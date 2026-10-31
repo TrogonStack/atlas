@@ -536,6 +536,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("SCHEMA_TYPE_URL_EMPTY", Error, "Schema Any has no type_url",
           "An Any-wrapped Schema must carry its type_url so consumers can deserialize it.",
           Unspecified, "schema", "schema"),
+        r("UNKNOWN_ANNOTATION_TYPE", Warning, "Annotation type is not known",
+          "A metadata annotation's type_url names no built-in annotation and no message the namespace's live type libraries declare, so no reader can decode it and any rule keyed on it never sees it. Usually a misspelled name or a missing type library. Reported when the entity is written; the write still succeeds.",
+          Unspecified, "metadata", "schema"),
         // ----- personal data (PersonalDataAnnotation) -----------------------------
         r("PII_DOC_MISSING", Error, "PersonalDataAnnotation has no doc, or is malformed",
           "A PersonalDataAnnotation's `doc` is empty, or the Any payload cannot be decoded as a PersonalDataAnnotation at all. Either way the annotation says nothing: explain what personal data this is and whose.",
@@ -706,6 +709,7 @@ mod catalog_drift_tests {
         "SCENARIO_REJECT_NO_REASON",
         "SCENARIO_TRANSITION_VIOLATION",
         "SCHEMA_TYPE_URL_EMPTY",
+        "UNKNOWN_ANNOTATION_TYPE",
         "SCREEN_MANY_CONTRIBUTORS",
         "SCREEN_NAMESPACE_IS_CONTEXT",
         "SEAM_WITHOUT_RELATIONSHIP",
@@ -929,10 +933,7 @@ fn push_annotation_findings(
     issues: &mut Vec<pb::ValidationIssue>,
 ) {
     for any in metadata {
-        if any
-            .type_url
-            .ends_with("trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation")
-        {
+        if crate::annotation_type::BuiltinAnnotation::OPEN_QUESTION.matches(any) {
             if let Ok(a) =
                 <pb::OpenQuestionAnnotation as prost::Message>::decode(any.value.as_slice())
             {
@@ -948,10 +949,7 @@ fn push_annotation_findings(
                     ..Default::default()
                 });
             }
-        } else if any
-            .type_url
-            .ends_with("trogonatlas.annotation.v1alpha1.AssumptionAnnotation")
-        {
+        } else if crate::annotation_type::BuiltinAnnotation::ASSUMPTION.matches(any) {
             if let Ok(a) =
                 <pb::AssumptionAnnotation as prost::Message>::decode(any.value.as_slice())
             {
@@ -1013,10 +1011,7 @@ fn is_derived_field(field: &pb::FieldSpec) -> bool {
     // matching would let an empty-doc annotation silently suppress
     // EVENT_FIELD_UNSOURCED / AUTOMATION_COMMAND_FIELD_UNSOURCED.
     for any in &field.metadata {
-        if !any
-            .type_url
-            .ends_with("trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation")
-        {
+        if !crate::annotation_type::BuiltinAnnotation::DERIVED_FIELD.matches(any) {
             continue;
         }
         if let Ok(ann) =
@@ -1100,6 +1095,37 @@ fn walk_personal_data_fields<'a>(
     }
 }
 
+/// `UNKNOWN_ANNOTATION_TYPE` for each annotation on `subject` whose type the
+/// namespace cannot resolve.
+#[must_use]
+pub fn unknown_annotation_type_issues(
+    subject: &pb::EntityRef,
+    found: &crate::type_libraries::UnknownAnnotationTypes,
+) -> Vec<pb::ValidationIssue> {
+    let cause = if found.libraries_unresolved {
+        "no built-in annotation declares it, and the namespace's type libraries do not compile together so tenant types could not be checked"
+    } else {
+        "neither a built-in annotation nor any live type library in the namespace declares it"
+    };
+    let mut issues: Vec<pb::ValidationIssue> = found
+        .annotations
+        .iter()
+        .map(|annotation| pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: "UNKNOWN_ANNOTATION_TYPE".into(),
+            message: format!(
+                "annotation type {:?} is unknown: {cause}",
+                annotation.type_url
+            ),
+            subject: Some(subject.clone()),
+            subject_field: annotation.path.clone(),
+            ..Default::default()
+        })
+        .collect();
+    enrich_issues_with_catalog(&mut issues);
+    issues
+}
+
 /// Decodes a `metadata` entry as PersonalDataAnnotation. Returns `None`
 /// when the entry is not a PersonalDataAnnotation at all (not our
 /// concern), `Some(Err(()))` when the type_url matches but the payload
@@ -1108,10 +1134,7 @@ fn walk_personal_data_fields<'a>(
 fn decode_personal_data_annotation(
     any: &prost_types::Any,
 ) -> Option<Result<pb::PersonalDataAnnotation, ()>> {
-    if !any
-        .type_url
-        .ends_with("trogonatlas.eventmodel.v1alpha1.PersonalDataAnnotation")
-    {
+    if !crate::annotation_type::BuiltinAnnotation::PERSONAL_DATA.matches(any) {
         return None;
     }
     Some(
@@ -3378,9 +3401,7 @@ pub fn validate_model_content(
                     let mut present = false;
                     let mut doc_ok = false;
                     for any in &rm.metadata {
-                        if !any
-                            .type_url
-                            .ends_with("trogonatlas.eventmodel.v1alpha1.SharedConsumersAnnotation")
+                        if !crate::annotation_type::BuiltinAnnotation::SHARED_CONSUMERS.matches(any)
                         {
                             continue;
                         }
@@ -3959,10 +3980,7 @@ pub fn validate_model_content(
             }
             let metadata = entity_metadata(&se.entity);
             for any in metadata {
-                if !any
-                    .type_url
-                    .ends_with("trogonatlas.annotation.v1alpha1.CodeRefAnnotation")
-                {
+                if !crate::annotation_type::BuiltinAnnotation::CODE_REF.matches(any) {
                     continue;
                 }
                 let Ok(cr) =
@@ -4026,10 +4044,7 @@ pub fn validate_model_content(
     // Malformed payloads are treated as absent: they must not panic.
     let decode_lifecycle_status = |metadata: &[prost_types::Any]| -> Option<String> {
         for any in metadata {
-            if !any
-                .type_url
-                .ends_with("trogonatlas.annotation.v1alpha1.LifecycleAnnotation")
-            {
+            if !crate::annotation_type::BuiltinAnnotation::LIFECYCLE.matches(any) {
                 continue;
             }
             if let Ok(ann) =
@@ -4125,10 +4140,7 @@ pub fn validate_model_content(
     // findings accidentally.
     let decode_pinned_ann = |metadata: &[prost_types::Any]| -> Option<pb::PinnedRefAnnotation> {
         for any in metadata {
-            if !any
-                .type_url
-                .ends_with("trogonatlas.eventmodel.v1alpha1.PinnedRefAnnotation")
-            {
+            if !crate::annotation_type::BuiltinAnnotation::PINNED_REF.matches(any) {
                 continue;
             }
             if let Ok(ann) =
@@ -5209,10 +5221,9 @@ pub fn validate_model_content(
             _ => None,
         })
         .filter(|ui| {
-            ui.metadata.iter().any(|m| {
-                m.type_url
-                    .ends_with("/trogonatlas.eventmodel.v1alpha1.MixedSurfaceAnnotation")
-            })
+            ui.metadata
+                .iter()
+                .any(|m| crate::annotation_type::BuiltinAnnotation::MIXED_SURFACE.matches(m))
         })
         .filter_map(|ui| ui.id.as_ref())
         .map(pb::IdKey::new)
@@ -5316,10 +5327,7 @@ pub fn validate_model_content(
         }
         let mut names: HashSet<String> = HashSet::new();
         for any in &lane.metadata {
-            if !any
-                .type_url
-                .ends_with("trogonatlas.eventmodel.v1alpha1.Uuidv5IdentityAnnotation")
-            {
+            if !crate::annotation_type::BuiltinAnnotation::UUIDV5_IDENTITY.matches(any) {
                 continue;
             }
             if let Ok(a) =
@@ -6577,10 +6585,7 @@ pub fn validate_model_content(
         let mut orphan_doc: Option<String> = None;
         let mut orphan_present = false;
         for any in metadata {
-            if !any
-                .type_url
-                .ends_with("trogonatlas.eventmodel.v1alpha1.OrphanAnnotation")
-            {
+            if !crate::annotation_type::BuiltinAnnotation::ORPHAN.matches(any) {
                 continue;
             }
             orphan_present = true;
