@@ -107,3 +107,20 @@ pub async fn list_incoming_document_declarations(
         )
         .context("encode ListIncomingDocumentDeclarations response")
 }
+
+pub async fn list_decision_amendments(
+    client: &mut Client,
+    request: pb::ListDecisionAmendmentsRequest,
+) -> Result<Value> {
+    let response = client
+        .list_decision_amendments(request)
+        .await
+        .context("ListDecisionAmendments failed")?
+        .into_inner();
+    TranscodePool::builtin()?
+        .message_json_value(
+            "trogonatlas.api.eventmodel.v1alpha1.ListDecisionAmendmentsResponse",
+            &response,
+        )
+        .context("encode ListDecisionAmendments response")
+}
