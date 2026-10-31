@@ -27,6 +27,11 @@ areas = ["proto", "rust"]
 paths = ["rsworkspace/crates/trogon-atlas-proto/", "rsworkspace/crates/trogon-atlas-authzed/"]
 
 [[rules]]
+reason = "generated from the MCP tool registry and checked by its tests"
+areas = ["rust"]
+paths = ["docs/reference/mcp-tools.md"]
+
+[[rules]]
 reason = "Rust workspace and the fixtures its tests read"
 areas = ["rust"]
 paths = ["rsworkspace/", "examples/", ".config/mise/tasks/rust/"]
