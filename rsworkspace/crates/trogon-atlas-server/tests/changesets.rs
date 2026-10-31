@@ -589,3 +589,69 @@ async fn batch_changeset_carries_the_batch_coverage() {
         findings
     );
 }
+
+/// A merge records the hygiene warnings of the world it lands next to its
+/// strategic findings, so a landing with warnings never reads as clean.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_changeset_counts_its_hygiene_warnings() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    let ns = "cs-receipt-merge";
+    let branch = "cs-receipt-merge";
+    c.create_branch(pb::CreateBranchRequest {
+        name: branch.into(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut write = tonic::Request::new(put_req(pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(pb::Id {
+                namespace: ns.into(),
+                slug: "sales".into(),
+                version: 1,
+            }),
+            title: "Sales".into(),
+            ..Default::default()
+        })),
+    }));
+    write
+        .metadata_mut()
+        .insert("x-trogon-atlas-branch", MetadataValue::from_static(branch));
+    c.put_entity(write).await.unwrap();
+
+    let merged = c
+        .merge_branch(pb::MergeBranchRequest {
+            name: branch.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        merged.validation.iter().any(|i| {
+            i.code == "DOMAIN_MISSING_PROJECT"
+                && i.subject
+                    .as_ref()
+                    .and_then(|s| s.id.as_ref())
+                    .is_some_and(|id| id.namespace == ns)
+        }),
+        "the merged domain declares no project: {:?}",
+        merged.validation
+    );
+
+    let found = changesets_touching(&mut c, ns).await;
+    let merge = found
+        .iter()
+        .find(|cs| cs.rpc == "MergeBranch")
+        .expect("the merge records a changeset");
+    let pb::changeset_validation::Outcome::Validated(receipt) = outcome(merge) else {
+        panic!("a merge reports coverage: {merge:?}");
+    };
+    assert!(receipt.warning_count >= 1);
+    assert_eq!(
+        (receipt.error_count + receipt.warning_count + receipt.info_count) as usize,
+        merged.validation.len()
+    );
+}
