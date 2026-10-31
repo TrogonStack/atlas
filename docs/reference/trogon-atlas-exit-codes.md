@@ -13,14 +13,14 @@ it.
 | `1` | The command ran to completion but reports a finding rather than an error: a diff found drift, `fmt --check` found files that would change, a merge or rebase left conflicts, `validate` found an error. |
 | `2` | Usage error: clap rejected the arguments before any command ran. |
 | `3` | `stale_state` -- a plan was made against a revision the server no longer holds. Read fresh state and plan again. |
-| `4` | `precondition` -- an etag or referrer check refused the request without staling a plan. |
-| `5` | `validation` -- the request itself does not satisfy a rule the server enforces. |
+| `4` | `precondition` -- an etag or referrer check refused the request without staling a plan, or `export-attested` refused an incomplete export. |
+| `5` | `validation` -- the request itself does not satisfy a rule the server enforces, or `verify` found a bundle missing, malformed or altered. |
 | `6` | `not_found` -- the target entity does not exist. |
 | `7` | `unauthorized` -- the caller is not allowed to do this. |
 | `8` | `incompatible` -- this client and server do not speak compatible contract revisions. |
 | `9` | `operation_conflict` -- reserved; no current failure classifies here. |
 | `10` | `partial_apply` -- a batch left entities in an intermediate state; see the named journal and `docs/how-to/replan-after-a-stale-refusal.md`-style recovery. |
-| `11` | `validate` / `validate-project` found no Error finding, but the server's coverage shows the run did not examine everything it was asked to. See [validation verdicts](#validation-verdicts). |
+| `11` | `validate` / `validate-project` found no Error finding, but the server's coverage shows the run did not examine everything it was asked to. See [validation verdicts](#validation-verdicts). Also `export-attested --allow-incomplete` and `verify` for an intact bundle marked incomplete; see [attested export](../explanation/attested-export.md). |
 | `70` | `internal` -- an unclassified server or local error. |
 | `75` | `unavailable` -- the condition is expected to clear; retry the same request. |
 

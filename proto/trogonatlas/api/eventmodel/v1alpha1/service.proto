@@ -21,6 +21,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/validation_attestation.proto";
 
 
 // =============================================================================
@@ -1160,6 +1161,7 @@ message ResolveBranchEntryResponse {
 //     GetEventModelProjection /
 //     ExtractSubgraph                    : denormalized subgraphs
 //   - ExportEventModelManifests          : a board as apply-ready manifests
+//   - ExportAttestedModel                : manifests + validation, digest-bound
 //   - DiffEntities                       : structural comparison
 //   - PutEntity / DeleteEntity /
 //     BatchMutate                        : mutation w/ etag + dry-run
@@ -1258,6 +1260,9 @@ service EventModelService {
   rpc ExtractSubgraph(ExtractSubgraphRequest) returns (ExtractSubgraphResponse);
   // An event model as apply-ready manifests, for sharing a board.
   rpc ExportEventModelManifests(ExportEventModelManifestsRequest) returns (ExportEventModelManifestsResponse);
+  // Manifests, validation and state identity from one state, bound by one
+  // digest a client can verify offline.
+  rpc ExportAttestedModel(ExportAttestedModelRequest) returns (ExportAttestedModelResponse);
 
   // Structural comparison of two entities (typically two versions).
   rpc DiffEntities(DiffEntitiesRequest) returns (DiffEntitiesResponse);

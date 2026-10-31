@@ -2960,6 +2960,362 @@ impl SourceCancellationDisposition {
         }
     }
 }
+// ---------- Attested export --------------------------------------------------
+//
+// An event model's manifests, the validation report run against them and
+// the identity of the state both came from, bound together by one digest.
+// The manifests, the entries and the validation are all computed from one
+// read snapshot, without holding writes off. Whatever that snapshot could
+// not show as it stood, because it was missing, hidden from the caller or
+// changed while the export ran, is listed in `unresolved` and marks the
+// bundle incomplete instead of being read from a second state.
+//
+// `bundle_digest` proves the bundle was not changed after the server
+// produced it. It does not prove who produced it. See
+// docs/explanation/attested-export.md and
+// docs/reference/attested-bundle-format.md.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AttestedModelBundle {
+    /// Format identifier. A verifier refuses any value it does not know,
+    /// since the digest rules belong to the format.
+    #[prost(string, tag="1")]
+    pub format: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub scope: ::core::option::Option<AttestedScope>,
+    #[prost(message, optional, tag="3")]
+    pub state: ::core::option::Option<AttestedState>,
+    /// Multi-document YAML, as `ExportEventModelManifestsResponse.manifests`.
+    #[prost(string, tag="4")]
+    pub manifests: ::prost::alloc::string::String,
+    /// Multi-document YAML, as
+    /// `ExportEventModelManifestsResponse.external_manifests`.
+    #[prost(string, tag="5")]
+    pub external_manifests: ::prost::alloc::string::String,
+    /// One row per exported entity (manifests and external manifests alike),
+    /// sorted by `key`, with the same content hash `GetSnapshotId` reports.
+    #[prost(message, repeated, tag="6")]
+    pub entries: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::SnapshotEntry>,
+    /// Entities that could not be rendered as manifests.
+    #[prost(message, repeated, tag="7")]
+    pub skipped: ::prost::alloc::vec::Vec<SkippedEntity>,
+    #[prost(message, optional, tag="8")]
+    pub validation: ::core::option::Option<AttestedValidation>,
+    #[prost(message, optional, tag="9")]
+    pub completeness: ::core::option::Option<AttestedCompleteness>,
+    /// Lowercase hex SHA-256 over the domain tag and the canonical JSON of
+    /// this message with `bundle_digest` cleared. Covers every other field.
+    #[prost(string, tag="10")]
+    pub bundle_digest: ::prost::alloc::string::String,
+    /// Entities the bundle needed but could not attest from its snapshot,
+    /// sorted by `key`, one row per key. Non-empty only when `completeness`
+    /// carries `REASON_UNRESOLVED_ENTITIES`.
+    #[prost(message, repeated, tag="11")]
+    pub unresolved: ::prost::alloc::vec::Vec<AttestedUnresolved>,
+}
+/// One entity the snapshot could not vouch for.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttestedUnresolved {
+    /// Storage key, in the form `SnapshotEntry.key` uses.
+    #[prost(string, tag="1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(enumeration="attested_unresolved::Cause", tag="3")]
+    pub cause: i32,
+}
+/// Nested message and enum types in `AttestedUnresolved`.
+pub mod attested_unresolved {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Cause {
+        Unspecified = 0,
+        /// Referenced by an exported entity, in a namespace the caller can see,
+        /// but absent from the snapshot. Against a truncated snapshot it may
+        /// still exist. An untyped slice reference that names no slice in the
+        /// snapshot is listed once per concrete slice kind it could name.
+        Missing = 1,
+        /// Referenced by an exported entity, in a namespace outside the
+        /// caller's lens. Says nothing about whether it exists.
+        Hidden = 2,
+        /// Exported from the snapshot, but its stored revision differed when
+        /// the export finished. The manifests show the snapshot's revision.
+        Changed = 3,
+        /// Exported from the snapshot, but deleted when the export finished.
+        Deleted = 4,
+        /// The model itself was not in the snapshot and was read by key
+        /// instead, so it may be from a later state than the rest.
+        OutsideSnapshot = 5,
+    }
+    impl Cause {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "CAUSE_UNSPECIFIED",
+                Self::Missing => "CAUSE_MISSING",
+                Self::Hidden => "CAUSE_HIDDEN",
+                Self::Changed => "CAUSE_CHANGED",
+                Self::Deleted => "CAUSE_DELETED",
+                Self::OutsideSnapshot => "CAUSE_OUTSIDE_SNAPSHOT",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "CAUSE_UNSPECIFIED" => Some(Self::Unspecified),
+                "CAUSE_MISSING" => Some(Self::Missing),
+                "CAUSE_HIDDEN" => Some(Self::Hidden),
+                "CAUSE_CHANGED" => Some(Self::Changed),
+                "CAUSE_DELETED" => Some(Self::Deleted),
+                "CAUSE_OUTSIDE_SNAPSHOT" => Some(Self::OutsideSnapshot),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttestedScope {
+    /// The exported event model.
+    #[prost(message, optional, tag="1")]
+    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    /// Branch the state was read through. Empty means baseline.
+    #[prost(string, tag="2")]
+    pub branch: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub lens: ::core::option::Option<AttestedLens>,
+}
+/// The namespaces the caller could see. The snapshot, the closure and the
+/// validation all read through this lens, so two bundles of one model taken
+/// by callers with different lenses describe different views.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttestedLens {
+    /// True when the caller had no ownership boundary.
+    #[prost(bool, tag="1")]
+    pub unrestricted: bool,
+    /// Namespace ids admitted by the lens, sorted. Empty when `unrestricted`.
+    #[prost(string, repeated, tag="2")]
+    pub namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttestedState {
+    #[prost(enumeration="attested_state::Mode", tag="1")]
+    pub mode: i32,
+    /// Snapshot id over the whole view the validation read, under `scope`.
+    /// For a current baseline export this equals `GetSnapshotId` with no
+    /// namespace filter, called by the same caller at the same moment.
+    #[prost(string, tag="2")]
+    pub snapshot_id: ::prost::alloc::string::String,
+    #[prost(uint32, tag="3")]
+    pub snapshot_entity_count: u32,
+    /// Snapshot id over `entries` alone, by the same rules, so a verifier
+    /// can recompute it offline.
+    #[prost(string, tag="4")]
+    pub closure_id: ::prost::alloc::string::String,
+    /// Current exports: the newest baseline changeset recorded before the
+    /// snapshot was read. A complete bundle also saw it unchanged once the
+    /// export finished, and confirmed every exported entry against the
+    /// store. Historical exports: the requested changeset. Empty when the
+    /// baseline has recorded no changeset. Writes that record no changeset
+    /// do not move it, so `snapshot_id` remains the identity of record.
+    #[prost(string, tag="5")]
+    pub baseline_changeset_id: ::prost::alloc::string::String,
+    /// The newest changeset on `scope.branch` before the snapshot was read,
+    /// under the same rules. Empty on baseline, or when the branch has
+    /// recorded none.
+    #[prost(string, tag="6")]
+    pub branch_changeset_id: ::prost::alloc::string::String,
+    /// True when the model's closure exceeded the projection cap, so `entries`
+    /// and the manifests stop short of everything the model reaches. Covered
+    /// by the digest independently of `completeness`, so a verifier refuses a
+    /// bundle that sets it and claims `STATE_COMPLETE`.
+    #[prost(bool, tag="7")]
+    pub closure_truncated: bool,
+}
+/// Nested message and enum types in `AttestedState`.
+pub mod attested_state {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Mode {
+        Unspecified = 0,
+        /// The state as of the export call.
+        Current = 1,
+        /// A past baseline state, rebuilt from changeset history.
+        Historical = 2,
+    }
+    impl Mode {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "MODE_UNSPECIFIED",
+                Self::Current => "MODE_CURRENT",
+                Self::Historical => "MODE_HISTORICAL",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "MODE_UNSPECIFIED" => Some(Self::Unspecified),
+                "MODE_CURRENT" => Some(Self::Current),
+                "MODE_HISTORICAL" => Some(Self::Historical),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AttestedValidation {
+    /// Findings from the same validation `ValidateEventModel` runs, over the
+    /// same view as the manifests.
+    #[prost(message, repeated, tag="1")]
+    pub issues: ::prost::alloc::vec::Vec<ValidationIssue>,
+    #[prost(message, optional, tag="2")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
+    #[prost(message, optional, tag="3")]
+    pub rule_catalog: ::core::option::Option<RuleCatalogIdentity>,
+}
+/// Which rule catalogue produced the findings.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RuleCatalogIdentity {
+    /// Lowercase hex SHA-256 over the canonical JSON of
+    /// `ListValidationRulesResponse`. Equal digests mean the same codes,
+    /// severities and descriptions.
+    #[prost(string, tag="1")]
+    pub digest: ::prost::alloc::string::String,
+    /// Version of the server build that ran the rules.
+    #[prost(string, tag="2")]
+    pub server_version: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttestedCompleteness {
+    #[prost(enumeration="attested_completeness::State", tag="1")]
+    pub state: i32,
+    /// Every reason that applies, sorted, without repeats. Empty exactly when
+    /// `state` is `STATE_COMPLETE`.
+    #[prost(enumeration="attested_completeness::Reason", repeated, tag="2")]
+    pub reasons: ::prost::alloc::vec::Vec<i32>,
+}
+/// Nested message and enum types in `AttestedCompleteness`.
+pub mod attested_completeness {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum State {
+        Unspecified = 0,
+        /// Nothing was clipped, skipped or left unvalidated.
+        Complete = 1,
+        /// The caller asked for the bundle anyway. Not a clean attestation.
+        Incomplete = 2,
+    }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "STATE_UNSPECIFIED",
+                Self::Complete => "STATE_COMPLETE",
+                Self::Incomplete => "STATE_INCOMPLETE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "STATE_UNSPECIFIED" => Some(Self::Unspecified),
+                "STATE_COMPLETE" => Some(Self::Complete),
+                "STATE_INCOMPLETE" => Some(Self::Incomplete),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Reason {
+        Unspecified = 0,
+        /// The store load hit its entity cap.
+        SnapshotTruncated = 1,
+        /// The model's closure exceeded the projection cap.
+        ClosureTruncated = 2,
+        /// A historical rebuild could not fetch every entity it needed.
+        HistoryIncomplete = 3,
+        /// At least one entity could not be rendered as a manifest.
+        EntitiesSkipped = 4,
+        /// A validation suite did not complete.
+        ValidationIncomplete = 5,
+        /// `unresolved` lists at least one entity.
+        UnresolvedEntities = 6,
+        /// A write landed while the export ran: the changeset log, the branch
+        /// or the caller's lens moved, or an exported entity changed.
+        ConcurrentWrite = 7,
+        /// A historical export rendered through type libraries that changed
+        /// after the requested changeset.
+        TypeLibrariesChanged = 8,
+        /// The serving process does not hold the writer lease, so its cached
+        /// snapshot is not refreshed by writes and may predate the changeset
+        /// boundary.
+        BoundaryUnverified = 9,
+    }
+    impl Reason {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::SnapshotTruncated => "REASON_SNAPSHOT_TRUNCATED",
+                Self::ClosureTruncated => "REASON_CLOSURE_TRUNCATED",
+                Self::HistoryIncomplete => "REASON_HISTORY_INCOMPLETE",
+                Self::EntitiesSkipped => "REASON_ENTITIES_SKIPPED",
+                Self::ValidationIncomplete => "REASON_VALIDATION_INCOMPLETE",
+                Self::UnresolvedEntities => "REASON_UNRESOLVED_ENTITIES",
+                Self::ConcurrentWrite => "REASON_CONCURRENT_WRITE",
+                Self::TypeLibrariesChanged => "REASON_TYPE_LIBRARIES_CHANGED",
+                Self::BoundaryUnverified => "REASON_BOUNDARY_UNVERIFIED",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
+                "REASON_SNAPSHOT_TRUNCATED" => Some(Self::SnapshotTruncated),
+                "REASON_CLOSURE_TRUNCATED" => Some(Self::ClosureTruncated),
+                "REASON_HISTORY_INCOMPLETE" => Some(Self::HistoryIncomplete),
+                "REASON_ENTITIES_SKIPPED" => Some(Self::EntitiesSkipped),
+                "REASON_VALIDATION_INCOMPLETE" => Some(Self::ValidationIncomplete),
+                "REASON_UNRESOLVED_ENTITIES" => Some(Self::UnresolvedEntities),
+                "REASON_CONCURRENT_WRITE" => Some(Self::ConcurrentWrite),
+                "REASON_TYPE_LIBRARIES_CHANGED" => Some(Self::TypeLibrariesChanged),
+                "REASON_BOUNDARY_UNVERIFIED" => Some(Self::BoundaryUnverified),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ExportAttestedModelRequest {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    /// Export the baseline as it stood right after this changeset, with the
+    /// same rules as `GetEventModelProjectionRequest.as_of_changeset`. Empty
+    /// exports the current state.
+    #[prost(string, tag="2")]
+    pub as_of_changeset: ::prost::alloc::string::String,
+    /// Return an incomplete bundle, marked `STATE_INCOMPLETE`, instead of
+    /// refusing with `EXPORT_INCOMPLETE`.
+    #[prost(bool, tag="3")]
+    pub allow_incomplete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ExportAttestedModelResponse {
+    #[prost(message, optional, tag="1")]
+    pub bundle: ::core::option::Option<AttestedModelBundle>,
+}
 // =============================================================================
 // Service surface: requests, responses, supporting messages
 // =============================================================================

@@ -622,6 +622,80 @@ async fn export_event_model_manifests_does_not_render_another_owners_model() {
     });
 }
 
+/// An attested bundle carries the manifests and the findings, so it would
+/// leak everything the two RPCs it combines are each kept from leaking.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_attested_model_does_not_attest_another_owners_model() {
+    let mut c = world().await;
+    let out = c
+        .export_attested_model(authed(
+            pb::ExportAttestedModelRequest {
+                id: Some(id("model")),
+                as_of_changeset: String::new(),
+                allow_incomplete: true,
+            },
+            BETA_TOKEN,
+        ))
+        .await;
+    assert_hidden("export_attested_model", out, |r| r.bundle.is_none());
+}
+
+/// The newest baseline changeset id is a UUIDv7 over every owner's writes,
+/// so even an owner's bundle of its own model must not carry it.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_attested_model_does_not_date_other_owners_writes() {
+    let mut c = world().await;
+    let bundle = c
+        .export_attested_model(authed(
+            pb::ExportAttestedModelRequest {
+                id: Some(id("model")),
+                as_of_changeset: String::new(),
+                allow_incomplete: true,
+            },
+            ACME_TOKEN,
+        ))
+        .await
+        .expect("acme exports its own model")
+        .into_inner()
+        .bundle
+        .unwrap();
+    let state = bundle.state.unwrap();
+    assert_eq!(state.baseline_changeset_id, "");
+}
+
+/// Reading through another owner's branch would hand back that branch's
+/// newest changeset id, so the branch must answer as absent.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_attested_model_does_not_read_through_another_owners_branch() {
+    let mut c = world().await;
+    let branch = "@beta-writer:xt-attested-hidden";
+    c.create_branch(authed(
+        pb::CreateBranchRequest {
+            name: branch.into(),
+            doc: String::new(),
+        },
+        BETA_TOKEN,
+    ))
+    .await
+    .expect("beta creates its own branch");
+    let mut req = authed(
+        pb::ExportAttestedModelRequest {
+            id: Some(id("model")),
+            as_of_changeset: String::new(),
+            allow_incomplete: true,
+        },
+        ACME_TOKEN,
+    );
+    req.metadata_mut().insert(
+        "x-trogon-atlas-branch",
+        MetadataValue::try_from(branch).unwrap(),
+    );
+    let out = c.export_attested_model(req).await;
+    assert_hidden("export_attested_model on beta's branch", out, |r| {
+        r.bundle.is_none()
+    });
+}
+
 /// Validating by id loads the stored model. The issues it reports name the
 /// model's members, so answering at all describes acme's graph to beta.
 #[tokio::test(flavor = "multi_thread")]

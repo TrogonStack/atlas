@@ -300,6 +300,14 @@ pub async fn load_all_with_cap(
     })
 }
 
+/// The concrete kinds an untyped slice ref may name, in probe order.
+const SLICE_KINDS: [pb::EntityKind; 4] = [
+    pb::EntityKind::CommandSlice,
+    pb::EntityKind::ReadModelSlice,
+    pb::EntityKind::AutomationSlice,
+    pb::EntityKind::UiSlice,
+];
+
 /// Resolve an outbound target kind. Typed refs pass through; untyped slice
 /// refs (Storyboard `slices[]` / trace steps) probe the four concrete slice
 /// kinds against `known`, matching `closure()`.
@@ -311,12 +319,7 @@ fn resolve_to_kinds<S: std::hash::BuildHasher>(
     if let Some(k) = to_kind {
         vec![k]
     } else {
-        for probe in [
-            pb::EntityKind::CommandSlice,
-            pb::EntityKind::ReadModelSlice,
-            pb::EntityKind::AutomationSlice,
-            pb::EntityKind::UiSlice,
-        ] {
+        for probe in SLICE_KINDS {
             if known.contains(&pb::EntityKey::new(probe, to_id)) {
                 return vec![probe];
             }
@@ -615,6 +618,8 @@ pub struct BoardClosure {
     pub own: Vec<pb::Entity>,
     pub external: Vec<pb::Entity>,
     pub truncated: bool,
+    /// Keys the board references that `all` does not hold, each once.
+    pub missing: Vec<pb::EntityKey>,
 }
 
 /// Walks from `root` through its own namespace only. A reference into
@@ -651,6 +656,7 @@ pub fn board_closure(
             continue;
         }
         let Some(&entity) = by_key.get(&key) else {
+            board.missing.push(key);
             continue;
         };
         if key.namespace != root_id.namespace {
@@ -695,6 +701,18 @@ fn board_targets(
         trogon_atlas_core::schema::declared_schema_id(entity)
             .map(|id| pb::EntityKey::new(pb::EntityKind::Schema, &id)),
     );
+    // An untyped slice ref that names no slice in the snapshot cannot be
+    // pinned to one kind, so every kind it could name is a target the walk
+    // reports missing, as `closure()` does.
+    for o in outbound_refs(entity) {
+        if o.to_kind.is_none() && resolve_to_kinds(None, &o.to_id, known).is_empty() {
+            out.extend(
+                SLICE_KINDS
+                    .iter()
+                    .map(|&kind| pb::EntityKey::new(kind, &o.to_id)),
+            );
+        }
+    }
     out.extend(board_type_libraries(entity, owners, types));
     out
 }
@@ -1516,6 +1534,52 @@ mod board_closure_tests {
         assert_eq!(slugs(&board.own), ["shop/order.placed", "shop/place-order"]);
         assert_eq!(slugs(&board.external), ["pay/payment.captured"]);
         assert!(!board.truncated);
+        assert_eq!(board.missing, Vec::<pb::EntityKey>::new());
+    }
+
+    #[test]
+    fn untyped_slice_refs_the_snapshot_cannot_resolve_are_listed_under_every_slice_kind() {
+        let missing_slice = id("shop", "gone");
+        let root = stored(pb::entity::Kind::Storyboard(pb::Storyboard {
+            id: Some(id("shop", "happy-path")),
+            title: "happy".into(),
+            slices: vec![pb::SliceRef {
+                id: Some(missing_slice.clone()),
+            }],
+            ..Default::default()
+        }));
+        let board = walk(std::slice::from_ref(&root), &root, 100);
+        let missing: HashSet<pb::EntityKey> = board.missing.iter().cloned().collect();
+        assert_eq!(
+            missing,
+            SLICE_KINDS
+                .iter()
+                .map(|&kind| pb::EntityKey::new(kind, &missing_slice))
+                .collect()
+        );
+    }
+
+    #[test]
+    fn references_the_snapshot_cannot_resolve_are_listed_once() {
+        let root = slice_emitting(
+            "shop",
+            "place-order",
+            &[
+                id("shop", "order.placed"),
+                id("pay", "payment.captured"),
+                id("shop", "order.placed"),
+            ],
+        );
+        let board = walk(std::slice::from_ref(&root), &root, 100);
+        let missing: HashSet<pb::EntityKey> = board.missing.iter().cloned().collect();
+        assert_eq!(board.missing.len(), missing.len());
+        assert_eq!(
+            missing,
+            HashSet::from([
+                pb::EntityKey::new(pb::EntityKind::Event, &id("shop", "order.placed")),
+                pb::EntityKey::new(pb::EntityKind::Event, &id("pay", "payment.captured")),
+            ])
+        );
     }
 
     #[test]

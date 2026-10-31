@@ -4,8 +4,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use trogon_atlas_client::{
-    apply, branch, client, compat, export, failure::Failure, fmt, manifest, manifest_schema,
-    openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
+    apply, attested, branch, client, compat, export, failure::Failure, fmt, manifest,
+    manifest_schema, openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
     precondition::BranchEntryState, validate, view,
 };
 use trogon_atlas_proto as pb;
@@ -348,6 +348,36 @@ enum Cmd {
         /// `@version` to validate the latest version.
         model: String,
     },
+    /// Export a stored event model as an attested bundle: its manifests,
+    /// its validation findings and coverage, and the state both were read
+    /// from, bound by one digest that `verify` checks offline. Refuses an
+    /// export that cannot cover its whole scope unless --allow-incomplete
+    /// is given, which saves the bundle marked incomplete and exits 11.
+    /// With --branch, exports the branch's view of the model.
+    ExportAttested {
+        /// `<namespace>/<model>[@version]`, e.g. `shop/checkout`. Omit
+        /// `@version` to export the latest version.
+        model: String,
+        /// File to write the bundle's proto3 JSON into.
+        #[arg(short = 'o', long = "output")]
+        output: PathBuf,
+        /// Describe baseline as it stood right after this changeset landed,
+        /// instead of its current state.
+        #[arg(long)]
+        as_of_changeset: Option<String>,
+        /// Save a bundle that does not cover its whole scope, marked
+        /// incomplete with the reasons, instead of refusing it.
+        #[arg(long)]
+        allow_incomplete: bool,
+    },
+    /// Check an attested bundle offline, without contacting a server: its
+    /// digest, and that what it says about its own completeness holds.
+    /// Exits 0 for a complete bundle, 11 for an intact bundle marked
+    /// incomplete, and 5 for one that is malformed or was altered.
+    Verify {
+        /// Bundle file written by `export-attested`.
+        bundle: PathBuf,
+    },
     /// Validate every event model in a namespace, domain or project, plus
     /// the strategic findings (BoundedContext, Domain, Subdomain, Project
     /// rules), which print once in a store-level section. Use it after
@@ -647,6 +677,63 @@ fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
         validate::ValidationVerdict::Findings => ExitCode::from(EXIT_FINDINGS),
         validate::ValidationVerdict::Incomplete => ExitCode::from(EXIT_VALIDATION_INCOMPLETE),
     }
+}
+
+/// Report a bundle that verified. An incomplete one exits 11, the same
+/// code an incomplete `validate` run gets, so a gate that accepts only 0
+/// never takes it for a clean attestation.
+fn attested_outcome(
+    text: bool,
+    verified: &trogon_atlas_core::attested_bundle::VerifiedBundle,
+    written: Option<&std::path::Path>,
+) -> (ExitCode, Option<Value>) {
+    use trogon_atlas_core::attested_bundle::Completeness;
+    let reasons: Vec<&str> = match &verified.completeness {
+        Completeness::Complete => Vec::new(),
+        Completeness::Incomplete(reasons) => reasons
+            .iter()
+            .map(trogon_atlas_proto::attested_completeness::Reason::as_str_name)
+            .collect(),
+    };
+    if text {
+        if let Some(path) = written {
+            println!("wrote {}", path.display());
+        }
+        println!("bundle_digest: {}", verified.digest);
+        if reasons.is_empty() {
+            println!("complete");
+        }
+        for reason in &reasons {
+            println!("incomplete: {reason}");
+        }
+        for entity in &verified.unresolved {
+            println!(
+                "unresolved: {} ({})",
+                entity.key,
+                entity.cause.as_str_name()
+            );
+        }
+    }
+    let unresolved: Vec<Value> = verified
+        .unresolved
+        .iter()
+        .map(|entity| json!({"key": entity.key, "cause": entity.cause.as_str_name()}))
+        .collect();
+    let mut data = json!({
+        "bundle_digest": verified.digest.to_hex(),
+        "complete": reasons.is_empty(),
+        "incomplete_reasons": reasons,
+        "unresolved": unresolved,
+    });
+    if let Some(path) = written {
+        data["output"] = json!(path.display().to_string());
+    }
+    let code = if verified.completeness.is_complete() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(EXIT_VALIDATION_INCOMPLETE)
+    };
+    (code, Some(data))
 }
 
 fn print_coverage_gaps(completeness: &validate::Completeness) {
@@ -1980,6 +2067,29 @@ async fn run(
             });
             validate::insert_verdict(&mut data, resp.coverage.as_ref(), verdict, &completeness);
             Ok((exit_code_for_verdict(verdict), Some(data)))
+        }
+        Cmd::ExportAttested {
+            model,
+            output,
+            as_of_changeset,
+            allow_incomplete,
+        } => {
+            let request = attested::ExportRequest {
+                address: validate::parse_model_address(&model)?,
+                as_of_changeset,
+                allow_incomplete,
+            };
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let (bundle, verified) = attested::export_attested_model(&mut client, &request).await?;
+            let json = trogon_atlas_core::attested_bundle::bundle_to_json(&bundle)?;
+            std::fs::write(&output, format!("{json}\n"))
+                .map_err(|e| anyhow::anyhow!("writing {}: {e}", output.display()))?;
+            Ok(attested_outcome(text, &verified, Some(&output)))
+        }
+        Cmd::Verify { bundle } => {
+            let verified = attested::verify_file(&bundle)?;
+            Ok(attested_outcome(text, &verified, None))
         }
         Cmd::ValidateProject {
             namespace,

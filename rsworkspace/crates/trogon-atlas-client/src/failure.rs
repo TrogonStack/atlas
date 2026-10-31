@@ -397,6 +397,7 @@ impl Failure {
                     Some(NextAction::UseNewOperationId),
                 ),
                 "NOT_WRITER" => (FailureCategory::Unavailable, "NOT_WRITER", None),
+                "EXPORT_INCOMPLETE" => (FailureCategory::Precondition, "EXPORT_INCOMPLETE", None),
                 "CURSOR_REJECTED" => (
                     FailureCategory::Validation,
                     "CURSOR_REJECTED",

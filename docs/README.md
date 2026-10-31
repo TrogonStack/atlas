@@ -17,6 +17,7 @@ Solve a specific problem:
 - [Check code against the model](how-to/check-code-drift.md)
 - [Declare an SLO](how-to/declare-an-slo.md)
 - [Draft and land a new entity version](how-to/draft-then-land.md)
+- [Export and verify an attested model](how-to/export-and-verify-an-attested-model.md)
 - [Issue an API key to a client](how-to/issue-an-api-key.md)
 - [Migrate legacy entity fields into `schema`](how-to/migrate-legacy-entity-fields.md)
 - [Model runtime code as an Event Model](how-to/model-runtime-code-as-an-event-model.md)
@@ -32,6 +33,7 @@ Solve a specific problem:
 
 Look up exact behavior:
 
+- [Attested bundle format](reference/attested-bundle-format.md)
 - [Failure reasons](reference/failure-reasons.md)
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
@@ -68,6 +70,7 @@ Understand how Atlas works and why:
 
 - [Atlas principles](explanation/principles/README.md)
 - [Architecture resource roadmap](explanation/architecture-resource-roadmap.md)
+- [Attested export](explanation/attested-export.md)
 - [Authorization design](explanation/authorization.md)
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)

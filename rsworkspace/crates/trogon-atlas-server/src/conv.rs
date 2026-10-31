@@ -155,6 +155,7 @@ pub mod reason {
     pub const NOT_WRITER: &str = "NOT_WRITER";
     pub const CURSOR_REJECTED: &str = "CURSOR_REJECTED";
     pub const BREAKING_CHANGE: &str = "BREAKING_CHANGE";
+    pub const EXPORT_INCOMPLETE: &str = "EXPORT_INCOMPLETE";
 }
 
 /// `UNAVAILABLE`: another call already owns this `operation_id` and has not
@@ -162,6 +163,19 @@ pub mod reason {
 /// the mutation as failed.
 pub fn operation_in_progress(message: impl Into<String>) -> Status {
     with_reason(Code::Unavailable, message, reason::OPERATION_IN_PROGRESS)
+}
+
+/// `FAILED_PRECONDITION`: an attested export could not cover its whole
+/// scope. `reasons` lists the bundle's incomplete reasons, comma-joined.
+/// The caller may ask again with `allow_incomplete` to get the bundle
+/// marked as incomplete instead.
+pub fn export_incomplete(message: impl Into<String>, reasons: String) -> Status {
+    with_reason_and_metadata(
+        Code::FailedPrecondition,
+        message,
+        reason::EXPORT_INCOMPLETE,
+        HashMap::from([("reasons".to_string(), reasons)]),
+    )
 }
 
 /// `ALREADY_EXISTS`: `operation_id` was already claimed for a request with a

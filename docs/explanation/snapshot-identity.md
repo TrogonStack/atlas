@@ -144,3 +144,7 @@ GetSnapshotId(namespaces: ["billing"], include_entries: true)
 The same call is available as the `get_snapshot_id` MCP tool.
 
 Requires the `Reader` role, like every other read RPC.
+
+To bind a snapshot id to the manifests and validation findings read
+from the same state, export an
+[attested bundle](attested-export.md).

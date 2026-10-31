@@ -38,6 +38,7 @@ instead of re-deriving category from code or reason on its own.
 | `NOT_WRITER` | `UNAVAILABLE` | `unavailable` | `role`, this process's configured role (`writer`, `standby`, or `reader`); `epoch`, the lease epoch it last observed |
 | `CURSOR_REJECTED` | `INVALID_ARGUMENT` | `validation` | none |
 | `BREAKING_CHANGE` | `FAILED_PRECONDITION` | `precondition` | none |
+| `EXPORT_INCOMPLETE` | `FAILED_PRECONDITION` | `precondition` | `reasons`, the comma-separated incomplete reasons of the refused bundle, such as `REASON_SNAPSHOT_TRUNCATED` |
 
 `PARTIAL_APPLY` and `UNAVAILABLE` share the `UNAVAILABLE` gRPC code on
 purpose: both mean "retry later", but only `PARTIAL_APPLY` means a batch
@@ -61,7 +62,9 @@ is `use_new_operation_id` instead of `operation_conflict`'s usual
 writer lease (see `docs/explanation/single-writer.md`), so the mutation
 never ran. Retrying against the same process will keep failing until it
 becomes the writer; a caller load-balancing across replicas should retry
-against a different one.
+against a different one. `ExportAttestedModel` does not refuse with
+`NOT_WRITER`: on a replica it marks the bundle with
+`REASON_BOUNDARY_UNVERIFIED`; see `docs/explanation/attested-export.md`.
 
 `CURSOR_REJECTED` is `ListChanges`' `since_token` carrying the sealed
 cursor prefix but failing to open: tampered, minted for a different
@@ -81,6 +84,14 @@ library, as `docs/how-to/register-a-type-library.md` describes. A delete that
 would strand a library's dependents or the entity schemas using its types is
 refused with `FAILED_PRECONDITION` and violations of type
 `TYPE_LIBRARY_DEPENDENCY` or `TYPE_LIBRARY_SCHEMA`, one per referrer.
+
+`EXPORT_INCOMPLETE` is `ExportAttestedModel` refusing a bundle that would
+not cover its whole scope. Retrying returns the same refusal while the
+cause holds. A refusal whose only reasons are `REASON_CONCURRENT_WRITE`
+and `REASON_UNRESOLVED_ENTITIES` came from writes landing during the
+export, and retrying once they settle can succeed. Narrow the scope, raise the server's limits, or pass
+`allow_incomplete` to receive the bundle marked incomplete, as
+`docs/how-to/export-and-verify-an-attested-model.md` describes.
 
 A status without an `ErrorInfo` at all (most `INVALID_ARGUMENT` statuses
 raised directly by request validation, for instance) still classifies
