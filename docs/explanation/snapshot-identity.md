@@ -99,9 +99,15 @@ state.
 
 ## Truncation
 
-The server loads at most `MAX_PROJECTION_ENTITIES` entities. When that cap
-is hit, `truncated` is true and the id names a *partial* state. Do not
-compare a truncated id against anything. This is reported rather than
+The server loads at most `MAX_PROJECTION_ENTITIES` entities, baseline and
+branch views alike. When the view holds more than that, `truncated` is true
+and the id names a *partial* state. Do not compare a truncated id against
+anything. A view holding exactly the cap is complete and is not flagged.
+
+The flag belongs to the load that produced the entities, not to the
+caller's narrowed view: a scoped caller whose own namespaces fit well inside
+the cap still sees `truncated` when the load behind the view was cut, since
+the server cannot tell which side of the cut the missing entities fell on. This is reported rather than
 silently tolerated because the whole value of an id is that it stands in
 for a complete state.
 

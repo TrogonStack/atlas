@@ -521,6 +521,9 @@ pub struct ChangesetPage<'a> {
 ///
 /// See `create_branch`/`list_branches`/`delete_branch` for branch lifecycle
 /// management, and `docs/explanation/branching.md` for the full design.
+/// Most entities a single `list` call returns, whatever `limit` asks for.
+pub const LIST_HARD_CAP: usize = 10_000;
+
 #[async_trait]
 pub trait Store: Send + Sync {
     // ---- Single-writer fencing --------------------------------------------
@@ -614,7 +617,7 @@ pub trait Store: Send + Sync {
     /// (kind, namespace, slug, version asc).
     ///
     /// `limit` caps the number of results returned. When `None` the store
-    /// applies an internal hard cap (`10_000`) to prevent unbounded scans.
+    /// applies [`LIST_HARD_CAP`] to prevent unbounded scans.
     /// Callers should always pass the bound they actually need.
     ///
     /// # Memory
