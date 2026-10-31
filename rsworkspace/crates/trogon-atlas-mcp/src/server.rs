@@ -1290,6 +1290,24 @@ fn with_consequence_delta(
     result
 }
 
+/// Add the server's advisory change assessment to an already-built JSON tool
+/// result body. An absent assessment leaves the body untouched.
+fn with_change_assessment(
+    mut result: CallToolResult,
+    assessment: Option<&pb::ChangeAssessment>,
+) -> CallToolResult {
+    let body = result
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok());
+    if let (Some(mut body), Some(_)) = (body, assessment) {
+        trogon_atlas_client::apply::insert_change_assessment(&mut body, assessment);
+        result.content[0] = ContentBlock::text(body.to_string());
+    }
+    result
+}
+
 fn with_issues(mut result: CallToolResult, issues: Vec<serde_json::Value>) -> CallToolResult {
     let body = result
         .content
@@ -4472,7 +4490,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Merge a branch onto baseline (Phase 2: Review and merge). All-or-nothing: any conflict (see conflicts) or post-merge validation Error (see validation) persists nothing. Set dry_run to run full detection and validation without persisting even on success; the result splits the landable entries into added_count, changed_count and deleted_count and lists the post-merge findings, strategic ones included, in validation and, as JSON, in `issues` (Warning and Info findings are non-blocking; fix them). keep_branch controls whether a successful, non-dry-run merge deletes the branch afterward (default: deletes it). Set auto_merge to land the combined result for edit/edit conflicts whose two sides changed different fields. A dry run also returns `consequence_delta`: which findings the change would introduce, resolve or leave unknown (advisory, never a refusal).",
+        description = "Merge a branch onto baseline (Phase 2: Review and merge). All-or-nothing: any conflict (see conflicts) or post-merge validation Error (see validation) persists nothing. Set dry_run to run full detection and validation without persisting even on success; the result splits the landable entries into added_count, changed_count and deleted_count and lists the post-merge findings, strategic ones included, in validation and, as JSON, in `issues` (Warning and Info findings are non-blocking; fix them). keep_branch controls whether a successful, non-dry-run merge deletes the branch afterward (default: deletes it). Set auto_merge to land the combined result for edit/edit conflicts whose two sides changed different fields. A dry run also returns `consequence_delta`: which findings the change would introduce, resolve or leave unknown (advisory, never a refusal), and `change_assessment`: the server's advisory verdict (`land`, `needs_review` or `reject`) with stable reason codes and the snapshot ids, entry etags, scope and catalogue revision it is bound to. A verdict never changes what the merge itself does; assess again if any bound input moves.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -4499,19 +4517,22 @@ impl McpServer {
             .map_err(tool_err("merge_branch"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(with_consequence_delta(
-            with_coverage(
-                with_issues(
-                    ok_response(
-                        "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
-                        &resp,
-                        p.json.unwrap_or(false),
+        Ok(with_change_assessment(
+            with_consequence_delta(
+                with_coverage(
+                    with_issues(
+                        ok_response(
+                            "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
+                            &resp,
+                            p.json.unwrap_or(false),
+                        ),
+                        issues_json(&resp.validation),
                     ),
-                    issues_json(&resp.validation),
+                    resp.coverage.as_ref(),
                 ),
-                resp.coverage.as_ref(),
+                resp.consequence_delta.as_ref(),
             ),
-            resp.consequence_delta.as_ref(),
+            resp.change_assessment.as_ref(),
         ))
     }
 

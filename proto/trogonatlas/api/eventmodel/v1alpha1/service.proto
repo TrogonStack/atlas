@@ -1112,6 +1112,9 @@ message MergeBranchResponse {
   // What the invariants declared in scope said about the write. Unset when
   // the scope declares none. A refused write returns a typed error instead.
   InvariantCheck invariant_check = 11;
+  // The server's advisory verdict on landing the branch. Set only on
+  // `dry_run`; a real merge never consults it.
+  ChangeAssessment change_assessment = 12;
 }
 
 message UpdateBranchRequest {

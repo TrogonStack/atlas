@@ -306,3 +306,75 @@ message ConsequenceDelta {
   // Snapshot identity of the candidate world the change would produce.
   string after_snapshot_id = 7;
 }
+
+// ---------- Change assessment ------------------------------------------------
+//
+// The server's advisory verdict on landing a branch, computed from the merge
+// dry run's own evidence by server-owned rules. Advisory only: MergeBranch
+// does not consult it, and no caller-supplied threshold changes it. A verdict
+// is only meaningful against the inputs in `binding`; when any of them moves,
+// assess again. See docs/explanation/change-assessment.md.
+
+message ChangeAssessment {
+  enum Verdict {
+    VERDICT_UNSPECIFIED = 0;
+    // Every check the server runs completed and the landing introduces,
+    // worsens and leaves unknown no finding.
+    VERDICT_LAND = 1;
+    // The landing is admissible, but a person should look first; see
+    // `reasons`.
+    VERDICT_NEEDS_REVIEW = 2;
+    // The merge would be refused as it stands; see `reasons`.
+    VERDICT_REJECT = 3;
+  }
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    // The branch conflicts with baseline. Rejects.
+    REASON_CONFLICTS = 1;
+    // The landed world fails a blocking validation check. Rejects.
+    REASON_BLOCKING_FINDINGS = 2;
+    // The landing introduces a finding.
+    REASON_FINDINGS_INTRODUCED = 3;
+    // The landing raises the severity of an existing finding.
+    REASON_FINDINGS_WORSENED = 4;
+    // A finding appeared or disappeared where the scan cannot vouch for it.
+    REASON_FINDINGS_UNKNOWN = 5;
+    // No consequence delta could be computed.
+    REASON_DELTA_MISSING = 6;
+    // The consequence delta did not cover every applicable suite.
+    REASON_DELTA_INCOMPLETE = 7;
+    // An invariant in scope was not evaluated or is hidden from the caller.
+    REASON_INVARIANTS_INCOMPLETE = 8;
+    // A world the verdict was computed over has no snapshot id, so the
+    // verdict cannot be bound to it.
+    REASON_UNBOUND = 9;
+  }
+  Verdict verdict = 1;
+  // Every reason that applies, in enum order. Empty only for VERDICT_LAND.
+  repeated Reason reasons = 2;
+  // The inputs the verdict was computed from.
+  AssessmentBinding binding = 3;
+}
+
+message AssessmentBinding {
+  // The branch assessed.
+  string branch = 1;
+  // Snapshot id of the baseline the landing was compared against. Empty
+  // when unbound.
+  string baseline_snapshot_id = 2;
+  // Snapshot id of the world the landing would produce. Empty when unbound.
+  string landed_snapshot_id = 3;
+  // Each landable entry with the baseline etag it was planned against. An
+  // empty etag means the entry adds an entity baseline does not have.
+  repeated AssessmentPin entries = 4;
+  // The caller's read scope: "*" for an unrestricted caller, otherwise
+  // the owner boundary it is held to.
+  string scope = 5;
+  // Revision of the rule catalogue and assessment rules the verdict used.
+  string catalogue_revision = 6;
+}
+
+message AssessmentPin {
+  trogonatlas.eventmodel.v1alpha1.EntityRef ref = 1;
+  string baseline_etag = 2;
+}

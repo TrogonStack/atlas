@@ -326,6 +326,55 @@ pub fn insert_consequence_delta(body: &mut Value, delta: Option<&pb::Consequence
     }
 }
 
+/// Adds the server's advisory change assessment to a JSON object. An absent
+/// assessment stays absent: it is never a verdict of `land`.
+pub fn insert_change_assessment(body: &mut Value, assessment: Option<&pb::ChangeAssessment>) {
+    if let (Some(fields), Some(assessment)) = (body.as_object_mut(), assessment) {
+        fields.insert(
+            "change_assessment".into(),
+            change_assessment_to_json(assessment),
+        );
+    }
+}
+
+/// JSON shape for [`pb::ChangeAssessment`]: the verdict and reason codes as
+/// lowercase names without their enum prefix, e.g. `needs_review`.
+#[must_use]
+pub fn change_assessment_to_json(assessment: &pb::ChangeAssessment) -> Value {
+    use pb::change_assessment::{Reason, Verdict};
+    let code = |name: &str, prefix: &str| {
+        name.strip_prefix(prefix)
+            .unwrap_or(name)
+            .to_ascii_lowercase()
+    };
+    let binding = assessment.binding.as_ref();
+    json!({
+        "verdict": code(
+            Verdict::try_from(assessment.verdict)
+                .unwrap_or(Verdict::Unspecified)
+                .as_str_name(),
+            "VERDICT_",
+        ),
+        "reasons": assessment.reasons.iter().map(|reason| code(
+            Reason::try_from(*reason)
+                .unwrap_or(Reason::Unspecified)
+                .as_str_name(),
+            "REASON_",
+        )).collect::<Vec<_>>(),
+        "binding": binding.map(|b| json!({
+            "branch": b.branch,
+            "baseline_snapshot_id": b.baseline_snapshot_id,
+            "landed_snapshot_id": b.landed_snapshot_id,
+            "entries": b.entries.iter().map(|pin| json!({
+                "ref": pin.r#ref.as_ref().and_then(entity_ref_string),
+                "baseline_etag": pin.baseline_etag,
+            })).collect::<Vec<_>>(),
+            "scope": b.scope,
+            "catalogue_revision": b.catalogue_revision,
+        })),
+    })
+}
+
 /// JSON shape for [`pb::ConsequenceDelta`], for CLI/MCP structured output.
 #[must_use]
 pub fn consequence_delta_to_json(delta: &pb::ConsequenceDelta) -> Value {
@@ -828,6 +877,41 @@ mod tests {
                 ),
                 (2, "subdomain:acme/ordering@1", "REALIZES_DANGLING"),
             ]
+        );
+    }
+
+    #[test]
+    fn change_assessment_json_names_codes_without_enum_prefixes() {
+        use pb::change_assessment::{Reason, Verdict};
+        let assessment = pb::ChangeAssessment {
+            verdict: Verdict::NeedsReview as i32,
+            reasons: vec![Reason::FindingsIntroduced as i32],
+            binding: Some(pb::AssessmentBinding {
+                branch: "feature".into(),
+                entries: vec![pb::AssessmentPin {
+                    r#ref: Some(pb::EntityRef {
+                        kind: pb::EntityKind::Event as i32,
+                        id: Some(pb::Id {
+                            namespace: "shop".into(),
+                            slug: "order.placed".into(),
+                            version: 1,
+                        }),
+                    }),
+                    baseline_etag: "7".into(),
+                }],
+                scope: "*".into(),
+                ..Default::default()
+            }),
+        };
+
+        let body = change_assessment_to_json(&assessment);
+
+        assert_eq!(body["verdict"], "needs_review");
+        assert_eq!(body["reasons"], json!(["findings_introduced"]));
+        assert_eq!(body["binding"]["branch"], "feature");
+        assert_eq!(
+            body["binding"]["entries"][0],
+            json!({"ref": "event:shop/order.placed@1", "baseline_etag": "7"})
         );
     }
 }
