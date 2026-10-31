@@ -1036,15 +1036,33 @@ impl EventModelServiceImpl {
             .any(|op| op.entity_ref.kind == pb::EntityKind::TypeLibrary as i32))
     }
 
+    /// Keys a branch holds its own delta for. A baseline write to one of
+    /// them does not change what the branch shows.
+    async fn branch_overlaid_keys(
+        &self,
+        branch: &str,
+    ) -> Result<std::collections::HashSet<pb::EntityKey>, Status> {
+        Ok(self
+            .store
+            .list_branch_deltas(branch)
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .map(|delta| pb::EntityKey::new(delta.kind, &delta.id))
+            .collect())
+    }
+
     /// Whether a baseline changeset newer than `since` touched an entity
     /// the export read or looked for, or a type library of a namespace it
-    /// rendered. A changeset log it cannot walk counts as touched.
+    /// rendered, unless the export's branch overlays that key. A changeset
+    /// log it cannot walk counts as touched.
     async fn baseline_moved_under(
         &self,
         since: &str,
         lens: &Lens,
         read: &std::collections::HashSet<pb::EntityKey>,
         namespaces: &BTreeSet<&str>,
+        overlaid: &std::collections::HashSet<pb::EntityKey>,
     ) -> bool {
         let Ok(newer) = self.baseline_changesets_after(since, lens).await else {
             return true;
@@ -1056,7 +1074,11 @@ impl EventModelServiceImpl {
             let Ok(kind) = pb::EntityKind::try_from(op.entity_ref.kind) else {
                 return true;
             };
-            read.contains(&pb::EntityKey::new(kind, id))
+            let key = pb::EntityKey::new(kind, id);
+            if overlaid.contains(&key) {
+                return false;
+            }
+            read.contains(&key)
                 || (kind == pb::EntityKind::TypeLibrary
                     && namespaces.contains(id.namespace.as_str()))
         })
@@ -4906,6 +4928,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 "as_of_changeset reads baseline history only; send it without a branch header",
             ));
         }
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
         self.require_visible(&vis, &id.namespace).await?;
 
         // Nothing holds writes off: the export reads one snapshot, binds the
@@ -4932,12 +4960,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     .await?;
                 let root = event_model_in(&all, id)
                     .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
-                if self
-                    .type_libraries_changed_after(&req.as_of_changeset, &lens)
-                    .await?
-                {
-                    reasons.insert(Reason::TypeLibrariesChanged);
-                }
                 let truncated = self.snapshot_truncated.load(Ordering::Acquire);
                 (
                     root,
@@ -4969,7 +4991,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 if !self.store.is_writer() {
                     reasons.insert(Reason::BoundaryUnverified);
                 }
-                (root, all, truncated, false, baseline_before.clone())
+                // The newest baseline changeset dates every owner's writes,
+                // so only an unrestricted caller may learn it.
+                let boundary = if vis.is_unrestricted() {
+                    baseline_before.clone()
+                } else {
+                    String::new()
+                };
+                (root, all, truncated, false, boundary)
             };
         let Some(pb::entity::Kind::EventModel(model)) = root.kind.as_ref() else {
             return Err(Status::internal("stored entity is not an EventModel"));
@@ -5076,12 +5105,33 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .map_err(|e| Status::internal(format!("digesting the rule catalog: {e}")))?;
 
         let rendered_namespaces: BTreeSet<&str> = types.keys().copied().collect();
-        if self.newest_changeset(ChangesetScope::Baseline).await? != baseline_before
-            && self
-                .baseline_moved_under(&baseline_before, &lens, &read, &rendered_namespaces)
+        if historical {
+            // A historical view is rewound from history, so later writes do
+            // not move it. Only the live type libraries it rendered through
+            // can, checked after rendering so a change mid-export counts.
+            if self
+                .type_libraries_changed_after(&req.as_of_changeset, &lens)
+                .await?
+            {
+                reasons.insert(Reason::TypeLibrariesChanged);
+            }
+        } else if self.newest_changeset(ChangesetScope::Baseline).await? != baseline_before {
+            let overlaid = match branch.as_deref() {
+                Some(name) => self.branch_overlaid_keys(name).await?,
+                None => std::collections::HashSet::new(),
+            };
+            if self
+                .baseline_moved_under(
+                    &baseline_before,
+                    &lens,
+                    &read,
+                    &rendered_namespaces,
+                    &overlaid,
+                )
                 .await
-        {
-            reasons.insert(Reason::ConcurrentWrite);
+            {
+                reasons.insert(Reason::ConcurrentWrite);
+            }
         }
         let branch_changeset_id = match (branch.as_deref(), branch_before) {
             (Some(name), Some(before)) => {
@@ -5159,6 +5209,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 closure_id: closure.finish().to_hex(),
                 baseline_changeset_id,
                 branch_changeset_id,
+                closure_truncated: board.truncated,
             }),
             manifests: rendered.manifests,
             external_manifests: rendered.external_manifests,

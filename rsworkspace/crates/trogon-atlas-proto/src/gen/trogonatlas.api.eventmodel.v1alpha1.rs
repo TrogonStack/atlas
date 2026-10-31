@@ -3032,7 +3032,8 @@ pub mod attested_unresolved {
         Unspecified = 0,
         /// Referenced by an exported entity, in a namespace the caller can see,
         /// but absent from the snapshot. Against a truncated snapshot it may
-        /// still exist.
+        /// still exist. An untyped slice reference that names no slice in the
+        /// snapshot is listed once per concrete slice kind it could name.
         Missing = 1,
         /// Referenced by an exported entity, in a namespace outside the
         /// caller's lens. Says nothing about whether it exists.
@@ -3126,6 +3127,12 @@ pub struct AttestedState {
     /// recorded none.
     #[prost(string, tag="6")]
     pub branch_changeset_id: ::prost::alloc::string::String,
+    /// True when the model's closure exceeded the projection cap, so `entries`
+    /// and the manifests stop short of everything the model reaches. Covered
+    /// by the digest independently of `completeness`, so a verifier refuses a
+    /// bundle that sets it and claims `STATE_COMPLETE`.
+    #[prost(bool, tag="7")]
+    pub closure_truncated: bool,
 }
 /// Nested message and enum types in `AttestedState`.
 pub mod attested_state {

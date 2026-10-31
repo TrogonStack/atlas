@@ -48,7 +48,9 @@ partial answer says so in a field, not in silence.
   baseline changeset, and on a branch the branch's identity, before and
   after. A newer changeset that touched anything the export read or looked
   for, a moved branch, a deleted branch or changed namespace visibility
-  marks the bundle with `REASON_CONCURRENT_WRITE`. Default chosen for
+  marks the bundle with `REASON_CONCURRENT_WRITE`. A baseline write to a
+  key the branch holds its own copy of does not change the branch's view,
+  so it does not mark a branch export. Default chosen for
   review: a concurrent write marks the bundle instead of failing the export
   with a retry, so an export never loses to a busy writer.
 - **A replica says what it cannot confirm.** A reader or standby replica's
@@ -72,7 +74,8 @@ A bundle states whether it describes the current state or a past one:
   rewinds it, and names that changeset as its boundary. It reads baseline
   history only, so a branch header is refused. The rewind already undoes
   every newer changeset, so a historical export does not confirm entities
-  against the live store.
+  against the live store, and live writes after its changeset do not mark
+  it concurrent.
 
 Manifests render through the type libraries as they are now. Default
 chosen for review: a historical export whose type libraries changed after
@@ -92,9 +95,12 @@ Default chosen for review: such an export is refused with
 `EXPORT_INCOMPLETE`. A caller who still wants the record passes
 `allow_incomplete` and gets a bundle whose completeness is `INCOMPLETE`,
 with every reason listed. Verification checks that a bundle claiming to be
-complete agrees with its own validation coverage and lists no skipped or
-unresolved entities, so relabelling an incomplete bundle as complete fails
-even when the digest is recomputed. The CLI exits 11 for an intact
+complete agrees with its own validation coverage, records no truncated
+closure and lists no skipped or unresolved entities, so relabelling a
+truncated, partially validated or unresolved bundle as complete fails even
+when the digest is recomputed. A reason with no other trace in the bundle,
+such as a concurrent write that touched only the changeset log, is carried
+by `completeness` alone, so only a signature could stop it being dropped. The CLI exits 11 for an intact
 incomplete bundle, the same code an incomplete `validate` run gets, and
 prints its reasons and unresolved entities.
 

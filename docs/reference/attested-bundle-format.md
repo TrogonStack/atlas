@@ -27,8 +27,9 @@ the meaning of a field changed.
 | `state.snapshot_id` | `GetSnapshotId` over the whole view validation read. |
 | `state.snapshot_entity_count` | Entities that id covers. |
 | `state.closure_id` | `GetSnapshotId` over `entries` only. |
-| `state.baseline_changeset_id` | Current: newest baseline changeset recorded before the snapshot was read. Historical: the requested changeset. Empty when baseline has none. |
+| `state.baseline_changeset_id` | Current: newest baseline changeset recorded before the snapshot was read. Historical: the requested changeset. Empty when baseline has none, and on a current export by a caller bound to an owner, since the id dates every owner's writes. |
 | `state.branch_changeset_id` | Newest changeset on `scope.branch` recorded before the snapshot was read. Empty on baseline or when the branch has none. |
+| `state.closure_truncated` | True when the board walk hit its entity bound, so `entries` stop short of everything the model reaches. |
 | `manifests` | Manifest YAML for the board in the model's namespace, as `ExportEventModelManifests` renders it. |
 | `external_manifests` | Manifest YAML for entities in other namespaces the board references. |
 | `entries` | Content hash of every entity in both manifest sets, sorted by storage key. |
@@ -60,7 +61,7 @@ the meaning of a field changed.
 
 | Cause | Meaning |
 | --- | --- |
-| `CAUSE_MISSING` | The board references the entity and the snapshot does not hold it. |
+| `CAUSE_MISSING` | The board references the entity and the snapshot does not hold it. An untyped slice reference that names no slice in the snapshot is listed once per concrete slice kind. |
 | `CAUSE_HIDDEN` | The board references the entity in a namespace the caller cannot see. |
 | `CAUSE_CHANGED` | The entity changed after the snapshot was read. The bundle carries the snapshot's copy. |
 | `CAUSE_DELETED` | The entity was deleted after the snapshot was read. The bundle carries the snapshot's copy. |
@@ -97,11 +98,12 @@ bundle when all of these hold, and report the first that does not:
 - `unresolved` rows are in strictly increasing key order, each with a
   known cause.
 - A complete bundle lists no reasons, no skipped entities and no
-  unresolved entities, and its coverage shows every suite completed over
-  an untruncated snapshot.
+  unresolved entities, does not set `state.closure_truncated`, and its
+  coverage shows every suite completed over an untruncated snapshot.
 - An incomplete bundle lists at least one known reason, sorted and unique,
-  and lists `REASON_UNRESOLVED_ENTITIES` exactly when `unresolved` is not
-  empty.
+  lists `REASON_UNRESOLVED_ENTITIES` exactly when `unresolved` is not
+  empty, and lists `REASON_CLOSURE_TRUNCATED` exactly when
+  `state.closure_truncated` is set.
 
 Verification does not contact a server, so it cannot check that the state
 named in the bundle exists. It checks integrity only; see

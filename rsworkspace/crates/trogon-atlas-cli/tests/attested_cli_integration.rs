@@ -186,3 +186,11 @@ async fn incomplete_export_is_refused_unless_allowed_and_then_exits_incomplete()
         "{verified}"
     );
 }
+
+#[test]
+fn verifying_a_missing_bundle_is_invalid_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("absent.bundle.json");
+    let verify = trogon_atlas(&["verify", path_str(&missing)]);
+    assert_eq!(verify.status.code(), Some(5), "{verify:?}");
+}

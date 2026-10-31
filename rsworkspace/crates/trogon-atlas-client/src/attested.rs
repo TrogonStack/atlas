@@ -68,8 +68,7 @@ pub fn verify_json(json: &str) -> Result<(pb::AttestedModelBundle, VerifiedBundl
 /// Read a saved bundle and verify it. A malformed or tampered file is
 /// reported as invalid input.
 pub fn verify_file(path: &Path) -> Result<(pb::AttestedModelBundle, VerifiedBundle)> {
-    let json =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let json = crate::manifest::read_text(path)?;
     verify_json(&json).map_err(|e| {
         crate::failure::invalid_input(format!("{} failed verification: {e}", path.display()))
     })
