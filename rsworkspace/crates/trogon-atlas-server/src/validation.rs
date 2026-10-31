@@ -287,7 +287,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "A read model serves multiple automation slices and a SharedConsumersAnnotation declares the arrangement is intentional. Informational; surfaces because the multi-consumer pattern is load-bearing.",
           ReadModel, "source_read_models", "model"),
         r("READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY", Error, "SharedConsumersAnnotation has no doc",
-          "A read model carries SharedConsumersAnnotation but its doc is empty; name the consumers and why they share the same data.",
+          "A read model carries SharedConsumersAnnotation but its doc is empty or only whitespace; name the consumers and why they share the same data.",
           ReadModel, "metadata", "model"),
         r("READ_MODEL_DUPLICATE_SHAPE", Warning, "Read models with the same shape",
           "Two or more read models in one namespace have the same key, fields and source events. They are one view drawn several times: merge them into one read model that every consumer observes.",
@@ -335,10 +335,10 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "Every field a command carries is data the runtime accepts. If that field does not appear on any of the slice's emitted_events AND does not appear in the command's swimlane.state, the model is silent about what happened to the value: the command took it in, the events do not record it, and the aggregate does not claim it as state. Either add the field to one of the emitted events, declare it on the lane's swimlane.state, or drop it from the command.",
           CommandSlice, "command", "model"),
         r("SLICE_STALE_REF", Warning, "Slice ref pins an older version than the latest loaded",
-          "A slice points at a specific (namespace, slug, version) of a command, ui, persona, processor, event, or read model, but a newer version of that entity exists in the loaded model. Mid-flight migration signal: the slice is still wired to the previous incarnation. Bump the ref to the latest version, or attach a PinnedRefAnnotation with a non-empty doc to the slice to justify staying pinned.",
+          "A slice points at a specific (namespace, slug, version) of a command, ui, persona, processor, event, or read model, but a newer version of that entity exists in the loaded model. Mid-flight migration signal: the slice is still wired to the previous incarnation. Bump the ref to the latest version, or attach a PinnedRefAnnotation with a doc that is not blank to the slice to justify staying pinned.",
           Unspecified, "", "model"),
         r("UI_USED_AS_INPUT_AND_OUTPUT", Warning, "UI used as both trigger and render target",
-          "A UI appears as both the trigger for a CommandSlice AND the render target for a UiSlice. One surface in both roles is usually a modeling mistake: split the form from the display, or attach a MixedSurfaceAnnotation explaining why.",
+          "A UI appears as both the trigger for a CommandSlice AND the render target for a UiSlice. One surface in both roles is usually a modeling mistake: split the form from the display, or attach a MixedSurfaceAnnotation whose doc explains why; a blank doc suppresses nothing.",
           Ui, "", "model"),
         r("TRANSITION_FOREIGN_EVENT", Error, "Swimlane transition references a foreign event",
           "A swimlane's lifecycle transitions reference an event that is not assigned to this lane. A lifecycle only contains its own stream's events.",
@@ -380,7 +380,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "An entity is loaded with the model but is referenced by no slice or storyboard and is not marked as deliberately standalone.",
           Unspecified, "", "model"),
         r("ORPHAN_DOC_EMPTY", Error, "Orphan-flagged entity has no doc",
-          "An entity carries an orphan-acknowledgement marker but no explanation. Document why this entity exists outside the slice graph.",
+          "An entity carries an orphan-acknowledgement marker but no explanation, or only whitespace. Document why this entity exists outside the slice graph.",
           Unspecified, "", "model"),
         r("ORPHAN_FLAG_OBSOLETE", Info, "Orphan flag no longer applies",
           "An entity is marked as an orphan but is now referenced by a slice or storyboard; the flag can be removed.",
@@ -538,7 +538,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           Unspecified, "schema", "schema"),
         // ----- personal data (PersonalDataAnnotation) -----------------------------
         r("PII_DOC_MISSING", Error, "PersonalDataAnnotation has no doc, or is malformed",
-          "A PersonalDataAnnotation's `doc` is empty, or the Any payload cannot be decoded as a PersonalDataAnnotation at all. Either way the annotation says nothing: explain what personal data this is and whose.",
+          "A PersonalDataAnnotation's `doc` is empty or only whitespace, or the Any payload cannot be decoded as a PersonalDataAnnotation at all. Either way the annotation says nothing: explain what personal data this is and whose.",
           Unspecified, "schema.fields", "schema"),
         r("PII_EVENT_ERASURE_UNSPECIFIED", Warning, "Personal-data event field has no erasure strategy",
           "A PersonalDataAnnotation on an Event field leaves `erasure` at ERASURE_UNSPECIFIED. Events are immutable, so a personal-data field needs a declared way to make the value unrecoverable when the person asks to be forgotten. Commands are not persisted to an event store, so this rule is Event-only.",
@@ -1007,6 +1007,15 @@ fn push_scenario_annotation_findings(
     }
 }
 
+/// A required annotation doc counts only when it says something; blank
+/// text is the silence the annotation replaces.
+fn is_stated_reason(doc: &str) -> bool {
+    !doc.trim().is_empty()
+}
+
+#[cfg(test)]
+const BLANK_DOCS: &[&str] = &["", " ", "\t", "\n", " \t\r\n "];
+
 fn is_derived_field(field: &pb::FieldSpec) -> bool {
     // Doc is mandatory on DerivedFieldAnnotation (same contract as
     // PinnedRefAnnotation / SharedConsumersAnnotation). Presence-only
@@ -1022,7 +1031,7 @@ fn is_derived_field(field: &pb::FieldSpec) -> bool {
         if let Ok(ann) =
             <pb::DerivedFieldAnnotation as prost::Message>::decode(any.value.as_slice())
         {
-            if !ann.doc.is_empty() {
+            if is_stated_reason(&ann.doc) {
                 return true;
             }
         }
@@ -3388,7 +3397,7 @@ pub fn validate_model_content(
                         if let Ok(a) = <pb::SharedConsumersAnnotation as prost::Message>::decode(
                             any.value.as_slice(),
                         ) {
-                            doc_ok = !a.doc.is_empty();
+                            doc_ok = is_stated_reason(&a.doc);
                         }
                         break;
                     }
@@ -4134,7 +4143,7 @@ pub fn validate_model_content(
             if let Ok(ann) =
                 <pb::PinnedRefAnnotation as prost::Message>::decode(any.value.as_slice())
             {
-                if !ann.doc.is_empty() {
+                if is_stated_reason(&ann.doc) {
                     return Some(ann);
                 }
             }
@@ -5212,6 +5221,8 @@ pub fn validate_model_content(
             ui.metadata.iter().any(|m| {
                 m.type_url
                     .ends_with("/trogonatlas.eventmodel.v1alpha1.MixedSurfaceAnnotation")
+                    && <pb::MixedSurfaceAnnotation as prost::Message>::decode(m.value.as_slice())
+                        .is_ok_and(|a| is_stated_reason(&a.doc))
             })
         })
         .filter_map(|ui| ui.id.as_ref())
@@ -6585,7 +6596,7 @@ pub fn validate_model_content(
             }
             orphan_present = true;
             if let Ok(a) = <pb::OrphanAnnotation as prost::Message>::decode(any.value.as_slice()) {
-                if !a.doc.is_empty() {
+                if is_stated_reason(&a.doc) {
                     orphan_doc = Some(a.doc);
                     break;
                 }
@@ -6792,7 +6803,7 @@ pub fn validate_model_content(
                     });
                     continue;
                 };
-                if ann.doc.is_empty() {
+                if !is_stated_reason(&ann.doc) {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "PII_DOC_MISSING".into(),
@@ -8464,6 +8475,97 @@ mod context_root_tests {
 }
 
 #[cfg(test)]
+mod mixed_surface_tests {
+    use prost::Message as _;
+
+    use super::*;
+
+    fn id(slug: &str) -> pb::Id {
+        pb::Id {
+            namespace: "t".into(),
+            slug: slug.into(),
+            version: 1,
+        }
+    }
+
+    fn stored(kind: pb::entity::Kind) -> StoredEntity {
+        StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(kind),
+            },
+            etag: "1".into(),
+        }
+    }
+
+    fn edge() -> pb::UiEdge {
+        pb::UiEdge {
+            ui: Some(pb::UiRef {
+                id: Some(id("order-ticket")),
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn issues_for(doc: &str) -> Vec<pb::ValidationIssue> {
+        let all = vec![
+            stored(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("order-ticket")),
+                title: "order ticket".into(),
+                metadata: vec![prost_types::Any {
+                    type_url:
+                        "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.MixedSurfaceAnnotation"
+                            .into(),
+                    value: pb::MixedSurfaceAnnotation { doc: doc.into() }.encode_to_vec(),
+                }],
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                id: Some(id("cancel-order")),
+                ui: Some(edge()),
+                ..Default::default()
+            })),
+            stored(pb::entity::Kind::UiSlice(pb::UiSlice {
+                id: Some(id("show-order")),
+                ui: Some(edge()),
+                ..Default::default()
+            })),
+        ];
+        let model = pb::EventModel {
+            id: Some(id("m")),
+            title: "m".into(),
+            members: vec![pb::EntityRef {
+                kind: pb::EntityKind::Ui as i32,
+                id: Some(id("order-ticket")),
+            }],
+            ..Default::default()
+        };
+        validate_model(&model, &all)
+    }
+
+    fn mixed(issues: &[pb::ValidationIssue]) -> usize {
+        issues
+            .iter()
+            .filter(|i| i.code == "UI_USED_AS_INPUT_AND_OUTPUT")
+            .count()
+    }
+
+    #[test]
+    fn stated_reason_suppresses_mixed_surface() {
+        let issues = issues_for("click a row to cancel, the row shows its fills");
+        assert_eq!(mixed(&issues), 0, "{issues:?}");
+    }
+
+    #[test]
+    fn blank_reason_does_not_suppress_mixed_surface() {
+        for doc in BLANK_DOCS {
+            let issues = issues_for(doc);
+            assert_eq!(mixed(&issues), 1, "{doc:?}: {issues:?}");
+        }
+    }
+}
+
+#[cfg(test)]
 mod observed_event_tests {
     use super::*;
 
@@ -9145,50 +9247,52 @@ mod information_completeness_tests {
     // annotation silently suppress EVENT_FIELD_UNSOURCED.
     #[test]
     fn empty_doc_derived_field_annotation_does_not_silence_unsourced() {
-        let empty_derived = pb::FieldSpec {
-            name: "placed_at".into(),
-            r#type: Some(pb::FieldType {
-                kind: Some(timestamp_kind()),
-            }),
-            metadata: vec![prost_types::Any {
-                type_url:
-                    "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation"
-                        .into(),
-                value: pb::DerivedFieldAnnotation {
-                    doc: String::new(),
-                    kind: 0,
-                }
-                .encode_to_vec(),
-            }],
-            ..Default::default()
-        };
-        let all = vec![
-            stored(lane("order", Vec::new())),
-            stored(command(
-                "place-order",
-                "order",
-                vec![field("order_id", string_kind())],
-            )),
-            stored(event(
-                "order-placed",
-                "order",
-                vec![field("order_id", string_kind()), empty_derived],
-            )),
-            stored(command_slice(
-                "place-order-slice",
-                "place-order",
-                vec!["order-placed"],
-            )),
-        ];
-        let issues = validate_model(
-            &model_member(pb::EntityKind::CommandSlice, "place-order-slice"),
-            &all,
-        );
-        assert_eq!(
+        for doc in BLANK_DOCS {
+            let empty_derived = pb::FieldSpec {
+                name: "placed_at".into(),
+                r#type: Some(pb::FieldType {
+                    kind: Some(timestamp_kind()),
+                }),
+                metadata: vec![prost_types::Any {
+                    type_url:
+                        "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation"
+                            .into(),
+                    value: pb::DerivedFieldAnnotation {
+                        doc: (*doc).into(),
+                        kind: 0,
+                    }
+                    .encode_to_vec(),
+                }],
+                ..Default::default()
+            };
+            let all = vec![
+                stored(lane("order", Vec::new())),
+                stored(command(
+                    "place-order",
+                    "order",
+                    vec![field("order_id", string_kind())],
+                )),
+                stored(event(
+                    "order-placed",
+                    "order",
+                    vec![field("order_id", string_kind()), empty_derived],
+                )),
+                stored(command_slice(
+                    "place-order-slice",
+                    "place-order",
+                    vec!["order-placed"],
+                )),
+            ];
+            let issues = validate_model(
+                &model_member(pb::EntityKind::CommandSlice, "place-order-slice"),
+                &all,
+            );
+            assert_eq!(
             count(&issues, "EVENT_FIELD_UNSOURCED"),
             1,
-            "empty-doc DerivedFieldAnnotation must not silence EVENT_FIELD_UNSOURCED: {issues:?}"
+            "blank-doc DerivedFieldAnnotation {doc:?} must not silence EVENT_FIELD_UNSOURCED: {issues:?}"
         );
+        }
     }
 
     #[test]
@@ -9503,23 +9607,25 @@ mod personal_data_tests {
 
     #[test]
     fn empty_doc_personal_data_annotation_errors() {
-        let all = vec![
-            stored(lane("customer")),
-            stored(event(
-                "customer-registered",
-                "customer",
-                vec![pii_field(
-                    "email",
-                    string_kind(),
-                    pii_annotation("", Erasure::CryptoShredding, ""),
-                )],
-            )),
-        ];
-        let issues = validate_model(
-            &model_member(pb::EntityKind::Event, "customer-registered"),
-            &all,
-        );
-        assert_eq!(count(&issues, "PII_DOC_MISSING"), 1, "{issues:?}");
+        for doc in BLANK_DOCS {
+            let all = vec![
+                stored(lane("customer")),
+                stored(event(
+                    "customer-registered",
+                    "customer",
+                    vec![pii_field(
+                        "email",
+                        string_kind(),
+                        pii_annotation(doc, Erasure::CryptoShredding, ""),
+                    )],
+                )),
+            ];
+            let issues = validate_model(
+                &model_member(pb::EntityKind::Event, "customer-registered"),
+                &all,
+            );
+            assert_eq!(count(&issues, "PII_DOC_MISSING"), 1, "{doc:?}: {issues:?}");
+        }
     }
 
     #[test]
@@ -10357,23 +10463,25 @@ mod slice_stale_ref_tests {
     // An empty doc does NOT silence anything even when pinned entries are listed.
     #[test]
     fn empty_doc_does_not_silence() {
-        let all = vec![
-            stored(ui_v("composer", 1)),
-            stored(ui_v("composer", 2)),
-            stored(command_v("post", 1)),
-            stored(command_slice_with_metadata(
-                "post-slice",
-                id_v("composer", 1),
-                id_v("post", 1),
-                vec![],
-                vec![pinned_ann_any("", vec!["t/composer@1"])],
-            )),
-        ];
-        let issues = validate_model(&model_with_slice("post-slice"), &all);
-        assert!(
-            issues.iter().any(|i| i.code == "SLICE_STALE_REF"),
-            "empty doc must not silence: {issues:?}",
-        );
+        for doc in BLANK_DOCS {
+            let all = vec![
+                stored(ui_v("composer", 1)),
+                stored(ui_v("composer", 2)),
+                stored(command_v("post", 1)),
+                stored(command_slice_with_metadata(
+                    "post-slice",
+                    id_v("composer", 1),
+                    id_v("post", 1),
+                    vec![],
+                    vec![pinned_ann_any(doc, vec!["t/composer@1"])],
+                )),
+            ];
+            let issues = validate_model(&model_with_slice("post-slice"), &all);
+            assert!(
+                issues.iter().any(|i| i.code == "SLICE_STALE_REF"),
+                "blank doc {doc:?} must not silence: {issues:?}",
+            );
+        }
     }
 
     // An annotation listing a different canonical id (wrong version or wrong slug)
@@ -15260,17 +15368,19 @@ mod read_model_shape_tests {
 
     #[test]
     fn shared_consumers_without_doc_is_error() {
-        let issues = validate(vec![
-            read_model("acme", "held-reservations", FIELDS, EVENTS, Some("")),
-            automation_slice("confirm", "held-reservations"),
-            automation_slice("expire", "held-reservations"),
-        ]);
-        let found = issues_with(&issues, "READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY");
-        assert_eq!(found.len(), 1);
-        assert_eq!(
-            found[0].severity,
-            pb::validation_issue::Severity::Error as i32
-        );
+        for doc in BLANK_DOCS {
+            let issues = validate(vec![
+                read_model("acme", "held-reservations", FIELDS, EVENTS, Some(doc)),
+                automation_slice("confirm", "held-reservations"),
+                automation_slice("expire", "held-reservations"),
+            ]);
+            let found = issues_with(&issues, "READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY");
+            assert_eq!(found.len(), 1, "{doc:?}: {issues:?}");
+            assert_eq!(
+                found[0].severity,
+                pb::validation_issue::Severity::Error as i32
+            );
+        }
     }
 
     #[test]
