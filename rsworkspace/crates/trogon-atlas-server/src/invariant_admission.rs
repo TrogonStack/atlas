@@ -22,8 +22,9 @@ use crate::{
 /// enumerated: every write in it is judged against a snapshot instead.
 const MAX_REGISTRY_MODELS: usize = 5_000;
 
-/// Write clocks and the per-scope carrier registry. Every clock moves under
-/// the mutation lock, so a verdict whose clocks still match at apply time
+/// Write clocks and the per-scope carrier registry. Clocks only move
+/// forward, even when a writer outside the mutation lock publishes its tick
+/// after a later one, so a verdict whose clocks still match at apply time
 /// was computed against the state the write lands in.
 pub(super) struct InvariantState {
     budget: usize,
@@ -50,6 +51,10 @@ impl InvariantState {
             carriers: AtomicU64::new(0),
             registry: tokio::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    fn next_tick(&self) -> u64 {
+        self.tick.fetch_add(1, Ordering::AcqRel) + 1
     }
 
     fn branch_clock(&self, branch: &str) -> u64 {
@@ -163,23 +168,31 @@ pub(super) fn changes_of(
 }
 
 impl EventModelServiceImpl {
-    /// Moves the clocks a committed write invalidates. Called under the
-    /// mutation lock by every path that changes entities or branches.
+    /// Moves the clocks a committed write invalidates. Called by every path
+    /// that changes entities or branches, including branch lifecycle paths
+    /// that run outside the mutation lock.
     pub(super) fn note_write(&self, branch: Option<&str>, touches_models: bool) {
+        let tick = self.invariants.next_tick();
+        self.publish_tick(branch, touches_models, tick);
+    }
+
+    fn publish_tick(&self, branch: Option<&str>, touches_models: bool, tick: u64) {
         let state = &self.invariants;
-        let tick = state.tick.fetch_add(1, Ordering::AcqRel) + 1;
         match branch {
-            None => state.baseline.store(tick, Ordering::Release),
+            None => {
+                state.baseline.fetch_max(tick, Ordering::AcqRel);
+            }
             Some(branch) => {
-                state
+                let mut branches = state
                     .branches
                     .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(branch.to_owned(), tick);
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let clock = branches.entry(branch.to_owned()).or_default();
+                *clock = (*clock).max(tick);
             }
         }
         if touches_models {
-            state.carriers.store(tick, Ordering::Release);
+            state.carriers.fetch_max(tick, Ordering::AcqRel);
         }
     }
 
@@ -567,6 +580,21 @@ mod tests {
         let ticket = judged(&service, InvariantScope::Landing("ia-recreated"));
         service.note_write(Some("ia-recreated"), true);
         assert_stale(service.invariant_gate(InvariantScope::Landing("ia-recreated"), &ticket));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_late_tick_never_moves_a_clock_backwards() {
+        let service = service().await;
+        for branch in [None, Some("ia-late")] {
+            let scope = InvariantScope::of(branch);
+            let early = service.invariants.next_tick();
+            service.note_write(branch, true);
+            let ticket = judged(&service, scope);
+            service.publish_tick(branch, true, early);
+            assert!(service.invariant_gate(scope, &ticket).is_ok());
+            service.note_write(branch, true);
+            assert_stale(service.invariant_gate(scope, &ticket));
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
