@@ -461,6 +461,10 @@ async fn source_cannot_create_domain_declaration_under_any_term_ownership_policy
             .await
             .unwrap_err();
         assert_eq!(error.code(), Code::InvalidArgument, "{error}");
+        assert_eq!(
+            error.message(),
+            "selected extensions support native authoring only"
+        );
         assert_eq!(f.mapping(&key).await, mapping);
         assert_eq!(f.get(&selection).await.unwrap_err().code(), Code::NotFound);
     }
@@ -491,12 +495,14 @@ async fn whole_owner_proposed_current_and_clear_refusals_preserve_accepted_base_
     let base = f.mapping("word").await;
     assert_eq!(base.base.as_ref().unwrap().native_value, baseline.entity);
     let payload = f.payload("word", term(&f.namespace, "word", true));
+    let error = f
+        .preview(&snapshot, "proposed", vec![payload], None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert_eq!(
-        f.preview(&snapshot, "proposed", vec![payload], None)
-            .await
-            .unwrap_err()
-            .code(),
-        Code::InvalidArgument
+        error.message(),
+        "selected extensions support native authoring only"
     );
     assert_eq!(f.mapping("word").await, base);
     assert_eq!(f.get(&owner(&value)).await.unwrap(), baseline);
@@ -511,28 +517,39 @@ async fn whole_owner_proposed_current_and_clear_refusals_preserve_accepted_base_
         ("clear", value.clone()),
     ] {
         let payload = f.payload("word", proposed);
+        let error = f
+            .preview(&snapshot, label, vec![payload], None)
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), Code::InvalidArgument);
         assert_eq!(
-            f.preview(&snapshot, label, vec![payload], None)
-                .await
-                .unwrap_err()
-                .code(),
-            Code::InvalidArgument
+            error.message(),
+            "selected extensions support native authoring only"
         );
         assert_eq!(f.mapping("word").await, base);
         let actual = f.get(&owner(&value)).await.unwrap();
         assert_eq!(actual.entity, local.entity);
         assert_eq!(actual.etag, local.etag);
     }
+    let unmapped = f.put(term(&f.namespace, "unmapped-word", true)).await;
     let adoption = f.proposed_mapping(
         "other",
-        pb::source_selection::Selection::Entity(owner(local.entity.as_ref().unwrap())),
+        pb::source_selection::Selection::Entity(owner(unmapped.entity.as_ref().unwrap())),
         whole_owner(),
-        Some(adoption(&local)),
+        Some(adoption(&unmapped)),
     );
+    let error = f.create_mapping(adoption).await.unwrap_err();
+    assert_eq!(error.code(), Code::InvalidArgument);
     assert_eq!(
-        f.create_mapping(adoption).await.unwrap_err().code(),
-        Code::InvalidArgument
+        error.message(),
+        "selected extensions support native authoring only"
     );
+    let unchanged = f
+        .get(&owner(unmapped.entity.as_ref().unwrap()))
+        .await
+        .unwrap();
+    assert_eq!(unchanged.entity, unmapped.entity);
+    assert_eq!(unchanged.etag, unmapped.etag);
     assert_eq!(f.mapping("word").await, base);
 }
 #[tokio::test]

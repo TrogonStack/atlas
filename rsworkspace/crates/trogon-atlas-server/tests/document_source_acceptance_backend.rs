@@ -577,7 +577,7 @@ async fn source_create_with_each_native_extension_rejects_under_whole_owner_poli
 }
 
 #[tokio::test]
-async fn source_whole_owner_mapping_and_preview_reject_native_extensions() {
+async fn source_whole_owner_mapping_and_retry_reject_native_extensions() {
     let mut fixture = fixture().await;
     let mut extended = fixture.base_document("extended");
     fixture.apply_extension(&mut extended, NativeExtension::BinaryOnly);
@@ -593,15 +593,16 @@ async fn source_whole_owner_mapping_and_preview_reject_native_extensions() {
         .await
         .unwrap_err();
     assert!(document_catalog_guard(&whole_err), "{whole_err:?}");
-    let mapping = fixture
+    let retry_err = fixture
         .create_mapping(
             "extended",
             native.entity.as_ref().unwrap(),
             whole_owner(),
             Some(adoption(&native)),
         )
-        .await;
-    assert!(mapping.is_err());
+        .await
+        .unwrap_err();
+    assert!(document_catalog_guard(&retry_err), "{retry_err:?}");
 }
 
 #[tokio::test]

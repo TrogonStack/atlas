@@ -565,13 +565,13 @@ async fn composed_native_graph_preserves_store_and_manifest_identity() {
             batch(vec![innocent, wrap(pb::entity::Kind::Decision(invalid))]),
             None,
         ))
-        .await;
-    if let Ok(result) = failed {
-        assert_eq!(
-            result.into_inner().status,
-            pb::batch_mutate_response::Status::Failed as i32
-        );
-    }
+        .await
+        .unwrap_err();
+    assert_eq!(failed.code(), Code::InvalidArgument);
+    assert_eq!(
+        failed.message(),
+        "scenario validation failed: CATALOG_REFERENCE_UNRESOLVED: expected a Gregorian calendar date in YYYY-MM-DD format"
+    );
     let missing = client
         .get_entity(request(
             pb::GetEntityRequest {

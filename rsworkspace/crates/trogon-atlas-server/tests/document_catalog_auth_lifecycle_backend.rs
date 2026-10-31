@@ -851,7 +851,7 @@ async fn branch_related_content_survives_target_removal_on_branch_without_baseli
     let mut client = client().await;
     let (visible_ns, _) = register_pair(&mut client).await;
     put_receipt(&mut client, &visible_ns).await;
-    client
+    let target = client
         .put_entity(request(
             pb::PutEntityRequest {
                 entity: Some(pb::Entity {
@@ -877,6 +877,9 @@ async fn branch_related_content_survives_target_removal_on_branch_without_baseli
             None,
         ))
         .await
+        .unwrap()
+        .into_inner()
+        .entity
         .unwrap();
     let owner = client
         .put_entity(request(
@@ -924,8 +927,13 @@ async fn branch_related_content_survives_target_removal_on_branch_without_baseli
         .await
         .unwrap()
         .into_inner();
+    let baseline_related = baseline_detail
+        .declarations
+        .iter()
+        .find(|declaration| declaration.field.starts_with("related_content["))
+        .expect("baseline related_content declaration");
     assert_eq!(
-        baseline_detail.declarations[0].state,
+        baseline_related.state,
         pb::CatalogResolutionState::Resolved as i32
     );
     client
@@ -971,6 +979,22 @@ async fn branch_related_content_survives_target_removal_on_branch_without_baseli
     assert_eq!(
         related.state,
         pb::CatalogResolutionState::Unavailable as i32
+    );
+    assert_eq!(
+        client
+            .get_entity(request(
+                pb::GetEntityRequest {
+                    kind: pb::EntityKind::Document as i32,
+                    id: Some(id(&visible_ns, "branch-target")),
+                },
+                READER,
+                None,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .entity,
+        Some(target)
     );
     let merged = client
         .merge_branch(request(

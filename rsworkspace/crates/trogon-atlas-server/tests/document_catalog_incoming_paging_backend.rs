@@ -283,6 +283,7 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
     };
     put(&mut client, document("hub")).await;
     let selection = hub_selection(scoped_id("hub"));
+    let mut visible_uids = HashSet::new();
     for slug in ["first", "second"] {
         let mut owner = document(slug);
         let Some(pb::entity::Kind::Document(body)) = owner.kind.as_mut() else {
@@ -293,7 +294,8 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
             document: Some(selection.clone()),
             ..Default::default()
         });
-        put(&mut client, owner).await;
+        let owner = put(&mut client, owner).await;
+        assert!(visible_uids.insert(owner.system.unwrap().uid));
     }
     let mut hidden = document("private-owner");
     let Some(pb::entity::Kind::Document(body)) = hidden.kind.as_mut() else {
@@ -302,6 +304,11 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
     body.id.as_mut().unwrap().namespace = "document-private".into();
     body.title = Some(pb::CatalogTitle {
         value: "Private owner detail".into(),
+    });
+    body.related_content.push(pb::RelatedContent {
+        role: pb::RelatedContentRole::Example as i32,
+        document: Some(selection.clone()),
+        ..Default::default()
     });
     let hidden = put(&mut client, hidden).await;
     let hidden_uid = hidden.system.unwrap().uid;
@@ -324,7 +331,8 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(restricted.declarations, unrestricted.declarations);
+    assert_eq!(restricted.declarations.len(), 1);
+    assert_ne!(restricted.next_page_token, "");
     let restricted_scope = restricted.scope.as_ref().unwrap();
     assert_eq!(restricted_scope.authorized_namespaces, [namespace]);
     let visible_receipt = format!("{restricted:?}");
@@ -333,11 +341,11 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
     assert!(!visible_receipt.contains(&hidden_uid));
     assert_ne!(
         restricted_scope.revision,
-        unrestricted.scope.unwrap().revision
+        unrestricted.scope.as_ref().unwrap().revision
     );
     let refused = client
         .list_incoming_document_declarations(request_as(
-            query(unrestricted.next_page_token),
+            query(unrestricted.next_page_token.clone()),
             LIMITED,
             None,
         ))
@@ -347,18 +355,62 @@ async fn incoming_document_cursor_is_bound_to_caller_visibility() {
     assert!(refused.message().contains("stale page token"));
     assert!(!refused.message().contains(&hidden_uid));
     assert!(!refused.message().contains("document-private"));
-    let next = client
-        .list_incoming_document_declarations(request_as(
-            query(restricted.next_page_token),
-            LIMITED,
-            None,
-        ))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(next.declarations.len(), 1);
-    assert_ne!(next.declarations, restricted.declarations);
-    assert_eq!(next.next_page_token, "");
+    let mut inventories = Vec::new();
+    for (principal, mut page, expected_pages) in
+        [(ADMIN, unrestricted, 3), (LIMITED, restricted, 2)]
+    {
+        let mut declarations = Vec::new();
+        for page_number in 0..expected_pages {
+            assert!(!page.incomplete);
+            assert_eq!(page.failures, vec![]);
+            assert_eq!(page.declarations.len(), 1);
+            if principal == LIMITED {
+                let response = format!("{page:?}");
+                assert!(!response.contains("document-private"));
+                assert!(!response.contains("Private owner detail"));
+                assert!(!response.contains(&hidden_uid));
+            }
+            declarations.extend(page.declarations);
+            if page_number + 1 == expected_pages {
+                assert_eq!(page.next_page_token, "");
+                break;
+            }
+            assert_ne!(page.next_page_token, "");
+            page = client
+                .list_incoming_document_declarations(request_as(
+                    query(page.next_page_token),
+                    principal,
+                    None,
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+        }
+        declarations.sort_by_key(|declaration| declaration.owner.as_ref().unwrap().uid.clone());
+        inventories.push(declarations);
+    }
+    let unrestricted = &inventories[0];
+    let restricted = &inventories[1];
+    assert_eq!(unrestricted.len(), 3);
+    assert_eq!(restricted.len(), 2);
+    assert!(unrestricted
+        .iter()
+        .any(|declaration| declaration.owner.as_ref().unwrap().uid == hidden_uid));
+    assert_eq!(
+        restricted
+            .iter()
+            .map(|declaration| declaration.owner.as_ref().unwrap().uid.clone())
+            .collect::<HashSet<_>>(),
+        visible_uids
+    );
+    assert_eq!(
+        restricted,
+        &unrestricted
+            .iter()
+            .filter(|declaration| declaration.owner.as_ref().unwrap().uid != hidden_uid)
+            .cloned()
+            .collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

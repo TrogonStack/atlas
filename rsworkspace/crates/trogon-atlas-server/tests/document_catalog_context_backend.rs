@@ -403,13 +403,17 @@ fn owner_with_related(slug: &str, role: pb::RelatedContentRole, target: &str) ->
 }
 
 async fn get_doc(client: &mut Client, slug: &str) -> pb::Entity {
+    get_doc_on_branch(client, slug, None).await
+}
+
+async fn get_doc_on_branch(client: &mut Client, slug: &str, branch: Option<&str>) -> pb::Entity {
     client
         .get_entity(request(
             pb::GetEntityRequest {
                 kind: pb::EntityKind::Document as i32,
                 id: Some(id(slug)),
             },
-            None,
+            branch,
         ))
         .await
         .unwrap()
@@ -597,13 +601,15 @@ async fn related_content_purpose_agreement_uses_branch_overlay_in_batch() {
         document.purpose = Some(pb::DocumentPurpose::Attachment as i32);
     }
     put_on_branch(&mut client, branch_target, Some("purpose-branch")).await;
-    let mut branch_owner = get_doc(&mut client, "branch-owner").await;
+    let owner_before = get_doc_on_branch(&mut client, "branch-owner", Some("purpose-branch")).await;
+    let target_before =
+        get_doc_on_branch(&mut client, "branch-target", Some("purpose-branch")).await;
+    let mut branch_owner = owner_before.clone();
     if let Some(pb::entity::Kind::Document(document)) = &mut branch_owner.kind {
         document.title = Some(pb::CatalogTitle {
             value: "Branch owner title".into(),
         });
     }
-    let before = get_doc(&mut client, "branch-owner").await;
     let response = client
         .batch_mutate(request(
             pb::BatchMutateRequest {
@@ -625,7 +631,14 @@ async fn related_content_purpose_agreement_uses_branch_overlay_in_batch() {
             pb::batch_mutate_response::Status::Applied as i32
         ),
     }
-    assert_eq!(get_doc(&mut client, "branch-owner").await, before);
+    assert_eq!(
+        get_doc_on_branch(&mut client, "branch-owner", Some("purpose-branch")).await,
+        owner_before
+    );
+    assert_eq!(
+        get_doc_on_branch(&mut client, "branch-target", Some("purpose-branch")).await,
+        target_before
+    );
 }
 
 #[tokio::test]
