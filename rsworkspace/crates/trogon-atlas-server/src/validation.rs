@@ -295,6 +295,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("EVENT_MULTIPLE_EMITTERS", Error, "Event emitted by more than one command",
           "An event is emitted by more than one distinct command; the board cannot say which decision caused the fact. There is NO annotation escape: when a design fans in, fix it structurally (origin split merged by a read model, or a projection + detector automation firing one dedicated completion command); when an AS-IS mapping fans in, the error is the finding: it reports the mapped system's own causal ambiguity, and the fix belongs in that system's code, not in the model.",
           Event, "", "model"),
+        r("ENTITY_UNBACKED", Info, "Entity has no recorded backing",
+          "Reported only by GetBackingReport when the caller opts in. The entity has no accepted Decision, Document or complete code reference naming it exactly, and the view was complete enough to rule out hidden evidence. Presence is all it checks: a backed entity is not thereby correct.",
+          Unspecified, "", "backing"),
         r("CODE_REF_INCOMPLETE", Error, "CodeRefAnnotation missing repo or path",
           "A CodeRefAnnotation must carry a logical `repo` name and a repo-relative `path`; without both the reference cannot be resolved, verified for drift, or queried. Fill both (symbol recommended, line numbers never) or remove the annotation.",
           Unspecified, "metadata", "model"),
@@ -641,6 +644,7 @@ mod catalog_drift_tests {
         "BC_PROJECT_COLLISION",
         "BC_REALIZES_NOTHING",
         "CODE_REF_INCOMPLETE",
+        "ENTITY_UNBACKED",
         "COMMAND_FIELD_NEVER_RECORDED",
         "COMMAND_HAS_NO_TRIGGER",
         "COMMAND_MULTIPLE_ISSUERS",
@@ -1122,7 +1126,7 @@ fn decode_personal_data_annotation(
 
 /// Metadata bag on every top-level entity kind. Exhaustive so a new kind
 /// that forgets metadata cannot silently skip CODE_REF / annotation walks.
-fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
+pub(crate) fn entity_metadata(entity: &pb::Entity) -> &[prost_types::Any] {
     match entity.kind.as_ref() {
         Some(pb::entity::Kind::Event(x)) => &x.metadata,
         Some(pb::entity::Kind::Command(x)) => &x.metadata,

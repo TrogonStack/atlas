@@ -20,7 +20,7 @@ it.
 | `8` | `incompatible` -- this client and server do not speak compatible contract revisions. |
 | `9` | `operation_conflict` -- reserved; no current failure classifies here. |
 | `10` | `partial_apply` -- a batch left entities in an intermediate state; see the named journal and `docs/how-to/replan-after-a-stale-refusal.md`-style recovery. |
-| `11` | `validate` / `validate-project` found no Error finding, but the server's coverage shows the run did not examine everything it was asked to. See [validation verdicts](#validation-verdicts). |
+| `11` | `validate` / `validate-project` found no Error finding, but the server's coverage shows the run did not examine everything it was asked to. See [validation verdicts](#validation-verdicts). `backing-report` exits `11` when some subject could not be settled or the snapshot was truncated; see the [backing report](backing-report.md). |
 | `70` | `internal` -- an unclassified server or local error. |
 | `75` | `unavailable` -- the condition is expected to clear; retry the same request. |
 

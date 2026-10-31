@@ -275,6 +275,436 @@ impl AnalysisProvenance {
         }
     }
 }
+// ---------- Validation -------------------------------------------------------
+//
+// Validation checks the model against the rules this schema cannot express
+// structurally: dangling references, edge-rule violations (the six allowed
+// edges + cardinality), supersession chains pointing at non-existent
+// versions, traces that violate data completeness, etc.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationIssue {
+    #[prost(enumeration="validation_issue::Severity", tag="1")]
+    pub severity: i32,
+    /// stable machine code, e.g. "DANGLING_REF"
+    #[prost(string, tag="2")]
+    pub code: ::prost::alloc::string::String,
+    /// human-readable explanation
+    #[prost(string, tag="3")]
+    pub message: ::prost::alloc::string::String,
+    /// entity the issue is attached to (optional)
+    #[prost(message, optional, tag="4")]
+    pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// structural path inside the entity (optional)
+    #[prost(string, tag="5")]
+    pub subject_field: ::prost::alloc::string::String,
+    /// Inline rule context -- denormalized from the static ValidationRule
+    /// catalog at issue-emit time so consumers can render a finding
+    /// (title, category, default_severity) without a second RPC to
+    /// ListValidationRules. Empty when the validator can't resolve the
+    /// catalog entry (which should never happen -- the drift test guards
+    /// against orphan codes).
+    #[prost(string, tag="6")]
+    pub rule_title: ::prost::alloc::string::String,
+    #[prost(string, tag="7")]
+    pub rule_category: ::prost::alloc::string::String,
+    #[prost(enumeration="validation_issue::Severity", tag="8")]
+    pub rule_default_severity: i32,
+}
+/// Nested message and enum types in `ValidationIssue`.
+pub mod validation_issue {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Severity {
+        Unspecified = 0,
+        Info = 1,
+        Warning = 2,
+        Error = 3,
+    }
+    impl Severity {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "SEVERITY_UNSPECIFIED",
+                Self::Info => "SEVERITY_INFO",
+                Self::Warning => "SEVERITY_WARNING",
+                Self::Error => "SEVERITY_ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
+                "SEVERITY_INFO" => Some(Self::Info),
+                "SEVERITY_WARNING" => Some(Self::Warning),
+                "SEVERITY_ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateEventModelRequest {
+    /// Either validate an in-memory model (supplied here) or validate a stored
+    /// one by Id. Exactly one of the two should be set.
+    #[prost(message, optional, tag="1")]
+    pub event_model: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EventModel>,
+    #[prost(message, optional, tag="2")]
+    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateEventModelResponse {
+    #[prost(message, repeated, tag="1")]
+    pub issues: ::prost::alloc::vec::Vec<ValidationIssue>,
+    /// Suites that ran for this call, plus whether the snapshot was truncated.
+    /// Absent or empty coverage must not be treated as "everything was checked".
+    #[prost(message, optional, tag="2")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
+}
+/// Static description of a single validation rule. Surfaces the catalog
+/// the validator dispatches on: stable machine `code`, canonical
+/// `default_severity`, and the "why" explanation lifted from the source
+/// comment that documents the rule. Consumers (Studio UI, MCP agents,
+/// CI tooling) use this to render legends, link findings to docs, and
+/// gate releases on specific severity classes without having to
+/// reverse-engineer the validator.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationRule {
+    /// e.g. "EVENT_UNOBSERVED"
+    #[prost(string, tag="1")]
+    pub code: ::prost::alloc::string::String,
+    /// canonical severity for the base case
+    #[prost(enumeration="validation_issue::Severity", tag="2")]
+    pub default_severity: i32,
+    /// short human label
+    #[prost(string, tag="3")]
+    pub title: ::prost::alloc::string::String,
+    /// the "why" -- what the rule asserts and how to fix it
+    #[prost(string, tag="4")]
+    pub doc: ::prost::alloc::string::String,
+    /// primary kind this rule attaches to (or ENTITY_KIND_UNSPECIFIED)
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="5")]
+    pub subject_kind: i32,
+    /// structural path inside the entity (or empty)
+    #[prost(string, tag="6")]
+    pub subject_field: ::prost::alloc::string::String,
+    /// grouping: "model" | "scenarios" | "strategic" | "schema" | "storyboard"
+    #[prost(string, tag="7")]
+    pub category: ::prost::alloc::string::String,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ListValidationRulesRequest {
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListValidationRulesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub rules: ::prost::alloc::vec::Vec<ValidationRule>,
+}
+/// Validate every EventModel in a project, a domain or a namespace in one
+/// pass, instead of N round trips through ValidateEventModel. The
+/// validator already has the full entity store in memory per call;
+/// looping per-model is pure waste.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidateProjectRequest {
+    /// Scope by Project.id (if your store carries Projects), by Domain.id
+    /// (legacy) or by namespace. Exactly one must be set.
+    #[prost(oneof="validate_project_request::Scope", tags="1, 2, 3")]
+    pub scope: ::core::option::Option<validate_project_request::Scope>,
+}
+/// Nested message and enum types in `ValidateProjectRequest`.
+pub mod validate_project_request {
+    /// Scope by Project.id (if your store carries Projects), by Domain.id
+    /// (legacy) or by namespace. Exactly one must be set.
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Scope {
+        #[prost(message, tag="1")]
+        ProjectId(super::super::super::super::r#type::v1alpha1::Id),
+        #[prost(message, tag="2")]
+        DomainId(super::super::super::super::r#type::v1alpha1::Id),
+        /// Every EventModel whose id carries this namespace, whether or not a
+        /// Domain claims it.
+        #[prost(string, tag="3")]
+        Namespace(::prost::alloc::string::String),
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidateProjectResponse {
+    #[prost(message, repeated, tag="1")]
+    pub reports: ::prost::alloc::vec::Vec<validate_project_response::ModelReport>,
+    /// Aggregate counts across all reports -- quick "is the project healthy"
+    /// glance without summing on the client.
+    #[prost(int32, tag="2")]
+    pub total_errors: i32,
+    #[prost(int32, tag="3")]
+    pub total_warnings: i32,
+    #[prost(int32, tag="4")]
+    pub total_info: i32,
+    /// Suites that ran for this call, plus whether the snapshot was truncated.
+    #[prost(message, optional, tag="5")]
+    pub coverage: ::core::option::Option<ValidationCoverage>,
+}
+/// Nested message and enum types in `ValidateProjectResponse`.
+pub mod validate_project_response {
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ModelReport {
+        #[prost(message, optional, tag="1")]
+        pub event_model_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::Id>,
+        #[prost(message, repeated, tag="2")]
+        pub issues: ::prost::alloc::vec::Vec<super::ValidationIssue>,
+    }
+}
+// ---------- Coverage ---------------------------------------------------------
+//
+// Findings (`ValidationIssue`) say what was wrong. Coverage says what was
+// checked. A completed suite can still emit Errors; a skipped suite must
+// never be read as a pass. See docs/explanation/validation-coverage.md.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationCheckResult {
+    /// Stable suite id: "model", "strategic", "store_hygiene", "architecture",
+    /// "scenarios", "request_shape".
+    #[prost(string, tag="1")]
+    pub check_id: ::prost::alloc::string::String,
+    #[prost(enumeration="validation_check_result::State", tag="2")]
+    pub state: i32,
+    /// Why skipped / partial / error. Empty when completed without caveat.
+    #[prost(string, tag="3")]
+    pub reason: ::prost::alloc::string::String,
+    /// Subjects examined when meaningful (models, namespaces, …). Zero is a
+    /// valid completed empty scan and must not be rewritten by clients.
+    #[prost(int32, tag="4")]
+    pub subjects_examined: i32,
+}
+/// Nested message and enum types in `ValidationCheckResult`.
+pub mod validation_check_result {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum State {
+        Unspecified = 0,
+        /// Suite finished for the declared scope. Findings may still be Errors.
+        Completed = 1,
+        /// Suite was not applicable on this route or for this request shape.
+        Skipped = 2,
+        /// Suite ran but could not cover the full declared scope (for example a
+        /// truncated snapshot). Do not treat an empty issue list as complete.
+        Partial = 3,
+        /// Suite failed to execute. Distinct from finding Errors inside a
+        /// completed suite.
+        Error = 4,
+    }
+    impl State {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "STATE_UNSPECIFIED",
+                Self::Completed => "STATE_COMPLETED",
+                Self::Skipped => "STATE_SKIPPED",
+                Self::Partial => "STATE_PARTIAL",
+                Self::Error => "STATE_ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "STATE_UNSPECIFIED" => Some(Self::Unspecified),
+                "STATE_COMPLETED" => Some(Self::Completed),
+                "STATE_SKIPPED" => Some(Self::Skipped),
+                "STATE_PARTIAL" => Some(Self::Partial),
+                "STATE_ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationScope {
+    /// Empty means baseline (no branch header).
+    #[prost(string, tag="1")]
+    pub branch: ::prost::alloc::string::String,
+    /// Effective project/domain/namespace/model when the route has one.
+    #[prost(message, optional, tag="2")]
+    pub project_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    #[prost(message, optional, tag="3")]
+    pub domain_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="4")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="5")]
+    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ValidationCoverage {
+    #[prost(message, repeated, tag="1")]
+    pub checks: ::prost::alloc::vec::Vec<ValidationCheckResult>,
+    /// What store-wide suites actually examined. For ValidateProject this is the
+    /// full visible snapshot under the branch (namespace / project / domain
+    /// empty): hygiene and architecture are not narrowed to the request filter.
+    /// Model and strategic suite subject counts still follow the request.
+    #[prost(message, optional, tag="2")]
+    pub effective_scope: ::core::option::Option<ValidationScope>,
+    /// True when the entity snapshot hit the configured cap. Shared with the
+    /// truncation package; an empty issue list on a truncated snapshot is not
+    /// a clean bill of health.
+    #[prost(bool, tag="3")]
+    pub snapshot_truncated: bool,
+    /// What the caller asked to validate (project / domain / namespace / model).
+    /// May be narrower than `effective_scope` for store-wide checks.
+    #[prost(message, optional, tag="4")]
+    pub requested_scope: ::core::option::Option<ValidationScope>,
+}
+// ---------- Backing report ---------------------------------------------------
+//
+// How much of the visible model carries evidence: an ACCEPTED Decision or a
+// Document selecting the exact entity, or a CodeRefAnnotation on the entity
+// itself. The report measures evidence presence only. It never judges whether
+// a rationale is sound or whether referenced code still exists. See
+// docs/reference/backing-report.md.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GetBackingReportRequest {
+    /// Count subjects only in these namespaces. Empty means every visible
+    /// namespace. Evidence is always read from the whole visible snapshot, so a
+    /// Decision in another namespace still backs a subject in scope.
+    #[prost(string, repeated, tag="1")]
+    pub namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Emit one ENTITY_UNBACKED Info finding per subject proven to have no
+    /// backing. Off by default; subjects whose backing is unknown never get one.
+    #[prost(bool, tag="2")]
+    pub include_unbacked_findings: bool,
+}
+/// Per-category subject counts. present + absent + unknown equals the total of
+/// the enclosing BackingTotals.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BackingCategoryCounts {
+    #[prost(uint32, tag="1")]
+    pub present: u32,
+    #[prost(uint32, tag="2")]
+    pub absent: u32,
+    #[prost(uint32, tag="3")]
+    pub unknown: u32,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct BackingTotals {
+    /// Exact entity versions counted as subjects.
+    #[prost(uint32, tag="1")]
+    pub total: u32,
+    /// Subjects with at least one category present, counted once however many
+    /// categories or declarations back them.
+    #[prost(uint32, tag="2")]
+    pub backed: u32,
+    /// Subjects proven to have no backing in any category.
+    #[prost(uint32, tag="3")]
+    pub unbacked: u32,
+    /// Subjects with nothing present and at least one category unknown.
+    #[prost(uint32, tag="4")]
+    pub unknown: u32,
+    #[prost(message, optional, tag="5")]
+    pub decision: ::core::option::Option<BackingCategoryCounts>,
+    #[prost(message, optional, tag="6")]
+    pub document: ::core::option::Option<BackingCategoryCounts>,
+    #[prost(message, optional, tag="7")]
+    pub code_ref: ::core::option::Option<BackingCategoryCounts>,
+    /// unbacked / total. Absent when total is zero, when any subject is unknown
+    /// or when the snapshot was truncated: the rate is then not established.
+    #[prost(double, optional, tag="8")]
+    pub unbacked_rate: ::core::option::Option<f64>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct KindBackingTotals {
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
+    pub kind: i32,
+    #[prost(message, optional, tag="2")]
+    pub totals: ::core::option::Option<BackingTotals>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BackingVisibility {
+    /// True when the caller is bound to an owner and cannot see every namespace.
+    #[prost(bool, tag="1")]
+    pub restricted: bool,
+    /// Namespace ids the caller may read. Empty when unrestricted.
+    #[prost(string, repeated, tag="2")]
+    pub authorized_namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetBackingReportResponse {
+    /// GetSnapshotId over every namespace, under the same branch and caller.
+    /// The report is a function of exactly that snapshot.
+    #[prost(string, tag="1")]
+    pub snapshot_id: ::prost::alloc::string::String,
+    #[prost(bool, tag="2")]
+    pub snapshot_truncated: bool,
+    /// Empty means baseline.
+    #[prost(string, tag="3")]
+    pub branch: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub visibility: ::core::option::Option<BackingVisibility>,
+    /// Requested subject namespaces, sorted and deduplicated. Empty means all.
+    #[prost(string, repeated, tag="5")]
+    pub namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="6")]
+    pub totals: ::core::option::Option<BackingTotals>,
+    /// Sorted by kind; kinds with no subject in scope are omitted.
+    #[prost(message, repeated, tag="7")]
+    pub kinds: ::prost::alloc::vec::Vec<KindBackingTotals>,
+    /// Entity selections on qualifying visible evidence whose exact target is
+    /// not in the visible snapshot, limited to targets in the requested scope.
+    #[prost(uint32, tag="8")]
+    pub unresolved_declarations: u32,
+    /// Every reason that left a subject unknown. Empty means complete.
+    #[prost(enumeration="BackingIncompleteReason", repeated, tag="9")]
+    pub incomplete_reasons: ::prost::alloc::vec::Vec<i32>,
+    /// ENTITY_UNBACKED findings, only when requested. Sorted by subject.
+    #[prost(message, repeated, tag="10")]
+    pub findings: ::prost::alloc::vec::Vec<ValidationIssue>,
+}
+/// Why some backing could not be established either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum BackingIncompleteReason {
+    Unspecified = 0,
+    /// The snapshot hit the entity cap: subjects and evidence beyond it are
+    /// missing from the report.
+    SnapshotTruncated = 1,
+    /// The caller cannot see every namespace, so Decisions and Documents it
+    /// cannot read may back a visible subject.
+    VisibilityRestricted = 2,
+    /// A CodeRefAnnotation could not be decoded or lacks its repo or path.
+    UnresolvedCodeRef = 3,
+    /// A visible Decision selecting the subject has a status this server does
+    /// not recognize.
+    UnrecognizedDecisionStatus = 4,
+}
+impl BackingIncompleteReason {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "BACKING_INCOMPLETE_REASON_UNSPECIFIED",
+            Self::SnapshotTruncated => "BACKING_INCOMPLETE_REASON_SNAPSHOT_TRUNCATED",
+            Self::VisibilityRestricted => "BACKING_INCOMPLETE_REASON_VISIBILITY_RESTRICTED",
+            Self::UnresolvedCodeRef => "BACKING_INCOMPLETE_REASON_UNRESOLVED_CODE_REF",
+            Self::UnrecognizedDecisionStatus => "BACKING_INCOMPLETE_REASON_UNRECOGNIZED_DECISION_STATUS",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BACKING_INCOMPLETE_REASON_UNSPECIFIED" => Some(Self::Unspecified),
+            "BACKING_INCOMPLETE_REASON_SNAPSHOT_TRUNCATED" => Some(Self::SnapshotTruncated),
+            "BACKING_INCOMPLETE_REASON_VISIBILITY_RESTRICTED" => Some(Self::VisibilityRestricted),
+            "BACKING_INCOMPLETE_REASON_UNRESOLVED_CODE_REF" => Some(Self::UnresolvedCodeRef),
+            "BACKING_INCOMPLETE_REASON_UNRECOGNIZED_DECISION_STATUS" => Some(Self::UnrecognizedDecisionStatus),
+            _ => None,
+        }
+    }
+}
 /// The state a mutation was planned against no longer holds. An etag is never
 /// empty, so an empty value here means the key is absent.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1089,288 +1519,6 @@ pub struct SearchResult {
     /// optional human-readable snippet
     #[prost(string, tag="3")]
     pub excerpt: ::prost::alloc::string::String,
-}
-// ---------- Validation -------------------------------------------------------
-//
-// Validation checks the model against the rules this schema cannot express
-// structurally: dangling references, edge-rule violations (the six allowed
-// edges + cardinality), supersession chains pointing at non-existent
-// versions, traces that violate data completeness, etc.
-
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidationIssue {
-    #[prost(enumeration="validation_issue::Severity", tag="1")]
-    pub severity: i32,
-    /// stable machine code, e.g. "DANGLING_REF"
-    #[prost(string, tag="2")]
-    pub code: ::prost::alloc::string::String,
-    /// human-readable explanation
-    #[prost(string, tag="3")]
-    pub message: ::prost::alloc::string::String,
-    /// entity the issue is attached to (optional)
-    #[prost(message, optional, tag="4")]
-    pub subject: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    /// structural path inside the entity (optional)
-    #[prost(string, tag="5")]
-    pub subject_field: ::prost::alloc::string::String,
-    /// Inline rule context -- denormalized from the static ValidationRule
-    /// catalog at issue-emit time so consumers can render a finding
-    /// (title, category, default_severity) without a second RPC to
-    /// ListValidationRules. Empty when the validator can't resolve the
-    /// catalog entry (which should never happen -- the drift test guards
-    /// against orphan codes).
-    #[prost(string, tag="6")]
-    pub rule_title: ::prost::alloc::string::String,
-    #[prost(string, tag="7")]
-    pub rule_category: ::prost::alloc::string::String,
-    #[prost(enumeration="validation_issue::Severity", tag="8")]
-    pub rule_default_severity: i32,
-}
-/// Nested message and enum types in `ValidationIssue`.
-pub mod validation_issue {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum Severity {
-        Unspecified = 0,
-        Info = 1,
-        Warning = 2,
-        Error = 3,
-    }
-    impl Severity {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "SEVERITY_UNSPECIFIED",
-                Self::Info => "SEVERITY_INFO",
-                Self::Warning => "SEVERITY_WARNING",
-                Self::Error => "SEVERITY_ERROR",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
-                "SEVERITY_INFO" => Some(Self::Info),
-                "SEVERITY_WARNING" => Some(Self::Warning),
-                "SEVERITY_ERROR" => Some(Self::Error),
-                _ => None,
-            }
-        }
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidateEventModelRequest {
-    /// Either validate an in-memory model (supplied here) or validate a stored
-    /// one by Id. Exactly one of the two should be set.
-    #[prost(message, optional, tag="1")]
-    pub event_model: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EventModel>,
-    #[prost(message, optional, tag="2")]
-    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidateEventModelResponse {
-    #[prost(message, repeated, tag="1")]
-    pub issues: ::prost::alloc::vec::Vec<ValidationIssue>,
-    /// Suites that ran for this call, plus whether the snapshot was truncated.
-    /// Absent or empty coverage must not be treated as "everything was checked".
-    #[prost(message, optional, tag="2")]
-    pub coverage: ::core::option::Option<ValidationCoverage>,
-}
-/// Static description of a single validation rule. Surfaces the catalog
-/// the validator dispatches on: stable machine `code`, canonical
-/// `default_severity`, and the "why" explanation lifted from the source
-/// comment that documents the rule. Consumers (Studio UI, MCP agents,
-/// CI tooling) use this to render legends, link findings to docs, and
-/// gate releases on specific severity classes without having to
-/// reverse-engineer the validator.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidationRule {
-    /// e.g. "EVENT_UNOBSERVED"
-    #[prost(string, tag="1")]
-    pub code: ::prost::alloc::string::String,
-    /// canonical severity for the base case
-    #[prost(enumeration="validation_issue::Severity", tag="2")]
-    pub default_severity: i32,
-    /// short human label
-    #[prost(string, tag="3")]
-    pub title: ::prost::alloc::string::String,
-    /// the "why" -- what the rule asserts and how to fix it
-    #[prost(string, tag="4")]
-    pub doc: ::prost::alloc::string::String,
-    /// primary kind this rule attaches to (or ENTITY_KIND_UNSPECIFIED)
-    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="5")]
-    pub subject_kind: i32,
-    /// structural path inside the entity (or empty)
-    #[prost(string, tag="6")]
-    pub subject_field: ::prost::alloc::string::String,
-    /// grouping: "model" | "scenarios" | "strategic" | "schema" | "storyboard"
-    #[prost(string, tag="7")]
-    pub category: ::prost::alloc::string::String,
-}
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ListValidationRulesRequest {
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListValidationRulesResponse {
-    #[prost(message, repeated, tag="1")]
-    pub rules: ::prost::alloc::vec::Vec<ValidationRule>,
-}
-/// Validate every EventModel in a project, a domain or a namespace in one
-/// pass, instead of N round trips through ValidateEventModel. The
-/// validator already has the full entity store in memory per call;
-/// looping per-model is pure waste.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidateProjectRequest {
-    /// Scope by Project.id (if your store carries Projects), by Domain.id
-    /// (legacy) or by namespace. Exactly one must be set.
-    #[prost(oneof="validate_project_request::Scope", tags="1, 2, 3")]
-    pub scope: ::core::option::Option<validate_project_request::Scope>,
-}
-/// Nested message and enum types in `ValidateProjectRequest`.
-pub mod validate_project_request {
-    /// Scope by Project.id (if your store carries Projects), by Domain.id
-    /// (legacy) or by namespace. Exactly one must be set.
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Scope {
-        #[prost(message, tag="1")]
-        ProjectId(super::super::super::super::r#type::v1alpha1::Id),
-        #[prost(message, tag="2")]
-        DomainId(super::super::super::super::r#type::v1alpha1::Id),
-        /// Every EventModel whose id carries this namespace, whether or not a
-        /// Domain claims it.
-        #[prost(string, tag="3")]
-        Namespace(::prost::alloc::string::String),
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidateProjectResponse {
-    #[prost(message, repeated, tag="1")]
-    pub reports: ::prost::alloc::vec::Vec<validate_project_response::ModelReport>,
-    /// Aggregate counts across all reports -- quick "is the project healthy"
-    /// glance without summing on the client.
-    #[prost(int32, tag="2")]
-    pub total_errors: i32,
-    #[prost(int32, tag="3")]
-    pub total_warnings: i32,
-    #[prost(int32, tag="4")]
-    pub total_info: i32,
-    /// Suites that ran for this call, plus whether the snapshot was truncated.
-    #[prost(message, optional, tag="5")]
-    pub coverage: ::core::option::Option<ValidationCoverage>,
-}
-/// Nested message and enum types in `ValidateProjectResponse`.
-pub mod validate_project_response {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct ModelReport {
-        #[prost(message, optional, tag="1")]
-        pub event_model_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::Id>,
-        #[prost(message, repeated, tag="2")]
-        pub issues: ::prost::alloc::vec::Vec<super::ValidationIssue>,
-    }
-}
-// ---------- Coverage ---------------------------------------------------------
-//
-// Findings (`ValidationIssue`) say what was wrong. Coverage says what was
-// checked. A completed suite can still emit Errors; a skipped suite must
-// never be read as a pass. See docs/explanation/validation-coverage.md.
-
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidationCheckResult {
-    /// Stable suite id: "model", "strategic", "store_hygiene", "architecture",
-    /// "scenarios", "request_shape".
-    #[prost(string, tag="1")]
-    pub check_id: ::prost::alloc::string::String,
-    #[prost(enumeration="validation_check_result::State", tag="2")]
-    pub state: i32,
-    /// Why skipped / partial / error. Empty when completed without caveat.
-    #[prost(string, tag="3")]
-    pub reason: ::prost::alloc::string::String,
-    /// Subjects examined when meaningful (models, namespaces, …). Zero is a
-    /// valid completed empty scan and must not be rewritten by clients.
-    #[prost(int32, tag="4")]
-    pub subjects_examined: i32,
-}
-/// Nested message and enum types in `ValidationCheckResult`.
-pub mod validation_check_result {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-    #[repr(i32)]
-    pub enum State {
-        Unspecified = 0,
-        /// Suite finished for the declared scope. Findings may still be Errors.
-        Completed = 1,
-        /// Suite was not applicable on this route or for this request shape.
-        Skipped = 2,
-        /// Suite ran but could not cover the full declared scope (for example a
-        /// truncated snapshot). Do not treat an empty issue list as complete.
-        Partial = 3,
-        /// Suite failed to execute. Distinct from finding Errors inside a
-        /// completed suite.
-        Error = 4,
-    }
-    impl State {
-        /// String value of the enum field names used in the ProtoBuf definition.
-        ///
-        /// The values are not transformed in any way and thus are considered stable
-        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-        pub fn as_str_name(&self) -> &'static str {
-            match self {
-                Self::Unspecified => "STATE_UNSPECIFIED",
-                Self::Completed => "STATE_COMPLETED",
-                Self::Skipped => "STATE_SKIPPED",
-                Self::Partial => "STATE_PARTIAL",
-                Self::Error => "STATE_ERROR",
-            }
-        }
-        /// Creates an enum from field names used in the ProtoBuf definition.
-        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-            match value {
-                "STATE_UNSPECIFIED" => Some(Self::Unspecified),
-                "STATE_COMPLETED" => Some(Self::Completed),
-                "STATE_SKIPPED" => Some(Self::Skipped),
-                "STATE_PARTIAL" => Some(Self::Partial),
-                "STATE_ERROR" => Some(Self::Error),
-                _ => None,
-            }
-        }
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ValidationScope {
-    /// Empty means baseline (no branch header).
-    #[prost(string, tag="1")]
-    pub branch: ::prost::alloc::string::String,
-    /// Effective project/domain/namespace/model when the route has one.
-    #[prost(message, optional, tag="2")]
-    pub project_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-    #[prost(message, optional, tag="3")]
-    pub domain_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="4")]
-    pub namespace: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="5")]
-    pub event_model_id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ValidationCoverage {
-    #[prost(message, repeated, tag="1")]
-    pub checks: ::prost::alloc::vec::Vec<ValidationCheckResult>,
-    /// What store-wide suites actually examined. For ValidateProject this is the
-    /// full visible snapshot under the branch (namespace / project / domain
-    /// empty): hygiene and architecture are not narrowed to the request filter.
-    /// Model and strategic suite subject counts still follow the request.
-    #[prost(message, optional, tag="2")]
-    pub effective_scope: ::core::option::Option<ValidationScope>,
-    /// True when the entity snapshot hit the configured cap. Shared with the
-    /// truncation package; an empty issue list on a truncated snapshot is not
-    /// a clean bill of health.
-    #[prost(bool, tag="3")]
-    pub snapshot_truncated: bool,
-    /// What the caller asked to validate (project / domain / namespace / model).
-    /// May be narrower than `effective_scope` for store-wide checks.
-    #[prost(message, optional, tag="4")]
-    pub requested_scope: ::core::option::Option<ValidationScope>,
 }
 // Tenant type libraries are stored as proto source text and compiled on
 // demand. These messages let a client check a library and look up the

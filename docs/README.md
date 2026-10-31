@@ -32,6 +32,7 @@ Solve a specific problem:
 
 Look up exact behavior:
 
+- [Backing report](reference/backing-report.md)
 - [Failure reasons](reference/failure-reasons.md)
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
@@ -69,6 +70,7 @@ Understand how Atlas works and why:
 - [Atlas principles](explanation/principles/README.md)
 - [Architecture resource roadmap](explanation/architecture-resource-roadmap.md)
 - [Authorization design](explanation/authorization.md)
+- [Backing evidence](explanation/backing-evidence.md)
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)
 - [Changesets](explanation/changesets.md)

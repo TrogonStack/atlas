@@ -333,3 +333,10 @@ reconstructed. It does not weaken the independent guard or assert anything about
 hidden referrers. Reports share a 4,096-record request ceiling. Overflow refuses
 the request before entity writes; only the visible resource-budget fallback may
 clip its report at that ceiling while retaining the incomplete flag.
+
+## Backing
+
+The [backing report](backing-report.md) counts accepted Decisions and
+Documents whose subjects select an exact entity as evidence for that
+entity. It reads the same subject associations these contracts define and
+adds no field to either resource.

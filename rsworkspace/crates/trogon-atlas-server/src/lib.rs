@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod as_of;
 pub mod auth;
+mod backing;
 pub mod batch_recovery;
 pub mod change_cursor;
 pub mod conv;
