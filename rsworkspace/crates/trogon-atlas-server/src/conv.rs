@@ -156,6 +156,7 @@ pub mod reason {
     pub const CURSOR_REJECTED: &str = "CURSOR_REJECTED";
     pub const BREAKING_CHANGE: &str = "BREAKING_CHANGE";
     pub const EXPORT_INCOMPLETE: &str = "EXPORT_INCOMPLETE";
+    pub const SIGNING_KEY_UNAVAILABLE: &str = "SIGNING_KEY_UNAVAILABLE";
 }
 
 /// `UNAVAILABLE`: another call already owns this `operation_id` and has not
@@ -175,6 +176,18 @@ pub fn export_incomplete(message: impl Into<String>, reasons: String) -> Status 
         message,
         reason::EXPORT_INCOMPLETE,
         HashMap::from([("reasons".to_string(), reasons)]),
+    )
+}
+
+/// `FAILED_PRECONDITION`: the server is configured to sign attested
+/// bundles and could not load its key, so it refuses rather than return an
+/// unsigned bundle. `source` is the kind of key reference, `file` or `env`.
+pub fn signing_key_unavailable(message: impl Into<String>, source: &str) -> Status {
+    with_reason_and_metadata(
+        Code::FailedPrecondition,
+        message,
+        reason::SIGNING_KEY_UNAVAILABLE,
+        HashMap::from([("source".to_string(), source.to_string())]),
     )
 }
 

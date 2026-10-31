@@ -39,6 +39,7 @@ instead of re-deriving category from code or reason on its own.
 | `CURSOR_REJECTED` | `INVALID_ARGUMENT` | `validation` | none |
 | `BREAKING_CHANGE` | `FAILED_PRECONDITION` | `precondition` | none |
 | `EXPORT_INCOMPLETE` | `FAILED_PRECONDITION` | `precondition` | `reasons`, the comma-separated incomplete reasons of the refused bundle, such as `REASON_SNAPSHOT_TRUNCATED` |
+| `SIGNING_KEY_UNAVAILABLE` | `FAILED_PRECONDITION` | `precondition` | `source`, the kind of key reference the server is configured with: `file` or `env` |
 
 `PARTIAL_APPLY` and `UNAVAILABLE` share the `UNAVAILABLE` gRPC code on
 purpose: both mean "retry later", but only `PARTIAL_APPLY` means a batch
@@ -92,6 +93,13 @@ and `REASON_UNRESOLVED_ENTITIES` came from writes landing during the
 export, and retrying once they settle can succeed. Narrow the scope, raise the server's limits, or pass
 `allow_incomplete` to receive the bundle marked incomplete, as
 `docs/how-to/export-and-verify-an-attested-model.md` describes.
+
+`SIGNING_KEY_UNAVAILABLE` is `ExportAttestedModel` on a server configured to
+sign attested bundles that could not read or parse its signing key. The
+server refuses rather than return an unsigned bundle. Retrying fails the
+same way until an operator fixes the key; the server log names the
+reference that failed, which the status message leaves out. See
+`docs/how-to/sign-attested-bundles.md`.
 
 A status without an `ErrorInfo` at all (most `INVALID_ARGUMENT` statuses
 raised directly by request validation, for instance) still classifies

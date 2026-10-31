@@ -15,6 +15,7 @@
 
 pub mod architectural_relationships;
 pub mod attested_bundle;
+pub mod attested_signing;
 pub mod communication_intent;
 pub mod connection_persistence;
 pub mod connections;

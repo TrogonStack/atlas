@@ -6,14 +6,16 @@ as `ExportAttestedModel` returns it and `trogon-atlas export-attested`
 saves it. Why the format looks this way is in
 [attested export](../explanation/attested-export.md).
 
-## Format identifier
+## Format identifiers
 
-| Field | Value |
+| `format` | Signature |
 | --- | --- |
-| `format` | `trogonatlas.attested-model.v1` |
+| `trogonatlas.attested-model.v1` | Refused. The bundle is unsigned. |
+| `trogonatlas.attested-model.v2` | Required. Every other field means what it means in `v1`. |
 
 A verifier refuses any other value. A new value means the digest rules or
-the meaning of a field changed.
+the meaning of a field changed. A server without a signing key emits `v1`;
+a server with one emits `v2`.
 
 ## Fields
 
@@ -42,6 +44,9 @@ the meaning of a field changed.
 | `completeness.state` | `STATE_COMPLETE` or `STATE_INCOMPLETE`. |
 | `completeness.reasons` | Why the bundle is incomplete, sorted and unique. Empty when complete. |
 | `bundle_digest` | Lowercase hex SHA-256, computed as below. |
+| `signature.algorithm` | `ALGORITHM_ED25519`. Present only under `v2`. |
+| `signature.key_id` | Lowercase hex SHA-256 of the signing key's raw 32-byte Ed25519 public key. |
+| `signature.value` | The 64-byte Ed25519 signature, base64 in proto3 JSON. |
 
 ## Incomplete reasons
 
@@ -74,7 +79,8 @@ tag ends with a NUL byte.
 
 | Digest | Domain tag | Input |
 | --- | --- | --- |
-| `bundle_digest` | `trogonatlas.attested-model.bundle.v1` | The bundle with `bundle_digest` set to empty. |
+| `bundle_digest` under `v1` | `trogonatlas.attested-model.bundle.v1` | The bundle with `bundle_digest` set to empty and no `signature`. |
+| `bundle_digest` under `v2` | `trogonatlas.attested-model.bundle.v2` | The bundle with `bundle_digest` set to empty and no `signature`. |
 | `validation.rule_catalog.digest` | `trogonatlas.validation.rule-catalog.v1` | A `ListValidationRulesResponse` holding the catalogue. |
 | `state.closure_id`, `state.snapshot_id` | as for `GetSnapshotId` | See [snapshot identity](../explanation/snapshot-identity.md). |
 
@@ -83,14 +89,47 @@ omitted, then re-serialized with the
 [pinned canonicalization decisions](../explanation/snapshot-identity.md#pinned-canonicalization-decisions)
 that entity content hashes use.
 
+## Signed statement
+
+Under `v2`, `signature.value` is an Ed25519 signature, checked with strict
+verification, over these bytes:
+
+1. The domain tag `trogonatlas.attested-model.signature.v1` followed by a
+   NUL byte.
+2. The 32 raw bytes `bundle_digest` encodes.
+
+The tag carries its own version, so a later signature scheme cannot produce
+a signature an older verifier accepts by accident. The digest covers
+`completeness`, so the signature binds an incomplete bundle's reasons as
+firmly as its manifests.
+
+## Server configuration
+
+| Flag | Environment variable | Meaning |
+| --- | --- | --- |
+| `--attested-signing-key-file` | `TROGON_ATLAS_ATTESTED_SIGNING_KEY_FILE` | Path to a PKCS#8 PEM Ed25519 private key. |
+| `--attested-signing-key-env` | `TROGON_ATLAS_ATTESTED_SIGNING_KEY_ENV` | Name of an environment variable holding a PKCS#8 PEM Ed25519 private key. |
+
+The flags are mutually exclusive. With neither set, bundles are unsigned.
+The key is read on every export. When it cannot be read or parsed, the
+export is refused with `SIGNING_KEY_UNAVAILABLE`, whose `source` metadata is
+`file` or `env`; see the [failure reasons](failure-reasons.md). The server
+logs the key id at startup when the key loads, and an error when it does
+not.
+
 ## Verification
 
 `trogon-atlas verify` accepts a bundle when all of these hold, and reports
 the first that does not:
 
 - The saved JSON parses with no unknown field.
-- `format` is the identifier above.
+- `format` is one of the identifiers above, and `signature` is absent under
+  `v1` and present under `v2`.
+- A signature names `ALGORITHM_ED25519`, a well-formed key id and a 64-byte
+  value.
 - `bundle_digest` recomputes.
+- With `--trusted-key`, the bundle is signed, its key id is one of the
+  trusted keys, and the signature verifies against that key.
 - `scope.event_model_id`, `state.mode`, `validation.coverage` and
   `validation.rule_catalog` are present.
 - `entries` are in strictly increasing key order with well-formed hashes,
@@ -106,5 +145,16 @@ the first that does not:
   `state.closure_truncated` is set.
 
 Verification does not contact a server, so it cannot check that the state
-named in the bundle exists. It checks integrity only; see
+named in the bundle exists.
+
+## Authenticity outcomes
+
+| `authenticity` in `--format json` | Text output | Meaning |
+| --- | --- | --- |
+| `unsigned` | `integrity only, issuer unauthenticated` | A `v1` bundle, verified without `--trusted-key`. |
+| `signature_unchecked` | `signature present, not checked` | A `v2` bundle verified without `--trusted-key`. Not authenticated. |
+| `authenticated` | `signed by trusted key <key id>` | A `v2` bundle whose signature verified against a trusted key. |
+
+`signing_key_id` carries the key id for the signed outcomes and is null for
+`unsigned`. What each outcome proves is in
 [integrity, not authenticity](../explanation/attested-export.md#integrity-not-authenticity).
