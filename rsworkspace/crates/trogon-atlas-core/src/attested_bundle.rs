@@ -268,6 +268,9 @@ pub fn verify(bundle: &pb::AttestedModelBundle) -> Result<VerifiedBundle, Bundle
                     "its validation coverage reports a truncated snapshot",
                 ));
             }
+            if state.closure_truncated {
+                return Err(BundleError::FalseComplete("its closure was truncated"));
+            }
             if coverage.checks.is_empty()
                 || coverage
                     .checks
@@ -309,6 +312,11 @@ pub fn verify(bundle: &pb::AttestedModelBundle) -> Result<VerifiedBundle, Bundle
             if reasons.contains(&IncompleteReason::UnresolvedEntities) == unresolved.is_empty() {
                 return Err(BundleError::MalformedIncomplete(
                     "its unresolved entities and the unresolved-entities reason disagree",
+                ));
+            }
+            if reasons.contains(&IncompleteReason::ClosureTruncated) != state.closure_truncated {
+                return Err(BundleError::MalformedIncomplete(
+                    "its closure truncation and the closure-truncated reason disagree",
                 ));
             }
             Completeness::Incomplete(reasons)
@@ -358,6 +366,7 @@ mod tests {
                 closure_id: closure_id(&entries).unwrap().to_hex(),
                 baseline_changeset_id: String::new(),
                 branch_changeset_id: String::new(),
+                closure_truncated: false,
             }),
             manifests: "kind: Event\n".into(),
             external_manifests: String::new(),
@@ -550,6 +559,50 @@ mod tests {
         assert!(matches!(
             verify(&bundle),
             Err(BundleError::FalseComplete(_))
+        ));
+    }
+
+    #[test]
+    fn truncated_closure_relabelled_complete_is_refused_even_when_resealed() {
+        let mut bundle = sealed();
+        bundle.state.as_mut().unwrap().closure_truncated = true;
+        bundle.completeness = Some(incomplete(&[IncompleteReason::ClosureTruncated]));
+        seal(&mut bundle).unwrap();
+        assert_eq!(
+            verify(&bundle).unwrap().completeness,
+            Completeness::Incomplete(vec![IncompleteReason::ClosureTruncated])
+        );
+
+        bundle.completeness = Some(Completeness::Complete.to_proto());
+        seal(&mut bundle).unwrap();
+        assert!(matches!(
+            verify(&bundle),
+            Err(BundleError::FalseComplete(_))
+        ));
+    }
+
+    #[test]
+    fn closure_truncation_and_its_reason_must_agree() {
+        let mut flagged_without_reason = sealed();
+        flagged_without_reason
+            .state
+            .as_mut()
+            .unwrap()
+            .closure_truncated = true;
+        flagged_without_reason.completeness =
+            Some(incomplete(&[IncompleteReason::SnapshotTruncated]));
+        seal(&mut flagged_without_reason).unwrap();
+        assert!(matches!(
+            verify(&flagged_without_reason),
+            Err(BundleError::MalformedIncomplete(_))
+        ));
+
+        let mut reason_without_flag = sealed();
+        reason_without_flag.completeness = Some(incomplete(&[IncompleteReason::ClosureTruncated]));
+        seal(&mut reason_without_flag).unwrap();
+        assert!(matches!(
+            verify(&reason_without_flag),
+            Err(BundleError::MalformedIncomplete(_))
         ));
     }
 

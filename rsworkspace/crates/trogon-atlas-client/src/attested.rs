@@ -60,8 +60,7 @@ pub async fn export_attested_model(
 /// Read a saved bundle and verify it. A malformed or tampered file is
 /// reported as invalid input.
 pub fn verify_file(path: &Path) -> Result<VerifiedBundle> {
-    let json =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let json = crate::manifest::read_text(path)?;
     let bundle = attested_bundle::bundle_from_json(&json).map_err(|e| {
         crate::failure::invalid_input(format!("{} is not an attested bundle: {e}", path.display()))
     })?;
