@@ -511,7 +511,10 @@ export function listIncomingDecisionDeclarations(decision: { id: EntityId }, opt
 export function listIncomingDocumentDeclarations(document: DocumentSelection, opts: FetchOptions = {}) {
   return catalogQuery('incoming-documents', { document }, opts);
 }
-export function inspectHumanInteraction(request: HumanInteractionRequest, opts: FetchOptions = {}): Promise<HumanInteractionResponse> {
+export function inspectHumanInteraction(
+  request: HumanInteractionRequest,
+  opts: FetchOptions = {},
+): Promise<HumanInteractionResponse> {
   return getJson(`/api/catalog/human-interaction?request=${encodeURIComponent(JSON.stringify(request))}`, opts);
 }
 export function getDesignGraphDetail(graph: { id: EntityId }, opts: FetchOptions = {}) {
