@@ -2445,39 +2445,32 @@
       "type": "string"
     },
     "trogonatlas.eventmodel.v1alpha1.DecisionMaker": {
-      "oneOf": [
+      "additionalProperties": false,
+      "allOf": [
         {
-          "$ref": "#/$defs/_ShorthandRef"
-        },
-        {
-          "additionalProperties": false,
-          "allOf": [
-            {
-              "not": {
-                "required": [
-                  "person",
-                  "team"
-                ]
-              }
-            }
-          ],
-          "properties": {
-            "connectionId": {
-              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
-            },
-            "doc": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
-            },
-            "person": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.PersonRef"
-            },
-            "team": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TeamRef"
-            }
-          },
-          "type": "object"
+          "not": {
+            "required": [
+              "person",
+              "team"
+            ]
+          }
         }
-      ]
+      ],
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+        },
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "person": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.PersonRef"
+        },
+        "team": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TeamRef"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.DecisionOption": {
       "additionalProperties": false,
@@ -7629,409 +7622,402 @@
       "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.TopologyStepTarget": {
-      "oneOf": [
+      "additionalProperties": false,
+      "allOf": [
         {
-          "$ref": "#/$defs/_ShorthandRef"
+          "not": {
+            "required": [
+              "catalogMessage",
+              "component"
+            ]
+          }
         },
         {
-          "additionalProperties": false,
-          "allOf": [
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "component"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "channel"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "dataStore"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "dataProduct"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "subflow"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "actor"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "custom"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "externalSystem"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "catalogMessage",
-                  "systemGroup"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "component",
-                  "channel"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "component",
-                  "dataStore"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "component",
-                  "dataProduct"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "component",
-                  "subflow"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "component",
-                  "actor"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "component",
-                  "custom"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "component",
-                  "externalSystem"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "component",
-                  "systemGroup"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "channel",
-                  "dataStore"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "channel",
-                  "dataProduct"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "channel",
-                  "subflow"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "channel",
-                  "actor"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "channel",
-                  "custom"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "channel",
-                  "externalSystem"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "channel",
-                  "systemGroup"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataStore",
-                  "dataProduct"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataStore",
-                  "subflow"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataStore",
-                  "actor"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataStore",
-                  "custom"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataStore",
-                  "externalSystem"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataStore",
-                  "systemGroup"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataProduct",
-                  "subflow"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataProduct",
-                  "actor"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataProduct",
-                  "custom"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataProduct",
-                  "externalSystem"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "dataProduct",
-                  "systemGroup"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "subflow",
-                  "actor"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "subflow",
-                  "custom"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "subflow",
-                  "externalSystem"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "subflow",
-                  "systemGroup"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "actor",
-                  "custom"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "actor",
-                  "externalSystem"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "actor",
-                  "systemGroup"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "custom",
-                  "externalSystem"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "custom",
-                  "systemGroup"
-                ]
-              }
-            },
-            {
-              "not": {
-                "required": [
-                  "externalSystem",
-                  "systemGroup"
-                ]
-              }
-            }
-          ],
-          "properties": {
-            "actor": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyActor"
-            },
-            "catalogMessage": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogSubject"
-            },
-            "channel": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
-            },
-            "component": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
-            },
-            "custom": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyCustomStep"
-            },
-            "dataProduct": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
-            },
-            "dataStore": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
-            },
-            "externalSystem": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyExternalSystem"
-            },
-            "subflow": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DesignGraphRef"
-            },
-            "systemGroup": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupRef"
-            }
-          },
-          "type": "object"
+          "not": {
+            "required": [
+              "catalogMessage",
+              "channel"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "catalogMessage",
+              "dataStore"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "catalogMessage",
+              "dataProduct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "catalogMessage",
+              "subflow"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "catalogMessage",
+              "actor"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "catalogMessage",
+              "custom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "catalogMessage",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "catalogMessage",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "channel"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "dataStore"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "dataProduct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "subflow"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "actor"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "custom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "component",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "dataStore"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "dataProduct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "subflow"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "actor"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "custom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "channel",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataStore",
+              "dataProduct"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataStore",
+              "subflow"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataStore",
+              "actor"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataStore",
+              "custom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataStore",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataStore",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataProduct",
+              "subflow"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataProduct",
+              "actor"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataProduct",
+              "custom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataProduct",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "dataProduct",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "subflow",
+              "actor"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "subflow",
+              "custom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "subflow",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "subflow",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "actor",
+              "custom"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "actor",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "actor",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "custom",
+              "externalSystem"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "custom",
+              "systemGroup"
+            ]
+          }
+        },
+        {
+          "not": {
+            "required": [
+              "externalSystem",
+              "systemGroup"
+            ]
+          }
         }
-      ]
+      ],
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyActor"
+        },
+        "catalogMessage": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogSubject"
+        },
+        "channel": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+        },
+        "component": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+        },
+        "custom": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyCustomStep"
+        },
+        "dataProduct": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+        },
+        "dataStore": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.EntityRef"
+        },
+        "externalSystem": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.TopologyExternalSystem"
+        },
+        "subflow": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.DesignGraphRef"
+        },
+        "systemGroup": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.SystemGroupRef"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.TopologyTransition": {
       "additionalProperties": false,

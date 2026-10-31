@@ -453,6 +453,8 @@ pub(crate) fn shorthand_ref_field(
             | "trogonatlas.eventmodel.v1alpha1.ResponsibilitySubject"
             | "trogonatlas.eventmodel.v1alpha1.CatalogSubject"
             | "trogonatlas.eventmodel.v1alpha1.DocumentSelection"
+            | "trogonatlas.eventmodel.v1alpha1.TopologyStepTarget"
+            | "trogonatlas.eventmodel.v1alpha1.DecisionMaker"
     ) {
         return None;
     }
