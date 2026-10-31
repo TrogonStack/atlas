@@ -21,6 +21,7 @@ use crate::{
     caller::{Caller, CallerToken},
     error::{attach_operation_id, tool_err, McpError},
     profile::ToolProfile,
+    prompts::{TaskPrompt, TASK_PROMPTS},
     tools::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
         BatchMutateParams, CatalogQueryParams, CompileTypeLibraryParams, CreateBranchParams,
@@ -48,177 +49,38 @@ pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_SEARCH_QUERY_BYTES: usize = 2048;
 
 /// ServerHandler instructions. Keep in sync with `get_info`.
-pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatlas.api.eventmodel.v1alpha1 gRPC service. \
-             Read tools return a binpb_base64 envelope you can decode (or use *_json companions). Mutations \
-             have two surfaces: JSON (get_entity_json -> edit proto3 JSON -> put_entity_json / \
-             batch_mutate_json; no protobuf tooling required) and binpb (get_entity -> modify \
-             binpb_base64 -> put_entity / batch_mutate). Call who_am_i if you need to confirm \
-             which role, namespaces, or owner you are authenticated as; the tools listed here \
-             are already filtered to what that role can call.\n\
+pub const SERVER_INSTRUCTIONS: &str =
+    "trogon-atlas MCP: tools for the trogonatlas.api.eventmodel.v1alpha1 gRPC service. \
+             Read tools return a binpb_base64 envelope; the *_json companions return and accept \
+             proto3 JSON instead, so no protobuf tooling is required. The tools listed are already \
+             filtered to what your role and tool profile can call; call who_am_i to confirm the \
+             role, namespaces or owner you act as.\n\
              \n\
-             SPECIFICATION AUTHORING: use the native specification entity for retained contract artifacts, \
-             schemas, messages, operations, provider exposures and usages. API classification is derived \
-             from operations and exposures selecting them. Integration messages map only to ReadModels; \
-             request/response/notification roles do not create Commands or Events. Preserve authoritative \
-             member IDs, connection IDs, exact artifact text and SHA-256 digests on edits and manifest \
-             round trips. Add replacement artifact members to change bytes. Opaque selectors remain \
-             unverified; no format importer, remote fetch or semantic validation is implied.\n\
+             Task procedures are MCP prompts: list them and fetch the one for your task (authoring \
+             a storyboard, the strategic layout, a specification or reliability overlays, or \
+             repairing a validation finding) before you start. A prompt is listed only when every \
+             tool it names is offered to you.\n\
              \n\
-             STORYBOARD AUTHORING RULES (validated; violations are rejected or flagged):\n\
-             1. A storyboard is a TEMPORAL sequence: each slice is one moment. A read-model \
-             slice lists only the events that just happened at that moment, never the type's \
-             full source list (the ReadModel entity carries the type-level list).\n\
-             2. Projection adjacency: every event's read-model projections come directly after \
-             the emitting slice, before the next command or automation slice acts. Updates \
-             from divergent branches (e.g. approve vs reject) are separate slices, never merged.\n\
-             3. One processor issues exactly one command; branching outcomes are separate \
-             automation slices with separate processors. Record 'these ship as one worker' \
-             with a Component entity listing them as members, not by sharing entities.\n\
-             4. Split read models by shape, not by consumer: add a read model only when a \
-             consumer needs different fields, key or source events. Consumers that read the \
-             same data share one read model; when several automations observe it, declare a \
-             SharedConsumersAnnotation naming them. A command's decision state comes from its \
-             stream (the given events) and is not a read model. Two read models with the same \
-             source events and fields are a duplicate. External integrations are declared on BOTH seams: the processor \
-             that performs the call lists the ExternalSystem in Processor.calls (outbound), \
-             and the results land in ExternalSource read models pointing at the same system \
-             (inbound); the round trip is structural, never prose-only.\n\
-             5. Sub-workflows are SEPARATE storyboards chained implicitly: storyboard A's \
-             outcome events project into read models that storyboard B's entry observes. \
-             Never build one mega-storyboard; never invent nesting. The EventModel is the \
-             workflow umbrella, and its ordered members list sequences the storyboards.\n\
-             6. Every storyboard declares an honest entry (the read model observed plus the \
-             human persona+ui or automation processor observing it) and an outcome (the \
-             terminal events). Clock/schedule triggers are read models observed by automations.\n\
-             7. Single-use or entitlement constraints (e.g. review-once) get their own \
-             aggregate swimlane; that stream is the consistency boundary.\n\
-             8. Swimlane stream_id placeholders must be followable names: each {placeholder} \
-             references a FieldSpec on that lane's events/commands, or the name of a \
-             Uuidv5IdentityAnnotation registered on the swimlane (composed identities). Never \
-             inline expressions like {uuidv5(...)}; register the identity once under a name \
-             and write e.g. 'review-eligibility-{eligibility_id}'.\n\
-             9. Forks in the road live on the SWIMLANE: declare the stream's lifecycle as \
-             Swimlane.transitions (after <event>, next = [<event> + guard doc, ...]). \
-             Exclusivity comes from the consistency boundary: competing commands append to \
-             the same stream and the aggregate accepts one successor, so alternatives \
-             without a shared stream are parallel fan-out, not a fork. Cycles are legal \
-             (lifecycles loop). Tools derive the storyboard fork graph from the table, and \
-             validation checks every GWT against it: a scenario may only emit a legal \
-             successor of the last given event on that stream.\n\
-             10. TIME ONLY POINTS FORWARD. Every edge goes from an earlier moment to a later \
-             one; recurrence of a type (a screen shown again, a view updated again, a \
-             lifecycle re-entered) is a NEW occurrence, never an arrow into the past; a \
-             backward arrow destroys the ability to read time off the graph. Order slices \
-             so events precede their projections and projections precede their consumers; \
-             write scenario given histories as forward walks of each stream's transitions \
-             (validated both in given order and in emission).\n\
-             11. Bounded contexts touch at exactly ONE seam: an upstream EVENT flowing into \
-             a downstream subscription READ MODEL's source_events (the translation pattern). \
-             A cross-model link is NOT a continuation: no shared stream means no fork, no \
-             guard, no single timeline; it is async pub/sub with fan-out. The DOWNSTREAM \
-             declares the dependency (its consumer-shaped view names the upstream event); \
-             the upstream never knows its consumers. Any other cross-namespace structural \
-             ref is rejected (CROSS_MODEL_BOUNDARY_VIOLATION): translate, don't reference. \
-             A namespace IS a bounded context; its root document is the BoundedContext \
-             entity (slug == namespace, validated) carrying the context charter, links, \
-             and metadata. Event models are free-form curations WITHIN a context (a \
-             feature, a flow, a release), and a namespace may hold many.\n\
-             12. Project management layers ON TOP of the model, never inside it. Delivery \
-             status (todo/in_progress/review/blocked/done) lives in Tracker entities: \
-             denormalized lists of {subject EntityRef, TrackStatus, doc} pointing at any \
-             entity kind. Design entities carry NO status fields; flipping a status never \
-             mutates the model. Several trackers may overlay one model (per team, per \
-             milestone); within one tracker each subject appears once. Trackers are NOT \
-             event model members. 'What needs work?' = list_entities kind=tracker.\n\
-             13. UI.transitions declares PURE navigation only: surface-to-surface links \
-             that carry no command and no event (tab bars, back affordances, menu links, \
-             deep links). Any hop a storyboard command path already explains is DERIVED \
-             from the slices; re-declaring it is managed duplication and warns \
-             (UI_TRANSITION_DERIVABLE). Cycles are legal in the data (a navigation map is \
-             a graph, like the swimlane lifecycle); renderers keep time forward by \
-             unrolling occurrences.\n\
-             14. Model DECISIONS AND DATA, never implementation. In scope: \
-             strategic design (contexts, charters, seams, investment) and the behavioral \
-             contract (facts, order, fields). Out of scope, always: classes, services, \
-             repositories, frameworks, persistence, code structure. Litmus test: would it \
-             survive reimplementing the system in another language?\n\
-             15. The problem space is a knowledge graph: Domain (the \
-             business, usually one) contains Subdomains (problems the business must be \
-             good at, classified CORE/SUPPORTING/GENERIC, a budget document). They live \
-             in a namespace named after the domain, which is NOT a bounded context. A \
-             Subdomain never contains contexts: BoundedContext.realizes maps solution to \
-             problem (cross-namespace, legal: knowledge, not coupling). One context \
-             realizing several subdomains is a monolith confessing; realizing subdomains \
-             of different classifications also warns (REALIZES_MIXED_CLASSIFICATIONS), \
-             because one boundary then carries two investment levels. A Domain declared in \
-             a context's namespace warns (DOMAIN_IN_CONTEXT_NAMESPACE): give it its own \
-             problem-space namespace. Classification goes on the SUBDOMAIN, never the \
-             context. Layout: the Project, the Domain and ALL Subdomains live in ONE \
-             problem-space namespace (Domain and Project slug == that namespace); each \
-             context namespace holds only its BoundedContext, which realizes ONE \
-             subdomain across namespaces. Never create a Project or Domain per context \
-             namespace to silence DOMAIN_MISSING_PROJECT; point the contexts at the one \
-             problem space instead. Declare a relationship intent (rule 16) for every \
-             cross-context seam.\n\
-             16. Seams carry data; relationships carry intent. The DOWNSTREAM \
-             BoundedContext declares relationships: upstream context + intent \
-             (CUSTOMER_SUPPLIER / CONFORMIST / PARTNERSHIP / SEPARATE_WAYS) + doc. Intent \
-             and data must agree: integration intent without a seam warns, SEPARATE_WAYS \
-             with a seam errors, a seam with no declared intent nudges (Info).\n\
-             17. Screen is composition, UI is the moment. Use UI for every \
-             slice and storyboard touchpoint. Use Screen only for URL-addressable \
-             surfaces that compose UI contributions through UI.slot. Put Screen \
-             entities in a non-context application namespace. Required Screen slots \
-             need at least one contributing UI. A Screen with UI contributions from \
-             multiple contexts is expected shared-surface composition, not a \
-             replacement for context seams.\n\
-             18. Terms and Ambiguities are language data. A Term lives in the \
-             bounded context whose language it defines and points outward through \
-             embodied_by to the entities carrying that meaning. An Ambiguity lives \
-             in the problem-space namespace and records a real ruling across two \
-             or more Term refs: HOMONYM or SYNONYM, with DELIBERATE, RENAME, or \
-             MERGE. Do not store unresolved language work as an Ambiguity.\n\
-             19. Disconnects are data when declared. Any model member that no \
-             slice produces, consumes, or feeds is DISCONNECTED. Disconnects are not always \
-             errors: a subscription view may wait for its consumer, an audit log may have no \
-             UI yet, a niche flow may be deferred. Declare the disconnect with OrphanAnnotation \
-             (a canonical Any in the entity's metadata) carrying a non-empty `doc` explaining \
-             WHY. Unflagged disconnects warn (ORPHAN_NOT_FLAGGED); flag-with-empty-doc errors \
-             (ORPHAN_DOC_EMPTY); flag-on-a-wired-entity nudges (ORPHAN_FLAG_OBSOLETE); remove \
-             the annotation once the entity is connected.\n\
-             20. Open questions and assumptions are first-class, not comments. An \
-             OpenQuestionAnnotation names something the model does not yet decide: put it on \
-             the entity or scenario where the gap lives, with `question` and `author`. An \
-             AssumptionAnnotation names something the design already proceeds as if true but \
-             nobody confirmed, with fields `statement`, optional `basis`, and `author`. Both \
-             attach via put_entity_json as a canonical Any (\"@type\": \
-             \"type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation\" or \
-             \"...AssumptionAnnotation\") in the entity's metadata, or a scenario's own metadata. \
-             Both surface as Info findings (OPEN_QUESTION_PRESENT, ASSUMPTION_PRESENT), never an \
-             error or a warning, so recording one never blocks a mutation.\n\
-             21. Reliability overlays point outward like Tracker, never as \
-             event model members: a ServiceLevelIndicator names a Connection \
-             (CommandHandling, Projection, Reaction, Display, Integration, or \
-             Journey) that must resolve to a real slice or edge; a \
-             ServiceLevelObjective points at one indicator, carries the \
-             threshold and target, and lists the AlertPolicy entities that \
-             watch it; an AlertPolicy points at AlertNotificationTarget \
-             entities. Validation checks the connection resolves, a Journey \
-             is structurally reachable, correlation fields are sourced on \
-             both ends, the signal matches the measure kind, and an \
-             objective with no alert policy is flagged (warning when \
-             externally committed, info otherwise).\n\
-             entity.system (uid, created_at) is SERVER-OWNED incarnation identity, Kubernetes \
-             metadata.uid style: assigned on create, preserved across updates, regenerated on \
-             delete+recreate. Anything you send there is ignored; never try to set it.\n\
-             Mutation responses (put_entity, put_entity_json, batch_mutate, batch_mutate_json, merge_branch) \
-             return non-blocking validation findings, strategic ones included, in an `issues` array \
-             beside binpb_base64: read it and fix them. Run validate_event_model after every mutation \
-             batch and fix all Errors and Warnings. After editing only problem-space entities \
-             (Project, Domain, Subdomain) or a BoundedContext there may be no EventModel to validate: \
-             run validate_project with the namespace or project scope instead. Mutations \
-             execute concurrently when pipelined: issue ordered workflows (write -> delete -> \
-             validate) as separate sequential requests.";
+             Mutation responses carry non-blocking validation findings in an `issues` array: read \
+             and fix them. entity.system (uid, created_at) is server-owned incarnation identity, \
+             assigned on create and regenerated on delete and recreate; anything you send there is \
+             ignored. Pipelined mutations execute concurrently: issue ordered work (write, then \
+             delete, then validate) as separate sequential requests.";
+
+/// The most bytes of instructions any session receives, its profile line
+/// included. Instructions reach every session whatever its task, so a
+/// procedure that outgrows this belongs in a task prompt.
+pub const SERVER_INSTRUCTIONS_BUDGET_BYTES: usize = 2048;
+
+/// The instructions a session running `profile` receives.
+pub fn instructions_for(profile: Option<ToolProfile>) -> String {
+    match profile {
+        None => SERVER_INSTRUCTIONS.to_owned(),
+        Some(profile) => format!(
+            "{SERVER_INSTRUCTIONS}\n\nActive tool profile: {profile}. Tools outside it are neither listed nor callable."
+        ),
+    }
+}
 
 /// The MCP crate's own ordering of the server's RBAC roles, so tool
 /// listing can compare a caller's role against a tool's minimum without
@@ -925,6 +787,14 @@ impl McpServer {
 
     fn offers(&self, tool: &rmcp::model::Tool) -> bool {
         self.profile.is_none_or(|profile| profile.admits(tool))
+    }
+
+    fn offers_prompt(&self, prompt: &TaskPrompt) -> bool {
+        prompt.tools.iter().all(|name| {
+            self.tool_router
+                .get(name)
+                .is_some_and(|tool| self.offers(tool))
+        })
     }
 
     /// Every tool this adapter registers, whatever any caller's role.
@@ -4846,19 +4716,18 @@ impl McpServer {
 #[tool_handler]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
-        let config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
-        match self.profile {
-            None => config.with_instructions(SERVER_INSTRUCTIONS),
-            Some(profile) => {
-                let mut config = config.with_instructions(format!(
-                    "{SERVER_INSTRUCTIONS}\n\nActive tool profile: {profile}. Tools outside it are neither listed nor callable."
-                ));
-                let mut meta = serde_json::Map::new();
-                meta.insert(PROFILE_META_KEY.to_owned(), profile.as_str().into());
-                config.meta = Some(rmcp::model::MetaObject(meta));
-                config
-            }
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_prompts()
+            .build();
+        let mut config =
+            ServerConfig::new(capabilities).with_instructions(instructions_for(self.profile));
+        if let Some(profile) = self.profile {
+            let mut meta = serde_json::Map::new();
+            meta.insert(PROFILE_META_KEY.to_owned(), profile.as_str().into());
+            config.meta = Some(rmcp::model::MetaObject(meta));
         }
+        config
     }
 
     /// Reports the profile this request runs under, which a header may name,
@@ -4927,6 +4796,50 @@ impl ServerHandler for McpServer {
                 .collect(),
         };
         Ok(rmcp::model::ListToolsResult::with_all_items(tools))
+    }
+
+    /// Lists the task prompts whose every tool this caller is offered, by
+    /// profile and, when it is known, by role.
+    async fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListPromptsResult, rmcp::ErrorData> {
+        let session = self.for_request(&context)?;
+        let role = session.learn_role().await;
+        let prompts = TASK_PROMPTS
+            .iter()
+            .filter(|prompt| session.offers_prompt(prompt))
+            .filter(|prompt| {
+                role.is_none_or(|role| prompt.tools.iter().all(|t| tool_allowed_for(t, role)))
+            })
+            .map(TaskPrompt::listing)
+            .collect();
+        Ok(rmcp::model::ListPromptsResult::with_all_items(prompts))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: rmcp::model::GetPromptRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::GetPromptResponse, rmcp::ErrorData> {
+        let session = self.for_request(&context)?;
+        let Some(prompt) = TaskPrompt::find(&request.name) else {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("unknown prompt `{}`", request.name),
+                None,
+            ));
+        };
+        if let Some(profile) = session.profile.filter(|_| !session.offers_prompt(prompt)) {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "prompt `{}` names tools outside the `{profile}` tool profile",
+                    prompt.name
+                ),
+                None,
+            ));
+        }
+        Ok(prompt.result().into())
     }
 }
 
@@ -5157,18 +5070,32 @@ mod tests {
     }
 
     #[test]
-    fn server_instructions_cover_strategic_layout_and_validation_followup() {
-        for needle in [
-            "ONE problem-space namespace",
-            "DOMAIN_MISSING_PROJECT",
-            "validate_project with the namespace or project scope",
-            "`issues` array",
-            "Errors and Warnings",
-        ] {
+    fn every_session_s_instructions_fit_the_budget() {
+        let profiles = std::iter::once(None).chain(ToolProfile::ALL.iter().copied().map(Some));
+        for profile in profiles {
+            let len = instructions_for(profile).len();
             assert!(
-                SERVER_INSTRUCTIONS.contains(needle),
-                "doctrine lost: {needle}"
+                len <= SERVER_INSTRUCTIONS_BUDGET_BYTES,
+                "{profile:?}: {len} bytes exceeds {SERVER_INSTRUCTIONS_BUDGET_BYTES}; move procedure into a task prompt"
             );
+        }
+    }
+
+    #[test]
+    fn instructions_name_only_tools_every_profile_offers() {
+        let named = crate::prompts::mentioned_tools(SERVER_INSTRUCTIONS);
+        assert!(!named.is_empty());
+        for name in named {
+            let tool = McpServer::registered_tools()
+                .into_iter()
+                .find(|t| t.name == name)
+                .unwrap();
+            for &profile in ToolProfile::ALL {
+                assert!(
+                    profile.admits(&tool),
+                    "{profile} hides {name}, which the instructions name"
+                );
+            }
         }
     }
 
