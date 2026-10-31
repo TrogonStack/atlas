@@ -2690,6 +2690,7 @@ async fn run(
                         });
                         apply::insert_coverage(&mut data, resp.coverage.as_ref());
                         apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Conflicts => {
@@ -2698,7 +2699,8 @@ async fn run(
                             eprintln!("{name} has conflicts, nothing merged:");
                             print!("{diff}");
                         }
-                        let data = json!({"status": "conflicts", "diff": diff});
+                        let mut data = json!({"status": "conflicts", "diff": diff});
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Invalid => {
@@ -2726,6 +2728,7 @@ async fn run(
                         });
                         apply::insert_coverage(&mut data, resp.coverage.as_ref());
                         apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Unspecified => {
