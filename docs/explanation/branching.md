@@ -109,6 +109,13 @@ The design, whatever it is, must satisfy these:
 - Replacing draft-then-land's annotations. `LifecycleAnnotation` remains
   meaningful on the live model (a landed entity can still be marked
   proposed); branches are about *where* work happens, not entity lifecycle.
+- Content-based write policy, for now. A rule that inspects what a write
+  changes and then denies it, demands that it go through a branch, or demands
+  a review (`Deny`, `RequireBranch`, `RequireReview`) is declined. The server
+  holds no durable, authorized evidence that a review happened, so a review
+  requirement could only check a claim the caller makes about itself. The
+  `Deny` case is already covered by authorization, entity protection and the
+  planned invariant gates. Review stays a team convention.
 
 ## Merge conflicts
 
