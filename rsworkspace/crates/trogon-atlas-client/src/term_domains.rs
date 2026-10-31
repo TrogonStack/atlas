@@ -4,6 +4,7 @@ use trogon_atlas_core::transcode::TranscodePool;
 use trogon_atlas_proto as pb;
 
 use crate::client::Client;
+pub use crate::responsibility::parse_request;
 
 pub async fn list_term_domain_declarations(
     client: &mut Client,
