@@ -9,6 +9,40 @@ use trogon_atlas_client::{
 };
 use trogon_atlas_proto as pb;
 
+#[test]
+fn term_domain_parser_preserves_exact_identity_and_paging() {
+    let request: pb::ListTermDomainDeclarationsRequest =
+        trogon_atlas_client::term_domains::parse_request(
+            "ListTermDomainDeclarationsRequest",
+            &serde_json::json!({
+                "domain": {"id": {
+                    "namespace": "catalog", "slug": "orders",
+                    "version": "18446744073709551615"
+                }},
+                "pageSize": 1,
+                "pageToken": "opaque-cursor"
+            }),
+        )
+        .unwrap();
+    assert_eq!(request.domain.unwrap().id.unwrap().version, u64::MAX);
+    assert_eq!(request.page_size, 1);
+    assert_eq!(request.page_token, "opaque-cursor");
+
+    for invalid in [
+        serde_json::json!({"pageSize": -1}),
+        serde_json::json!({"unknown": true}),
+    ] {
+        let error = trogon_atlas_client::term_domains::parse_request::<
+            pb::ListTermDomainDeclarationsRequest,
+        >("ListTermDomainDeclarationsRequest", &invalid)
+        .unwrap_err();
+        assert_eq!(
+            Failure::classify(&error).category,
+            FailureCategory::Validation
+        );
+    }
+}
+
 #[tokio::test]
 async fn native_catalog_queries_preserve_branch_auth_and_operational_failure_codes() {
     for (rpc, code) in [
