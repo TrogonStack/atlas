@@ -2964,9 +2964,11 @@ impl SourceCancellationDisposition {
 //
 // An event model's manifests, the validation report run against them and
 // the identity of the state both came from, bound together by one digest.
-// Everything in the bundle is captured from a single state: the server
-// holds its mutation boundary for the whole capture, so no write can land
-// between reading the manifests and validating them.
+// The manifests, the entries and the validation are all computed from one
+// read snapshot, without holding writes off. Whatever that snapshot could
+// not show as it stood, because it was missing, hidden from the caller or
+// changed while the export ran, is listed in `unresolved` and marks the
+// bundle incomplete instead of being read from a second state.
 //
 // `bundle_digest` proves the bundle was not changed after the server
 // produced it. It does not prove who produced it. See
@@ -3005,6 +3007,73 @@ pub struct AttestedModelBundle {
     /// this message with `bundle_digest` cleared. Covers every other field.
     #[prost(string, tag="10")]
     pub bundle_digest: ::prost::alloc::string::String,
+    /// Entities the bundle needed but could not attest from its snapshot,
+    /// sorted by `key`, one row per key. Non-empty only when `completeness`
+    /// carries `REASON_UNRESOLVED_ENTITIES`.
+    #[prost(message, repeated, tag="11")]
+    pub unresolved: ::prost::alloc::vec::Vec<AttestedUnresolved>,
+}
+/// One entity the snapshot could not vouch for.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AttestedUnresolved {
+    /// Storage key, in the form `SnapshotEntry.key` uses.
+    #[prost(string, tag="1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="2")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(enumeration="attested_unresolved::Cause", tag="3")]
+    pub cause: i32,
+}
+/// Nested message and enum types in `AttestedUnresolved`.
+pub mod attested_unresolved {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Cause {
+        Unspecified = 0,
+        /// Referenced by an exported entity, in a namespace the caller can see,
+        /// but absent from the snapshot. Against a truncated snapshot it may
+        /// still exist.
+        Missing = 1,
+        /// Referenced by an exported entity, in a namespace outside the
+        /// caller's lens. Says nothing about whether it exists.
+        Hidden = 2,
+        /// Exported from the snapshot, but its stored revision differed when
+        /// the export finished. The manifests show the snapshot's revision.
+        Changed = 3,
+        /// Exported from the snapshot, but deleted when the export finished.
+        Deleted = 4,
+        /// The model itself was not in the snapshot and was read by key
+        /// instead, so it may be from a later state than the rest.
+        OutsideSnapshot = 5,
+    }
+    impl Cause {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "CAUSE_UNSPECIFIED",
+                Self::Missing => "CAUSE_MISSING",
+                Self::Hidden => "CAUSE_HIDDEN",
+                Self::Changed => "CAUSE_CHANGED",
+                Self::Deleted => "CAUSE_DELETED",
+                Self::OutsideSnapshot => "CAUSE_OUTSIDE_SNAPSHOT",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "CAUSE_UNSPECIFIED" => Some(Self::Unspecified),
+                "CAUSE_MISSING" => Some(Self::Missing),
+                "CAUSE_HIDDEN" => Some(Self::Hidden),
+                "CAUSE_CHANGED" => Some(Self::Changed),
+                "CAUSE_DELETED" => Some(Self::Deleted),
+                "CAUSE_OUTSIDE_SNAPSHOT" => Some(Self::OutsideSnapshot),
+                _ => None,
+            }
+        }
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AttestedScope {
@@ -3044,14 +3113,17 @@ pub struct AttestedState {
     /// can recompute it offline.
     #[prost(string, tag="4")]
     pub closure_id: ::prost::alloc::string::String,
-    /// Current exports: the newest baseline changeset when the capture
-    /// started. Historical exports: the requested changeset. Empty when the
+    /// Current exports: the newest baseline changeset recorded before the
+    /// snapshot was read. A complete bundle also saw it unchanged once the
+    /// export finished, and confirmed every exported entry against the
+    /// store. Historical exports: the requested changeset. Empty when the
     /// baseline has recorded no changeset. Writes that record no changeset
     /// do not move it, so `snapshot_id` remains the identity of record.
     #[prost(string, tag="5")]
     pub baseline_changeset_id: ::prost::alloc::string::String,
-    /// The newest changeset on `scope.branch`. Empty on baseline, or when the
-    /// branch has recorded none.
+    /// The newest changeset on `scope.branch` before the snapshot was read,
+    /// under the same rules. Empty on baseline, or when the branch has
+    /// recorded none.
     #[prost(string, tag="6")]
     pub branch_changeset_id: ::prost::alloc::string::String,
 }
@@ -3168,6 +3240,18 @@ pub mod attested_completeness {
         EntitiesSkipped = 4,
         /// A validation suite did not complete.
         ValidationIncomplete = 5,
+        /// `unresolved` lists at least one entity.
+        UnresolvedEntities = 6,
+        /// A write landed while the export ran: the changeset log, the branch
+        /// or the caller's lens moved, or an exported entity changed.
+        ConcurrentWrite = 7,
+        /// A historical export rendered through type libraries that changed
+        /// after the requested changeset.
+        TypeLibrariesChanged = 8,
+        /// The serving process does not hold the writer lease, so its cached
+        /// snapshot is not refreshed by writes and may predate the changeset
+        /// boundary.
+        BoundaryUnverified = 9,
     }
     impl Reason {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -3182,6 +3266,10 @@ pub mod attested_completeness {
                 Self::HistoryIncomplete => "REASON_HISTORY_INCOMPLETE",
                 Self::EntitiesSkipped => "REASON_ENTITIES_SKIPPED",
                 Self::ValidationIncomplete => "REASON_VALIDATION_INCOMPLETE",
+                Self::UnresolvedEntities => "REASON_UNRESOLVED_ENTITIES",
+                Self::ConcurrentWrite => "REASON_CONCURRENT_WRITE",
+                Self::TypeLibrariesChanged => "REASON_TYPE_LIBRARIES_CHANGED",
+                Self::BoundaryUnverified => "REASON_BOUNDARY_UNVERIFIED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3193,6 +3281,10 @@ pub mod attested_completeness {
                 "REASON_HISTORY_INCOMPLETE" => Some(Self::HistoryIncomplete),
                 "REASON_ENTITIES_SKIPPED" => Some(Self::EntitiesSkipped),
                 "REASON_VALIDATION_INCOMPLETE" => Some(Self::ValidationIncomplete),
+                "REASON_UNRESOLVED_ENTITIES" => Some(Self::UnresolvedEntities),
+                "REASON_CONCURRENT_WRITE" => Some(Self::ConcurrentWrite),
+                "REASON_TYPE_LIBRARIES_CHANGED" => Some(Self::TypeLibrariesChanged),
+                "REASON_BOUNDARY_UNVERIFIED" => Some(Self::BoundaryUnverified),
                 _ => None,
             }
         }

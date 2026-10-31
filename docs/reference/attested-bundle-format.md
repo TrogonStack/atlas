@@ -27,12 +27,13 @@ the meaning of a field changed.
 | `state.snapshot_id` | `GetSnapshotId` over the whole view validation read. |
 | `state.snapshot_entity_count` | Entities that id covers. |
 | `state.closure_id` | `GetSnapshotId` over `entries` only. |
-| `state.baseline_changeset_id` | Current: newest baseline changeset in the captured state. Historical: the requested changeset. Empty when baseline has none. |
-| `state.branch_changeset_id` | Newest changeset on `scope.branch`. Empty on baseline or when the branch has none. |
+| `state.baseline_changeset_id` | Current: newest baseline changeset recorded before the snapshot was read. Historical: the requested changeset. Empty when baseline has none. |
+| `state.branch_changeset_id` | Newest changeset on `scope.branch` recorded before the snapshot was read. Empty on baseline or when the branch has none. |
 | `manifests` | Manifest YAML for the board in the model's namespace, as `ExportEventModelManifests` renders it. |
 | `external_manifests` | Manifest YAML for entities in other namespaces the board references. |
 | `entries` | Content hash of every entity in both manifest sets, sorted by storage key. |
 | `skipped` | Entities the renderer could not render. |
+| `unresolved` | Entities the export names but could not attest from its snapshot, one row per storage key, sorted by key. Each row carries `key`, `entity` and `cause`. Empty unless `REASON_UNRESOLVED_ENTITIES` is listed. |
 | `validation.issues` | Findings of the `model` and `strategic` suites. |
 | `validation.coverage` | Coverage for those suites, as `ValidateEventModel` reports it. |
 | `validation.rule_catalog.digest` | Digest of the rule catalogue. |
@@ -50,6 +51,20 @@ the meaning of a field changed.
 | `REASON_HISTORY_INCOMPLETE` | A historical rewind could not fetch every entity it needed. |
 | `REASON_ENTITIES_SKIPPED` | At least one entity could not be rendered and is listed in `skipped`. |
 | `REASON_VALIDATION_INCOMPLETE` | A validation suite did not complete. |
+| `REASON_UNRESOLVED_ENTITIES` | At least one entity is listed in `unresolved`. |
+| `REASON_CONCURRENT_WRITE` | A write landed after the snapshot was read and touched what the export read, or the branch or namespace visibility changed. |
+| `REASON_TYPE_LIBRARIES_CHANGED` | Historical only: a visible type library changed after the requested changeset, so manifests render through newer types. |
+| `REASON_BOUNDARY_UNVERIFIED` | The exporting process does not hold the writer lease, so its snapshot may predate the changeset boundary it names. |
+
+## Unresolved causes
+
+| Cause | Meaning |
+| --- | --- |
+| `CAUSE_MISSING` | The board references the entity and the snapshot does not hold it. |
+| `CAUSE_HIDDEN` | The board references the entity in a namespace the caller cannot see. |
+| `CAUSE_CHANGED` | The entity changed after the snapshot was read. The bundle carries the snapshot's copy. |
+| `CAUSE_DELETED` | The entity was deleted after the snapshot was read. The bundle carries the snapshot's copy. |
+| `CAUSE_OUTSIDE_SNAPSHOT` | The exported model was not in the snapshot and was read directly from the store. |
 
 ## Digest rules
 
@@ -79,9 +94,14 @@ the first that does not:
   `validation.rule_catalog` are present.
 - `entries` are in strictly increasing key order with well-formed hashes,
   and `state.closure_id` recomputes from them.
-- A complete bundle lists no reasons and no skipped entities, and its
-  coverage shows every suite completed over an untruncated snapshot.
-- An incomplete bundle lists at least one known reason, sorted and unique.
+- `unresolved` rows are in strictly increasing key order, each with a
+  known cause.
+- A complete bundle lists no reasons, no skipped entities and no
+  unresolved entities, and its coverage shows every suite completed over
+  an untruncated snapshot.
+- An incomplete bundle lists at least one known reason, sorted and unique,
+  and lists `REASON_UNRESOLVED_ENTITIES` exactly when `unresolved` is not
+  empty.
 
 Verification does not contact a server, so it cannot check that the state
 named in the bundle exists. It checks integrity only; see

@@ -11,7 +11,9 @@ use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tonic::{metadata::MetadataValue, transport::Channel};
-use trogon_atlas_core::attested_bundle::{self, BundleError, Completeness, IncompleteReason};
+use trogon_atlas_core::attested_bundle::{
+    self, BundleError, Completeness, IncompleteReason, UnresolvedCause,
+};
 use trogon_atlas_proto as pb;
 use trogon_atlas_proto::{
     event_model_service_client::EventModelServiceClient,
@@ -20,14 +22,18 @@ use trogon_atlas_proto::{
 use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
 
 async fn start_server(snapshot_cap: Option<usize>) -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
     let store = trogon_atlas_testsupport::shared().await.store().await;
     let mut svc =
         EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
     if let Some(cap) = snapshot_cap {
         svc = svc.with_snapshot_cap(cap);
     }
+    serve(svc).await
+}
+
+async fn serve(svc: EventModelServiceImpl) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
     let grpc = EventModelServiceServer::new(svc);
     tokio::spawn(async move {
         tonic::transport::Server::builder()
@@ -287,6 +293,15 @@ async fn incomplete_export_is_refused_unless_explicitly_allowed() {
     };
     assert!(reasons.contains(&IncompleteReason::SnapshotTruncated));
     assert!(reasons.contains(&IncompleteReason::ValidationIncomplete));
+    assert!(reasons.contains(&IncompleteReason::UnresolvedEntities));
+    assert!(
+        verified
+            .unresolved
+            .iter()
+            .any(|u| u.cause == UnresolvedCause::Missing),
+        "{:?}",
+        verified.unresolved
+    );
 
     let mut relabelled = bundle.clone();
     relabelled.completeness = Some(Completeness::Complete.to_proto());
@@ -330,8 +345,82 @@ async fn historical_export_describes_the_state_right_after_the_changeset() {
     assert_eq!(refused.code(), tonic::Code::InvalidArgument);
 }
 
-/// Exports racing a writer must each describe one state: the model entry,
-/// the board it reached, the findings and the changeset boundary all agree.
+fn model_entry(bundle: &pb::AttestedModelBundle) -> &pb::SnapshotEntry {
+    bundle
+        .entries
+        .iter()
+        .find(|e| e.entity.as_ref().unwrap().id.as_ref().unwrap().slug == "checkout")
+        .unwrap()
+}
+
+fn reasons_of(bundle: &pb::AttestedModelBundle) -> Vec<IncompleteReason> {
+    match attested_bundle::verify(bundle).unwrap().completeness {
+        Completeness::Complete => Vec::new(),
+        Completeness::Incomplete(reasons) => reasons,
+    }
+}
+
+/// A process whose cached snapshot predates another writer's commit must
+/// not attest the cached copy as current: it is carried, and marked.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_changed_underneath_a_cached_snapshot_is_marked_not_mixed() {
+    let store: Arc<dyn trogon_atlas_store::Store> =
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let reader =
+        serve(EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap())
+            .await;
+    let writer =
+        serve(EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap()).await;
+    let mut r = client(&reader).await;
+    let mut w = client(&writer).await;
+    let ns = "attested-underneath";
+    put(&mut w, event(ns, "placed")).await;
+    put(&mut w, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let mut allowed = export_req(ns, "checkout");
+    allowed.allow_incomplete = true;
+    let before = export(&mut r, allowed.clone()).await;
+    assert!(before.manifests.contains("Before"));
+
+    put(&mut w, event_model(ns, "checkout", "After", &["placed"])).await;
+
+    let refused = r
+        .export_attested_model(export_req(ns, "checkout"))
+        .await
+        .unwrap_err();
+    let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+    assert_eq!(failure.code.unwrap().as_str(), "EXPORT_INCOMPLETE");
+    assert!(
+        failure.message.contains("REASON_CONCURRENT_WRITE"),
+        "{refused:?}"
+    );
+
+    let marked = export(&mut r, allowed).await;
+    let verified = attested_bundle::verify(&marked).unwrap();
+    let reasons = reasons_of(&marked);
+    assert!(reasons.contains(&IncompleteReason::ConcurrentWrite));
+    assert!(reasons.contains(&IncompleteReason::UnresolvedEntities));
+    let model_key = &model_entry(&marked).key;
+    assert!(
+        verified
+            .unresolved
+            .iter()
+            .any(|u| &u.key == model_key && u.cause == UnresolvedCause::Changed),
+        "{:?}",
+        verified.unresolved
+    );
+    assert_eq!(
+        model_entry(&marked).content_hash,
+        model_entry(&before).content_hash,
+        "the bundle carries the snapshot's copy, not the live one"
+    );
+    assert!(marked.manifests.contains("Before"));
+    assert!(!marked.manifests.contains("After"));
+}
+
+/// Exports racing a writer never lock it out and never mix states: a
+/// complete bundle is the revision its boundary names, and every bundle,
+/// partial or not, agrees with itself across entries, manifests and
+/// findings.
 #[tokio::test(flavor = "multi_thread")]
 async fn exports_racing_writes_never_mix_states() {
     let endpoint = start_server(None).await;
@@ -339,7 +428,9 @@ async fn exports_racing_writes_never_mix_states() {
     let ns = "attested-race";
     put(&mut c, event(ns, "placed")).await;
     put(&mut c, event_model(ns, "checkout", "w0", &["placed"])).await;
-    let mut bundles = vec![export(&mut c, export_req(ns, "checkout")).await];
+    let mut req = export_req(ns, "checkout");
+    req.allow_incomplete = true;
+    let mut bundles = vec![export(&mut c, req.clone()).await];
 
     const WRITES: usize = 31;
     let writer = {
@@ -356,10 +447,10 @@ async fn exports_racing_writes_never_mix_states() {
         })
     };
     while !writer.is_finished() {
-        bundles.push(export(&mut c, export_req(ns, "checkout")).await);
+        bundles.push(export(&mut c, req.clone()).await);
     }
     writer.await.unwrap();
-    bundles.push(export(&mut c, export_req(ns, "checkout")).await);
+    bundles.push(export(&mut c, req.clone()).await);
 
     let revisions = c
         .get_entity_history(pb::GetEntityHistoryRequest {
@@ -377,25 +468,42 @@ async fn exports_racing_writes_never_mix_states() {
     let mut saw_member = false;
     let mut saw_empty = false;
     for bundle in &bundles {
-        attested_bundle::verify(bundle).unwrap();
-        let boundary = &bundle.state.as_ref().unwrap().baseline_changeset_id;
-        let landed = revisions
-            .iter()
-            .filter(|r| r.changeset_id.as_str() <= boundary.as_str())
-            .max_by(|a, b| a.changeset_id.cmp(&b.changeset_id))
-            .expect("the boundary covers the model's first write");
-        let landed_model = landed.after.as_ref().unwrap();
-        let model_entry = bundle
-            .entries
-            .iter()
-            .find(|e| e.entity.as_ref().unwrap().id.as_ref().unwrap().slug == "checkout")
-            .unwrap();
+        let reasons = reasons_of(bundle);
+        assert!(
+            reasons.iter().all(|r| matches!(
+                r,
+                IncompleteReason::ConcurrentWrite | IncompleteReason::UnresolvedEntities
+            )),
+            "only the race may make a bundle partial: {reasons:?}"
+        );
+        let entry = model_entry(bundle);
+        let landed_model = if reasons.is_empty() {
+            let boundary = &bundle.state.as_ref().unwrap().baseline_changeset_id;
+            let landed = revisions
+                .iter()
+                .filter(|r| r.changeset_id.as_str() <= boundary.as_str())
+                .max_by(|a, b| a.changeset_id.cmp(&b.changeset_id))
+                .expect("the boundary covers the model's first write");
+            landed.after.as_ref().unwrap()
+        } else {
+            assert!(reasons.contains(&IncompleteReason::ConcurrentWrite));
+            revisions
+                .iter()
+                .filter_map(|r| r.after.as_ref())
+                .find(|after| {
+                    trogon_atlas_core::entity_content_hash(after)
+                        .unwrap()
+                        .to_hex()
+                        == entry.content_hash
+                })
+                .expect("a partial bundle still carries a revision that existed")
+        };
         assert_eq!(
-            model_entry.content_hash,
+            entry.content_hash,
             trogon_atlas_core::entity_content_hash(landed_model)
                 .unwrap()
                 .to_hex(),
-            "the model entry must be the revision the boundary names"
+            "a complete bundle's model entry must be the revision its boundary names"
         );
         let Some(pb::entity::Kind::EventModel(em)) = landed_model.kind.as_ref() else {
             panic!("model revision is not an EventModel");

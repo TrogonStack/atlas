@@ -120,6 +120,11 @@ async fn exported_bundle_verifies_offline_until_it_is_altered() {
     assert_eq!(export.status.code(), Some(0), "{export:?}");
     let exported = outcome(&export);
     assert_eq!(exported["data"]["complete"], true, "{exported}");
+    assert_eq!(
+        exported["data"]["unresolved"],
+        serde_json::json!([]),
+        "{exported}"
+    );
 
     let verify = trogon_atlas(&["--format", "json", "verify", path_str(&bundle)]);
     assert_eq!(verify.status.code(), Some(0), "{verify:?}");
@@ -170,6 +175,14 @@ async fn incomplete_export_is_refused_unless_allowed_and_then_exits_incomplete()
             .as_array()
             .unwrap()
             .contains(&serde_json::json!("REASON_SNAPSHOT_TRUNCATED")),
+        "{verified}"
+    );
+    assert!(
+        verified["data"]["unresolved"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|u| u["cause"].as_str().is_some_and(|c| c.starts_with("CAUSE_"))),
         "{verified}"
     );
 }

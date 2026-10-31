@@ -62,9 +62,9 @@ is `use_new_operation_id` instead of `operation_conflict`'s usual
 writer lease (see `docs/explanation/single-writer.md`), so the mutation
 never ran. Retrying against the same process will keep failing until it
 becomes the writer; a caller load-balancing across replicas should retry
-against a different one. `ExportAttestedModel` is a read that also refuses
-with `NOT_WRITER`, because only the writer can hold its state still for
-the capture; see `docs/explanation/attested-export.md`.
+against a different one. `ExportAttestedModel` does not refuse with
+`NOT_WRITER`: on a replica it marks the bundle with
+`REASON_BOUNDARY_UNVERIFIED`; see `docs/explanation/attested-export.md`.
 
 `CURSOR_REJECTED` is `ListChanges`' `since_token` carrying the sealed
 cursor prefix but failing to open: tampered, minted for a different
@@ -87,7 +87,9 @@ refused with `FAILED_PRECONDITION` and violations of type
 
 `EXPORT_INCOMPLETE` is `ExportAttestedModel` refusing a bundle that would
 not cover its whole scope. Retrying returns the same refusal while the
-cause holds. Narrow the scope, raise the server's limits, or pass
+cause holds. A refusal whose only reasons are `REASON_CONCURRENT_WRITE`
+and `REASON_UNRESOLVED_ENTITIES` came from writes landing during the
+export, and retrying once they settle can succeed. Narrow the scope, raise the server's limits, or pass
 `allow_incomplete` to receive the bundle marked incomplete, as
 `docs/how-to/export-and-verify-an-attested-model.md` describes.
 

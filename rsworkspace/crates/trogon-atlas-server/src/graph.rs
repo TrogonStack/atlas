@@ -615,6 +615,8 @@ pub struct BoardClosure {
     pub own: Vec<pb::Entity>,
     pub external: Vec<pb::Entity>,
     pub truncated: bool,
+    /// Keys the board references that `all` does not hold, each once.
+    pub missing: Vec<pb::EntityKey>,
 }
 
 /// Walks from `root` through its own namespace only. A reference into
@@ -651,6 +653,7 @@ pub fn board_closure(
             continue;
         }
         let Some(&entity) = by_key.get(&key) else {
+            board.missing.push(key);
             continue;
         };
         if key.namespace != root_id.namespace {
@@ -1516,6 +1519,30 @@ mod board_closure_tests {
         assert_eq!(slugs(&board.own), ["shop/order.placed", "shop/place-order"]);
         assert_eq!(slugs(&board.external), ["pay/payment.captured"]);
         assert!(!board.truncated);
+        assert_eq!(board.missing, Vec::<pb::EntityKey>::new());
+    }
+
+    #[test]
+    fn references_the_snapshot_cannot_resolve_are_listed_once() {
+        let root = slice_emitting(
+            "shop",
+            "place-order",
+            &[
+                id("shop", "order.placed"),
+                id("pay", "payment.captured"),
+                id("shop", "order.placed"),
+            ],
+        );
+        let board = walk(std::slice::from_ref(&root), &root, 100);
+        let missing: HashSet<pb::EntityKey> = board.missing.iter().cloned().collect();
+        assert_eq!(board.missing.len(), missing.len());
+        assert_eq!(
+            missing,
+            HashSet::from([
+                pb::EntityKey::new(pb::EntityKind::Event, &id("shop", "order.placed")),
+                pb::EntityKey::new(pb::EntityKind::Event, &id("pay", "payment.captured")),
+            ])
+        );
     }
 
     #[test]

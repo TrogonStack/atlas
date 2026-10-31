@@ -3,6 +3,7 @@ syntax = "proto3";
 package trogonatlas.api.eventmodel.v1alpha1;
 
 import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/catalog/v1alpha1/snapshots.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/validation.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/projections.proto";
@@ -11,9 +12,11 @@ import "trogonatlas/api/eventmodel/v1alpha1/projections.proto";
 //
 // An event model's manifests, the validation report run against them and
 // the identity of the state both came from, bound together by one digest.
-// Everything in the bundle is captured from a single state: the server
-// holds its mutation boundary for the whole capture, so no write can land
-// between reading the manifests and validating them.
+// The manifests, the entries and the validation are all computed from one
+// read snapshot, without holding writes off. Whatever that snapshot could
+// not show as it stood, because it was missing, hidden from the caller or
+// changed while the export ran, is listed in `unresolved` and marks the
+// bundle incomplete instead of being read from a second state.
 //
 // `bundle_digest` proves the bundle was not changed after the server
 // produced it. It does not prove who produced it. See
@@ -41,6 +44,36 @@ message AttestedModelBundle {
   // Lowercase hex SHA-256 over the domain tag and the canonical JSON of
   // this message with `bundle_digest` cleared. Covers every other field.
   string bundle_digest = 10;
+  // Entities the bundle needed but could not attest from its snapshot,
+  // sorted by `key`, one row per key. Non-empty only when `completeness`
+  // carries `REASON_UNRESOLVED_ENTITIES`.
+  repeated AttestedUnresolved unresolved = 11;
+}
+
+// One entity the snapshot could not vouch for.
+message AttestedUnresolved {
+  enum Cause {
+    CAUSE_UNSPECIFIED = 0;
+    // Referenced by an exported entity, in a namespace the caller can see,
+    // but absent from the snapshot. Against a truncated snapshot it may
+    // still exist.
+    CAUSE_MISSING = 1;
+    // Referenced by an exported entity, in a namespace outside the
+    // caller's lens. Says nothing about whether it exists.
+    CAUSE_HIDDEN = 2;
+    // Exported from the snapshot, but its stored revision differed when
+    // the export finished. The manifests show the snapshot's revision.
+    CAUSE_CHANGED = 3;
+    // Exported from the snapshot, but deleted when the export finished.
+    CAUSE_DELETED = 4;
+    // The model itself was not in the snapshot and was read by key
+    // instead, so it may be from a later state than the rest.
+    CAUSE_OUTSIDE_SNAPSHOT = 5;
+  }
+  // Storage key, in the form `SnapshotEntry.key` uses.
+  string key = 1;
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 2;
+  Cause cause = 3;
 }
 
 message AttestedScope {
@@ -78,13 +111,16 @@ message AttestedState {
   // Snapshot id over `entries` alone, by the same rules, so a verifier
   // can recompute it offline.
   string closure_id = 4;
-  // Current exports: the newest baseline changeset when the capture
-  // started. Historical exports: the requested changeset. Empty when the
+  // Current exports: the newest baseline changeset recorded before the
+  // snapshot was read. A complete bundle also saw it unchanged once the
+  // export finished, and confirmed every exported entry against the
+  // store. Historical exports: the requested changeset. Empty when the
   // baseline has recorded no changeset. Writes that record no changeset
   // do not move it, so `snapshot_id` remains the identity of record.
   string baseline_changeset_id = 5;
-  // The newest changeset on `scope.branch`. Empty on baseline, or when the
-  // branch has recorded none.
+  // The newest changeset on `scope.branch` before the snapshot was read,
+  // under the same rules. Empty on baseline, or when the branch has
+  // recorded none.
   string branch_changeset_id = 6;
 }
 
@@ -126,6 +162,18 @@ message AttestedCompleteness {
     REASON_ENTITIES_SKIPPED = 4;
     // A validation suite did not complete.
     REASON_VALIDATION_INCOMPLETE = 5;
+    // `unresolved` lists at least one entity.
+    REASON_UNRESOLVED_ENTITIES = 6;
+    // A write landed while the export ran: the changeset log, the branch
+    // or the caller's lens moved, or an exported entity changed.
+    REASON_CONCURRENT_WRITE = 7;
+    // A historical export rendered through type libraries that changed
+    // after the requested changeset.
+    REASON_TYPE_LIBRARIES_CHANGED = 8;
+    // The serving process does not hold the writer lease, so its cached
+    // snapshot is not refreshed by writes and may predate the changeset
+    // boundary.
+    REASON_BOUNDARY_UNVERIFIED = 9;
   }
   State state = 1;
   // Every reason that applies, sorted, without repeats. Empty exactly when

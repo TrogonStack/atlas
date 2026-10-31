@@ -32,6 +32,7 @@ const RULE_CATALOG_MESSAGE: &str =
     "trogonatlas.api.eventmodel.v1alpha1.ListValidationRulesResponse";
 
 pub type IncompleteReason = pb::attested_completeness::Reason;
+pub type UnresolvedCause = pb::attested_unresolved::Cause;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BundleError {
@@ -65,6 +66,8 @@ pub enum BundleError {
     MalformedIncomplete(&'static str),
     #[error("bundle completeness state is unspecified")]
     UnspecifiedCompleteness,
+    #[error("unresolved entity {key:?} is out of key order, repeated, or has no known cause")]
+    MalformedUnresolved { key: String },
 }
 
 /// What a bundle that passed verification says about itself.
@@ -111,6 +114,37 @@ impl Completeness {
 pub struct VerifiedBundle {
     pub digest: ContentHash,
     pub completeness: Completeness,
+    pub unresolved: Vec<Unresolved>,
+}
+
+/// An entity the export could not attest from its snapshot, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unresolved {
+    pub key: String,
+    pub cause: UnresolvedCause,
+}
+
+fn unresolved_rows(rows: &[pb::AttestedUnresolved]) -> Result<Vec<Unresolved>, BundleError> {
+    let mut previous: Option<&str> = None;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let malformed = || BundleError::MalformedUnresolved {
+            key: row.key.clone(),
+        };
+        if previous.is_some_and(|p| p >= row.key.as_str()) {
+            return Err(malformed());
+        }
+        previous = Some(&row.key);
+        let cause = match UnresolvedCause::try_from(row.cause) {
+            Ok(UnresolvedCause::Unspecified) | Err(_) => return Err(malformed()),
+            Ok(cause) => cause,
+        };
+        out.push(Unresolved {
+            key: row.key.clone(),
+            cause,
+        });
+    }
+    Ok(out)
 }
 
 /// The digest of `bundle`, ignoring whatever `bundle_digest` currently holds.
@@ -216,6 +250,7 @@ pub fn verify(bundle: &pb::AttestedModelBundle) -> Result<VerifiedBundle, Bundle
     ContentHash::from_str(&catalog.digest)
         .map_err(|_| BundleError::Missing("validation.rule_catalog.digest"))?;
 
+    let unresolved = unresolved_rows(&bundle.unresolved)?;
     let completeness = bundle
         .completeness
         .as_ref()
@@ -246,6 +281,9 @@ pub fn verify(bundle: &pb::AttestedModelBundle) -> Result<VerifiedBundle, Bundle
             if !bundle.skipped.is_empty() {
                 return Err(BundleError::FalseComplete("it skipped entities"));
             }
+            if !unresolved.is_empty() {
+                return Err(BundleError::FalseComplete("it lists unresolved entities"));
+            }
             Completeness::Complete
         }
         pb::attested_completeness::State::Incomplete => {
@@ -268,6 +306,11 @@ pub fn verify(bundle: &pb::AttestedModelBundle) -> Result<VerifiedBundle, Bundle
                     "its reasons are not sorted and unique",
                 ));
             }
+            if reasons.contains(&IncompleteReason::UnresolvedEntities) == unresolved.is_empty() {
+                return Err(BundleError::MalformedIncomplete(
+                    "its unresolved entities and the unresolved-entities reason disagree",
+                ));
+            }
             Completeness::Incomplete(reasons)
         }
     };
@@ -275,6 +318,7 @@ pub fn verify(bundle: &pb::AttestedModelBundle) -> Result<VerifiedBundle, Bundle
     Ok(VerifiedBundle {
         digest: computed,
         completeness,
+        unresolved,
     })
 }
 
@@ -339,9 +383,111 @@ mod tests {
             }),
             completeness: Some(Completeness::Complete.to_proto()),
             bundle_digest: String::new(),
+            unresolved: Vec::new(),
         };
         seal(&mut bundle).unwrap();
         bundle
+    }
+
+    fn unresolved(key: &str, cause: UnresolvedCause) -> pb::AttestedUnresolved {
+        pb::AttestedUnresolved {
+            key: key.into(),
+            entity: None,
+            cause: cause as i32,
+        }
+    }
+
+    fn incomplete(reasons: &[IncompleteReason]) -> pb::AttestedCompleteness {
+        Completeness::from_reasons(reasons.iter().copied().collect()).to_proto()
+    }
+
+    #[test]
+    fn unresolved_entities_verify_as_incomplete_and_are_reported() {
+        let mut bundle = sealed();
+        bundle.unresolved = vec![
+            unresolved("a", UnresolvedCause::Changed),
+            unresolved("c", UnresolvedCause::Missing),
+        ];
+        bundle.completeness = Some(incomplete(&[
+            IncompleteReason::UnresolvedEntities,
+            IncompleteReason::ConcurrentWrite,
+        ]));
+        seal(&mut bundle).unwrap();
+        let verified = verify(&bundle).unwrap();
+        assert_eq!(
+            verified.unresolved,
+            vec![
+                Unresolved {
+                    key: "a".into(),
+                    cause: UnresolvedCause::Changed
+                },
+                Unresolved {
+                    key: "c".into(),
+                    cause: UnresolvedCause::Missing
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn complete_bundle_listing_unresolved_entities_is_refused_even_when_resealed() {
+        let mut bundle = sealed();
+        bundle.unresolved = vec![unresolved("c", UnresolvedCause::Hidden)];
+        seal(&mut bundle).unwrap();
+        assert!(matches!(
+            verify(&bundle),
+            Err(BundleError::FalseComplete(_))
+        ));
+    }
+
+    #[test]
+    fn unresolved_entities_and_their_reason_must_agree() {
+        let mut listed_without_reason = sealed();
+        listed_without_reason.unresolved = vec![unresolved("c", UnresolvedCause::Missing)];
+        listed_without_reason.completeness =
+            Some(incomplete(&[IncompleteReason::SnapshotTruncated]));
+        seal(&mut listed_without_reason).unwrap();
+        assert!(matches!(
+            verify(&listed_without_reason),
+            Err(BundleError::MalformedIncomplete(_))
+        ));
+
+        let mut reason_without_listing = sealed();
+        reason_without_listing.completeness =
+            Some(incomplete(&[IncompleteReason::UnresolvedEntities]));
+        seal(&mut reason_without_listing).unwrap();
+        assert!(matches!(
+            verify(&reason_without_listing),
+            Err(BundleError::MalformedIncomplete(_))
+        ));
+    }
+
+    #[test]
+    fn unresolved_entities_must_be_sorted_unique_and_have_a_cause() {
+        for rows in [
+            vec![
+                unresolved("c", UnresolvedCause::Missing),
+                unresolved("a", UnresolvedCause::Missing),
+            ],
+            vec![
+                unresolved("a", UnresolvedCause::Missing),
+                unresolved("a", UnresolvedCause::Changed),
+            ],
+            vec![unresolved("a", UnresolvedCause::Unspecified)],
+        ] {
+            let mut bundle = sealed();
+            bundle.unresolved = rows;
+            bundle.completeness = Some(incomplete(&[IncompleteReason::UnresolvedEntities]));
+            seal(&mut bundle).unwrap();
+            assert!(
+                matches!(
+                    verify(&bundle),
+                    Err(BundleError::MalformedUnresolved { .. })
+                ),
+                "{:?}",
+                bundle.unresolved
+            );
+        }
     }
 
     #[test]

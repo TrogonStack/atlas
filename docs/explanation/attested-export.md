@@ -21,57 +21,82 @@ nothing in the record could show it.
 A saved validation report was also only prose. Nothing tied the findings to
 the manifests, so editing either after the fact left no trace.
 
-## One state per bundle
+## One snapshot per bundle
 
-The server captures everything in a bundle from one state, and refuses
-rather than mixing two:
+The server reads everything in a bundle from one snapshot and never holds
+writes off to do it. Writers keep committing while an export runs. What
+moved underneath, or what the snapshot could not resolve, is written into
+the bundle as a marker the digest covers, so a reader can act on it. This
+follows [layered information](principles/layered-information.md): a
+partial answer says so in a field, not in silence.
 
-- **Mutations are held off for the whole capture.** Every write this server
-  performs runs under its mutation lock, and the export holds that lock from
-  the first read to the last. The manifests, the findings, the snapshot id
-  and the changeset boundary are therefore all read with no write between
-  them.
-- **Only the writer exports.** A reader or standby replica's snapshot cache
-  is not invalidated by the writer's commits, so holding its own lock pins
-  nothing. Default chosen for review: a replica refuses with `NOT_WRITER`
-  rather than attest a state it cannot pin. The writer lease is checked
-  before and after the capture.
-- **What the lock does not cover is compared instead.** Deleting a branch
-  and moving a namespace do not take the mutation lock. A branch export
-  reads the branch's identity before and after the capture, and every
-  export reads the caller's namespace visibility twice. A difference
-  refuses the export with `UNAVAILABLE`, which means retry.
+- **One read, one state.** The manifests, the findings and the snapshot id
+  all come from the same cached snapshot. The bundle names that snapshot by
+  its id and by the newest changeset recorded before it was read.
+- **Every exported entity is confirmed against the store.** After reading
+  the snapshot, the export fetches each entity it carries and compares its
+  etag. An entity that changed or was deleted since is listed in
+  `unresolved` as changed or deleted, and the bundle still carries the
+  snapshot's copy, never the live one. A complete bundle's entries were
+  all unchanged from the moment the snapshot was read until they were
+  confirmed, so together they are the store's state at that moment.
+- **What the snapshot lacks is listed, not skipped.** A reference to an
+  entity the snapshot does not hold is listed as missing, or as hidden when
+  the caller's namespace visibility excludes it. A model the snapshot does
+  not hold is read directly and listed as outside the snapshot.
+- **The boundary is compared, not locked.** The export reads the newest
+  baseline changeset, and on a branch the branch's identity, before and
+  after. A newer changeset that touched anything the export read or looked
+  for, a moved branch, a deleted branch or changed namespace visibility
+  marks the bundle with `REASON_CONCURRENT_WRITE`. Default chosen for
+  review: a concurrent write marks the bundle instead of failing the export
+  with a retry, so an export never loses to a busy writer.
+- **A replica says what it cannot confirm.** A reader or standby replica's
+  snapshot cache is not refreshed by the writer's commits, so its snapshot
+  may be older than the boundary it names. Default chosen for review: a
+  replica exports, and marks the bundle with
+  `REASON_BOUNDARY_UNVERIFIED`, rather than refusing with `NOT_WRITER`.
+
+A concurrent write therefore yields either a bundle bound to the snapshot
+read before the write, or a bundle that says which entities moved. It never
+yields a bundle that mixes the two without saying so.
 
 ## Current and historical bundles
 
 A bundle states whether it describes the current state or a past one:
 
 - **Current** names the newest baseline changeset, and on a branch also the
-  newest branch changeset, that the captured state includes.
+  newest branch changeset, recorded before its snapshot was read.
 - **Historical** reads baseline as it stood right after
   `as_of_changeset` landed, rewound the same way `GetEventModelProjection`
   rewinds it, and names that changeset as its boundary. It reads baseline
-  history only, so a branch header is refused.
+  history only, so a branch header is refused. The rewind already undoes
+  every newer changeset, so a historical export does not confirm entities
+  against the live store.
 
 Manifests render through the type libraries as they are now. Default
-chosen for review: a historical export refuses when a type library the
-caller can see changed after the requested changeset, because old entities
-rendered through new types would describe a state that never existed.
+chosen for review: a historical export whose type libraries changed after
+the requested changeset is marked with `REASON_TYPE_LIBRARIES_CHANGED`,
+because old entities rendered through new types may describe a state that
+never existed.
 
 ## Incomplete is never clean
 
 The server caps how many entities a read loads, and the board walk and the
 rewind have their own bounds. An export that hit any of them did not see its
 whole scope, and an empty finding list over part of a model is not a pass.
+The same holds for a bundle that lists unresolved entities or a concurrent
+write.
 
 Default chosen for review: such an export is refused with
 `EXPORT_INCOMPLETE`. A caller who still wants the record passes
 `allow_incomplete` and gets a bundle whose completeness is `INCOMPLETE`,
 with every reason listed. Verification checks that a bundle claiming to be
-complete agrees with its own validation coverage and lists no skipped
-entities, so relabelling an incomplete bundle as complete fails even when
-the digest is recomputed. The CLI exits 11 for an intact incomplete bundle,
-the same code an incomplete `validate` run gets.
+complete agrees with its own validation coverage and lists no skipped or
+unresolved entities, so relabelling an incomplete bundle as complete fails
+even when the digest is recomputed. The CLI exits 11 for an intact
+incomplete bundle, the same code an incomplete `validate` run gets, and
+prints its reasons and unresolved entities.
 
 ## What the digest covers
 

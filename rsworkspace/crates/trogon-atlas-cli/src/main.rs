@@ -706,11 +706,24 @@ fn attested_outcome(
         for reason in &reasons {
             println!("incomplete: {reason}");
         }
+        for entity in &verified.unresolved {
+            println!(
+                "unresolved: {} ({})",
+                entity.key,
+                entity.cause.as_str_name()
+            );
+        }
     }
+    let unresolved: Vec<Value> = verified
+        .unresolved
+        .iter()
+        .map(|entity| json!({"key": entity.key, "cause": entity.cause.as_str_name()}))
+        .collect();
     let mut data = json!({
         "bundle_digest": verified.digest.to_hex(),
         "complete": reasons.is_empty(),
         "incomplete_reasons": reasons,
+        "unresolved": unresolved,
     });
     if let Some(path) = written {
         data["output"] = json!(path.display().to_string());

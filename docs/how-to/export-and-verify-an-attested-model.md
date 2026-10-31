@@ -6,8 +6,8 @@ check later that nothing in it changed. For what a bundle proves, see
 
 ## Export the current state
 
-Point the CLI at the writer. A reader or standby replica refuses with
-`NOT_WRITER`.
+Point the CLI at the writer. A reader or standby replica still exports,
+but marks the bundle incomplete with `REASON_BOUNDARY_UNVERIFIED`.
 
 ```sh
 trogon-atlas export-attested shop/checkout -o checkout.bundle.json
@@ -31,14 +31,18 @@ trogon-atlas export-attested shop/checkout \
 ```
 
 Historical exports read baseline only, so they cannot be combined with
-`--branch`. If a type library changed after that changeset, the export is
-refused, because the manifests would render through the newer types.
+`--branch`. If a type library changed after that changeset, the bundle is
+marked incomplete with `REASON_TYPE_LIBRARIES_CHANGED`, because the
+manifests render through the newer types.
 
 ## When the export is refused as incomplete
 
 `EXPORT_INCOMPLETE` (exit 4) means the server could not cover the whole
 scope, for example because the store holds more entities than one read
-loads. The error lists the reasons. If you still want a record, ask for one
+loads, or a write changed the model while it was being exported. The error
+lists the reasons. When the only reasons are `REASON_CONCURRENT_WRITE` and
+`REASON_UNRESOLVED_ENTITIES`, exporting again once writes settle usually
+gives a complete bundle. If you still want a record, ask for one
 marked incomplete:
 
 ```sh
@@ -57,8 +61,8 @@ trogon-atlas verify checkout.bundle.json
 | Exit | Meaning |
 | --- | --- |
 | `0` | The bundle is intact and complete. Compare the printed digest with the one you recorded. |
-| `11` | The bundle is intact but marked incomplete. Its reasons are printed. |
+| `11` | The bundle is intact but marked incomplete. Its reasons and unresolved entities are printed. |
 | `5` | The bundle is malformed or was changed after it was sealed. |
 
-With `--format json`, the outcome carries `bundle_digest`, `complete` and
-`incomplete_reasons`.
+With `--format json`, the outcome carries `bundle_digest`, `complete`,
+`incomplete_reasons` and `unresolved`, a list of `key` and `cause`.

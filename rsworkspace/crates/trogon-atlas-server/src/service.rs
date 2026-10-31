@@ -13,7 +13,7 @@ mod decision_document_queries;
 mod responsibility_queries;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -24,7 +24,7 @@ use std::{
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tonic::{Request, Response, Status};
 use trogon_atlas_core::{
-    attested_bundle,
+    attested_bundle::{self, UnresolvedCause},
     operation_id::{operation_claim_key, validate_operation_id},
     NamespaceId, NamespaceName, OwnerId, WriterRole,
 };
@@ -985,22 +985,6 @@ impl EventModelServiceImpl {
         Ok((entities, result.truncated))
     }
 
-    /// Refuse an attested export on a process that does not hold the
-    /// writer lease. A replica's snapshot cache is not invalidated by the
-    /// writer's commits, so its mutation lock pins nothing.
-    fn require_attesting_writer(&self) -> Result<(), Status> {
-        if self.store.is_writer() {
-            return Ok(());
-        }
-        let status = self.store.writer_status();
-        Err(store_err(
-            trogon_atlas_store::error::StoreError::NotWriter {
-                role: status.role,
-                epoch: status.epoch,
-            },
-        ))
-    }
-
     /// Id of the newest changeset in `scope`, or empty when it holds none.
     async fn newest_changeset(&self, scope: ChangesetScope<'_>) -> Result<String, Status> {
         let page = self
@@ -1016,9 +1000,8 @@ impl EventModelServiceImpl {
         Ok(page.into_iter().next().map(|r| r.id).unwrap_or_default())
     }
 
-    /// What identifies a branch's state for an attested export. Branch
-    /// deletion does not take the mutation lock, so an export compares this
-    /// before and after its capture.
+    /// What identifies a branch's state for an attested export, compared
+    /// before and after the export reads it.
     async fn branch_boundary(&self, branch: &str) -> Result<BranchBoundary, Status> {
         let info = self
             .store
@@ -1039,25 +1022,44 @@ impl EventModelServiceImpl {
     }
 
     /// Manifests render through the live type libraries, so a historical
-    /// export whose libraries changed since `changeset_id` would describe
-    /// old entities with new types. Refuse rather than mix the two.
-    async fn refuse_rewound_type_libraries(
+    /// export whose libraries changed since `changeset_id` describes old
+    /// entities with new types. The export marks that instead of hiding it.
+    async fn type_libraries_changed_after(
         &self,
         changeset_id: &str,
         lens: &Lens,
-    ) -> Result<(), Status> {
+    ) -> Result<bool, Status> {
         let newer = self.baseline_changesets_after(changeset_id, lens).await?;
-        let changed = newer
+        Ok(newer
             .iter()
             .flat_map(|(_, ops)| ops)
-            .any(|op| op.entity_ref.kind == pb::EntityKind::TypeLibrary as i32);
-        if changed {
-            return Err(Status::failed_precondition(format!(
-                "a type library changed after changeset {changeset_id}, so its manifests \
-                 cannot be rendered as they were then"
-            )));
-        }
-        Ok(())
+            .any(|op| op.entity_ref.kind == pb::EntityKind::TypeLibrary as i32))
+    }
+
+    /// Whether a baseline changeset newer than `since` touched an entity
+    /// the export read or looked for, or a type library of a namespace it
+    /// rendered. A changeset log it cannot walk counts as touched.
+    async fn baseline_moved_under(
+        &self,
+        since: &str,
+        lens: &Lens,
+        read: &std::collections::HashSet<pb::EntityKey>,
+        namespaces: &BTreeSet<&str>,
+    ) -> bool {
+        let Ok(newer) = self.baseline_changesets_after(since, lens).await else {
+            return true;
+        };
+        newer.iter().flat_map(|(_, ops)| ops).any(|op| {
+            let Some(id) = op.entity_ref.id.as_ref() else {
+                return true;
+            };
+            let Ok(kind) = pb::EntityKind::try_from(op.entity_ref.kind) else {
+                return true;
+            };
+            read.contains(&pb::EntityKey::new(kind, id))
+                || (kind == pb::EntityKind::TypeLibrary
+                    && namespaces.contains(id.namespace.as_str()))
+        })
     }
 
     async fn lock_mutations(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -4906,16 +4908,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
         self.require_visible(&vis, &id.namespace).await?;
 
-        // Every mutation of this process runs under the lock, so holding it
-        // pins one state for the whole capture.
-        self.require_attesting_writer()?;
-        let _guard = self.lock_mutations().await;
-        self.require_attesting_writer()?;
+        // Nothing holds writes off: the export reads one snapshot, binds the
+        // bundle to it, and marks whatever moved or could not be resolved.
         let lens = self.lens(&vis).await?;
+        let mut reasons = BTreeSet::new();
+        let mut unresolved = Unresolved::default();
+        let root_key = pb::EntityKey::new(pb::EntityKind::EventModel, id);
         let branch_before = match branch.as_deref() {
             Some(name) => Some(self.branch_boundary(name).await?),
             None => None,
         };
+        let baseline_before = self.newest_changeset(ChangesetScope::Baseline).await?;
 
         let (root, all, snapshot_truncated, history_incomplete, baseline_changeset_id) =
             if historical {
@@ -4927,18 +4930,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         (pb::EntityKind::EventModel, id),
                     )
                     .await?;
-                let root = all
-                    .iter()
-                    .find(|se| {
-                        matches!(
-                            se.entity.kind.as_ref(),
-                            Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(id)
-                        )
-                    })
-                    .map(|se| se.entity.clone())
+                let root = event_model_in(&all, id)
                     .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
-                self.refuse_rewound_type_libraries(&req.as_of_changeset, &lens)
-                    .await?;
+                if self
+                    .type_libraries_changed_after(&req.as_of_changeset, &lens)
+                    .await?
+                {
+                    reasons.insert(Reason::TypeLibrariesChanged);
+                }
                 let truncated = self.snapshot_truncated.load(Ordering::Acquire);
                 (
                     root,
@@ -4948,16 +4947,29 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     req.as_of_changeset.clone(),
                 )
             } else {
-                let stored = self
-                    .store
-                    .get(pb::EntityKind::EventModel, id, branch.as_deref())
-                    .await
-                    .map_err(store_err)?;
                 let (all, truncated) = self
                     .snapshot_with_truncation(branch.as_deref(), &vis)
                     .await?;
-                let boundary = self.newest_changeset(ChangesetScope::Baseline).await?;
-                (stored.entity, all, truncated, false, boundary)
+                let root = if let Some(root) = event_model_in(&all, id) {
+                    root
+                } else {
+                    // Not in the snapshot it was read from: carry the live
+                    // copy, marked, rather than attest it as part of it.
+                    let stored = self
+                        .store
+                        .get(pb::EntityKind::EventModel, id, branch.as_deref())
+                        .await
+                        .map_err(store_err)?;
+                    unresolved.mark(&root_key, UnresolvedCause::OutsideSnapshot);
+                    if !truncated {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    stored.entity
+                };
+                if !self.store.is_writer() {
+                    reasons.insert(Reason::BoundaryUnverified);
+                }
+                (root, all, truncated, false, baseline_before.clone())
             };
         let Some(pb::entity::Kind::EventModel(model)) = root.kind.as_ref() else {
             return Err(Status::internal("stored entity is not an EventModel"));
@@ -4997,6 +5009,50 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let (closure, entries) = snapshot_identity(board.own.iter().chain(&board.external), true)?;
         let (view, _) = snapshot_identity(all.iter().map(|se| &se.entity), false)?;
 
+        for key in &board.missing {
+            let cause = if lens.admits(&key.namespace) {
+                UnresolvedCause::Missing
+            } else {
+                UnresolvedCause::Hidden
+            };
+            unresolved.mark(key, cause);
+        }
+        let mut read: std::collections::HashSet<pb::EntityKey> =
+            board.missing.iter().cloned().collect();
+        read.insert(root_key.clone());
+        let snapshot_etags: HashMap<pb::EntityKey, &str> = all
+            .iter()
+            .filter_map(|se| {
+                let kind = trogon_atlas_store::refs::entity_kind(&se.entity)?;
+                let id = trogon_atlas_store::refs::entity_id(&se.entity)?;
+                Some((pb::EntityKey::new(kind, id), se.etag.as_str()))
+            })
+            .collect();
+        for entity in board.own.iter().chain(&board.external) {
+            let key = pb::EntityKey::new(entity_kind(entity)?, entity_id(entity)?);
+            read.insert(key.clone());
+            if historical {
+                continue;
+            }
+            // The bundle carries the snapshot's copy; a live etag that
+            // differs means a write landed after the snapshot was read.
+            let Some(&etag) = snapshot_etags.get(&key) else {
+                continue;
+            };
+            match self.store.get(key.kind, &key.id(), branch.as_deref()).await {
+                Ok(live) if live.etag == etag => {}
+                Ok(_) => {
+                    unresolved.mark(&key, UnresolvedCause::Changed);
+                    reasons.insert(Reason::ConcurrentWrite);
+                }
+                Err(trogon_atlas_store::error::StoreError::NotFound) => {
+                    unresolved.mark(&key, UnresolvedCause::Deleted);
+                    reasons.insert(Reason::ConcurrentWrite);
+                }
+                Err(other) => return Err(store_err(other)),
+            }
+        }
+
         let view_truncated = snapshot_truncated || history_incomplete;
         let issues = validation::validate_model(model, &all);
         let checks = vec![
@@ -5019,25 +5075,37 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let rule_catalog = attested_bundle::rule_catalog_digest(&validation::rule_catalog())
             .map_err(|e| Status::internal(format!("digesting the rule catalog: {e}")))?;
 
+        let rendered_namespaces: BTreeSet<&str> = types.keys().copied().collect();
+        if self.newest_changeset(ChangesetScope::Baseline).await? != baseline_before
+            && self
+                .baseline_moved_under(&baseline_before, &lens, &read, &rendered_namespaces)
+                .await
+        {
+            reasons.insert(Reason::ConcurrentWrite);
+        }
         let branch_changeset_id = match (branch.as_deref(), branch_before) {
             (Some(name), Some(before)) => {
-                if self.branch_boundary(name).await? != before {
-                    return Err(Status::unavailable(format!(
-                        "branch {name} changed during the export; retry"
-                    )));
+                match self.branch_boundary(name).await {
+                    Ok(after) if after == before => {}
+                    Ok(_) => {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    Err(status) if status.code() == tonic::Code::NotFound => {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    Err(status) => return Err(status),
                 }
                 before.newest_changeset
             }
             _ => String::new(),
         };
         if self.lens(&vis).await? != lens {
-            return Err(Status::unavailable(
-                "namespace visibility changed during the export; retry",
-            ));
+            reasons.insert(Reason::ConcurrentWrite);
         }
-        self.require_attesting_writer()?;
+        if !unresolved.is_empty() {
+            reasons.insert(Reason::UnresolvedEntities);
+        }
 
-        let mut reasons = std::collections::BTreeSet::new();
         if snapshot_truncated {
             reasons.insert(Reason::SnapshotTruncated);
         }
@@ -5106,6 +5174,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }),
             completeness: Some(attested_bundle::Completeness::from_reasons(reasons).to_proto()),
             bundle_digest: String::new(),
+            unresolved: unresolved.into_rows(),
         };
         attested_bundle::seal(&mut bundle)
             .map_err(|e| Status::internal(format!("sealing the bundle: {e}")))?;
@@ -9352,6 +9421,47 @@ fn snapshot_identity<'a>(
     // match, since the proto promises key order.
     entries.sort_by(|a, b| a.key.cmp(&b.key));
     Ok((hasher, entries))
+}
+
+fn event_model_in(all: &[StoredEntity], id: &pb::Id) -> Option<pb::Entity> {
+    all.iter()
+        .find(|se| {
+            matches!(
+                se.entity.kind.as_ref(),
+                Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(id)
+            )
+        })
+        .map(|se| se.entity.clone())
+}
+
+/// Entities an attested export names but could not attest from its
+/// snapshot, one row per key in key order. The first cause found wins.
+#[derive(Default)]
+struct Unresolved(BTreeMap<String, pb::AttestedUnresolved>);
+
+impl Unresolved {
+    fn mark(&mut self, key: &pb::EntityKey, cause: UnresolvedCause) {
+        let id = key.id();
+        let name = trogon_atlas_store::key::entity_key(key.kind, &id);
+        self.0
+            .entry(name.clone())
+            .or_insert_with(|| pb::AttestedUnresolved {
+                key: name,
+                entity: Some(pb::EntityRef {
+                    kind: key.kind as i32,
+                    id: Some(id),
+                }),
+                cause: cause as i32,
+            });
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn into_rows(self) -> Vec<pb::AttestedUnresolved> {
+        self.0.into_values().collect()
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
