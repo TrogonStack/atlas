@@ -121,6 +121,9 @@ message ListEntitiesRequest {
 message ListEntitiesResponse {
   repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 // SearchEntitiesRequest always searches the baseline index. The
@@ -153,6 +156,9 @@ message ListVersionsResponse {
   // Every version of (namespace, slug), ordered by version ascending.
   repeated trogonatlas.eventmodel.v1alpha1.Entity versions = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 message GetLatestVersionRequest {
@@ -482,6 +488,9 @@ message ListEntitiesByDomainRequest {
 message ListEntitiesByDomainResponse {
   repeated trogonatlas.eventmodel.v1alpha1.Entity entities = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
 }
 
 
@@ -495,8 +504,9 @@ message ListEntitiesByDomainResponse {
 
 message GetImpactRequest {
   trogonatlas.eventmodel.v1alpha1.EntityRef root = 1;
-  // Maximum hops from root. 0 = unlimited. Default 0; large models with
-  // dense fan-out should set a bound to keep responses tractable.
+  // Maximum hops from root. 0 asks for the server maximum, and a larger
+  // value is clamped to it; `GetImpactResponse.effective_max_depth` reports
+  // the bound that applied.
   uint32 max_depth = 2;
   // Restrict the traversal to entities of these kinds. Empty = all kinds.
   repeated trogonatlas.eventmodel.v1alpha1.EntityKind filter_kinds = 3;
@@ -509,6 +519,17 @@ message GetImpactResponse {
   // at depth 0. Ordered by depth ascending, then canonical Id.
   repeated ImpactNode nodes = 1;
   string next_page_token = 2;
+  // True when the server's entity load hit its cap, so entities beyond it
+  // were never examined. A short or empty list is then not complete.
+  bool snapshot_truncated = 3;
+  // The hop bound the traversal actually used.
+  uint32 effective_max_depth = 4;
+  // True when the server replaced the requested `max_depth` with its own
+  // maximum, either because the request asked for 0 or for more.
+  bool depth_clamped = 5;
+  // True when an entity at `effective_max_depth` has a reference the
+  // traversal did not follow, so the impact set continues past the bound.
+  bool depth_limited = 6;
 }
 
 // ---------- Bulk reference retargeting (version promotion) -------------------

@@ -56,8 +56,10 @@ inaccessible branch returns `NOT_FOUND`, even when it contains entities in a
 namespace the caller may otherwise read.
 
 Resolution uses the existing capped model snapshot. An omitted intermediate
-record can prevent a realization chain from resolving. Empty results or an
-exhausted page token therefore do not establish whole-store completeness.
+record can prevent a realization chain from resolving. When the load behind
+the query was cut at that cap, every page reports `snapshot_truncated`, and
+an empty result or exhausted page token then says nothing about the records
+the load never reached.
 
 MCP `list_entities_by_domain` requires an explicit positive Domain version and
 defaults `latest_versions_only` to true. `ValidateProject` has a separate scope

@@ -66,7 +66,12 @@ These tools take flat identity arguments, for example:
 ```
 
 For `get_impact`, optionally add `max_depth`. Zero uses the server default,
-currently capped at 16 hops; it does not prove an unlimited closure. Avoid
+currently capped at 16 hops; it does not prove an unlimited closure. The
+response says which bound applied (`effective_max_depth`), whether the
+server chose it (`depth_clamped`), whether reachable entities lie past it
+(`depth_limited`), and whether the snapshot behind it was cut
+(`snapshot_truncated`). Treat either of the last two as an incomplete
+result. Avoid
 kind filters until the necessary dependency paths are understood. Impact
 results are inspection candidates, not exclusively downstream dependents.
 Inspect reference directions to distinguish an emitter from a consumer, then fetch each

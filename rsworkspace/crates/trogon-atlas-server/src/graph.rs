@@ -861,13 +861,18 @@ fn supersedes_of(entity: &pb::Entity) -> Option<&pb::Id> {
 
 /// Breadth-first impact analysis from a root `EntityRef`. Each visited node
 /// records hop count and the path of references taken to reach it.
+pub struct Impact {
+    pub nodes: Vec<pb::ImpactNode>,
+    pub depth_limited: bool,
+}
+
 pub fn impact(
     all: &[StoredEntity],
     root_kind: pb::EntityKind,
     root_id: &pb::Id,
     max_depth: u32,
     follow_incoming: bool,
-) -> Vec<pb::ImpactNode> {
+) -> Impact {
     let known: HashSet<pb::EntityKey> = all
         .iter()
         .filter_map(|se| {
@@ -905,10 +910,8 @@ pub fn impact(
     let mut queue: VecDeque<(pb::EntityKind, pb::Id, u32, Vec<pb::Reference>)> = VecDeque::new();
     queue.push_back((root_kind, root_id.clone(), 0, Vec::new()));
 
+    let mut depth_limited = false;
     while let Some((k, id, depth, path)) = queue.pop_front() {
-        if depth >= max_depth {
-            continue;
-        }
         let key = pb::EntityKey::new(k, &id);
         // Tag each ref with the side we should walk to. For an outbound
         // ref (`from = self`), the neighbor is `r.to`. For an incoming
@@ -945,6 +948,10 @@ pub fn impact(
                 }
             };
             let okey = pb::EntityKey::new(ok, oid);
+            if depth >= max_depth {
+                depth_limited |= !visited.contains(&okey);
+                continue;
+            }
             if !visited.insert(okey.clone()) {
                 continue;
             }
@@ -961,7 +968,10 @@ pub fn impact(
             queue.push_back((ok, oid.clone(), depth + 1, new_path));
         }
     }
-    out
+    Impact {
+        nodes: out,
+        depth_limited,
+    }
 }
 
 fn entity_uid(entity: &pb::Entity) -> String {
@@ -1110,7 +1120,8 @@ mod impact_tests {
             &id("orders", "place-slice"),
             3,
             /*follow_incoming=*/ true,
-        );
+        )
+        .nodes;
         let entity_ids: Vec<String> = nodes
             .iter()
             .filter_map(|n| {
@@ -1127,6 +1138,42 @@ mod impact_tests {
             entity_ids.iter().any(|s| s.contains("place")),
             "root must always be present: {entity_ids:?}"
         );
+    }
+
+    fn two_slices_sharing_an_event() -> Vec<StoredEntity> {
+        vec![
+            stored_command_slice("orders", "place", Some(("orders", "placed"))),
+            stored_command_slice("orders", "replace", Some(("orders", "placed"))),
+            stored_event("orders", "placed"),
+        ]
+    }
+
+    #[test]
+    fn impact_is_depth_limited_when_the_bound_cuts_a_reachable_entity() {
+        let all = two_slices_sharing_an_event();
+        let cut = impact(
+            &all,
+            pb::EntityKind::CommandSlice,
+            &id("orders", "place"),
+            1,
+            true,
+        );
+        assert_eq!(cut.nodes.len(), 2);
+        assert!(cut.depth_limited);
+    }
+
+    #[test]
+    fn impact_is_not_depth_limited_when_the_bound_reaches_everything() {
+        let all = two_slices_sharing_an_event();
+        let whole = impact(
+            &all,
+            pb::EntityKind::CommandSlice,
+            &id("orders", "place"),
+            2,
+            true,
+        );
+        assert_eq!(whole.nodes.len(), 3);
+        assert!(!whole.depth_limited);
     }
 
     /// `filter_refs_by_kinds` must filter the *other* end of the ref,
@@ -1294,7 +1341,8 @@ mod impact_tests {
             &id("app", "checkout"),
             2,
             true,
-        );
+        )
+        .nodes;
         let has_ui = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1363,7 +1411,8 @@ mod impact_tests {
             &id("checkout", "review"),
             2,
             true,
-        );
+        )
+        .nodes;
         let has_amb = nodes.iter().any(|n| {
             n.entity
                 .as_ref()
@@ -1434,7 +1483,8 @@ mod impact_tests {
             &id("orders", "place-slice"),
             3,
             true,
-        );
+        )
+        .nodes;
         let has_sibling = nodes.iter().any(|n| {
             n.entity
                 .as_ref()

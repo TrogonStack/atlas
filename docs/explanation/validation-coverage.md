@@ -148,7 +148,14 @@ subset). Coverage work makes that answer observable either way.
 
 Truncation, depth, and visibility flags must use the same scope and
 snapshot identity vocabulary as coverage, so a truncated empty issue list
-cannot look complete. Consequence deltas then compare findings only within
+cannot look complete. Read paths outside validation follow the same rule:
+`ListEntities`, `ListVersions`, `ListEntitiesByDomain`, `GetImpact`,
+`InferDataFlow` and `CheckInformationCompleteness` carry
+`snapshot_truncated`, and projections and `ExtractSubgraph` fold the cut
+load into their existing `truncated` flag. A short or empty answer under
+either flag says nothing about the entities the load never reached. The
+Rust client refuses to export a namespace from such a listing rather than
+write partial manifests. Consequence deltas then compare findings only within
 declared comparable scopes; an after-scan that omitted a suite or truncated
 the snapshot cannot claim a finding was resolved.
 

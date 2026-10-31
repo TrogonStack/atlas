@@ -182,6 +182,11 @@ async fn fetch_latest_namespace_entities(
             .await
             .context("ListEntities failed")?
             .into_inner();
+        if resp.snapshot_truncated {
+            crate::invalid_input!(
+                "namespace {namespace:?} cannot be read completely: the server snapshot exceeds its entity cap"
+            );
+        }
         entities.extend(resp.entities);
         if resp.next_page_token.is_empty() {
             break;
