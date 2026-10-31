@@ -13,7 +13,7 @@ pub const WRITER: &str = "hosting-client-writer";
 pub const READER: &str = "hosting-client-reader";
 pub const HIDDEN: &str = "hosting-client-hidden";
 
-pub fn manifest(namespace: &str, kind: &str, name: &str, spec: Value) -> String {
+pub fn manifest(namespace: &str, kind: &str, name: &str, spec: &Value) -> String {
     json!({
         "apiVersion": trogon_atlas_client::manifest::API_VERSION,
         "kind": kind,
@@ -27,24 +27,24 @@ pub fn manifests(namespace: &str) -> String {
     let target =
         |slug| json!({"id":{"namespace":namespace,"slug":slug,"version":VERSION.to_string()}});
     [
-        manifest(namespace, "Ui", "review", json!({"title":"Review"})),
-        manifest(namespace, "Persona", "reviewer", json!({"title":"Reviewer"})),
-        manifest(namespace, "Command", "approve", json!({"title":"Approve"})),
-        manifest(namespace, "ReadModel", "summary", json!({"title":"Summary"})),
-        manifest(namespace, "Component", "portal", json!({
+        manifest(namespace, "Ui", "review", &json!({"title":"Review"})),
+        manifest(namespace, "Persona", "reviewer", &json!({"title":"Reviewer"})),
+        manifest(namespace, "Command", "approve", &json!({"title":"Approve"})),
+        manifest(namespace, "ReadModel", "summary", &json!({"title":"Summary"})),
+        manifest(namespace, "Component", "portal", &json!({
             "title":"Portal",
             "uiHostings":[
                 {"ui":target("review"),"label":{"value":"Review portal 🦜"}},
                 {"ui":target("review"),"label":{"value":"Review portal 🦜"},"doc":{"value":"<script>inert</script>"}}
             ]
         })),
-        manifest(namespace, "CommandSlice", "issue", json!({
+        manifest(namespace, "CommandSlice", "issue", &json!({
             "title":"Approve from review",
             "persona":{"persona":target("reviewer")},
             "ui":{"ui":target("review")},
             "command":{"command":target("approve")}
         })),
-        manifest(namespace, "UiSlice", "display", json!({
+        manifest(namespace, "UiSlice", "display", &json!({
             "title":"Display summary",
             "persona":{"persona":target("reviewer")},
             "ui":{"ui":target("review")},
@@ -145,7 +145,7 @@ pub fn assert_checked(response: &Value, request: &Value) {
     );
     let scope = &response["scope"];
     assert_eq!(scope["branch"], BRANCH);
-    assert!(!scope["revision"].as_str().unwrap().is_empty());
+    assert_ne!(scope["revision"].as_str().unwrap(), "");
     let edges = response["edges"].as_array().unwrap();
     assert_eq!(edges.len(), 4);
     for edge in edges {
@@ -155,13 +155,10 @@ pub fn assert_checked(response: &Value, request: &Value) {
             VERSION.to_string()
         );
         assert_eq!(edge["target"]["id"]["version"], VERSION.to_string());
-        assert!(!edge["checkedTarget"]["uid"].as_str().unwrap().is_empty());
-        assert!(!edge["checkedTarget"]["etag"].as_str().unwrap().is_empty());
-        assert!(!edge["selection"]["ownerUid"].as_str().unwrap().is_empty());
-        assert!(!edge["selection"]["id"]["value"]
-            .as_str()
-            .unwrap()
-            .is_empty());
+        assert_ne!(edge["checkedTarget"]["uid"].as_str().unwrap(), "");
+        assert_ne!(edge["checkedTarget"]["etag"].as_str().unwrap(), "");
+        assert_ne!(edge["selection"]["ownerUid"].as_str().unwrap(), "");
+        assert_ne!(edge["selection"]["id"]["value"].as_str().unwrap(), "");
     }
     let (path, terminal_role, terminal_field) = if request.get("issuance").is_some() {
         (
@@ -185,7 +182,7 @@ pub fn assert_checked(response: &Value, request: &Value) {
         let edge = edges.iter().find(|edge| edge["role"] == role).unwrap();
         assert_eq!(&edge["selection"], selection);
         assert_eq!(edge["checkedTarget"]["owner"], edge["target"]);
-        assert!(!edge["field"].as_str().unwrap().is_empty());
+        assert_ne!(edge["field"].as_str().unwrap(), "");
     }
     assert_eq!(scope["visited"].as_array().unwrap().len(), 5);
 }

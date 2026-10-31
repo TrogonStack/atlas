@@ -141,12 +141,12 @@ async fn invoke(client: &McpClient, name: &'static str, arguments: Value) -> Res
         .await
     {
         Ok(result) if result.is_error.unwrap_or(false) => Err(format!("{result:?}")),
-        Ok(result) => Ok(body(result)),
+        Ok(result) => Ok(body(&result)),
         Err(error) => Err(error.to_string()),
     }
 }
 
-fn body(result: CallToolResult) -> Value {
+fn body(result: &CallToolResult) -> Value {
     let text = &result.content[0].as_text().unwrap().text;
     serde_json::from_str(text).unwrap()
 }
@@ -227,7 +227,7 @@ async fn authenticated_mcp_authors_and_inspects_exact_hosting_through_export_rea
         &namespace,
         "Document",
         "hosting-note",
-        json!({
+        &json!({
             "title":{"value":"Hosting assertion"},"link":{"value":"https://example.invalid/hosting"},
             "subjects":[{"subject":{"connection":issuance["hosting"]}}]
         }),
@@ -291,7 +291,10 @@ async fn authenticated_mcp_authors_and_inspects_exact_hosting_through_export_rea
         );
     }
     let exported = succeed(&reader, "export_namespace", json!({"namespace":namespace})).await;
-    assert!(exported["skipped"].as_array().unwrap().is_empty());
+    assert_eq!(
+        exported["skipped"].as_array().unwrap().as_slice(),
+        [] as [Value; 0]
+    );
     let files = exported["files"].as_object().unwrap();
     for text in files.values() {
         let yaml = text.as_str().unwrap();
@@ -307,7 +310,7 @@ async fn authenticated_mcp_authors_and_inspects_exact_hosting_through_export_rea
         &namespace,
         "Component",
         "reader-write",
-        json!({"title":"Reader cannot author hosting","uiHostings":[{"ui":{"id":{"namespace":namespace,"slug":"review","version":fixture::VERSION.to_string()}},"label":{"value":"Forbidden"}}]}),
+        &json!({"title":"Reader cannot author hosting","uiHostings":[{"ui":{"id":{"namespace":namespace,"slug":"review","version":fixture::VERSION.to_string()}},"label":{"value":"Forbidden"}}]}),
     );
     let denied = invoke(&reader, "apply_manifests", json!({"manifests_yaml":change}))
         .await
