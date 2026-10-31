@@ -890,10 +890,10 @@ fn swimlane_state_endpoint(
 }
 
 pub(crate) fn is_derived_field(field: &pb::FieldSpec) -> bool {
-    field.metadata.iter().any(|m| {
-        m.type_url
-            .ends_with("trogonatlas.eventmodel.v1alpha1.DerivedFieldAnnotation")
-    })
+    field
+        .metadata
+        .iter()
+        .any(|m| crate::annotation_type::BuiltinAnnotation::DERIVED_FIELD.matches(m))
 }
 
 fn fields_of(entity: &pb::Entity) -> Vec<pb::FieldSpec> {
