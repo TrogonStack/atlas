@@ -84,7 +84,9 @@ A finding can only be called resolved if the after-scan actually looked
 for it. If the suite that produced it did not complete after the change
 (skipped, partial, errored, or simply not reported), its absence proves
 nothing, and the delta reports it as unknown with the reason the suite
-gave. The same holds the other way: a finding only counts as introduced if
+gave. The exception is a finding whose subject or origin no longer exists:
+the change removed what the finding was about, so the delta reports it as
+subject removed even when the after-scan's suite did not complete. The same holds the other way: a finding only counts as introduced if
 the before-scan's suite completed, otherwise it might have been there all
 along.
 
