@@ -52,6 +52,14 @@ the write landed in, because a branch write keeps no durable receipt:
 
 `scope` is `baseline` and `branch` is `null` when no branch applies.
 
+The entity protection tools (`protect_entity`, `unprotect_entity`,
+`get_entity_protection`, `list_entity_protections`) return plain JSON instead
+of `binpb_base64` and carry no `scope`, because protection is baseline-only
+and the same on every branch. `protect_entity` and `unprotect_entity` refuse
+to run while a branch is set. A listing reports `verdict: "partial"` when the
+server could not read every row or enumerate the whole registry. See
+`docs/reference/entity-protection-commands.md`.
+
 `put_entity`, `put_entity_json`, `delete_entity`, `batch_mutate` and
 `batch_mutate_json` also return the server's validation findings as a JSON
 `issues` array next to `binpb_base64`, so an agent reads them without decoding
