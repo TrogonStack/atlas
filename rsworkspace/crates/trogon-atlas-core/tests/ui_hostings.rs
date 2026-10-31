@@ -28,3 +28,33 @@ fn native_preparation_preserves_equal_hostings_as_distinct_occurrences() -> Resu
     assert_eq!(occurrences[0].target, occurrences[1].target);
     Ok(())
 }
+
+fn owner() -> Entity {
+    Entity { kind: Some(entity::Kind::Component(Component {
+        id: Some(Id { namespace: "shop".into(), slug: "portal".into(), version: 1 }),
+        ui_hostings: vec![trogon_atlas_proto::UiHosting {
+            ui: Some(UiRef { id: Some(Id { namespace: "shop".into(), slug: "review".into(), version: 1 }) }),
+            label: Some(CatalogTitle { value: "Review".into() }),
+            ..Default::default()
+        }], ..Default::default()
+    })), ..Default::default() }
+}
+
+#[test]
+fn preparation_rejects_invalid_hosting_values_before_identity_assignment() {
+    for case in 0..8 {
+        let mut candidate = owner();
+        let Some(entity::Kind::Component(component)) = candidate.kind.as_mut() else { panic!("component") };
+        match case {
+            0 => component.ui_hostings[0].connection_id = Some(trogon_atlas_proto::ConnectionId { value: String::new() }),
+            1 => component.ui_hostings[0].ui = None,
+            2 => component.ui_hostings[0].ui.as_mut().unwrap().id.as_mut().unwrap().version = 0,
+            3 => component.ui_hostings[0].label = None,
+            4 => component.ui_hostings[0].label.as_mut().unwrap().value = " ".into(),
+            5 => component.ui_hostings[0].label.as_mut().unwrap().value = "a".repeat(257),
+            6 => component.ui_hostings[0].doc = Some(trogon_atlas_proto::CatalogText { value: "a".repeat(16_385) }),
+            _ => component.ui_hostings = vec![component.ui_hostings[0].clone(); 1_025],
+        }
+        assert!(prepare_entity(None, &candidate).is_err(), "invalid hosting case {case} published");
+    }
+}
