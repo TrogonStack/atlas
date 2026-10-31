@@ -227,6 +227,16 @@ pub enum ToolRole {
     Admin,
 }
 
+impl ToolRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolRole::Reader => "reader",
+            ToolRole::Writer => "writer",
+            ToolRole::Admin => "admin",
+        }
+    }
+}
+
 impl From<pb::Role> for ToolRole {
     fn from(role: pb::Role) -> Self {
         match role {
@@ -764,6 +774,11 @@ impl McpServer {
             client,
             tool_router: Self::tool_router(),
         })
+    }
+
+    /// Every tool this adapter registers, whatever any caller's role.
+    pub fn registered_tools() -> Vec<rmcp::model::Tool> {
+        Self::tool_router().list_all()
     }
 
     /// A copy of this server whose every gRPC call carries `caller`'s token
