@@ -21,12 +21,10 @@ fn event(ns: &str, slug: &str) -> pb::Entity {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn load_all_flags_truncation_at_cap_boundary() {
+async fn store_with(slugs: &[&str]) -> Arc<dyn Store> {
     let nats = trogon_atlas_testsupport::shared().await;
     let store: Arc<dyn Store> = Arc::new(nats.store().await);
-
-    for slug in ["a", "b", "c"] {
+    for slug in slugs {
         store
             .create(
                 pb::EntityKind::Event,
@@ -36,12 +34,50 @@ async fn load_all_flags_truncation_at_cap_boundary() {
             .await
             .unwrap();
     }
+    store
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn load_all_flags_truncation_only_above_the_cap() {
+    let store = store_with(&["a", "b", "c"]).await;
+
+    let below_cap = load_all_with_cap(&store, 4, None).await.unwrap();
+    assert_eq!(below_cap.entities.len(), 3);
+    assert!(!below_cap.truncated);
 
     let at_cap = load_all_with_cap(&store, 3, None).await.unwrap();
     assert_eq!(at_cap.entities.len(), 3);
-    assert!(at_cap.truncated);
+    assert!(
+        !at_cap.truncated,
+        "a view holding exactly the cap is complete"
+    );
 
-    let below_cap = load_all_with_cap(&store, 10, None).await.unwrap();
-    assert_eq!(below_cap.entities.len(), 3);
-    assert!(!below_cap.truncated);
+    let above_cap = load_all_with_cap(&store, 2, None).await.unwrap();
+    assert_eq!(above_cap.entities.len(), 2, "never more than the cap");
+    assert!(above_cap.truncated);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn branch_overlay_load_flags_truncation_only_above_the_cap() {
+    let store = store_with(&["a", "b"]).await;
+    store.create_branch("overlay", "").await.unwrap();
+    store
+        .create(
+            pb::EntityKind::Event,
+            &event("shop", "c"),
+            WriteContext::branch("overlay"),
+        )
+        .await
+        .unwrap();
+
+    let at_cap = load_all_with_cap(&store, 3, Some("overlay")).await.unwrap();
+    assert_eq!(at_cap.entities.len(), 3);
+    assert!(!at_cap.truncated);
+
+    let above_cap = load_all_with_cap(&store, 2, Some("overlay")).await.unwrap();
+    assert_eq!(above_cap.entities.len(), 2);
+    assert!(above_cap.truncated);
+
+    let baseline = load_all_with_cap(&store, 2, None).await.unwrap();
+    assert!(!baseline.truncated, "the overlay entity is not on baseline");
 }

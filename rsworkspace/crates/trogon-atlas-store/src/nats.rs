@@ -133,7 +133,7 @@ pub enum StoreOpenMode {
 /// namespace that predates the registry from one a principal deliberately
 /// claimed, which matters when auditing who owns what.
 pub const LEGACY_ADOPTION_AUTHOR: &str = "migration";
-const LIST_HARD_CAP: usize = 10_000;
+use crate::store::LIST_HARD_CAP;
 const LIST_FETCH_CONCURRENCY: usize = 16;
 /// Hard cap on the number of keys accepted by `batch_get`. Prevents a single
 /// caller from scheduling LIST_HARD_CAP-sized fan-outs. Mirrors the spirit of

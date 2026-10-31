@@ -264,10 +264,45 @@ pub const SCHEMA_FIELD: &str = "schema";
 
 pub struct LoadAllResult {
     pub entities: Vec<StoredEntity>,
-    /// True when the store returned exactly the cap, meaning more entities
-    /// may exist beyond what was loaded. Callers that need the complete set
-    /// (e.g. `delete_by_query`) must treat a truncated snapshot as an error.
+    /// True when the store held more entities than the cap, so `entities`
+    /// is a prefix of the view. Callers that need the complete set (e.g.
+    /// `delete_by_query`) must treat a truncated load as an error.
     pub truncated: bool,
+}
+
+/// What one snapshot load covered: the cap it ran under, whether the view
+/// held more entities than that, and which view it read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoadCoverage {
+    pub cap: usize,
+    pub truncated: bool,
+    pub branch: Option<String>,
+}
+
+/// Entities from one load, kept with that same load's coverage so a reader
+/// can never pair one load's entities with another load's flag.
+#[derive(Clone)]
+pub struct LoadedSnapshot {
+    pub entities: Arc<Vec<StoredEntity>>,
+    pub coverage: LoadCoverage,
+}
+
+impl LoadedSnapshot {
+    pub async fn load(
+        store: &Arc<dyn Store>,
+        cap: usize,
+        branch: Option<&str>,
+    ) -> Result<Self, Status> {
+        let result = load_all_with_cap(store, cap, branch).await?;
+        Ok(Self {
+            entities: Arc::new(result.entities),
+            coverage: LoadCoverage {
+                cap,
+                truncated: result.truncated,
+                branch: branch.map(str::to_owned),
+            },
+        })
+    }
 }
 
 pub async fn load_all(
@@ -277,21 +312,32 @@ pub async fn load_all(
     load_all_with_cap(store, crate::service::MAX_PROJECTION_ENTITIES, branch).await
 }
 
+/// Loads at most `cap` entities, probing one past the cap so a view of
+/// exactly `cap` entities is not mistaken for a truncated one.
+///
+/// When the probe exceeds the store's own list ceiling the store cannot
+/// return it, so a load that fills the cap is reported as truncated.
 pub async fn load_all_with_cap(
     store: &Arc<dyn Store>,
     cap: usize,
     branch: Option<&str>,
 ) -> Result<LoadAllResult, Status> {
-    let entities = store
-        .list(ListFilter::default(), Some(cap), branch)
+    let probe = cap.saturating_add(1);
+    let mut entities = store
+        .list(ListFilter::default(), Some(probe), branch)
         .await
         .map_err(store_err)?;
-    let truncated = entities.len() >= cap;
+    let truncated = if probe > trogon_atlas_store::store::LIST_HARD_CAP {
+        entities.len() >= cap
+    } else {
+        entities.len() > cap
+    };
+    entities.truncate(cap);
     if truncated {
         tracing::warn!(
             cap,
-            "snapshot loaded exactly the entity cap; store may have more entities \
-             than are visible to read paths"
+            "snapshot hit the entity cap; store has more entities than are \
+             visible to read paths"
         );
     }
     Ok(LoadAllResult {
