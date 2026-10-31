@@ -41,17 +41,15 @@ fn reference(selection: &pb::ConnectionRef) -> Result<&pb::EntityRef, Status> {
     Ok(owner)
 }
 
-fn required(value: &Option<pb::ConnectionRef>) -> Result<&pb::ConnectionRef, Status> {
-    value
-        .as_ref()
-        .ok_or_else(|| Status::invalid_argument("complete interaction tuple is required"))
+fn required(value: Option<&pb::ConnectionRef>) -> Result<&pb::ConnectionRef, Status> {
+    value.ok_or_else(|| Status::invalid_argument("complete interaction tuple is required"))
 }
 
 fn selections(
     request: &pb::InspectHumanInteractionRequest,
 ) -> Result<[(&pb::ConnectionRef, pb::HumanInteractionRole); 4], Status> {
     use pb::HumanInteractionRole as Role;
-    let hosting = (required(&request.hosting)?, Role::HostedUi);
+    let hosting = (required(request.hosting.as_ref())?, Role::HostedUi);
     let result = match request
         .path
         .as_ref()
@@ -59,15 +57,15 @@ fn selections(
     {
         pb::inspect_human_interaction_request::Path::Issuance(path) => [
             hosting,
-            (required(&path.persona)?, Role::Persona),
-            (required(&path.ui)?, Role::SliceUi),
-            (required(&path.command)?, Role::Command),
+            (required(path.persona.as_ref())?, Role::Persona),
+            (required(path.ui.as_ref())?, Role::SliceUi),
+            (required(path.command.as_ref())?, Role::Command),
         ],
         pb::inspect_human_interaction_request::Path::Display(path) => [
             hosting,
-            (required(&path.persona)?, Role::Persona),
-            (required(&path.ui)?, Role::SliceUi),
-            (required(&path.source_read_model)?, Role::ReadModel),
+            (required(path.persona.as_ref())?, Role::Persona),
+            (required(path.ui.as_ref())?, Role::SliceUi),
+            (required(path.source_read_model.as_ref())?, Role::ReadModel),
         ],
     };
     for (selection, _) in result {
