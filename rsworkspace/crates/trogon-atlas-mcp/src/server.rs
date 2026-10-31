@@ -24,7 +24,7 @@ use crate::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
         BatchMutateParams, CatalogQueryParams, CompileTypeLibraryParams, CreateBranchParams,
         DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams, DiffBranchParams,
-        DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySpec,
+        DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySchemaParams, EntitySpec,
         EventModelProjectionParams, ExportNamespaceParams, ExportOpensloParams,
         ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
         GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
@@ -714,6 +714,11 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Writer,
     },
     ToolPolicy {
+        tool: "get_entity_schema",
+        rpcs: &["ListValidationRules"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
         tool: "get_operation",
         rpcs: &["GetOperation"],
         min_role: ToolRole::Writer,
@@ -1182,6 +1187,35 @@ fn ok_envelope<M: Message>(msg: &M) -> CallToolResult {
 /// `{severity, code, subject, field, message}`. `severity` is
 /// `error`/`warning`/`info`; `subject` is the canonical entity id string or
 /// `null`; `field` is the structural path inside the subject or `null`.
+fn rule_json(rule: &pb::ValidationRule) -> serde_json::Value {
+    let severity = match pb::validation_issue::Severity::try_from(rule.default_severity) {
+        Ok(pb::validation_issue::Severity::Error) => "error",
+        Ok(pb::validation_issue::Severity::Warning) => "warning",
+        Ok(pb::validation_issue::Severity::Info) => "info",
+        _ => "unspecified",
+    };
+    serde_json::json!({
+        "code": rule.code,
+        "default_severity": severity,
+        "title": rule.title,
+        "category": rule.category,
+        "field": (!rule.subject_field.is_empty()).then_some(rule.subject_field.as_str()),
+    })
+}
+
+/// Hex SHA-256 of the schema's serialized form. `serde_json` keeps object
+/// keys sorted here, so the digest is stable for an unchanged schema.
+fn schema_sha256(schema: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(schema.to_string().as_bytes()).iter().fold(
+        String::with_capacity(64),
+        |mut hex, byte| {
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+            hex
+        },
+    )
+}
+
 fn issue_json(issue: &pb::ValidationIssue) -> serde_json::Value {
     let mut value = trogon_atlas_client::apply::issue_to_json(issue);
     if let serde_json::Value::Object(fields) = &mut value {
@@ -4089,6 +4123,61 @@ impl McpServer {
             &resp,
             p.json.unwrap_or(false),
         ))
+    }
+
+    #[tool(
+        description = "JSON Schema (draft 2020-12) for one entity kind's manifest document, cut from the same generator as `trogon-atlas schema`, with schema_sha256 identifying it. Also returns a minimal skeleton, the placeholders in it, and the validation rules whose subject is that kind. The skeleton satisfies the schema only: replace every placeholder and add the references and context the kind needs before apply_manifests accepts it. Tenant types are not included; resolve them with resolve_type. An unknown kind is invalid_params; list_entity_kinds names every kind.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_entity_schema(
+        &self,
+        Parameters(p): Parameters<EntitySchemaParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        use trogon_atlas_client::manifest_schema;
+
+        let kind = parse_kind(&p.kind)?;
+        let schema = manifest_schema::generate_for_kind(kind)
+            .map_err(|e| McpError::Internal(format!("{e:#}")))?;
+        let mut client = self.client();
+        let rules: Vec<serde_json::Value> = client
+            .list_validation_rules(pb::ListValidationRulesRequest {})
+            .await
+            .map_err(tool_err("get_entity_schema"))?
+            .into_inner()
+            .rules
+            .iter()
+            .filter(|rule| rule.subject_kind == kind as i32)
+            .map(rule_json)
+            .collect();
+        let placeholders: Vec<serde_json::Value> = manifest_schema::SKELETON_PLACEHOLDERS
+            .iter()
+            .map(|placeholder| {
+                serde_json::json!({
+                    "pointer": placeholder.pointer(),
+                    "marker": placeholder.marker,
+                    "meaning": placeholder.meaning,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "kind": pb::canonical::kind_short(kind),
+            "api_version": trogon_atlas_client::manifest::API_VERSION,
+            "dialect": schema["$schema"],
+            "schema_sha256": schema_sha256(&schema),
+            "skeleton": manifest_schema::skeleton(kind),
+            "skeleton_validity": "schema_only",
+            "placeholders": placeholders,
+            "rules": rules,
+            "schema": schema,
+        });
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
     }
 
     #[tool(

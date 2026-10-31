@@ -741,3 +741,91 @@ spec: {{ title: Shop }}
 
     mcp_service.cancel().await.unwrap();
 }
+
+async fn dry_run_apply(
+    client: &McpClient,
+    manifest: &serde_json::Value,
+) -> Result<rmcp::model::CallToolResult, rmcp::ServiceError> {
+    client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("apply_manifests").with_arguments(args_obj(&[
+                ("manifests_yaml", serde_json::json!(manifest.to_string())),
+                ("dry_run", serde_json::json!(true)),
+            ])),
+        )
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mcp_get_entity_schema_returns_a_schema_skeleton_and_rules_for_the_kind() {
+    let (client, mcp_service, _grpc_endpoint) = start_mcp_client().await;
+
+    let result = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("get_entity_schema")
+                .with_arguments(args_obj(&[("kind", serde_json::json!("event"))])),
+        )
+        .await
+        .unwrap();
+    assert!(!result.is_error.unwrap_or(false), "{result:?}");
+    let body = call_tool_result_text(&result);
+
+    assert_eq!(body["kind"], "event");
+    assert_eq!(
+        body["schema"],
+        trogon_atlas_client::manifest_schema::generate_for_kind(pb::EntityKind::Event).unwrap()
+    );
+    assert!(
+        body["schema"]["properties"]["kind"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("Event")),
+        "{body:?}"
+    );
+    assert!(body["schema"]["properties"]["spec"].is_object(), "{body:?}");
+    assert_eq!(body["schema_sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(body["skeleton_validity"], "schema_only");
+    let pointers: Vec<&str> = body["placeholders"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["pointer"].as_str().unwrap())
+        .collect();
+    assert_eq!(pointers, ["/metadata/namespace", "/metadata/name"]);
+    let rules = body["rules"].as_array().unwrap();
+    assert!(!rules.is_empty(), "{body:?}");
+    assert!(
+        rules
+            .iter()
+            .all(|r| r["code"].is_string() && r["default_severity"].is_string()),
+        "{rules:?}"
+    );
+
+    let mut unfilled = body["skeleton"].clone();
+    unfilled["spec"]["title"] = serde_json::json!("Order placed");
+    let refused = dry_run_apply(&client, &unfilled).await;
+    assert!(
+        refused
+            .as_ref()
+            .map_or(true, |r| r.is_error.unwrap_or(false)),
+        "placeholders must not apply: {refused:?}"
+    );
+
+    let mut filled = unfilled;
+    filled["metadata"]["namespace"] = serde_json::json!("mcp-schema-ns");
+    filled["metadata"]["name"] = serde_json::json!("order.placed");
+    let applied = dry_run_apply(&client, &filled).await.unwrap();
+    assert!(!applied.is_error.unwrap_or(false), "{applied:?}");
+
+    let unknown = client
+        .call_tool(
+            rmcp::model::CallToolRequestParams::new("get_entity_schema")
+                .with_arguments(args_obj(&[("kind", serde_json::json!("widget"))])),
+        )
+        .await
+        .unwrap_err();
+    assert!(format!("{unknown:?}").contains("widget"), "{unknown:?}");
+
+    client.cancel().await.unwrap();
+    mcp_service.cancel().await.unwrap();
+}
