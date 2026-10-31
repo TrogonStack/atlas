@@ -1877,7 +1877,13 @@ pub fn retarget_refs(
             }
         }
         EntityOneof::Component(x) => {
-            crate::ui_hosting::retarget(&mut x.ui_hostings, from_kind, from_id, to_id, &mut rewritten);
+            crate::ui_hosting::retarget(
+                &mut x.ui_hostings,
+                from_kind,
+                from_id,
+                to_id,
+                &mut rewritten,
+            );
             crate::communication_intent::retarget(
                 &mut x.communications,
                 from_kind,
