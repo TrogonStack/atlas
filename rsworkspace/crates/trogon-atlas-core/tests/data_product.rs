@@ -134,9 +134,12 @@ fn new_kind_roundtrips_and_revision_floors_are_coherent() {
         canonical::parse_kind("DATA_PRODUCT"),
         Some(EntityKind::DataProduct)
     );
-    assert!(CONTRACT_REVISION >= 17);
-    assert!((17..=CONTRACT_REVISION).contains(&MIN_CLIENT_CONTRACT_REVISION));
-    assert!((17..=CONTRACT_REVISION).contains(&MIN_SERVER_CONTRACT_REVISION));
+    const {
+        assert!(17 <= MIN_CLIENT_CONTRACT_REVISION);
+        assert!(17 <= MIN_SERVER_CONTRACT_REVISION);
+        assert!(MIN_CLIENT_CONTRACT_REVISION <= CONTRACT_REVISION);
+        assert!(MIN_SERVER_CONTRACT_REVISION <= CONTRACT_REVISION);
+    }
     let value = stored();
     assert_eq!(
         Entity::decode(value.encode_to_vec().as_slice()).unwrap(),
