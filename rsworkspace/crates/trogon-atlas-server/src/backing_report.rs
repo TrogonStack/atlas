@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use tonic::Status;
 
 use super::{pb, snapshot_digest, EventModelServiceImpl, Lens, Visibility};
-use crate::backing::{self, SubjectScope, ViewLimits};
+use crate::backing::{self, SubjectScope, ViewLimits, VisibleNamespaces};
 
 impl EventModelServiceImpl {
     pub(super) async fn backing_report(
@@ -19,17 +19,23 @@ impl EventModelServiceImpl {
             .snapshot_with_truncation(branch.as_deref(), vis)
             .await?;
         let digest = snapshot_digest(&rows, &BTreeSet::new(), false)?;
-        let authorized_namespaces = match self.lens(vis).await? {
-            Lens::Everything => Vec::new(),
-            Lens::Only(ids) => ids.iter().map(|id| id.as_str().to_owned()).collect(),
+        let visibility = match self.lens(vis).await? {
+            Lens::Everything => VisibleNamespaces::All,
+            Lens::Only(ids) => {
+                VisibleNamespaces::Only(ids.iter().map(|id| id.as_str().to_owned()).collect())
+            }
+        };
+        let authorized_namespaces = match &visibility {
+            VisibleNamespaces::All => Vec::new(),
+            VisibleNamespaces::Only(namespaces) => namespaces.iter().cloned().collect(),
         };
         let scope = SubjectScope::new(req.namespaces);
         let report = backing::report(
             &rows,
             &scope,
-            ViewLimits {
+            &ViewLimits {
                 snapshot_truncated: truncated,
-                visibility_restricted: !vis.is_unrestricted(),
+                visibility,
             },
         );
         let mut findings: Vec<pb::ValidationIssue> = if req.include_unbacked_findings {

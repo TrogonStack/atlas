@@ -60,8 +60,8 @@ owns it: only an exact entity selection counts.
 | `namespaces` | The requested subject scope, sorted. |
 | `totals` | `total`, `backed`, `unbacked` and `unknown` subjects, the present, absent and unknown count per category, and `unbacked_rate`. |
 | `kinds` | The same totals for each subject kind that has at least one subject. |
-| `unresolved_declarations` | Subject selections on accepted Decisions and on Documents whose exact target is not in the visible snapshot but whose namespace is in scope. |
-| `incomplete_reasons` | Why some subjects could not be settled. |
+| `unresolved_declarations` | Subject selections on accepted Decisions and on Documents whose exact target is not in the visible snapshot but whose namespace is in scope and visible to the caller. A target in a namespace the caller cannot see is not counted, even when `namespaces` is empty. |
+| `incomplete_reasons` | Why some subjects could not be settled. A reason is reported only for subjects left unknown, so a backed subject never adds one. |
 | `findings` | `ENTITY_UNBACKED` findings, sorted by subject, when requested. |
 
 Category counts overlap: a subject with both a Decision and a Document adds
@@ -76,9 +76,9 @@ has no rate, not a rate of zero.
 | Reason | When |
 | --- | --- |
 | `SNAPSHOT_TRUNCATED` | Always reported when the snapshot is truncated. |
-| `VISIBILITY_RESTRICTED` | A restricted caller has a subject whose Decision or Document evidence may sit in a namespace it cannot see. |
-| `UNRESOLVED_CODE_REF` | A subject has an incomplete or unreadable `CodeRefAnnotation`. |
-| `UNRECOGNIZED_DECISION_STATUS` | A Decision with an unrecognized status names a subject. |
+| `VISIBILITY_RESTRICTED` | A restricted caller has an unknown subject whose Decision or Document evidence may sit in a namespace it cannot see. |
+| `UNRESOLVED_CODE_REF` | An unknown subject has an incomplete or unreadable `CodeRefAnnotation`. |
+| `UNRECOGNIZED_DECISION_STATUS` | A Decision with an unrecognized status names an unknown subject. |
 
 ## `ENTITY_UNBACKED`
 
