@@ -301,6 +301,11 @@ enum Cmd {
         #[arg(long)]
         request: String,
     },
+    /// Check one exact authored hosting and human path using proto3 JSON.
+    InspectHumanInteraction {
+        #[arg(long)]
+        request: String,
+    },
     /// List messages carried by an exact channel using proto3 JSON `ListChannelMessagesRequest`.
     ListChannelMessages {
         /// Proto3 JSON `ListChannelMessagesRequest`.
@@ -1870,6 +1875,28 @@ async fn run(
                     request,
                 )
                 .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::InspectHumanInteraction { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::human_interaction::parse_request(
+                "InspectHumanInteractionRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::human_interaction::inspect_human_interaction(
+                &mut client,
+                request,
+            )
+            .await?;
             if text {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }

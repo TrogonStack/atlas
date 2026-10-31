@@ -19,6 +19,7 @@ pub mod design_topology;
 pub mod export;
 pub mod failure;
 pub mod fmt;
+pub mod human_interaction;
 pub mod manifest;
 pub mod manifest_schema;
 pub mod openslo;
