@@ -222,3 +222,23 @@ pub fn unique_suffix_for_test() -> String {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{n}")
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::{io::BufRead, net::TcpStream, time::Duration};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn spawned_nats_advertises_configured_payload_capacity() {
+        let server = super::TestNats::start().await;
+        let stream = TcpStream::connect(server.url.strip_prefix("nats://").unwrap()).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut greeting = String::new();
+        std::io::BufReader::new(stream).read_line(&mut greeting).unwrap();
+        assert!(greeting.starts_with("INFO "));
+        let field = greeting.split_once("\"max_payload\"").unwrap().1;
+        let value = field.trim_start().strip_prefix(':').unwrap().trim_start();
+        let advertised = value.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<usize>().unwrap();
+        assert_eq!(advertised, 8 * 1024 * 1024);
+    }
+}
