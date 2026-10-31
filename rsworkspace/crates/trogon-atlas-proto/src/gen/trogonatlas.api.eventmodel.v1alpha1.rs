@@ -483,8 +483,10 @@ pub struct ListIncomingDocumentDeclarationsRequest {
     pub document: ::core::option::Option<super::super::super::eventmodel::v1alpha1::DocumentSelection>,
     #[prost(enumeration="super::super::super::eventmodel::v1alpha1::RelatedContentRole", optional, tag="2")]
     pub related_content_role: ::core::option::Option<i32>,
-    #[prost(int32, tag="3")]
-    pub page_size: i32,
+    /// Omission preserves this query's existing unpaged, budget-bounded inventory.
+    /// Explicit zero opts into the default page size.
+    #[prost(int32, optional, tag="3")]
+    pub page_size: ::core::option::Option<i32>,
     #[prost(string, tag="4")]
     pub page_token: ::prost::alloc::string::String,
 }

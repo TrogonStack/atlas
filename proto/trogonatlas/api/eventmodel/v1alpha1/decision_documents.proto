@@ -118,7 +118,9 @@ message ListIncomingDecisionDeclarationsResponse {
 message ListIncomingDocumentDeclarationsRequest {
   trogonatlas.eventmodel.v1alpha1.DocumentSelection document = 1;
   optional trogonatlas.eventmodel.v1alpha1.RelatedContentRole related_content_role = 2;
-  int32 page_size = 3;
+  // Omission preserves this query's existing unpaged, budget-bounded inventory.
+  // Explicit zero opts into the default page size.
+  optional int32 page_size = 3;
   string page_token = 4;
 }
 message ListIncomingDocumentDeclarationsResponse {

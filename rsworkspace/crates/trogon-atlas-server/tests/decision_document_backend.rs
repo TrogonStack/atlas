@@ -326,7 +326,7 @@ async fn incoming_documents_preserve_unpaged_omission_and_explicit_page_continua
         .unwrap()
         .into_inner();
     assert_eq!(legacy.declarations.len(), 101);
-    assert!(legacy.next_page_token.is_empty());
+    assert_eq!(legacy.next_page_token, "");
     assert!(!legacy.incomplete);
     let scope = legacy.scope.unwrap();
     assert!(scope.page_receipt.is_none());
@@ -369,7 +369,7 @@ async fn incoming_documents_preserve_unpaged_omission_and_explicit_page_continua
         .unwrap()
         .into_inner();
     assert_eq!(first.declarations.len(), 100);
-    assert!(!first.next_page_token.is_empty());
+    assert_ne!(first.next_page_token, "");
     let first_scope = first.scope.unwrap();
     let receipt = first_scope.page_receipt.unwrap();
     assert_eq!(
@@ -398,7 +398,7 @@ async fn incoming_documents_preserve_unpaged_omission_and_explicit_page_continua
         .unwrap()
         .into_inner();
     assert_eq!(second.declarations.len(), 1);
-    assert!(second.next_page_token.is_empty());
+    assert_eq!(second.next_page_token, "");
     assert!(!second.incomplete);
     let receipt = second.scope.unwrap().page_receipt.unwrap();
     assert_eq!(

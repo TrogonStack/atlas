@@ -903,11 +903,13 @@ impl EventModelServiceImpl {
             Some(Err(error)) => return Err(error),
             None => None,
         };
-        let page_size = super::clamp_page_size(req.page_size, 100, 500);
+        let paged = req.page_size.is_some() || !req.page_token.is_empty();
+        let page_size =
+            paged.then(|| super::clamp_page_size(req.page_size.unwrap_or_default(), 100, 500));
         let mut query = self.catalog_query(branch, vis, true).await?;
         query.documents.push(selection.clone());
         let state = self.catalog_document_state(&mut query, &selection).await?;
-        let mut scope = query.checked_scope(Some(caller))?;
+        let mut scope = query.checked_scope(paged.then_some(caller))?;
         let start = decode_catalog_page_token(&req.page_token, &scope, role_filter, &selection)?;
         let mut declarations = Vec::new();
         for row in query.rows.clone() {
@@ -999,45 +1001,51 @@ impl EventModelServiceImpl {
             return Err(Status::invalid_argument("page token offset out of range"));
         }
         let mut page = Vec::new();
-        for (_, declaration) in declarations.into_iter().skip(start).take(page_size) {
+        for (_, declaration) in declarations
+            .into_iter()
+            .skip(start)
+            .take(page_size.unwrap_or(total))
+        {
             query.budget.output()?;
             page.push(declaration);
         }
         let next = start + page.len();
-        let mut owners = HashSet::new();
-        owners.insert(pb::EntityKey::new(
-            exact(&reference)?.0,
-            exact(&reference)?.1,
-        ));
-        for declaration in &page {
-            if let Some(owner) = declaration
-                .owner
-                .as_ref()
-                .and_then(|checked| checked.owner.as_ref())
-            {
+        if paged {
+            let mut owners = HashSet::new();
+            owners.insert(pb::EntityKey::new(
+                exact(&reference)?.0,
+                exact(&reference)?.1,
+            ));
+            for declaration in &page {
+                if let Some(owner) = declaration
+                    .owner
+                    .as_ref()
+                    .and_then(|checked| checked.owner.as_ref())
+                {
+                    let (kind, id) = exact(owner)?;
+                    owners.insert(pb::EntityKey::new(kind, id));
+                }
+            }
+            let checked_owner_count = scope.visited.len() as u64;
+            let mut visited = Vec::new();
+            for checked in scope.visited {
+                let owner = checked
+                    .owner
+                    .as_ref()
+                    .ok_or_else(|| Status::internal("checked owner missing reference"))?;
                 let (kind, id) = exact(owner)?;
-                owners.insert(pb::EntityKey::new(kind, id));
+                if owners.contains(&pb::EntityKey::new(kind, id)) {
+                    visited.push(checked);
+                }
             }
+            scope.visited = visited;
+            scope.page_receipt = Some(pb::CatalogPageReceipt {
+                checked_owner_count,
+                total_declarations: total as u64,
+                start_offset: start as u64,
+                end_offset: next as u64,
+            });
         }
-        let checked_owner_count = scope.visited.len() as u64;
-        let mut visited = Vec::new();
-        for checked in scope.visited {
-            let owner = checked
-                .owner
-                .as_ref()
-                .ok_or_else(|| Status::internal("checked owner missing reference"))?;
-            let (kind, id) = exact(owner)?;
-            if owners.contains(&pb::EntityKey::new(kind, id)) {
-                visited.push(checked);
-            }
-        }
-        scope.visited = visited;
-        scope.page_receipt = Some(pb::CatalogPageReceipt {
-            checked_owner_count,
-            total_declarations: total as u64,
-            start_offset: start as u64,
-            end_offset: next as u64,
-        });
         query.charge_scope(&scope)?;
         let next_page_token = if next < total {
             encode_catalog_page_token(&scope, role_filter, &selection, next)?
