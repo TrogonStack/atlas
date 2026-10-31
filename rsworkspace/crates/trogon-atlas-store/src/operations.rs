@@ -166,7 +166,7 @@ impl NatsStore {
     async fn settle_operation(
         &self,
         key: &str,
-        mutate: impl Fn(&mut OperationRow),
+        mutate: impl Fn(&mut OperationRow) -> bool,
     ) -> StoreResult<()> {
         for attempt in 0..CAS_MAX_ATTEMPTS {
             let Some(entry) =
@@ -180,7 +180,9 @@ impl NatsStore {
             };
             let mut row = OperationRow::decode(entry.value.as_ref())
                 .map_err(|e| StoreError::Backend(format!("decode operation {key}: {e}")))?;
-            mutate(&mut row);
+            if !mutate(&mut row) {
+                return Ok(());
+            }
             row.updated_at_micros = now_micros();
             let bytes = Bytes::from(row.encode_to_vec());
             match tokio::time::timeout(
@@ -217,6 +219,7 @@ impl NatsStore {
         self.settle_operation(key, |row| {
             row.status = status_code(OperationStatus::Applied);
             changeset_id.clone_into(&mut row.changeset_id);
+            true
         })
         .await
     }
@@ -233,6 +236,7 @@ impl NatsStore {
             row.status = status_code(OperationStatus::Rejected);
             code.clone_into(&mut row.rejection_code);
             message.clone_into(&mut row.rejection_message);
+            true
         })
         .await
     }
@@ -242,6 +246,7 @@ impl NatsStore {
     pub(crate) async fn settle_operation_not_applied(&self, key: &str) -> StoreResult<()> {
         self.settle_operation(key, |row| {
             row.status = status_code(OperationStatus::NotApplied);
+            true
         })
         .await
     }
@@ -256,6 +261,26 @@ impl NatsStore {
         self.settle_operation(key, |row| {
             row.status = status_code(OperationStatus::NotApplied);
             changeset_id.clone_into(&mut row.changeset_id);
+            true
+        })
+        .await
+    }
+
+    /// [`Self::settle_operation_unfinished`], but only while the claim is
+    /// still pending: a request that settled its own claim already knows
+    /// more than recovery does, so its answer stands.
+    pub(crate) async fn settle_pending_operation_unfinished(
+        &self,
+        key: &str,
+        changeset_id: &str,
+    ) -> StoreResult<()> {
+        self.settle_operation(key, |row| {
+            if row.status != status_code(OperationStatus::Pending) {
+                return false;
+            }
+            row.status = status_code(OperationStatus::NotApplied);
+            changeset_id.clone_into(&mut row.changeset_id);
+            true
         })
         .await
     }
