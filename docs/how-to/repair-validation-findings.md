@@ -53,6 +53,7 @@ Use existing model tools before searching exports manually:
 | `get_outgoing_references` | Find definitions referenced by the subject or a related slice. |
 | `get_incoming_references` | Find consumers, emitting slices, containing storyboards, and model memberships. |
 | `get_impact` | Find related entities around a proposed change by traversing incoming and outgoing references. |
+| `classify_impact` | Classify every dependent of an exact version as breaking, bump-only or unknown against an exact candidate. |
 
 These tools take flat identity arguments, for example:
 
@@ -177,6 +178,7 @@ errors and `isError` before reading that envelope.
 | `get_entity_json` | `{ "etag": "...", "json": { ... } }` with an object-valued entity. |
 | `validate_event_model` with `json: true` | `{ "json": "..." }` with a JSON-encoded response string. |
 | Reference tools, `get_impact` | `{ "binpb_base64": "..." }` with the protobuf response. |
+| `classify_impact` | The aggregated `ClassifyImpactResponse` in proto3 JSON plus `clientVerdict`. |
 | `put_entity`, `put_entity_json`, `delete_entity`, `batch_mutate`, `batch_mutate_json`, `merge_branch`, `apply_manifests` | The `scope`, `branch` and `binpb_base64` envelope plus an `issues` array. Use `scope` and `branch` to confirm which store took the write. Each issue has `severity`, `code`, `subject`, `field` and `message`; batch and apply issues add `op_index` and `op_entity`, for delete ops as well as puts. Strategic findings arrive here without blocking the write, and a `delete_entity` `dry_run` previews them. |
 
 The JSON response helper can fall back to `binpb_base64` if reflection
