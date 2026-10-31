@@ -1,0 +1,421 @@
+//! In-process gRPC integration tests for `ExportAttestedModel`: a bundle
+//! names one state, verifies offline, fails verification once any normative
+//! field changes, and is refused or marked when it cannot cover its scope.
+//!
+//! The store is shared across tests in this file, so every test writes into
+//! its own namespace.
+
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::sync::Arc;
+
+use tokio::net::TcpListener;
+use tonic::{metadata::MetadataValue, transport::Channel};
+use trogon_atlas_core::attested_bundle::{self, BundleError, Completeness, IncompleteReason};
+use trogon_atlas_proto as pb;
+use trogon_atlas_proto::{
+    event_model_service_client::EventModelServiceClient,
+    event_model_service_server::EventModelServiceServer,
+};
+use trogon_atlas_server::{metrics::ServerMetrics, service::EventModelServiceImpl};
+
+async fn start_server(snapshot_cap: Option<usize>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let mut svc =
+        EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
+    if let Some(cap) = snapshot_cap {
+        svc = svc.with_snapshot_cap(cap);
+    }
+    let grpc = EventModelServiceServer::new(svc);
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(grpc)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    format!("http://{addr}")
+}
+
+async fn client(endpoint: &str) -> EventModelServiceClient<Channel> {
+    EventModelServiceClient::connect(endpoint.to_string())
+        .await
+        .unwrap()
+}
+
+fn id(ns: &str, slug: &str) -> pb::Id {
+    pb::Id {
+        namespace: ns.into(),
+        slug: slug.into(),
+        version: 1,
+    }
+}
+
+fn event(ns: &str, slug: &str) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::Event(pb::Event {
+            id: Some(id(ns, slug)),
+            title: format!("{slug} happened"),
+            ..Default::default()
+        })),
+    }
+}
+
+fn event_model(ns: &str, slug: &str, title: &str, members: &[&str]) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id(ns, slug)),
+            title: title.into(),
+            members: members
+                .iter()
+                .map(|m| pb::EntityRef {
+                    kind: pb::EntityKind::Event as i32,
+                    id: Some(id(ns, m)),
+                })
+                .collect(),
+            ..Default::default()
+        })),
+    }
+}
+
+fn put_req(entity: pb::Entity) -> pb::PutEntityRequest {
+    pb::PutEntityRequest {
+        operation_id: String::new(),
+        entity: Some(entity),
+        create_only: false,
+        if_match: String::new(),
+        validate_only: false,
+        force: false,
+    }
+}
+
+async fn put(c: &mut EventModelServiceClient<Channel>, entity: pb::Entity) {
+    c.put_entity(put_req(entity)).await.unwrap();
+}
+
+fn export_req(ns: &str, slug: &str) -> pb::ExportAttestedModelRequest {
+    pb::ExportAttestedModelRequest {
+        id: Some(id(ns, slug)),
+        as_of_changeset: String::new(),
+        allow_incomplete: false,
+    }
+}
+
+async fn export(
+    c: &mut EventModelServiceClient<Channel>,
+    req: pb::ExportAttestedModelRequest,
+) -> pb::AttestedModelBundle {
+    c.export_attested_model(req)
+        .await
+        .unwrap()
+        .into_inner()
+        .bundle
+        .unwrap()
+}
+
+async fn newest_changeset(c: &mut EventModelServiceClient<Channel>) -> String {
+    c.list_changesets(pb::ListChangesetsRequest {
+        page_token: String::new(),
+        page_size: 1,
+        branch: String::new(),
+        namespace: String::new(),
+    })
+    .await
+    .unwrap()
+    .into_inner()
+    .changesets[0]
+        .id
+        .clone()
+}
+
+fn entry_slugs(bundle: &pb::AttestedModelBundle) -> Vec<String> {
+    bundle
+        .entries
+        .iter()
+        .map(|e| {
+            e.entity
+                .as_ref()
+                .and_then(|r| r.id.as_ref())
+                .unwrap()
+                .slug
+                .clone()
+        })
+        .collect()
+}
+
+fn mentions(issues: &[pb::ValidationIssue], slug: &str) -> bool {
+    issues.iter().any(|i| {
+        i.subject
+            .as_ref()
+            .and_then(|s| s.id.as_ref())
+            .is_some_and(|id| id.slug == slug)
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn complete_export_verifies_and_names_the_current_state() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-current";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+    let boundary = newest_changeset(&mut c).await;
+
+    let bundle = export(&mut c, export_req(ns, "checkout")).await;
+
+    let verified = attested_bundle::verify(&bundle).unwrap();
+    assert_eq!(verified.completeness, Completeness::Complete);
+    assert_eq!(verified.digest.to_hex(), bundle.bundle_digest);
+    let state = bundle.state.as_ref().unwrap();
+    assert_eq!(state.mode(), pb::attested_state::Mode::Current);
+    assert_eq!(state.baseline_changeset_id, boundary);
+    assert_eq!(state.branch_changeset_id, "");
+    let scope = bundle.scope.as_ref().unwrap();
+    assert_eq!(scope.event_model_id, Some(id(ns, "checkout")));
+    assert!(scope.lens.as_ref().unwrap().unrestricted);
+    assert_eq!(entry_slugs(&bundle), ["placed", "checkout"]);
+    assert!(bundle.manifests.contains("Checkout"));
+    let validation = bundle.validation.as_ref().unwrap();
+    assert_eq!(
+        validation.rule_catalog.as_ref().unwrap().digest,
+        attested_bundle::rule_catalog_digest(
+            &c.list_validation_rules(pb::ListValidationRulesRequest {})
+                .await
+                .unwrap()
+                .into_inner()
+                .rules
+        )
+        .unwrap()
+        .to_hex()
+    );
+
+    let json = attested_bundle::bundle_to_json(&bundle).unwrap();
+    let reread = attested_bundle::bundle_from_json(&json).unwrap();
+    assert_eq!(attested_bundle::verify(&reread).unwrap(), verified);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changing_any_normative_field_fails_verification() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-tamper";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+    let bundle = export(&mut c, export_req(ns, "checkout")).await;
+    assert!(
+        !bundle.validation.as_ref().unwrap().issues.is_empty(),
+        "the fixture needs a finding to tamper with"
+    );
+
+    type Tamper = fn(&mut pb::AttestedModelBundle);
+    let tampers: [(&str, Tamper); 8] = [
+        ("manifests", |b| b.manifests.push_str("# edited\n")),
+        ("external manifests", |b| {
+            b.external_manifests.push_str("# edited\n");
+        }),
+        ("finding", |b| {
+            b.validation.as_mut().unwrap().issues[0].message = "nothing to see".into();
+        }),
+        ("dropped finding", |b| {
+            b.validation.as_mut().unwrap().issues.remove(0);
+        }),
+        ("coverage evidence", |b| {
+            let coverage = b.validation.as_mut().unwrap().coverage.as_mut().unwrap();
+            coverage.checks[0].subjects_examined += 1;
+        }),
+        ("entry", |b| {
+            b.entries[0].content_hash = "0".repeat(64);
+        }),
+        ("scope", |b| {
+            b.scope.as_mut().unwrap().branch = "elsewhere".into();
+        }),
+        ("rule catalogue", |b| {
+            let catalog = b
+                .validation
+                .as_mut()
+                .unwrap()
+                .rule_catalog
+                .as_mut()
+                .unwrap();
+            catalog.server_version = "0.0.0-older".into();
+        }),
+    ];
+    for (field, tamper) in tampers {
+        let mut tampered = bundle.clone();
+        tamper(&mut tampered);
+        assert!(
+            matches!(
+                attested_bundle::verify(&tampered),
+                Err(BundleError::DigestMismatch { .. })
+            ),
+            "editing the {field} must fail the digest"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn incomplete_export_is_refused_unless_explicitly_allowed() {
+    let endpoint = start_server(Some(1)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-capped";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event(ns, "shipped")).await;
+    put(
+        &mut c,
+        event_model(ns, "checkout", "Checkout", &["placed", "shipped"]),
+    )
+    .await;
+
+    let refused = c
+        .export_attested_model(export_req(ns, "checkout"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
+    let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+    assert_eq!(failure.code.unwrap().as_str(), "EXPORT_INCOMPLETE");
+
+    let mut allowed = export_req(ns, "checkout");
+    allowed.allow_incomplete = true;
+    let bundle = export(&mut c, allowed).await;
+    let verified = attested_bundle::verify(&bundle).unwrap();
+    let Completeness::Incomplete(reasons) = verified.completeness else {
+        panic!("a capped export must be marked incomplete");
+    };
+    assert!(reasons.contains(&IncompleteReason::SnapshotTruncated));
+    assert!(reasons.contains(&IncompleteReason::ValidationIncomplete));
+
+    let mut relabelled = bundle.clone();
+    relabelled.completeness = Some(Completeness::Complete.to_proto());
+    attested_bundle::seal(&mut relabelled).unwrap();
+    assert!(matches!(
+        attested_bundle::verify(&relabelled),
+        Err(BundleError::FalseComplete(_))
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn historical_export_describes_the_state_right_after_the_changeset() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let then = newest_changeset(&mut c).await;
+    put(&mut c, event_model(ns, "checkout", "After", &["placed"])).await;
+
+    let mut req = export_req(ns, "checkout");
+    req.as_of_changeset = then.clone();
+    let historical = export(&mut c, req.clone()).await;
+    attested_bundle::verify(&historical).unwrap();
+    let state = historical.state.as_ref().unwrap();
+    assert_eq!(state.mode(), pb::attested_state::Mode::Historical);
+    assert_eq!(state.baseline_changeset_id, then);
+    assert!(historical.manifests.contains("Before"));
+    assert!(!historical.manifests.contains("After"));
+
+    let current = export(&mut c, export_req(ns, "checkout")).await;
+    assert!(current.manifests.contains("After"));
+    assert_ne!(current.bundle_digest, historical.bundle_digest);
+
+    let mut on_branch = tonic::Request::new(req);
+    on_branch.metadata_mut().insert(
+        "x-trogon-atlas-branch",
+        MetadataValue::try_from("feature").unwrap(),
+    );
+    let refused = c.export_attested_model(on_branch).await.unwrap_err();
+    assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+}
+
+/// Exports racing a writer must each describe one state: the model entry,
+/// the board it reached, the findings and the changeset boundary all agree.
+#[tokio::test(flavor = "multi_thread")]
+async fn exports_racing_writes_never_mix_states() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-race";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "w0", &["placed"])).await;
+    let mut bundles = vec![export(&mut c, export_req(ns, "checkout")).await];
+
+    const WRITES: usize = 31;
+    let writer = {
+        let mut c = client(&endpoint).await;
+        tokio::spawn(async move {
+            for i in 1..=WRITES {
+                let members: &[&str] = if i % 2 == 0 { &["placed"] } else { &[] };
+                put(
+                    &mut c,
+                    event_model(ns, "checkout", &format!("w{i}"), members),
+                )
+                .await;
+            }
+        })
+    };
+    while !writer.is_finished() {
+        bundles.push(export(&mut c, export_req(ns, "checkout")).await);
+    }
+    writer.await.unwrap();
+    bundles.push(export(&mut c, export_req(ns, "checkout")).await);
+
+    let revisions = c
+        .get_entity_history(pb::GetEntityHistoryRequest {
+            r#ref: Some(pb::EntityRef {
+                kind: pb::EntityKind::EventModel as i32,
+                id: Some(id(ns, "checkout")),
+            }),
+            page_token: String::new(),
+            page_size: 100,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .revisions;
+    let mut saw_member = false;
+    let mut saw_empty = false;
+    for bundle in &bundles {
+        attested_bundle::verify(bundle).unwrap();
+        let boundary = &bundle.state.as_ref().unwrap().baseline_changeset_id;
+        let landed = revisions
+            .iter()
+            .filter(|r| r.changeset_id.as_str() <= boundary.as_str())
+            .max_by(|a, b| a.changeset_id.cmp(&b.changeset_id))
+            .expect("the boundary covers the model's first write");
+        let landed_model = landed.after.as_ref().unwrap();
+        let model_entry = bundle
+            .entries
+            .iter()
+            .find(|e| e.entity.as_ref().unwrap().id.as_ref().unwrap().slug == "checkout")
+            .unwrap();
+        assert_eq!(
+            model_entry.content_hash,
+            trogon_atlas_core::entity_content_hash(landed_model)
+                .unwrap()
+                .to_hex(),
+            "the model entry must be the revision the boundary names"
+        );
+        let Some(pb::entity::Kind::EventModel(em)) = landed_model.kind.as_ref() else {
+            panic!("model revision is not an EventModel");
+        };
+        assert!(bundle.manifests.contains(&em.title));
+        let has_member = !em.members.is_empty();
+        saw_member |= has_member;
+        saw_empty |= !has_member;
+        assert_eq!(
+            entry_slugs(bundle).contains(&"placed".to_string()),
+            has_member
+        );
+        assert_eq!(
+            mentions(&bundle.validation.as_ref().unwrap().issues, "placed"),
+            has_member,
+            "findings must come from the same state as the manifests"
+        );
+    }
+    assert!(
+        saw_member && saw_empty,
+        "the race must observe both shapes of the model"
+    );
+}

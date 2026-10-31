@@ -565,13 +565,13 @@ The full list of key-shaped reads that carry their own gate:
 `GetEntity`, `BatchGetEntities`, `GetEntityHistory`, `DiffEntities`,
 `GetLatestVersion`, `GetOutgoingReferences`, `GetSliceProjection`,
 `GetStoryboardProjection`, `GetEventModelProjection`,
-`ExportEventModelManifests`, `ValidateEventModel`, and the unscoped
+`ExportEventModelManifests`, `ExportAttestedModel`, `ValidateEventModel`, and the unscoped
 `ListChanges` poll. `DiffEntities` is two key lookups
 wearing a diff for a hat; `GetLatestVersion` accepts an empty namespace
 meaning "any", so its filter runs on the results rather than on the request.
 
 `GetOutgoingReferences`, the projection RPCs, `ExportEventModelManifests`,
-and `ValidateEventModel` read *both* ways. Each fetches a root entity by key
+`ExportAttestedModel` and `ValidateEventModel` read *both* ways. Each fetches a root entity by key
 and then walks its neighbourhood through the lens-filtered snapshot, but
 only the snapshot read was covered.
 The neighbourhood was narrowed correctly, which made the handler look

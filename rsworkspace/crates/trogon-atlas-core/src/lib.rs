@@ -14,6 +14,7 @@
 //! single `use` swap.
 
 pub mod architectural_relationships;
+pub mod attested_bundle;
 pub mod communication_intent;
 pub mod connection_persistence;
 pub mod connections;

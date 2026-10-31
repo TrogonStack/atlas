@@ -622,6 +622,24 @@ async fn export_event_model_manifests_does_not_render_another_owners_model() {
     });
 }
 
+/// An attested bundle carries the manifests and the findings, so it would
+/// leak everything the two RPCs it combines are each kept from leaking.
+#[tokio::test(flavor = "multi_thread")]
+async fn export_attested_model_does_not_attest_another_owners_model() {
+    let mut c = world().await;
+    let out = c
+        .export_attested_model(authed(
+            pb::ExportAttestedModelRequest {
+                id: Some(id("model")),
+                as_of_changeset: String::new(),
+                allow_incomplete: true,
+            },
+            BETA_TOKEN,
+        ))
+        .await;
+    assert_hidden("export_attested_model", out, |r| r.bundle.is_none());
+}
+
 /// Validating by id loads the stored model. The issues it reports name the
 /// model's members, so answering at all describes acme's graph to beta.
 #[tokio::test(flavor = "multi_thread")]

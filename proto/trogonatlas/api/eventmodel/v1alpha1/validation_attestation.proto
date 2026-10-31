@@ -1,0 +1,149 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/catalog/v1alpha1/snapshots.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/validation.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/projections.proto";
+
+// ---------- Attested export --------------------------------------------------
+//
+// An event model's manifests, the validation report run against them and
+// the identity of the state both came from, bound together by one digest.
+// Everything in the bundle is captured from a single state: the server
+// holds its mutation boundary for the whole capture, so no write can land
+// between reading the manifests and validating them.
+//
+// `bundle_digest` proves the bundle was not changed after the server
+// produced it. It does not prove who produced it. See
+// docs/explanation/attested-export.md and
+// docs/reference/attested-bundle-format.md.
+
+message AttestedModelBundle {
+  // Format identifier. A verifier refuses any value it does not know,
+  // since the digest rules belong to the format.
+  string format = 1;
+  AttestedScope scope = 2;
+  AttestedState state = 3;
+  // Multi-document YAML, as `ExportEventModelManifestsResponse.manifests`.
+  string manifests = 4;
+  // Multi-document YAML, as
+  // `ExportEventModelManifestsResponse.external_manifests`.
+  string external_manifests = 5;
+  // One row per exported entity (manifests and external manifests alike),
+  // sorted by `key`, with the same content hash `GetSnapshotId` reports.
+  repeated trogonatlas.catalog.v1alpha1.SnapshotEntry entries = 6;
+  // Entities that could not be rendered as manifests.
+  repeated SkippedEntity skipped = 7;
+  AttestedValidation validation = 8;
+  AttestedCompleteness completeness = 9;
+  // Lowercase hex SHA-256 over the domain tag and the canonical JSON of
+  // this message with `bundle_digest` cleared. Covers every other field.
+  string bundle_digest = 10;
+}
+
+message AttestedScope {
+  // The exported event model.
+  trogonatlas.type.v1alpha1.Id event_model_id = 1;
+  // Branch the state was read through. Empty means baseline.
+  string branch = 2;
+  AttestedLens lens = 3;
+}
+
+// The namespaces the caller could see. The snapshot, the closure and the
+// validation all read through this lens, so two bundles of one model taken
+// by callers with different lenses describe different views.
+message AttestedLens {
+  // True when the caller had no ownership boundary.
+  bool unrestricted = 1;
+  // Namespace ids admitted by the lens, sorted. Empty when `unrestricted`.
+  repeated string namespaces = 2;
+}
+
+message AttestedState {
+  enum Mode {
+    MODE_UNSPECIFIED = 0;
+    // The state as of the export call.
+    MODE_CURRENT = 1;
+    // A past baseline state, rebuilt from changeset history.
+    MODE_HISTORICAL = 2;
+  }
+  Mode mode = 1;
+  // Snapshot id over the whole view the validation read, under `scope`.
+  // For a current baseline export this equals `GetSnapshotId` with no
+  // namespace filter, called by the same caller at the same moment.
+  string snapshot_id = 2;
+  uint32 snapshot_entity_count = 3;
+  // Snapshot id over `entries` alone, by the same rules, so a verifier
+  // can recompute it offline.
+  string closure_id = 4;
+  // Current exports: the newest baseline changeset when the capture
+  // started. Historical exports: the requested changeset. Empty when the
+  // baseline has recorded no changeset. Writes that record no changeset
+  // do not move it, so `snapshot_id` remains the identity of record.
+  string baseline_changeset_id = 5;
+  // The newest changeset on `scope.branch`. Empty on baseline, or when the
+  // branch has recorded none.
+  string branch_changeset_id = 6;
+}
+
+message AttestedValidation {
+  // Findings from the same validation `ValidateEventModel` runs, over the
+  // same view as the manifests.
+  repeated ValidationIssue issues = 1;
+  ValidationCoverage coverage = 2;
+  RuleCatalogIdentity rule_catalog = 3;
+}
+
+// Which rule catalogue produced the findings.
+message RuleCatalogIdentity {
+  // Lowercase hex SHA-256 over the canonical JSON of
+  // `ListValidationRulesResponse`. Equal digests mean the same codes,
+  // severities and descriptions.
+  string digest = 1;
+  // Version of the server build that ran the rules.
+  string server_version = 2;
+}
+
+message AttestedCompleteness {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // Nothing was clipped, skipped or left unvalidated.
+    STATE_COMPLETE = 1;
+    // The caller asked for the bundle anyway. Not a clean attestation.
+    STATE_INCOMPLETE = 2;
+  }
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    // The store load hit its entity cap.
+    REASON_SNAPSHOT_TRUNCATED = 1;
+    // The model's closure exceeded the projection cap.
+    REASON_CLOSURE_TRUNCATED = 2;
+    // A historical rebuild could not fetch every entity it needed.
+    REASON_HISTORY_INCOMPLETE = 3;
+    // At least one entity could not be rendered as a manifest.
+    REASON_ENTITIES_SKIPPED = 4;
+    // A validation suite did not complete.
+    REASON_VALIDATION_INCOMPLETE = 5;
+  }
+  State state = 1;
+  // Every reason that applies, sorted, without repeats. Empty exactly when
+  // `state` is `STATE_COMPLETE`.
+  repeated Reason reasons = 2;
+}
+
+message ExportAttestedModelRequest {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  // Export the baseline as it stood right after this changeset, with the
+  // same rules as `GetEventModelProjectionRequest.as_of_changeset`. Empty
+  // exports the current state.
+  string as_of_changeset = 2;
+  // Return an incomplete bundle, marked `STATE_INCOMPLETE`, instead of
+  // refusing with `EXPORT_INCOMPLETE`.
+  bool allow_incomplete = 3;
+}
+
+message ExportAttestedModelResponse {
+  AttestedModelBundle bundle = 1;
+}
