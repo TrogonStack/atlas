@@ -1,5 +1,5 @@
 //! Typed causes attached to validation findings. Evidence is part of a
-//! finding's identity, so every list leaves through [`canonical`] and the
+//! finding's identity, so every list leaves through `canonical` and the
 //! identity key ignores the presentation-only `detail`.
 
 use std::cmp::Ordering;
