@@ -669,6 +669,7 @@ fn as_of_req(ns: &str, slug: &str, changeset: &str) -> pb::GetEventModelProjecti
         id: Some(id(ns, slug)),
         include_cross_model: false,
         as_of_changeset: changeset.into(),
+        as_of_time: String::new(),
     }
 }
 
@@ -1119,4 +1120,158 @@ async fn as_of_projection_of_an_unknown_changeset_is_not_found() {
         .await
         .expect_err("a malformed id is the caller's mistake");
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
+}
+
+fn as_of_time_req(ns: &str, slug: &str, at: &str) -> pb::GetEventModelProjectionRequest {
+    pb::GetEventModelProjectionRequest {
+        id: Some(id(ns, slug)),
+        include_cross_model: false,
+        as_of_changeset: String::new(),
+        as_of_time: at.into(),
+    }
+}
+
+fn minted_millis(changeset: &str) -> i64 {
+    let (secs, nanos) = uuid::Uuid::parse_str(changeset)
+        .unwrap()
+        .get_timestamp()
+        .unwrap()
+        .to_unix();
+    i64::try_from(secs).unwrap() * 1000 + i64::from(nanos / 1_000_000)
+}
+
+fn rfc3339_millis(millis: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(millis)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+/// An instant resolves to the changeset minted in that millisecond, reads the
+/// same board `as_of_changeset` gives, and names the changeset it chose. One
+/// millisecond earlier the model did not exist yet.
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_time_reads_the_board_of_the_changeset_at_that_instant() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    let ns = "hist-asof-time";
+
+    c.put_entity(as_author(
+        put_req(event(ns, "order-placed", "Order placed")),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_author(
+        put_req(event_model(ns, "checkout", &["order-placed"])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    c.put_entity(as_author(
+        put_req(event(ns, "order-placed", "Order was placed")),
+        "bob",
+    ))
+    .await
+    .unwrap();
+
+    let millis = minted_millis(&target);
+    let by_time = c
+        .get_event_model_projection(as_of_time_req(ns, "checkout", &rfc3339_millis(millis)))
+        .await
+        .unwrap()
+        .into_inner();
+    let by_id = c
+        .get_event_model_projection(as_of_req(ns, "checkout", &target))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        board(by_time.projection.as_ref().unwrap()),
+        board(by_id.projection.as_ref().unwrap())
+    );
+    assert_eq!(
+        board(by_time.projection.as_ref().unwrap()).1,
+        vec![("order-placed".to_string(), "Order placed".to_string())]
+    );
+    assert!(
+        by_time.as_of_changeset >= target && minted_millis(&by_time.as_of_changeset) == millis,
+        "resolved {} for target {target}",
+        by_time.as_of_changeset
+    );
+    assert_eq!(by_id.as_of_changeset, target);
+
+    let status = c
+        .get_event_model_projection(as_of_time_req(ns, "checkout", &rfc3339_millis(millis - 1)))
+        .await
+        .expect_err("the model was created in the target's millisecond");
+    assert_eq!(status.code(), tonic::Code::NotFound);
+
+    let now = c
+        .get_event_model_projection(as_of_req(ns, "checkout", ""))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(now.as_of_changeset, "", "a current read names no changeset");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn as_of_time_refuses_what_it_cannot_pin() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    let ns = "hist-asof-time-refusals";
+
+    c.put_entity(as_author(
+        put_req(event_model(ns, "checkout", &[])),
+        "alice",
+    ))
+    .await
+    .unwrap();
+    let target = newest_changeset(&mut c).await;
+
+    let future = rfc3339_millis(chrono::Utc::now().timestamp_millis() + 60_000);
+    for (label, req) in [
+        (
+            "an instant later than the server clock",
+            as_of_time_req(ns, "checkout", &future),
+        ),
+        (
+            "a malformed instant",
+            as_of_time_req(ns, "checkout", "yesterday"),
+        ),
+        ("both as-of fields", {
+            let mut req = as_of_time_req(ns, "checkout", &rfc3339_millis(minted_millis(&target)));
+            req.as_of_changeset = target.clone();
+            req
+        }),
+    ] {
+        let status = c.get_event_model_projection(req).await.expect_err(label);
+        assert_eq!(status.code(), tonic::Code::InvalidArgument, "{label}");
+    }
+
+    c.create_branch(tonic::Request::new(pb::CreateBranchRequest {
+        name: "hist-asof-time-work".into(),
+        doc: String::new(),
+    }))
+    .await
+    .unwrap();
+    let status = c
+        .get_event_model_projection(on_branch(
+            tonic::Request::new(as_of_time_req(
+                ns,
+                "checkout",
+                &rfc3339_millis(minted_millis(&target)),
+            )),
+            "hist-asof-time-work",
+        ))
+        .await
+        .expect_err("as-of is baseline only");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+
+    let status = c
+        .get_event_model_projection(as_of_time_req(ns, "checkout", "1970-01-01T00:00:00Z"))
+        .await
+        .expect_err("no changeset was recorded that early");
+    assert_eq!(status.code(), tonic::Code::FailedPrecondition);
 }
