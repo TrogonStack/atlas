@@ -39,6 +39,7 @@ test('authenticated native hosting and explicit human tuples preserve checked id
   page,
   request,
 }) => {
+  page.setDefaultTimeout(30_000);
   const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
   const evidenceDirectory = process.env.ATLAS_NATIVE_EVIDENCE_DIR;
   if (!evidenceDirectory) throw new Error('Missing native evidence directory');
@@ -100,6 +101,7 @@ test('authenticated native hosting and explicit human tuples preserve checked id
       ...process.env,
       TROGON_ATLAS_GRPC: fixture.grpc,
       TROGON_ATLAS_AUTH_PASSTHROUGH: 'true',
+      TROGON_ATLAS_AUTH_TOKEN: TOKEN,
       PORT: String(bridgePort),
       HOST: '127.0.0.1',
       NATS_WS_AUTH_TOKEN: 'native-fixture-sse',
