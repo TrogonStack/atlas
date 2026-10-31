@@ -26,13 +26,15 @@ pub const MAX_REWIND_CHANGESETS: usize = 1000;
 /// The view is narrowed to `lens` anyway, so another owner's keys are left
 /// alone: reading their revision rows would let their gaps fail this read and
 /// put their ids in the error. Two ops on one key share one folded revision
-/// row, so only the first is kept.
+/// row, so only the first is kept. Protection ops change no content and have
+/// no revision row, so they are never rewound.
 #[must_use]
 pub fn ops_to_rewind<'a>(record: &'a ChangesetRecord, lens: &Lens) -> Vec<&'a ChangesetOp> {
     let mut seen = HashSet::new();
     record
         .ops
         .iter()
+        .filter(|op| op.kind.is_content())
         .filter(|op| match op.entity_ref.id.as_ref() {
             Some(id) => {
                 lens.admits(&id.namespace)
@@ -151,6 +153,16 @@ mod tests {
             slugs(&ops_to_rewind(&record, &Lens::Everything)),
             ["paid", "shipped"]
         );
+    }
+
+    #[test]
+    fn ops_to_rewind_skips_protection_ops() {
+        let protect = ChangesetOp {
+            kind: ChangeKind::Protect,
+            ..op("acme", "frozen")
+        };
+        let record = changeset(vec![protect, op("acme", "paid")]);
+        assert_eq!(slugs(&ops_to_rewind(&record, &Lens::Everything)), ["paid"]);
     }
 
     #[test]

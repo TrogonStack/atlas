@@ -1269,6 +1269,128 @@ pub mod event_model_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Entity protection. Setting and lifting are admin-only and baseline-only;
+ reading is open to any reader.
+*/
+        pub async fn protect_entity(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ProtectEntityRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ProtectEntityResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ProtectEntity",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ProtectEntity",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn unprotect_entity(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UnprotectEntityRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UnprotectEntityResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UnprotectEntity",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "UnprotectEntity",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn get_entity_protection(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetEntityProtectionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetEntityProtectionResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntityProtection",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetEntityProtection",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn list_entity_protections(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListEntityProtectionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListEntityProtectionsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntityProtections",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListEntityProtections",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         /** Content-addressable identity of the current state. Branch-scoped via
  the `x-trogon-atlas-branch` header like every other read.
 */
@@ -3030,6 +3152,40 @@ pub mod event_model_service_server {
             request: tonic::Request<super::MoveNamespaceRequest>,
         ) -> std::result::Result<
             tonic::Response<super::MoveNamespaceResponse>,
+            tonic::Status,
+        >;
+        /** Entity protection. Setting and lifting are admin-only and baseline-only;
+ reading is open to any reader.
+*/
+        async fn protect_entity(
+            &self,
+            request: tonic::Request<super::ProtectEntityRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ProtectEntityResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn unprotect_entity(
+            &self,
+            request: tonic::Request<super::UnprotectEntityRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UnprotectEntityResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn get_entity_protection(
+            &self,
+            request: tonic::Request<super::GetEntityProtectionRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetEntityProtectionResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn list_entity_protections(
+            &self,
+            request: tonic::Request<super::ListEntityProtectionsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListEntityProtectionsResponse>,
             tonic::Status,
         >;
         /** Content-addressable identity of the current state. Branch-scoped via
@@ -5422,6 +5578,196 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = MoveNamespaceSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ProtectEntity" => {
+                    #[allow(non_camel_case_types)]
+                    struct ProtectEntitySvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::ProtectEntityRequest>
+                    for ProtectEntitySvc<T> {
+                        type Response = super::ProtectEntityResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ProtectEntityRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::protect_entity(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ProtectEntitySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UnprotectEntity" => {
+                    #[allow(non_camel_case_types)]
+                    struct UnprotectEntitySvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::UnprotectEntityRequest>
+                    for UnprotectEntitySvc<T> {
+                        type Response = super::UnprotectEntityResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UnprotectEntityRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::unprotect_entity(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UnprotectEntitySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntityProtection" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetEntityProtectionSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::GetEntityProtectionRequest>
+                    for GetEntityProtectionSvc<T> {
+                        type Response = super::GetEntityProtectionResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetEntityProtectionRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::get_entity_protection(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetEntityProtectionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntityProtections" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListEntityProtectionsSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::ListEntityProtectionsRequest>
+                    for ListEntityProtectionsSvc<T> {
+                        type Response = super::ListEntityProtectionsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListEntityProtectionsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_entity_protections(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListEntityProtectionsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

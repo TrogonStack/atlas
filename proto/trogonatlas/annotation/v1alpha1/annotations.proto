@@ -81,3 +81,14 @@ message AssumptionAnnotation {
   string author = 3;
   string created_at = 4;
 }
+
+// A request to protect the entity's identity, carried on a write. It is a
+// request, never stored state: the server removes it from every entity it
+// stores. When the writer is an authenticated admin writing to baseline, the
+// write that carried it also protects the identity, attributed to that
+// admin. From anyone else, or on a branch, it is dropped without effect, so
+// an imported model cannot grant itself protection. The authoritative state
+// is trogonatlas.catalog.v1alpha1.EntityProtection.
+message ProtectionAnnotation {
+  string reason = 1;
+}

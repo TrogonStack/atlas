@@ -19,6 +19,7 @@ pub mod merge3;
 pub mod metrics;
 pub mod operation_receipts;
 pub mod ownership;
+pub mod protection;
 mod responsibility_resources;
 pub mod scope;
 pub mod search;

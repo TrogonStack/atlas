@@ -47,6 +47,15 @@ struct JournalHeader {
     /// by a crash, without the original RPC caller present to do it.
     #[prost(string, tag = "9")]
     operation_key: String,
+    /// The `operation_id` behind `operation_key`, so a changeset completed
+    /// by recovery still names the operation that produced it.
+    #[prost(string, tag = "10")]
+    operation_id: String,
+    /// The caller settles the receipt only after work that follows this
+    /// batch (registering protections). Recovery cannot see that work, so
+    /// it settles such a receipt not-applied and lets a retry finish it.
+    #[prost(bool, tag = "11")]
+    settlement_deferred: bool,
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -162,11 +171,7 @@ impl JournalHeader {
             id: &self.changeset_id,
             author: &self.author,
             rpc: &self.rpc,
-            // The raw `operation_id` is not itself in the journal header
-            // (only the derived claim key is, for settlement); a changeset
-            // completed by recovery denormalises no `operation_id`. The
-            // claim is still settled correctly via `operation_key` above.
-            operation_id: None,
+            operation_id: (!self.operation_id.is_empty()).then_some(self.operation_id.as_str()),
         })
     }
 }
@@ -398,6 +403,11 @@ impl NatsStore {
             changes: Vec::new(),
             writer_epoch: self.lease.current_epoch().get(),
             operation_key: ctx.operation_key().unwrap_or_default().to_owned(),
+            operation_id: attribution
+                .and_then(|c| c.operation_id)
+                .unwrap_or_default()
+                .to_owned(),
+            settlement_deferred: ctx.settlement_deferred(),
         };
         let created = tokio::time::timeout(
             KV_OP_TIMEOUT,
@@ -701,6 +711,15 @@ impl NatsStore {
                     self.settle_operation_not_applied(&header.operation_key)
                         .await
                 }
+                RecoveryAction::RollForward | RecoveryAction::CompleteChangeset
+                    if header.settlement_deferred =>
+                {
+                    self.settle_pending_operation_unfinished(
+                        &header.operation_key,
+                        &header.changeset_id,
+                    )
+                    .await
+                }
                 RecoveryAction::RollForward | RecoveryAction::CompleteChangeset => {
                     self.settle_operation_applied(&header.operation_key, &header.changeset_id)
                         .await
@@ -827,7 +846,7 @@ impl NatsStore {
             ),
             rpc: changeset.rpc.to_owned(),
             branch: None,
-            operation_id: None,
+            operation_id: changeset.operation_id.map(str::to_owned),
             ops: header
                 .changes
                 .iter()

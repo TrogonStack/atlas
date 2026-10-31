@@ -178,6 +178,43 @@ pub struct NamespaceClaim {
 pub enum ChangeKind {
     Put,
     Delete,
+    /// Protection set on the entity's identity. Only ever a changeset op; the
+    /// change feed never carries it.
+    Protect,
+    /// Protection lifted. Same changeset-only rule as [`ChangeKind::Protect`].
+    Unprotect,
+}
+
+impl ChangeKind {
+    #[must_use]
+    pub fn to_proto(self) -> i32 {
+        use trogon_atlas_proto::change_event::Kind;
+        match self {
+            Self::Put => Kind::Put as i32,
+            Self::Delete => Kind::Deleted as i32,
+            Self::Protect => Kind::Protected as i32,
+            Self::Unprotect => Kind::Unprotected as i32,
+        }
+    }
+
+    #[must_use]
+    pub fn from_proto(raw: i32) -> Option<Self> {
+        use trogon_atlas_proto::change_event::Kind;
+        match Kind::try_from(raw).ok()? {
+            Kind::Put => Some(Self::Put),
+            Kind::Deleted => Some(Self::Delete),
+            Kind::Protected => Some(Self::Protect),
+            Kind::Unprotected => Some(Self::Unprotect),
+            Kind::Unspecified => None,
+        }
+    }
+
+    /// Whether this kind changes entity content, as opposed to the
+    /// protection registry.
+    #[must_use]
+    pub fn is_content(self) -> bool {
+        matches!(self, Self::Put | Self::Delete)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +277,7 @@ pub struct WriteContext<'a> {
     branch: Option<&'a str>,
     changeset: Option<ChangesetRef<'a>>,
     operation_key: Option<&'a str>,
+    settlement_deferred: bool,
     connection_admission: ConnectionAdmission<'a>,
 }
 
@@ -257,6 +295,7 @@ impl<'a> WriteContext<'a> {
             branch: Some(name),
             changeset: None,
             operation_key: None,
+            settlement_deferred: false,
             connection_admission: ConnectionAdmission::Active,
         }
     }
@@ -269,6 +308,7 @@ impl<'a> WriteContext<'a> {
             branch,
             changeset: None,
             operation_key: None,
+            settlement_deferred: false,
             connection_admission: ConnectionAdmission::Active,
         }
     }
@@ -298,6 +338,20 @@ impl<'a> WriteContext<'a> {
     pub fn with_operation_key(mut self, key: &'a str) -> Self {
         self.operation_key = Some(key);
         self
+    }
+
+    /// Mark the claimed receipt as settled by the caller only after work
+    /// that follows this write, so a recovery pass that finds the write
+    /// durable does not settle it applied on the caller's behalf.
+    #[must_use]
+    pub fn with_deferred_settlement(mut self) -> Self {
+        self.settlement_deferred = true;
+        self
+    }
+
+    #[must_use]
+    pub fn settlement_deferred(self) -> bool {
+        self.settlement_deferred
     }
 
     #[must_use]
@@ -1042,6 +1096,41 @@ pub trait Store: Send + Sync {
     /// Look up one row by id. `None` when no such namespace is registered.
     async fn get_namespace(&self, id: &NamespaceId) -> StoreResult<Option<NamespaceRecord>>;
 
+    // ---- Entity protection registry ---------------------------------------
+    //
+    // Protection is keyed by identity rather than stored on the entity, so no
+    // write, merge, or revert of the entity can carry it away. Rows are never
+    // versioned and never branch-scoped: a branch cannot see a different
+    // answer than baseline, which is what keeps an old branch from merging
+    // over a protected identity.
+
+    /// One identity's protection. A row that exists but cannot be decoded is
+    /// [`ProtectionState::Unknown`](crate::protection::ProtectionState::Unknown);
+    /// `Err` means the registry did not answer.
+    async fn get_protection(
+        &self,
+        identity: &crate::protection::EntityIdentity,
+    ) -> StoreResult<crate::protection::ProtectionState>;
+
+    /// Write a row. Fails with `AlreadyExists` when a row is already there, so
+    /// two concurrent protects cannot both claim to have set it.
+    async fn put_protection(
+        &self,
+        record: &crate::protection::ProtectionRecord,
+    ) -> StoreResult<crate::protection::ProtectionRevision>;
+
+    /// Remove the row only if it is still at `expected`. `EtagMismatch` when
+    /// it moved or is gone.
+    async fn delete_protection(
+        &self,
+        identity: &crate::protection::EntityIdentity,
+        expected: crate::protection::ProtectionRevision,
+    ) -> StoreResult<()>;
+
+    /// Every row the registry can enumerate, for listing only; the write path
+    /// looks identities up one at a time.
+    async fn list_protections(&self) -> StoreResult<crate::protection::ProtectionListing>;
+
     /// Resolve a human name to its id *within one owner*. `None` when that
     /// owner has no namespace by that name, even if another owner does.
     ///
@@ -1126,6 +1215,16 @@ pub trait Store: Send + Sync {
     async fn settle_operation_not_applied(&self, key: &str) -> StoreResult<()> {
         let _ = key;
         Ok(())
+    }
+
+    /// Settle a claim as not-applied although changeset `changeset_id`
+    /// already landed its content: a later step of the same operation
+    /// failed, so a retry is free to claim again and can recognise that
+    /// content as its own instead of tripping its own precondition. A
+    /// backend that cannot record the changeset settles plain not-applied.
+    async fn settle_operation_unfinished(&self, key: &str, changeset_id: &str) -> StoreResult<()> {
+        let _ = changeset_id;
+        self.settle_operation_not_applied(key).await
     }
 
     /// Look up a claim by key, for `GetOperation`. `None` means no record:
@@ -1249,7 +1348,9 @@ pub struct OperationRecord {
     /// Branch the mutation applied to. `None` = baseline.
     pub branch: Option<String>,
     pub status: OperationStatus,
-    /// Set when `status == Applied`.
+    /// Set when `status == Applied`, and on a `NotApplied` claim whose
+    /// content landed before a later step failed (see
+    /// [`Store::settle_operation_unfinished`]).
     pub changeset_id: String,
     /// Set when `status == Rejected`.
     pub rejection_code: String,

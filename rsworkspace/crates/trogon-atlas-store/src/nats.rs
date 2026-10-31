@@ -68,6 +68,10 @@ use crate::{
         parse_entity_key, parse_namespace_record_key, revision_key, revision_prefix,
     },
     metrics::StoreMetrics,
+    protection::{
+        EntityIdentity, ProtectionListing, ProtectionRecord, ProtectionRevision, ProtectionState,
+        ProtectionUnknown, ProtectionUnknownCause, StoredProtection,
+    },
     store::{
         BranchDeltaEntry, BranchInfo, BranchLandOp, ChangeKind, ChangeRecord, ChangesetOp,
         ChangesetPage, ChangesetRecord, ChangesetRef, ClaimOutcome, EntityRevisionRecord,
@@ -464,6 +468,9 @@ pub struct NatsStore {
     /// KV bucket holding the namespace registry. See the "Namespace
     /// registry" section on the `Store` trait.
     namespaces_kv: KvStore,
+    /// KV bucket holding the entity protection registry, named after the
+    /// namespace bucket so test isolation and deployments need no new knob.
+    protections_kv: KvStore,
     /// KV bucket holding operation receipts. See `operations.rs`.
     operations_kv: KvStore,
     /// In-memory writer-lease state, kept current by the background task
@@ -656,6 +663,12 @@ impl NatsStore {
             "Event Modeling namespace registry (namespace id -> owner + name)",
         )
         .await?;
+        let protections_kv = ensure_kv(
+            &js,
+            &format!("{}-protections", config.namespaces_bucket),
+            "Event Modeling entity protection registry (identity -> EntityProtection)",
+        )
+        .await?;
         let source_kv = ensure_kv(
             &js,
             &format!("{}-sources", config.batches_bucket),
@@ -716,6 +729,7 @@ impl NatsStore {
             #[cfg(test)]
             faults: Arc::default(),
             namespaces_kv,
+            protections_kv,
             operations_kv,
             lease,
             lease_task: Arc::new(writer_lease::WriterLeaseHandle::new(lease_task)),
@@ -2170,6 +2184,39 @@ fn entity_id(entity: &Entity) -> Option<&Id> {
 // Namespace registry codec
 // ---------------------------------------------------------------------------
 
+fn decode_protection(bytes: &[u8]) -> StoreResult<ProtectionRecord> {
+    let proto = trogon_atlas_proto::EntityProtection::decode(bytes)
+        .map_err(|e| StoreError::Backend(format!("decode EntityProtection: {e}")))?;
+    ProtectionRecord::from_proto(proto)
+}
+
+/// A live row decodes to `Protected`, or to `Unknown` when it is unreadable
+/// or names a different identity than its key.
+fn protection_state(identity: EntityIdentity, entry: &KvEntry) -> ProtectionState {
+    let revision = ProtectionRevision::new(entry.revision);
+    match decode_protection(&entry.value) {
+        Ok(record) if record.identity == identity => {
+            ProtectionState::Protected(StoredProtection { record, revision })
+        }
+        Ok(record) => {
+            tracing::warn!(%identity, named = %record.identity, "protection row names a different identity");
+            ProtectionState::Unknown(ProtectionUnknown {
+                identity,
+                cause: ProtectionUnknownCause::Mismatched,
+                revision: Some(revision),
+            })
+        }
+        Err(error) => {
+            tracing::warn!(%identity, %error, "protection row cannot be decoded");
+            ProtectionState::Unknown(ProtectionUnknown {
+                identity,
+                cause: ProtectionUnknownCause::Undecodable,
+                revision: Some(revision),
+            })
+        }
+    }
+}
+
 fn encode_namespace_record(record: &NamespaceRecord) -> Bytes {
     let proto = trogon_atlas_proto::NamespaceRecord {
         id: record.id.to_string(),
@@ -2479,12 +2526,8 @@ fn change_event_proto(
     entity_ref: &EntityRef,
     changeset: Option<ChangesetRef<'_>>,
 ) -> trogon_atlas_proto::ChangeEvent {
-    use trogon_atlas_proto::change_event::Kind as PbKind;
     trogon_atlas_proto::ChangeEvent {
-        kind: match kind {
-            ChangeKind::Put => PbKind::Put as i32,
-            ChangeKind::Delete => PbKind::Deleted as i32,
-        },
+        kind: kind.to_proto(),
         entity: Some(entity_ref.clone()),
         at: now_rfc3339(),
         token: String::new(),
@@ -2526,6 +2569,11 @@ fn change_subject(
     let kind_tag = match kind {
         ChangeKind::Put => "put",
         ChangeKind::Delete => "del",
+        ChangeKind::Protect | ChangeKind::Unprotect => {
+            return Err(StoreError::InvalidArgument(
+                "change_subject: protection changes are never published to the change feed".into(),
+            ));
+        }
     };
     Ok(format!(
         "{subject_root}.{kind_tag}.{}.{}",
@@ -4511,6 +4559,119 @@ impl Store for NatsStore {
         Ok(self.read_namespace_row(id).await?.map(|(record, _)| record))
     }
 
+    async fn get_protection(&self, identity: &EntityIdentity) -> StoreResult<ProtectionState> {
+        let key = crate::key::protection_key(identity);
+        Ok(
+            match kv_entry_timeout(&self.protections_kv, key)
+                .await?
+                .filter(|entry| entry.operation == Operation::Put)
+            {
+                None => ProtectionState::Unprotected,
+                Some(entry) => protection_state(identity.clone(), &entry),
+            },
+        )
+    }
+
+    async fn put_protection(&self, record: &ProtectionRecord) -> StoreResult<ProtectionRevision> {
+        self.source_guarded(async {
+            self.require_writer()?;
+            let key = crate::key::protection_key(&record.identity);
+            let bytes = Bytes::from(record.to_proto().encode_to_vec());
+            match tokio::time::timeout(KV_OP_TIMEOUT, self.protections_kv.create(&key, bytes))
+                .await
+                .map_err(|_| StoreError::Backend(format!("protection kv.create {key}: timeout")))?
+            {
+                Ok(revision) => Ok(ProtectionRevision::new(revision)),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        async_nats::jetstream::kv::CreateErrorKind::AlreadyExists
+                    ) =>
+                {
+                    Err(StoreError::AlreadyExists)
+                }
+                Err(e) => Err(StoreError::Backend(format!(
+                    "protection kv.create {key}: {e}"
+                ))),
+            }
+        })
+        .await
+    }
+
+    async fn delete_protection(
+        &self,
+        identity: &EntityIdentity,
+        expected: ProtectionRevision,
+    ) -> StoreResult<()> {
+        self.source_guarded(async {
+            self.require_writer()?;
+            let key = crate::key::protection_key(identity);
+            match tokio::time::timeout(
+                KV_OP_TIMEOUT,
+                self.protections_kv
+                    .delete_expect_revision(&key, Some(expected.get())),
+            )
+            .await
+            .map_err(|_| StoreError::Backend(format!("protection kv.delete {key}: timeout")))?
+            {
+                Ok(()) => Ok(()),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        async_nats::jetstream::kv::DeleteErrorKind::WrongLastRevision
+                    ) =>
+                {
+                    Err(StoreError::EtagMismatch {
+                        expected: expected.to_string(),
+                        found: live_found_etag(&self.protections_kv, &key).await,
+                    })
+                }
+                Err(e) => Err(StoreError::Backend(format!(
+                    "protection kv.delete {key}: {e}"
+                ))),
+            }
+        })
+        .await
+    }
+
+    async fn list_protections(&self) -> StoreResult<ProtectionListing> {
+        let mut listing = ProtectionListing {
+            complete: true,
+            ..ProtectionListing::default()
+        };
+        let mut keys_stream = tokio::time::timeout(KV_OP_TIMEOUT, self.protections_kv.keys())
+            .await
+            .map_err(|_| StoreError::Backend("protection kv.keys: timeout".into()))?
+            .map_err(|e| StoreError::Backend(format!("protection kv.keys: {e}")))?;
+        let mut keys = Vec::new();
+        loop {
+            match tokio::time::timeout(KV_OP_TIMEOUT, keys_stream.next()).await {
+                Ok(Some(Ok(key))) => keys.push(key),
+                Ok(None) => break,
+                Ok(Some(Err(_))) | Err(_) => {
+                    listing.complete = false;
+                    break;
+                }
+            }
+        }
+        for key in keys {
+            let Some(identity) = crate::key::parse_protection_key(&key) else {
+                listing.complete = false;
+                continue;
+            };
+            let state = match self.get_protection(&identity).await {
+                Ok(state) => state,
+                Err(e) => ProtectionState::unreadable(identity, &e),
+            };
+            match state {
+                ProtectionState::Unprotected => {}
+                ProtectionState::Protected(stored) => listing.protected.push(stored),
+                ProtectionState::Unknown(unknown) => listing.unknown.push(unknown),
+            }
+        }
+        Ok(listing)
+    }
+
     async fn resolve_namespace(
         &self,
         parent: &OwnerId,
@@ -4663,6 +4824,11 @@ impl Store for NatsStore {
 
     async fn settle_operation_not_applied(&self, key: &str) -> StoreResult<()> {
         self.source_guarded(async { self.settle_operation_not_applied(key).await })
+            .await
+    }
+
+    async fn settle_operation_unfinished(&self, key: &str, changeset_id: &str) -> StoreResult<()> {
+        self.source_guarded(async { self.settle_operation_unfinished(key, changeset_id).await })
             .await
     }
 
@@ -5667,7 +5833,6 @@ fn entity_revision_proto(
     branch: Option<&str>,
     revision: &Revision,
 ) -> trogon_atlas_proto::EntityRevision {
-    use trogon_atlas_proto::change_event::Kind as PbKind;
     trogon_atlas_proto::EntityRevision {
         changeset_id: changeset.id.to_owned(),
         author: changeset.author.to_owned(),
@@ -5675,10 +5840,7 @@ fn entity_revision_proto(
         rpc: changeset.rpc.to_owned(),
         branch: branch.unwrap_or_default().to_owned(),
         entity: Some(revision.entity_ref()),
-        kind: match revision.change {
-            ChangeKind::Put => PbKind::Put as i32,
-            ChangeKind::Delete => PbKind::Deleted as i32,
-        },
+        kind: revision.change.to_proto(),
         before: revision.before.clone(),
         after: revision.after.clone(),
     }
@@ -5717,7 +5879,6 @@ fn decode_entity_revision(bytes: &[u8]) -> StoreResult<EntityRevisionRecord> {
 }
 
 fn changeset_proto(record: &ChangesetRecord) -> trogon_atlas_proto::Changeset {
-    use trogon_atlas_proto::change_event::Kind as PbKind;
     trogon_atlas_proto::Changeset {
         id: record.id.clone(),
         author: record.author.clone(),
@@ -5730,10 +5891,7 @@ fn changeset_proto(record: &ChangesetRecord) -> trogon_atlas_proto::Changeset {
             .ops
             .iter()
             .map(|op| trogon_atlas_proto::ChangesetOp {
-                kind: match op.kind {
-                    ChangeKind::Put => PbKind::Put as i32,
-                    ChangeKind::Delete => PbKind::Deleted as i32,
-                },
+                kind: op.kind.to_proto(),
                 entity: Some(op.entity_ref.clone()),
             })
             .collect(),
@@ -5748,14 +5906,11 @@ fn decode_changeset(bytes: &[u8]) -> StoreResult<ChangesetRecord> {
         let entity_ref = op
             .entity
             .ok_or_else(|| StoreError::Backend("ChangesetOp.entity is required".into()))?;
-        let kind = match op.kind {
-            x if x == trogon_atlas_proto::change_event::Kind::Put as i32 => ChangeKind::Put,
-            x if x == trogon_atlas_proto::change_event::Kind::Deleted as i32 => ChangeKind::Delete,
-            other => {
-                return Err(StoreError::Backend(format!(
-                    "unknown ChangesetOp.kind value {other}"
-                )));
-            }
+        let Some(kind) = ChangeKind::from_proto(op.kind) else {
+            return Err(StoreError::Backend(format!(
+                "unknown ChangesetOp.kind value {}",
+                op.kind
+            )));
         };
         ops.push(ChangesetOp { kind, entity_ref });
     }

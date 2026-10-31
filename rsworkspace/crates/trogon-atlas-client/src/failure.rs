@@ -163,6 +163,9 @@ pub enum NextAction {
     /// A `ListChanges` cursor failed to open; retry the poll with an empty
     /// `since_token` instead of reusing it.
     RestartListing,
+    /// The target identity is protected; an admin must lift the protection
+    /// with `UnprotectEntity` before any change to it can land.
+    RequestUnprotect,
     /// No retry helps.
     None,
 }
@@ -176,6 +179,7 @@ impl fmt::Display for NextAction {
             NextAction::CheckOperation => "check_operation",
             NextAction::UseNewOperationId => "use_new_operation_id",
             NextAction::RestartListing => "restart_listing",
+            NextAction::RequestUnprotect => "request_unprotect",
             NextAction::None => "none",
         })
     }
@@ -402,6 +406,21 @@ impl Failure {
                     "CURSOR_REJECTED",
                     Some(NextAction::RestartListing),
                 ),
+                "ENTITY_PROTECTED" => (
+                    FailureCategory::Precondition,
+                    "ENTITY_PROTECTED",
+                    Some(NextAction::RequestUnprotect),
+                ),
+                "PROTECTION_STATE_UNKNOWN" if metadata.contains_key("row_revision") => (
+                    FailureCategory::Unavailable,
+                    "PROTECTION_STATE_UNKNOWN",
+                    Some(NextAction::RequestUnprotect),
+                ),
+                "PROTECTION_STATE_UNKNOWN" => (
+                    FailureCategory::Unavailable,
+                    "PROTECTION_STATE_UNKNOWN",
+                    None,
+                ),
                 _ => return None,
             };
         // Single-entity stale refusals carry the same revision pair BatchMutate
@@ -417,6 +436,14 @@ impl Failure {
                 }))
             } else if let Some(journal) = metadata.get("journal") {
                 FailureDetails::from_json(json!({ "journal": journal }))
+            } else if let Some(identity) = metadata.get("identity") {
+                let mut fields = serde_json::Map::from_iter([("identity".into(), json!(identity))]);
+                for key in ["protection_reason", "protected_by", "row_revision"] {
+                    if let Some(value) = metadata.get(key) {
+                        fields.insert(key.into(), json!(value));
+                    }
+                }
+                FailureDetails::from_json(serde_json::Value::Object(fields))
             } else if let Some(slugs) = metadata.get("did_you_mean") {
                 // ErrorInfo metadata is string-to-string, so the server joins the
                 // slugs with a comma, which a valid slug can never contain.
@@ -545,6 +572,10 @@ mod tests {
             NextAction::Replan,
             NextAction::Retry,
             NextAction::FixInput,
+            NextAction::CheckOperation,
+            NextAction::UseNewOperationId,
+            NextAction::RestartListing,
+            NextAction::RequestUnprotect,
             NextAction::None,
         ] {
             let serialized: String = serde_json::from_value(json!(action)).unwrap();
@@ -802,6 +833,77 @@ mod tests {
         assert_eq!(failure.category, FailureCategory::Unavailable);
         assert_eq!(failure.next_action, NextAction::Retry);
         assert_eq!(failure.code.unwrap().as_str(), "NOT_WRITER");
+    }
+
+    #[test]
+    fn status_with_entity_protected_reason_asks_for_an_unprotect() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "ENTITY_PROTECTED",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([
+                ("identity".to_string(), "event/orders/placed".to_string()),
+                ("protection_reason".to_string(), "published".to_string()),
+                ("protected_by".to_string(), "ops".to_string()),
+            ]),
+        );
+        let status = Status::with_error_details(
+            Code::FailedPrecondition,
+            "event/orders/placed is protected (published)",
+            details,
+        );
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::RequestUnprotect);
+        assert_eq!(failure.code.unwrap().as_str(), "ENTITY_PROTECTED");
+        assert_eq!(failure.details.0["identity"], json!("event/orders/placed"));
+        assert_eq!(failure.details.0["protected_by"], json!("ops"));
+    }
+
+    fn protection_state_unknown_status(metadata: &[(&str, &str)]) -> Status {
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "PROTECTION_STATE_UNKNOWN",
+            SERVER_ERROR_DOMAIN,
+            metadata
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        );
+        Status::with_error_details(
+            Code::Unavailable,
+            "protection state of event/orders/placed is unknown",
+            details,
+        )
+    }
+
+    #[test]
+    fn status_with_protection_state_unknown_is_retryable_not_a_lift_request() {
+        let status = protection_state_unknown_status(&[("identity", "event/orders/placed")]);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Unavailable);
+        assert_eq!(failure.next_action, NextAction::Retry);
+        assert_eq!(failure.code.unwrap().as_str(), "PROTECTION_STATE_UNKNOWN");
+        assert_eq!(failure.details.0["identity"], json!("event/orders/placed"));
+        assert!(failure.details.0.get("row_revision").is_none());
+        assert!(failure.details.0.get("protected_by").is_none());
+    }
+
+    #[test]
+    fn status_with_an_unreadable_protection_row_asks_for_a_lift_not_a_retry() {
+        let status = protection_state_unknown_status(&[
+            ("identity", "event/orders/placed"),
+            ("row_revision", "7"),
+        ]);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Unavailable);
+        assert_eq!(failure.next_action, NextAction::RequestUnprotect);
+        assert_eq!(failure.code.unwrap().as_str(), "PROTECTION_STATE_UNKNOWN");
+        assert_eq!(failure.details.0["row_revision"], json!("7"));
     }
 
     #[test]

@@ -94,6 +94,28 @@ pub async fn claim(
     }
 }
 
+/// The settled outcome a retry of `attempt` would replay, read without
+/// claiming, so a handler can answer it before the checks that only guard
+/// a fresh write. A failed read is `None`; the claim still decides.
+pub async fn settled(
+    store: &dyn Store,
+    attempt: Option<&OperationAttempt>,
+) -> Option<OperationRecord> {
+    let attempt = attempt?;
+    match store.get_operation(&attempt.claim_key).await {
+        Ok(Some(record))
+            if record.digest == attempt.digest
+                && matches!(
+                    record.status,
+                    OperationStatus::Applied | OperationStatus::Rejected
+                ) =>
+        {
+            Some(record)
+        }
+        _ => None,
+    }
+}
+
 /// Reject `operation_id` combined with a flag that persists nothing. The two
 /// do not compose: idempotent replay is a property of a write that actually
 /// happened, and a dry run / validate-only call never produces one.
@@ -145,14 +167,44 @@ pub async fn settle_not_applied(store: &dyn Store, claim_key: &str) {
 /// code is a deterministic business rejection and settles rejected, so a
 /// replay returns the same failure instead of a generic one.
 pub async fn settle_for_status(store: &dyn Store, claim_key: &str, status: &Status) {
-    let code = status.code();
-    if matches!(
-        code,
-        Code::Unavailable | Code::Internal | Code::Unknown | Code::DeadlineExceeded
-    ) {
+    if is_operational(status) {
         settle_not_applied(store, claim_key).await;
         return;
     }
+    settle_rejected(store, claim_key, status).await;
+}
+
+/// [`settle_for_status`] for an attempt whose content already landed in
+/// `changeset_id` before a later step failed with `status`. An operational
+/// failure keeps that changeset on the not-applied claim, so a retry can
+/// recognise the content as its own and finish only the step that failed.
+pub async fn settle_unfinished_for_status(
+    store: &dyn Store,
+    claim_key: &str,
+    status: &Status,
+    changeset_id: &str,
+) {
+    if !is_operational(status) {
+        settle_rejected(store, claim_key, status).await;
+        return;
+    }
+    if let Err(e) = store
+        .settle_operation_unfinished(claim_key, changeset_id)
+        .await
+    {
+        tracing::warn!(error = %e, claim_key, "failed to settle operation receipt as unfinished");
+    }
+}
+
+fn is_operational(status: &Status) -> bool {
+    matches!(
+        status.code(),
+        Code::Unavailable | Code::Internal | Code::Unknown | Code::DeadlineExceeded
+    )
+}
+
+async fn settle_rejected(store: &dyn Store, claim_key: &str, status: &Status) {
+    let code = status.code();
     if let Err(e) = store
         .settle_operation_rejected(claim_key, grpc_code_name(code), status.message())
         .await

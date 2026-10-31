@@ -13,6 +13,10 @@ message ChangeEvent {
     KIND_UNSPECIFIED = 0;
     KIND_PUT     = 1;   // entity created or replaced
     KIND_DELETED = 2;   // entity removed
+    // Protection set or lifted on the entity's identity. Recorded only in
+    // the changeset log; the change feed never carries these kinds.
+    KIND_PROTECTED = 3;
+    KIND_UNPROTECTED = 4;
   }
   Kind kind = 1;
   trogonatlas.eventmodel.v1alpha1.EntityRef entity = 2;

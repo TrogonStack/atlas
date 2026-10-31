@@ -38,6 +38,8 @@ instead of re-deriving category from code or reason on its own.
 | `NOT_WRITER` | `UNAVAILABLE` | `unavailable` | `role`, this process's configured role (`writer`, `standby`, or `reader`); `epoch`, the lease epoch it last observed |
 | `CURSOR_REJECTED` | `INVALID_ARGUMENT` | `validation` | none |
 | `BREAKING_CHANGE` | `FAILED_PRECONDITION` | `precondition` | none |
+| `ENTITY_PROTECTED` | `FAILED_PRECONDITION` | `precondition` | `identity` (`kind/namespace/slug`), `protection_reason` and `protected_by` of the first protected identity. Every protected identity the request touched is also listed as a `PreconditionFailure` violation of type `ENTITY_PROTECTED`. |
+| `PROTECTION_STATE_UNKNOWN` | `UNAVAILABLE` | `unavailable` | `identity` of the first identity whose protection could not be read, and `row_revision` when an unreadable row exists. Every such identity is also listed as a `PreconditionFailure` violation of type `PROTECTION_STATE_UNKNOWN`. |
 
 `PARTIAL_APPLY` and `UNAVAILABLE` share the `UNAVAILABLE` gRPC code on
 purpose: both mean "retry later", but only `PARTIAL_APPLY` means a batch
@@ -81,6 +83,23 @@ library, as `docs/how-to/register-a-type-library.md` describes. A delete that
 would strand a library's dependents or the entity schemas using its types is
 refused with `FAILED_PRECONDITION` and violations of type
 `TYPE_LIBRARY_DEPENDENCY` or `TYPE_LIBRARY_SCHEMA`, one per referrer.
+
+`ENTITY_PROTECTED` means the request would change an identity an admin has
+protected (see `docs/explanation/entity-protection.md`). Nothing was written,
+and a dry run answers the same way. Its next action is `request_unprotect`
+instead of `precondition`'s usual `replan`: replanning cannot help, because
+every version of the identity is refused, including new ones. Ask an admin to
+call `UnprotectEntity` for the named identity, or drop it from the request.
+A `BatchMutate` that touches one protected identity is refused whole.
+
+`PROTECTION_STATE_UNKNOWN` means the server could not tell whether an
+identity the request touches is protected: its protection row does not decode,
+or the registry did not answer. The write is refused as if the identity were
+protected, so an outage never lets a protected identity change. It is kept
+apart from `ENTITY_PROTECTED` because the recovery differs: retry first. When
+`row_revision` is present the row itself is unreadable and retrying will not
+help, so the next action is `request_unprotect`: an admin reads it with
+`GetEntityProtection` and removes it with `UnprotectEntity` at that revision.
 
 A status without an `ErrorInfo` at all (most `INVALID_ARGUMENT` statuses
 raised directly by request validation, for instance) still classifies

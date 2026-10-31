@@ -448,3 +448,81 @@ async fn automatic_recovery_leaves_a_batch_another_writer_may_still_run_alone() 
     repair(&store).await;
     scenario.assert_absent(&store).await;
 }
+
+async fn commit_losing_its_changeset(store: &NatsStore, deferred: bool) -> (Scenario, String) {
+    let scenario = Scenario::seed(store).await;
+    let key = format!("recovery-op-{}", scenario.changeset_id);
+    store
+        .claim_operation(&key, "digest", RPC, None)
+        .await
+        .expect("claim");
+    store.faults.lock().fail_changeset_append = true;
+    let changeset = ChangesetRef {
+        operation_id: Some("op-recovery"),
+        ..scenario.changeset()
+    };
+    let ctx = WriteContext::baseline()
+        .attributed(changeset)
+        .with_operation_key(&key);
+    let ctx = if deferred {
+        ctx.with_deferred_settlement()
+    } else {
+        ctx
+    };
+    store
+        .batch_apply(&scenario.ops, ctx)
+        .await
+        .expect("applied");
+    scenario
+        .append_changeset(store)
+        .await
+        .expect_err("append fails");
+    clear_faults(store);
+    (scenario, key)
+}
+
+async fn crash_after_a_claimed_commit(store: &NatsStore, deferred: bool) -> (Scenario, String) {
+    let (scenario, key) = commit_losing_its_changeset(store, deferred).await;
+    repair(store).await;
+    (scenario, key)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_settles_a_landed_batch_applied_and_names_its_operation() {
+    let store = isolated_store().await;
+    let (scenario, key) = crash_after_a_claimed_commit(&store, false).await;
+
+    let record = store.get_operation(&key).await.unwrap().unwrap();
+    assert_eq!(record.status, crate::store::OperationStatus::Applied);
+    let changeset = store.get_changeset(&scenario.changeset_id).await.unwrap();
+    assert_eq!(changeset.operation_id.as_deref(), Some("op-recovery"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_leaves_a_deferred_settlement_retryable() {
+    let store = isolated_store().await;
+    let (scenario, key) = crash_after_a_claimed_commit(&store, true).await;
+
+    scenario.assert_applied(&store).await;
+    let record = store.get_operation(&key).await.unwrap().unwrap();
+    assert_eq!(record.status, crate::store::OperationStatus::NotApplied);
+    assert_eq!(record.changeset_id, scenario.changeset_id);
+    let changeset = store.get_changeset(&scenario.changeset_id).await.unwrap();
+    assert_eq!(changeset.operation_id.as_deref(), Some("op-recovery"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_keeps_a_deferred_settlement_the_request_already_finished() {
+    let store = isolated_store().await;
+    let (scenario, key) = commit_losing_its_changeset(&store, true).await;
+    store
+        .settle_operation_applied(&key, &scenario.changeset_id)
+        .await
+        .expect("settle");
+
+    repair(&store).await;
+
+    let record = store.get_operation(&key).await.unwrap().unwrap();
+    assert_eq!(record.status, crate::store::OperationStatus::Applied);
+    assert_eq!(record.changeset_id, scenario.changeset_id);
+}
