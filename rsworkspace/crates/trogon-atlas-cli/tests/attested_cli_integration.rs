@@ -310,3 +310,11 @@ async fn unsigned_bundle_verifies_as_integrity_only_and_fails_when_a_key_is_requ
     ]);
     assert_eq!(required.status.code(), Some(5), "{required:?}");
 }
+
+#[test]
+fn verifying_a_missing_bundle_is_invalid_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("absent.bundle.json");
+    let verify = trogon_atlas(&["verify", path_str(&missing)]);
+    assert_eq!(verify.status.code(), Some(5), "{verify:?}");
+}

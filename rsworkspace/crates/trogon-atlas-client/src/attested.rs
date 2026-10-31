@@ -85,8 +85,7 @@ pub fn read_trusted_keys(paths: &[impl AsRef<Path>]) -> Result<Option<TrustedKey
 /// `trusted` when given. A malformed, tampered or untrusted file is
 /// reported as invalid input.
 pub fn verify_file(path: &Path, trusted: Option<&TrustedKeys>) -> Result<VerifiedBundle> {
-    let json =
-        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let json = crate::manifest::read_text(path)?;
     let bundle = attested_bundle::bundle_from_json(&json).map_err(|e| {
         crate::failure::invalid_input(format!("{} is not an attested bundle: {e}", path.display()))
     })?;

@@ -664,3 +664,115 @@ async fn signing_key_that_cannot_be_loaded_fails_the_export_closed() {
         assert!(!refused.message().contains("absent.pem"), "{refused:?}");
     }
 }
+
+/// Races `writes` revisions of `slug` in `ns` on the baseline against
+/// repeated exports sent by `request`, and returns every bundle.
+async fn export_while_writing(
+    endpoint: &str,
+    ns: &'static str,
+    slug: &'static str,
+    request: impl Fn() -> tonic::Request<pb::ExportAttestedModelRequest>,
+) -> Vec<pb::AttestedModelBundle> {
+    let mut c = client(endpoint).await;
+    let writer = {
+        let mut c = client(endpoint).await;
+        tokio::spawn(async move {
+            for i in 1..=31 {
+                put(
+                    &mut c,
+                    event_model(ns, slug, &format!("live{i}"), &["placed"]),
+                )
+                .await;
+            }
+        })
+    };
+    let mut bundles = Vec::new();
+    while !writer.is_finished() {
+        bundles.push(
+            c.export_attested_model(request())
+                .await
+                .unwrap()
+                .into_inner()
+                .bundle
+                .unwrap(),
+        );
+    }
+    writer.await.unwrap();
+    bundles
+}
+
+/// A historical export is rewound from history, so live writes after its
+/// changeset cannot move it and must not mark it concurrent.
+#[tokio::test(flavor = "multi_thread")]
+async fn live_writes_do_not_taint_a_historical_export() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-live";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let then = newest_changeset(&mut c).await;
+
+    let bundles = export_while_writing(&endpoint, ns, "checkout", || {
+        let mut req = export_req(ns, "checkout");
+        req.as_of_changeset = then.clone();
+        tonic::Request::new(req)
+    })
+    .await;
+    assert_ne!(
+        bundles.len(),
+        0,
+        "the race must produce at least one export"
+    );
+    for bundle in &bundles {
+        assert_eq!(reasons_of(bundle), Vec::<IncompleteReason>::new());
+        assert!(bundle.manifests.contains("Before"));
+    }
+}
+
+/// A baseline write to a key the branch overlays does not change what the
+/// branch shows, so it must not mark the branch export concurrent.
+#[tokio::test(flavor = "multi_thread")]
+async fn baseline_writes_under_a_branch_overlay_do_not_taint_the_branch_export() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-overlay";
+    let branch = "attested-overlay-feature";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Base", &["placed"])).await;
+    c.create_branch(pb::CreateBranchRequest {
+        name: branch.into(),
+        doc: String::new(),
+    })
+    .await
+    .unwrap();
+    for entity in [
+        event(ns, "placed"),
+        event_model(ns, "checkout", "Branch", &["placed"]),
+    ] {
+        let mut req = tonic::Request::new(put_req(entity));
+        req.metadata_mut().insert(
+            "x-trogon-atlas-branch",
+            MetadataValue::try_from(branch).unwrap(),
+        );
+        c.put_entity(req).await.unwrap();
+    }
+
+    let bundles = export_while_writing(&endpoint, ns, "checkout", || {
+        let mut req = tonic::Request::new(export_req(ns, "checkout"));
+        req.metadata_mut().insert(
+            "x-trogon-atlas-branch",
+            MetadataValue::try_from(branch).unwrap(),
+        );
+        req
+    })
+    .await;
+    assert_ne!(
+        bundles.len(),
+        0,
+        "the race must produce at least one export"
+    );
+    for bundle in &bundles {
+        assert_eq!(reasons_of(bundle), Vec::<IncompleteReason>::new());
+        assert!(bundle.manifests.contains("Branch"));
+    }
+}

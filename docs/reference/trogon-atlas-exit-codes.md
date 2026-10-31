@@ -14,7 +14,7 @@ it.
 | `2` | Usage error: clap rejected the arguments before any command ran. |
 | `3` | `stale_state` -- a plan was made against a revision the server no longer holds. Read fresh state and plan again. |
 | `4` | `precondition` -- an etag or referrer check refused the request without staling a plan, or `export-attested` refused an incomplete export or could not be signed. |
-| `5` | `validation` -- the request itself does not satisfy a rule the server enforces, or `verify` found a bundle malformed or altered, or a bundle that failed its `--trusted-key` check. |
+| `5` | `validation` -- the request itself does not satisfy a rule the server enforces, or `verify` found a bundle missing, malformed or altered, or a bundle that failed its `--trusted-key` check. |
 | `6` | `not_found` -- the target entity does not exist. |
 | `7` | `unauthorized` -- the caller is not allowed to do this. |
 | `8` | `incompatible` -- this client and server do not speak compatible contract revisions. |
