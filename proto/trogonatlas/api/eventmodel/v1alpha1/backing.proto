@@ -1,0 +1,100 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/validation.proto";
+
+// ---------- Backing report ---------------------------------------------------
+//
+// How much of the visible model carries evidence: an ACCEPTED Decision or a
+// Document selecting the exact entity, or a CodeRefAnnotation on the entity
+// itself. The report measures evidence presence only. It never judges whether
+// a rationale is sound or whether referenced code still exists. See
+// docs/reference/backing-report.md.
+
+message GetBackingReportRequest {
+  // Count subjects only in these namespaces. Empty means every visible
+  // namespace. Evidence is always read from the whole visible snapshot, so a
+  // Decision in another namespace still backs a subject in scope.
+  repeated string namespaces = 1;
+  // Emit one ENTITY_UNBACKED Info finding per subject proven to have no
+  // backing. Off by default; subjects whose backing is unknown never get one.
+  bool include_unbacked_findings = 2;
+}
+
+// Why some backing could not be established either way.
+enum BackingIncompleteReason {
+  BACKING_INCOMPLETE_REASON_UNSPECIFIED = 0;
+  // The snapshot hit the entity cap: subjects and evidence beyond it are
+  // missing from the report.
+  BACKING_INCOMPLETE_REASON_SNAPSHOT_TRUNCATED = 1;
+  // The caller cannot see every namespace, so Decisions and Documents it
+  // cannot read may back a visible subject.
+  BACKING_INCOMPLETE_REASON_VISIBILITY_RESTRICTED = 2;
+  // A CodeRefAnnotation could not be decoded or lacks its repo or path.
+  BACKING_INCOMPLETE_REASON_UNRESOLVED_CODE_REF = 3;
+  // A visible Decision selecting the subject has a status this server does
+  // not recognize.
+  BACKING_INCOMPLETE_REASON_UNRECOGNIZED_DECISION_STATUS = 4;
+}
+
+// Per-category subject counts. present + absent + unknown equals the total of
+// the enclosing BackingTotals.
+message BackingCategoryCounts {
+  uint32 present = 1;
+  uint32 absent = 2;
+  uint32 unknown = 3;
+}
+
+message BackingTotals {
+  // Exact entity versions counted as subjects.
+  uint32 total = 1;
+  // Subjects with at least one category present, counted once however many
+  // categories or declarations back them.
+  uint32 backed = 2;
+  // Subjects proven to have no backing in any category.
+  uint32 unbacked = 3;
+  // Subjects with nothing present and at least one category unknown.
+  uint32 unknown = 4;
+  BackingCategoryCounts decision = 5;
+  BackingCategoryCounts document = 6;
+  BackingCategoryCounts code_ref = 7;
+  // unbacked / total. Absent when total is zero, when any subject is unknown
+  // or when the snapshot was truncated: the rate is then not established.
+  optional double unbacked_rate = 8;
+}
+
+message KindBackingTotals {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  BackingTotals totals = 2;
+}
+
+message BackingVisibility {
+  // True when the caller is bound to an owner and cannot see every namespace.
+  bool restricted = 1;
+  // Namespace ids the caller may read. Empty when unrestricted.
+  repeated string authorized_namespaces = 2;
+}
+
+message GetBackingReportResponse {
+  // GetSnapshotId over every namespace, under the same branch and caller.
+  // The report is a function of exactly that snapshot.
+  string snapshot_id = 1;
+  bool snapshot_truncated = 2;
+  // Empty means baseline.
+  string branch = 3;
+  BackingVisibility visibility = 4;
+  // Requested subject namespaces, sorted and deduplicated. Empty means all.
+  repeated string namespaces = 5;
+  BackingTotals totals = 6;
+  // Sorted by kind; kinds with no subject in scope are omitted.
+  repeated KindBackingTotals kinds = 7;
+  // Entity selections on qualifying visible evidence whose exact target is
+  // not in the visible snapshot, limited to targets in the requested scope.
+  uint32 unresolved_declarations = 8;
+  // Every reason that left a subject unknown. Empty means complete.
+  repeated BackingIncompleteReason incomplete_reasons = 9;
+  // ENTITY_UNBACKED findings, only when requested. Sorted by subject.
+  repeated ValidationIssue findings = 10;
+}

@@ -401,6 +401,144 @@ pub struct GetArtifactContentResponse {
     pub artifact: ::core::option::Option<Artifact>,
     #[prost(bytes="vec", tag="2")]
     pub content: ::prost::alloc::vec::Vec<u8>,
+pub struct GetBackingReportRequest {
+    /// Count subjects only in these namespaces. Empty means every visible
+    /// namespace. Evidence is always read from the whole visible snapshot, so a
+    /// Decision in another namespace still backs a subject in scope.
+    #[prost(string, repeated, tag="1")]
+    pub namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Emit one ENTITY_UNBACKED Info finding per subject proven to have no
+    /// backing. Off by default; subjects whose backing is unknown never get one.
+    #[prost(bool, tag="2")]
+    pub include_unbacked_findings: bool,
+}
+/// Per-category subject counts. present + absent + unknown equals the total of
+/// the enclosing BackingTotals.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BackingCategoryCounts {
+    #[prost(uint32, tag="1")]
+    pub present: u32,
+    #[prost(uint32, tag="2")]
+    pub absent: u32,
+    #[prost(uint32, tag="3")]
+    pub unknown: u32,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct BackingTotals {
+    /// Exact entity versions counted as subjects.
+    #[prost(uint32, tag="1")]
+    pub total: u32,
+    /// Subjects with at least one category present, counted once however many
+    /// categories or declarations back them.
+    #[prost(uint32, tag="2")]
+    pub backed: u32,
+    /// Subjects proven to have no backing in any category.
+    #[prost(uint32, tag="3")]
+    pub unbacked: u32,
+    /// Subjects with nothing present and at least one category unknown.
+    #[prost(uint32, tag="4")]
+    pub unknown: u32,
+    #[prost(message, optional, tag="5")]
+    pub decision: ::core::option::Option<BackingCategoryCounts>,
+    #[prost(message, optional, tag="6")]
+    pub document: ::core::option::Option<BackingCategoryCounts>,
+    #[prost(message, optional, tag="7")]
+    pub code_ref: ::core::option::Option<BackingCategoryCounts>,
+    /// unbacked / total. Absent when total is zero, when any subject is unknown
+    /// or when the snapshot was truncated: the rate is then not established.
+    #[prost(double, optional, tag="8")]
+    pub unbacked_rate: ::core::option::Option<f64>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct KindBackingTotals {
+    #[prost(enumeration="super::super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
+    pub kind: i32,
+    #[prost(message, optional, tag="2")]
+    pub totals: ::core::option::Option<BackingTotals>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BackingVisibility {
+    /// True when the caller is bound to an owner and cannot see every namespace.
+    #[prost(bool, tag="1")]
+    pub restricted: bool,
+    /// Namespace ids the caller may read. Empty when unrestricted.
+    #[prost(string, repeated, tag="2")]
+    pub authorized_namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetBackingReportResponse {
+    /// GetSnapshotId over every namespace, under the same branch and caller.
+    /// The report is a function of exactly that snapshot.
+    #[prost(string, tag="1")]
+    pub snapshot_id: ::prost::alloc::string::String,
+    #[prost(bool, tag="2")]
+    pub snapshot_truncated: bool,
+    /// Empty means baseline.
+    #[prost(string, tag="3")]
+    pub branch: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub visibility: ::core::option::Option<BackingVisibility>,
+    /// Requested subject namespaces, sorted and deduplicated. Empty means all.
+    #[prost(string, repeated, tag="5")]
+    pub namespaces: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="6")]
+    pub totals: ::core::option::Option<BackingTotals>,
+    /// Sorted by kind; kinds with no subject in scope are omitted.
+    #[prost(message, repeated, tag="7")]
+    pub kinds: ::prost::alloc::vec::Vec<KindBackingTotals>,
+    /// Entity selections on qualifying visible evidence whose exact target is
+    /// not in the visible snapshot, limited to targets in the requested scope.
+    #[prost(uint32, tag="8")]
+    pub unresolved_declarations: u32,
+    /// Every reason that left a subject unknown. Empty means complete.
+    #[prost(enumeration="BackingIncompleteReason", repeated, tag="9")]
+    pub incomplete_reasons: ::prost::alloc::vec::Vec<i32>,
+    /// ENTITY_UNBACKED findings, only when requested. Sorted by subject.
+    #[prost(message, repeated, tag="10")]
+    pub findings: ::prost::alloc::vec::Vec<ValidationIssue>,
+}
+/// Why some backing could not be established either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum BackingIncompleteReason {
+    Unspecified = 0,
+    /// The snapshot hit the entity cap: subjects and evidence beyond it are
+    /// missing from the report.
+    SnapshotTruncated = 1,
+    /// The caller cannot see every namespace, so Decisions and Documents it
+    /// cannot read may back a visible subject.
+    VisibilityRestricted = 2,
+    /// A CodeRefAnnotation could not be decoded or lacks its repo or path.
+    UnresolvedCodeRef = 3,
+    /// A visible Decision selecting the subject has a status this server does
+    /// not recognize.
+    UnrecognizedDecisionStatus = 4,
+}
+impl BackingIncompleteReason {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "BACKING_INCOMPLETE_REASON_UNSPECIFIED",
+            Self::SnapshotTruncated => "BACKING_INCOMPLETE_REASON_SNAPSHOT_TRUNCATED",
+            Self::VisibilityRestricted => "BACKING_INCOMPLETE_REASON_VISIBILITY_RESTRICTED",
+            Self::UnresolvedCodeRef => "BACKING_INCOMPLETE_REASON_UNRESOLVED_CODE_REF",
+            Self::UnrecognizedDecisionStatus => "BACKING_INCOMPLETE_REASON_UNRECOGNIZED_DECISION_STATUS",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "BACKING_INCOMPLETE_REASON_UNSPECIFIED" => Some(Self::Unspecified),
+            "BACKING_INCOMPLETE_REASON_SNAPSHOT_TRUNCATED" => Some(Self::SnapshotTruncated),
+            "BACKING_INCOMPLETE_REASON_VISIBILITY_RESTRICTED" => Some(Self::VisibilityRestricted),
+            "BACKING_INCOMPLETE_REASON_UNRESOLVED_CODE_REF" => Some(Self::UnresolvedCodeRef),
+            "BACKING_INCOMPLETE_REASON_UNRECOGNIZED_DECISION_STATUS" => Some(Self::UnrecognizedDecisionStatus),
+            _ => None,
+        }
+    }
 }
 /// The state a mutation was planned against no longer holds. An etag is never
 /// empty, so an empty value here means the key is absent.
