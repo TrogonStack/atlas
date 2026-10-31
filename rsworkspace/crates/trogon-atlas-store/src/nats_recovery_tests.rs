@@ -501,6 +501,7 @@ async fn recovery_leaves_a_deferred_settlement_retryable() {
     scenario.assert_applied(&store).await;
     let record = store.get_operation(&key).await.unwrap().unwrap();
     assert_eq!(record.status, crate::store::OperationStatus::NotApplied);
+    assert_eq!(record.changeset_id, scenario.changeset_id);
     let changeset = store.get_changeset(&scenario.changeset_id).await.unwrap();
     assert_eq!(changeset.operation_id.as_deref(), Some("op-recovery"));
 }

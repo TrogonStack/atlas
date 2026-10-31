@@ -1089,6 +1089,16 @@ impl Store for FailingBatchStore {
         self.inner.settle_operation_not_applied(key).await
     }
 
+    async fn settle_operation_unfinished(
+        &self,
+        key: &str,
+        changeset_id: &str,
+    ) -> trogon_atlas_store::StoreResult<()> {
+        self.inner
+            .settle_operation_unfinished(key, changeset_id)
+            .await
+    }
+
     async fn get_operation(
         &self,
         key: &str,
@@ -4934,6 +4944,150 @@ async fn batch_mutate_retry_finishes_protections_after_some_already_landed() {
         .await
         .expect_err("a different operation still meets the protection");
     assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_entity_retry_finishes_a_protecting_create_whose_content_already_landed() {
+    let store = protection_failing_store().await;
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-retry-create";
+    let request = || pb::PutEntityRequest {
+        create_only: true,
+        ..protecting_put(ns, "placed", "op-protect-retry-create")
+    };
+
+    svc.put_entity(as_protecting_admin(request()))
+        .await
+        .expect_err("the registry failure must fail the write");
+    assert!(!is_protected(&store, ns, "placed").await);
+
+    let retried = svc
+        .put_entity(as_protecting_admin(request()))
+        .await
+        .expect("a retry must not trip the create_only its own first attempt satisfied")
+        .into_inner();
+    assert!(is_protected(&store, ns, "placed").await);
+    let changeset_id = retried.operation_receipt.unwrap().changeset_id;
+    assert_ne!(changeset_id, "");
+
+    let replayed = svc
+        .put_entity(as_protecting_admin(request()))
+        .await
+        .expect("the settled operation replays")
+        .into_inner();
+    assert_eq!(
+        replayed.operation_receipt.unwrap().changeset_id,
+        changeset_id
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_entity_retry_finishes_a_protecting_if_match_whose_content_already_landed() {
+    let store = protection_failing_store().await;
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-retry-if-match";
+    let seeded = svc
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(make_event(ns, "placed", 1)),
+            ..protecting_put(ns, "placed", "")
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut changed = protection_annotated(make_event(ns, "placed", 1));
+    if let Some(pb::entity::Kind::Event(e)) = changed.kind.as_mut() {
+        e.title = "Edited".into();
+    }
+    let request = || pb::PutEntityRequest {
+        entity: Some(changed.clone()),
+        if_match: seeded.etag.clone(),
+        ..protecting_put(ns, "placed", "op-protect-retry-if-match")
+    };
+
+    svc.put_entity(as_protecting_admin(request()))
+        .await
+        .expect_err("the registry failure must fail the write");
+    assert!(!is_protected(&store, ns, "placed").await);
+
+    svc.put_entity(as_protecting_admin(request()))
+        .await
+        .expect("a retry must not go stale against the etag its own first attempt moved");
+    assert!(is_protected(&store, ns, "placed").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn put_entity_retry_still_refuses_a_create_whose_content_moved_after_it_landed() {
+    let store = protection_failing_store().await;
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-retry-create-moved";
+    let request = || pb::PutEntityRequest {
+        create_only: true,
+        ..protecting_put(ns, "placed", "op-protect-retry-create-moved")
+    };
+
+    svc.put_entity(as_protecting_admin(request()))
+        .await
+        .expect_err("the registry failure must fail the write");
+    let mut moved = make_event(ns, "placed", 1);
+    if let Some(pb::entity::Kind::Event(e)) = moved.kind.as_mut() {
+        e.title = "Moved".into();
+    }
+    svc.put_entity(Request::new(pb::PutEntityRequest {
+        entity: Some(moved),
+        ..protecting_put(ns, "placed", "")
+    }))
+    .await
+    .unwrap();
+
+    let refused = svc
+        .put_entity(as_protecting_admin(request()))
+        .await
+        .expect_err("content another writer replaced is no longer this operation's to protect");
+    assert_eq!(refused.code(), tonic::Code::AlreadyExists);
+    assert!(!is_protected(&store, ns, "placed").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_retry_finishes_a_protecting_create_whose_content_already_landed() {
+    let store = protection_failing_store().await;
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-retry-batch-create";
+    let request = || pb::BatchMutateRequest {
+        operation_id: "op-protect-retry-batch-create".into(),
+        ops: vec![
+            pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    create_only: true,
+                    ..protecting_put(ns, "placed", "")
+                })),
+            },
+            pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                    entity: Some(make_event(ns, "shipped", 1)),
+                    create_only: true,
+                    ..protecting_put(ns, "shipped", "")
+                })),
+            },
+        ],
+        ..Default::default()
+    };
+
+    svc.batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect_err("the registry failure must fail the batch");
+    assert!(!is_protected(&store, ns, "placed").await);
+
+    let retried = svc
+        .batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect("a retry must not trip the create_only its own first attempt satisfied")
+        .into_inner();
+    assert_eq!(
+        retried.status,
+        pb::batch_mutate_response::Status::Applied as i32
+    );
+    assert!(is_protected(&store, ns, "placed").await);
+    assert!(!is_protected(&store, ns, "shipped").await);
 }
 
 #[tokio::test(flavor = "multi_thread")]
