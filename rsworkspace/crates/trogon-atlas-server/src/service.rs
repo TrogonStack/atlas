@@ -16,6 +16,9 @@ mod business_reference_identity_test;
 mod data_product_events;
 #[path = "data_product_inspection.rs"]
 mod data_product_inspection;
+#[path = "invariant_admission.rs"]
+mod invariant_admission;
+use invariant_admission::InvariantScope;
 #[path = "decision_document_queries.rs"]
 mod decision_document_queries;
 #[path = "design_topology_queries.rs"]
@@ -545,6 +548,7 @@ pub struct EventModelServiceImpl {
     /// SpiceDB and changes nothing else.
     authorizer: Arc<dyn NamespaceAuthorizer>,
     type_libraries: crate::type_libraries::TypeLibraryGate,
+    invariants: invariant_admission::InvariantState,
     /// Per-owner projections of the baseline snapshot.
     ///
     /// Filtering is O(entities) and would otherwise run on every request of
@@ -688,6 +692,7 @@ impl EventModelServiceImpl {
             directory: directory.clone(),
             authorizer: Arc::new(RegistryAuthorizer::new(directory, store_for_authorizer)),
             type_libraries: crate::type_libraries::TypeLibraryGate::default(),
+            invariants: invariant_admission::InvariantState::default(),
             owner_snapshot_cache: tokio::sync::RwLock::new(HashMap::new()),
             owner_reverse_index_cache: tokio::sync::RwLock::new(HashMap::new()),
             metrics,
@@ -1401,6 +1406,14 @@ impl EventModelServiceImpl {
     #[must_use]
     pub fn with_snapshot_cap(mut self, cap: usize) -> Self {
         self.snapshot_cap = cap;
+        self
+    }
+
+    /// Bound how many invariant declarations one write is judged against
+    /// before the rest are reported as unevaluable.
+    #[must_use]
+    pub fn with_invariant_budget(mut self, budget: usize) -> Self {
+        self.invariants = invariant_admission::InvariantState::with_budget(budget);
         self
     }
 
@@ -2122,6 +2135,7 @@ impl EventModelServiceImpl {
                 .await
                 .map_err(store_err)?;
         }
+        self.note_write(Some(name), true);
         Ok(())
     }
 
@@ -2491,6 +2505,11 @@ impl EventModelServiceImpl {
         if changeset.ops.is_empty() {
             return;
         }
+        let touches_models = changeset
+            .ops
+            .iter()
+            .any(|op| op.entity_ref.kind == pb::EntityKind::EventModel as i32);
+        self.note_write(changeset.branch.as_deref(), touches_models);
         let record = changeset.into_record(message);
         if let Err(err) = self.store.append_changeset(&record).await {
             self.metrics.record_changeset_lost();
@@ -2923,6 +2942,7 @@ impl EventModelServiceImpl {
             id: Some(m.id.clone()),
         });
         pb::BatchMutateResponse {
+            invariant_check: None,
             status: pb::batch_mutate_response::Status::Failed as i32,
             results: Vec::new(),
             failed_op_index: i32::try_from(index).unwrap_or(i32::MAX),
@@ -2959,6 +2979,7 @@ impl EventModelServiceImpl {
             failure: Vec::new(),
             precondition_failure: None,
             operation_receipt: Some(operation_receipts::replay_receipt(operation_id, record)),
+            invariant_check: None,
             coverage: None,
             consequence_delta: None,
         }))
@@ -2986,6 +3007,7 @@ impl EventModelServiceImpl {
             entity: Some(current.entity),
             validation: Vec::new(),
             operation_receipt: Some(operation_receipts::replay_receipt(operation_id, record)),
+            invariant_check: None,
             coverage: None,
             consequence_delta: None,
         }))
@@ -3039,6 +3061,7 @@ impl EventModelServiceImpl {
             id: Some(m.id.clone()),
         });
         pb::BatchMutateResponse {
+            invariant_check: None,
             status: pb::batch_mutate_response::Status::Failed as i32,
             results: Vec::new(),
             failed_op_index: i32::try_from(index).unwrap_or(i32::MAX),
@@ -3380,6 +3403,7 @@ fn build_op_results(
                 pb::BatchMutateOpResult {
                     result: Some(pb::batch_mutate_op_result::Result::Put(
                         pb::PutEntityResponse {
+                            invariant_check: None,
                             entity: stored.or_else(|| m.entity.clone()),
                             etag,
                             validation,
@@ -3398,6 +3422,7 @@ fn build_op_results(
                 pb::BatchMutateOpResult {
                     result: Some(pb::batch_mutate_op_result::Result::Delete(
                         pb::DeleteEntityResponse {
+                            invariant_check: None,
                             referrers_incomplete,
                             referrers,
                             operation_receipt: None,
@@ -5403,6 +5428,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             &WriteTargets::Unbounded,
         )
         .await?;
+        let preview = invariant_admission::preview_request(
+            &req,
+            pb::RetargetReferencesRequest {
+                dry_run: true,
+                ..req.get_ref().clone()
+            },
+        );
         let req = req.into_inner();
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
@@ -5441,8 +5473,23 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await
             .map_err(store_err)?;
 
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_ticket = if req.dry_run {
+            None
+        } else {
+            Some(
+                self.ticket_by_preview(
+                    invariant_scope,
+                    preview,
+                    |preview| self.retarget_references(preview),
+                    |response: &pb::RetargetReferencesResponse| response.invariant_check.clone(),
+                )
+                .await?,
+            )
+        };
+
         // Acquire the mutation lock; concurrent batches must not interleave.
-        let _guard = self.lock_mutations().await;
+        let guard = self.lock_mutations().await;
         if branch.is_none() {
             self.invalidate_snapshot().await;
         }
@@ -5612,13 +5659,35 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let staged_count = u32::try_from(staged.len()).unwrap_or(u32::MAX);
 
-        if req.dry_run || staged.is_empty() {
+        if req.dry_run {
+            drop(guard);
+            let changes: Vec<invariant_admission::Change> = metas
+                .iter()
+                .map(|m| (m.kind, m.id.clone(), m.entity.clone()))
+                .collect();
+            let invariant_check = self
+                .check_invariants(invariant_scope, &changes, &vis)
+                .await?;
             return Ok(Response::new(pb::RetargetReferencesResponse {
+                invariant_check,
                 rewritten: staged_count,
                 failed: load_fail_count,
                 results,
             }));
         }
+        if staged.is_empty() {
+            return Ok(Response::new(pb::RetargetReferencesResponse {
+                invariant_check: None,
+                rewritten: staged_count,
+                failed: load_fail_count,
+                results,
+            }));
+        }
+
+        let invariant_check = match invariant_ticket.as_ref() {
+            Some(ticket) => self.invariant_gate(invariant_scope, ticket)?,
+            None => None,
+        };
 
         // Apply staged writes through the existing batch machinery.
         use trogon_atlas_store::store::MutationOp;
@@ -5649,12 +5718,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     self.invalidate_snapshot().await;
                 }
                 Ok(Response::new(pb::RetargetReferencesResponse {
+                    invariant_check,
                     rewritten: u32::try_from(outcomes.len()).unwrap_or(u32::MAX),
                     failed: load_fail_count,
                     results,
                 }))
             }
             Err(e) => {
+                if e.is_partial_apply() {
+                    self.note_write(branch.as_deref(), true);
+                }
                 tracing::warn!(error = %e, "retarget_references batch_apply failed");
                 for r in &mut results {
                     if r.error.is_empty() && !r.fields.is_empty() {
@@ -5662,6 +5735,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     }
                 }
                 Ok(Response::new(pb::RetargetReferencesResponse {
+                    invariant_check: None,
                     rewritten: 0,
                     failed: load_fail_count + staged_count,
                     results,
@@ -6105,6 +6179,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
         }
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_pins = self.invariant_pins(invariant_scope);
         validate_entity_content(&entity)?;
         check_project_namespace_conflict(&entity)?;
         check_context_slug(&entity)?;
@@ -6168,6 +6244,35 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 snapshot_truncated,
             },
         );
+
+        let invariant_ticket = if let Some(ticket) = self
+            .unguarded(
+                invariant_scope,
+                invariant_pins,
+                crate::invariants::declares_invariants(&entity),
+            )
+            .await?
+        {
+            ticket
+        } else {
+            let previous = match self.store.get(kind, &id, branch.as_deref()).await {
+                Ok(stored) => Some(stored.entity),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let prepared = trogon_atlas_core::connection_persistence::prepare_entity(
+                previous.as_ref(),
+                &entity,
+            )
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            self.ticket_for_changes(
+                invariant_scope,
+                invariant_pins,
+                &[(kind, id.clone(), Some(prepared))],
+                &vis,
+            )
+            .await?
+        };
 
         // Dry runs share the mutation lock with apply so `create_only` /
         // `if_match` see a stable view and report the same typed refusal as a
@@ -6251,6 +6356,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 &vis,
             )
             .await?;
+            let invariant_check = invariant_ticket.preview()?;
             let stored = match self.store.get(kind, &id, branch.as_deref()).await {
                 Ok(stored) => Some(stored),
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
@@ -6291,6 +6397,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .consequence_delta(&before, &after, truncated, branch.as_deref(), &vis)
                 .await;
             return Ok(Response::new(pb::PutEntityResponse {
+                invariant_check,
                 entity: Some(prepared),
                 etag: String::new(),
                 validation: scenario_issues,
@@ -6348,6 +6455,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     &req.operation_id,
                     changeset_id,
                 )),
+                invariant_check: None,
                 coverage: Some(put_coverage),
                 consequence_delta: None,
             }));
@@ -6384,6 +6492,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 return Err(status);
             }
         }
+        let invariant_check = match self.invariant_gate(invariant_scope, &invariant_ticket) {
+            Ok(check) => check,
+            Err(status) => {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        };
 
         let mut changeset = PendingChangeset::mint("PutEntity", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
@@ -6559,6 +6676,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         Ok(Response::new(pb::PutEntityResponse {
+            invariant_check,
             no_op: !changed,
             etag: written.etag,
             entity: Some(written.entity),
@@ -6612,6 +6730,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         } else {
             Some(req.if_match.as_str())
         };
+
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_ticket = self
+            .ticket_for_changes(
+                invariant_scope,
+                self.invariant_pins(invariant_scope),
+                &[(kind, id.clone(), None)],
+                &vis,
+            )
+            .await?;
 
         let _guard = self.lock_mutations().await;
         // Drop any snapshot cached from before we acquired the mutation lock:
@@ -6677,6 +6805,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         // current to report; an empty list is the honest
                         // answer, not a stale one.
                         return Ok(Response::new(pb::DeleteEntityResponse {
+                            invariant_check: None,
                             referrers_incomplete: true,
                             referrers: Vec::new(),
                             operation_receipt: Some(operation_receipts::replay_receipt(
@@ -6788,10 +6917,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             pb::delete_entity_request::Mode::DryRun => {
                 // operation_id and dry-run never coexist (rejected above),
                 // so claim_key is always None here.
+                let invariant_check = invariant_ticket.preview()?;
                 let validation = self
                     .delete_strategic_findings(kind, &id, branch.as_deref(), &vis)
                     .await?;
                 return Ok(Response::new(pb::DeleteEntityResponse {
+                    invariant_check,
                     referrers_incomplete,
                     referrers,
                     operation_receipt: None,
@@ -6819,6 +6950,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await
         {
             Ok(findings) => findings,
+            Err(status) => {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        };
+        let invariant_check = match self.invariant_gate(invariant_scope, &invariant_ticket) {
+            Ok(check) => check,
             Err(status) => {
                 if let Some(key) = &claim_key {
                     operation_receipts::settle_for_status(&*self.store, key, &status).await;
@@ -6870,6 +7010,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await;
         }
         Ok(Response::new(pb::DeleteEntityResponse {
+            invariant_check,
             referrers_incomplete,
             referrers,
             operation_receipt: claim_key.as_ref().map(|_| {
@@ -6944,6 +7085,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
         }
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_pins = self.invariant_pins(invariant_scope);
 
         // Validate every op up front and translate to store-level mutations.
         // Build per-op metadata so we can map outcomes back to per-op responses.
@@ -7104,6 +7247,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
+        let invariant_changes: Vec<invariant_admission::Change> = metas
+            .iter()
+            .map(|m| (m.kind, m.id.clone(), m.entity.clone().filter(|_| m.is_put)))
+            .collect();
+        let invariant_ticket = self
+            .ticket_for_changes(invariant_scope, invariant_pins, &invariant_changes, &vis)
+            .await?;
+
         // Serialize against every other writer: dry-run applies and rolls
         // back, so nothing may interleave with it, and concurrent batches
         // must not interleave with each other.
@@ -7197,6 +7348,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
             self.refuse_protected(rewritten).await?;
         }
+        let mut invariant_check = None;
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
@@ -7207,6 +7359,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 source_business_bypass,
             )
             .await?;
+            invariant_check = invariant_ticket.preview()?;
         }
         for admission in &type_library_admissions {
             self.type_libraries
@@ -7370,6 +7523,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         validation::SuiteRun::NotReached(validation::REASON_BLOCKED_BY_SCENARIOS);
                 }
                 return Ok(Response::new(pb::BatchMutateResponse {
+                    invariant_check: None,
                     status: pb::batch_mutate_response::Status::Failed as i32,
                     results: Vec::new(),
                     failed_op_index: i32::try_from(failed_op_index).unwrap_or(i32::MAX),
@@ -7634,6 +7788,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         )
                         .await;
                     Ok(Response::new(pb::BatchMutateResponse {
+                        invariant_check,
                         status: pb::batch_mutate_response::Status::Validated as i32,
                         results,
                         failed_op_index: 0,
@@ -7696,6 +7851,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     return Err(status);
                 }
             }
+            let invariant_check = match self.invariant_gate(invariant_scope, &invariant_ticket) {
+                Ok(check) => check,
+                Err(status) => {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
+                }
+            };
 
             if let Some(execution) = source_execution {
                 let outcome = self
@@ -7713,6 +7877,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     .map_err(|_| Status::internal("source outcome lock unavailable"))? =
                     Some(outcome);
                 if applied {
+                    self.note_write(branch.as_deref(), true);
                     self.invalidate_snapshot().await;
                     self.search_ready.store(false, Ordering::Release);
                 }
@@ -7831,6 +7996,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     }
                     protected?;
                     Ok(Response::new(pb::BatchMutateResponse {
+                        invariant_check,
                         status: pb::batch_mutate_response::Status::Applied as i32,
                         results,
                         failed_op_index: 0,
@@ -7851,7 +8017,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 // `operation_key` on this changeset's `WriteContext`) once it
                 // resolves what actually landed, which this handler cannot
                 // know yet.
-                Err(err) if err.is_partial_apply() => Err(store_err(err)),
+                Err(err) if err.is_partial_apply() => {
+                    self.note_write(branch.as_deref(), true);
+                    Err(store_err(err))
+                }
                 Err(err) => {
                     let resp = self
                         .batch_failure(&metas, &mutations, err, branch.as_deref(), &batch_coverage)
@@ -8285,6 +8454,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
         }
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_pins = self.invariant_pins(invariant_scope);
         let record = self.store.get_changeset(&req.id).await.map_err(store_err)?;
         let origin = record.branch.clone();
 
@@ -8397,11 +8568,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             })
             .collect();
 
+        let invariant_ticket = self
+            .ticket_for_changes(invariant_scope, invariant_pins, &inverse, &vis)
+            .await?;
+        let mut invariant_check = None;
         if req.dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
             self.validate_business_writes(&metas, branch.as_deref(), &vis)
                 .await?;
+            invariant_check = invariant_ticket.preview()?;
         }
 
         let attempt = if req.operation_id.is_empty() {
@@ -8446,6 +8622,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             return Err(operation_receipts::replay_rejected_status(&record));
                         }
                         return Ok(Response::new(pb::RevertChangesetResponse {
+                            invariant_check: None,
                             ops: reverted_ops,
                             dry_run: record.changeset_id.is_empty(),
                             changeset_id: record.changeset_id.clone(),
@@ -8464,6 +8641,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 operation_receipts::settle_applied(&*self.store, key, "").await;
             }
             return Ok(Response::new(pb::RevertChangesetResponse {
+                invariant_check,
                 ops: reverted_ops,
                 changeset_id: String::new(),
                 dry_run: true,
@@ -8503,6 +8681,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
             return Err(status);
         }
+        let invariant_check = match self.invariant_gate(invariant_scope, &invariant_ticket) {
+            Ok(check) => check,
+            Err(status) => {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        };
         let mut changeset = PendingChangeset::mint("RevertChangeset", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
             .with_operation_key(claim_key.as_deref());
@@ -8512,7 +8699,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // Same partial-apply exception as `batch_mutate`: leave the
             // claim Pending and let `nats_journal`'s crash-recovery pass
             // settle it once it knows what actually landed.
-            Err(err) if err.is_partial_apply() => return Err(store_err(err)),
+            Err(err) if err.is_partial_apply() => {
+                self.note_write(branch.as_deref(), true);
+                return Err(store_err(err));
+            }
             Err(err) => {
                 let status = store_err(err);
                 if let Some(key) = &claim_key {
@@ -8533,6 +8723,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             self.invalidate_snapshot().await;
         }
         Ok(Response::new(pb::RevertChangesetResponse {
+            invariant_check,
             ops: reverted_ops,
             changeset_id: changeset_id.clone(),
             dry_run: false,
@@ -9098,6 +9289,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // cleanup becomes a reviewable change set like any other.
         let branch = Self::branch_from_metadata(&req)?;
         let principal = Self::principal_from_metadata(&req);
+        let preview = invariant_admission::preview_request(
+            &req,
+            pb::DeleteByQueryRequest {
+                mode: pb::delete_entity_request::Mode::DryRun as i32,
+                ..req.get_ref().clone()
+            },
+        );
         let req = req.into_inner();
 
         if !req.project.is_empty() && !req.namespace.is_empty() && req.project != req.namespace {
@@ -9171,12 +9369,40 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             ));
         }
 
+        // Same default as DeleteEntity: MODE_UNSPECIFIED (protobuf 0) means
+        // FAIL_IF_REFERENCED. Without this remap, mode=0 skips the referrer
+        // gate and force-deletes (DeleteByQueryRequest.mode documents the
+        // shared DeleteEntityRequest.Mode semantics).
+        let mode = pb::delete_entity_request::Mode::try_from(req.mode)
+            .unwrap_or(pb::delete_entity_request::Mode::FailIfReferenced);
+        let mode = if matches!(mode, pb::delete_entity_request::Mode::Unspecified) {
+            pb::delete_entity_request::Mode::FailIfReferenced
+        } else {
+            mode
+        };
+        let dry_run = mode == pb::delete_entity_request::Mode::DryRun;
+
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_ticket = if dry_run {
+            None
+        } else {
+            Some(
+                self.ticket_by_preview(
+                    invariant_scope,
+                    preview,
+                    |preview| self.delete_by_query(preview),
+                    |response: &pb::DeleteByQueryResponse| response.invariant_check.clone(),
+                )
+                .await?,
+            )
+        };
+
         // Hold the mutation lock for the entire query->delete sequence so a
         // concurrent put cannot create entities matching the query mid-loop
         // (which would escape the max_deletes cap) or delete entities that
         // are already on our victim list (which would surface as NotFound).
         // Drop the snapshot first so the victim scan reads post-lock state.
-        let _guard = self.lock_mutations().await;
+        let guard = self.lock_mutations().await;
         if branch.is_none() {
             self.invalidate_snapshot().await;
         }
@@ -9244,19 +9470,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         self.refuse_protected(victims.iter().map(|(kind, id)| (*kind, id)))
             .await?;
 
-        // Same default as DeleteEntity: MODE_UNSPECIFIED (protobuf 0) means
-        // FAIL_IF_REFERENCED. Without this remap, mode=0 skips the referrer
-        // gate and force-deletes (DeleteByQueryRequest.mode documents the
-        // shared DeleteEntityRequest.Mode semantics).
-        let mode = pb::delete_entity_request::Mode::try_from(req.mode)
-            .unwrap_or(pb::delete_entity_request::Mode::FailIfReferenced);
-        let mode = if matches!(mode, pb::delete_entity_request::Mode::Unspecified) {
-            pb::delete_entity_request::Mode::FailIfReferenced
-        } else {
-            mode
-        };
-        let dry_run = mode == pb::delete_entity_request::Mode::DryRun;
-
         // For FAIL_IF_REFERENCED mode, find any entities outside the victim
         // set that hold references into it. Intra-set references are
         // intentionally ignored: we are deleting those too.
@@ -9301,6 +9514,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             })
             .collect();
 
+        let mut invariant_check = None;
+        if dry_run {
+            drop(guard);
+            let changes: Vec<invariant_admission::Change> = victims
+                .iter()
+                .map(|(k, id)| (*k, id.clone(), None))
+                .collect();
+            invariant_check = self
+                .check_invariants(invariant_scope, &changes, &vis)
+                .await?;
+        } else if let Some(ticket) = invariant_ticket.as_ref().filter(|_| !victims.is_empty()) {
+            invariant_check = self.invariant_gate(invariant_scope, ticket)?;
+        }
+
         if !dry_run && !victims.is_empty() {
             let ops: Vec<MutationOp> = victims
                 .iter()
@@ -9323,7 +9550,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             self.store
                 .batch_apply(&ops, changeset.write_ctx())
                 .await
-                .map_err(store_err)?;
+                .map_err(|error| {
+                    if error.is_partial_apply() {
+                        self.note_write(branch.as_deref(), true);
+                    }
+                    store_err(error)
+                })?;
             let outcomes: Vec<MutationOutcome> =
                 victims.iter().map(|_| MutationOutcome::Deleted).collect();
             changeset.record_batch(&metas, &outcomes);
@@ -9344,6 +9576,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // proto count cannot wrap into a negative number.
         let count = i32::try_from(deleted.len()).unwrap_or(i32::MAX);
         Ok(Response::new(pb::DeleteByQueryResponse {
+            invariant_check,
             deleted,
             deleted_count: count,
             dry_run,
@@ -9638,6 +9871,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .create_branch(&req.name, &req.doc)
             .await
             .map_err(store_err)?;
+        self.note_write(Some(&req.name), true);
         Ok(Response::new(pb::CreateBranchResponse {
             branch: Some(branch_info_to_pb(info)),
         }))
@@ -9680,6 +9914,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let vis = Self::visibility_of(&req);
         let author = Self::author_from_metadata(&req);
         let principal = Self::principal_from_metadata(&req);
+        let preview = invariant_admission::preview_request(
+            &req,
+            pb::MergeBranchRequest {
+                dry_run: true,
+                operation_id: String::new(),
+                ..req.get_ref().clone()
+            },
+        );
         let req = req.into_inner();
         validate_branch_name(&req.name)?;
         // Clears only the ownership-delegation gate: every namespace the
@@ -9697,6 +9939,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         {
             return Err(branch_not_found(&req.name));
         }
+        let invariant_scope = InvariantScope::Landing(&req.name);
+        let invariant_ticket = if req.dry_run {
+            None
+        } else {
+            Some(
+                self.ticket_by_preview(
+                    invariant_scope,
+                    preview,
+                    |preview| self.merge_branch(preview),
+                    |response: &pb::MergeBranchResponse| response.invariant_check.clone(),
+                )
+                .await?,
+            )
+        };
 
         let guard = self.lock_mutations().await;
 
@@ -9877,14 +10133,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // Full detection already ran above; validate the post-merge
             // world via an in-memory overlay without persisting anything.
             let (pre_all, snapshot_truncated) = self.snapshot_with_truncation(None, &vis).await?;
-            let post_world = match dry_run::apply_landing(&pre_all, &ops) {
-                Ok(outcomes) => world_with_outcomes(
-                    &pre_all,
-                    op_metas.iter().map(|meta| (meta.kind, &meta.id)),
-                    &outcomes,
-                ),
-                Err(error) => return Err(store_err(error)),
-            };
+            let outcomes = dry_run::apply_landing(&pre_all, &ops).map_err(store_err)?;
+            let post_world = world_with_outcomes(
+                &pre_all,
+                op_metas.iter().map(|meta| (meta.kind, &meta.id)),
+                &outcomes,
+            );
             let mut validation_issues = validation::validate_store_hygiene(&post_world);
             let has_error = validation_issues
                 .iter()
@@ -9902,8 +10156,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     ..landed.into_response()
                 }));
             }
+            let landing = invariant_admission::changes_of(
+                op_metas.iter().map(|meta| (meta.kind, meta.id.clone())),
+                &outcomes,
+            );
+            let invariant_check = self
+                .check_invariants(invariant_scope, &landing, &vis)
+                .await?;
             validation_issues.extend(merge_strategic_findings(&op_metas, &pre_all, &post_world));
             return Ok(Response::new(pb::MergeBranchResponse {
+                invariant_check,
                 status: pb::merge_branch_response::Status::Validated as i32,
                 validation: validation_issues,
                 coverage: Some(merge_coverage(snapshot_truncated, true)),
@@ -10048,6 +10310,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     .await
                     .map_err(store_err)?;
             }
+            self.note_write(Some(&req.name), true);
             self.settle_provisional_namespaces(&req.name).await?;
             if let Some(key) = &claim_key {
                 operation_receipts::settle_applied(&*self.store, key, "").await;
@@ -10061,6 +10324,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 ..Default::default()
             }));
         }
+
+        let invariant_check = match invariant_ticket.as_ref() {
+            Some(ticket) => match self.invariant_gate(invariant_scope, ticket) {
+                Ok(check) => check,
+                Err(status) => {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
+                }
+            },
+            None => None,
+        };
 
         // The merge lands on the baseline, so the changeset is a baseline
         // changeset: `branch` stays empty and the ops are the entities that
@@ -10078,7 +10354,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // Same partial-apply exception as `batch_mutate`: leave the
             // claim Pending and let `nats_journal`'s crash-recovery pass
             // settle it once it knows what actually landed.
-            Err(err) if err.is_partial_apply() => return Err(store_err(err)),
+            Err(err) if err.is_partial_apply() => {
+                self.note_write(None, true);
+                return Err(store_err(err));
+            }
             Err(err) => {
                 let status = store_err(err);
                 if let Some(key) = &claim_key {
@@ -10117,9 +10396,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .await
                 .map_err(store_err)?;
         }
+        self.note_write(Some(&req.name), true);
         self.settle_provisional_namespaces(&req.name).await?;
 
         Ok(Response::new(pb::MergeBranchResponse {
+            invariant_check,
             status: pb::merge_branch_response::Status::Applied as i32,
             validation: merge_findings,
             operation_receipt: claim_key
@@ -10252,6 +10533,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             _ => info.fork_changeset_id.unwrap_or_default(),
         };
 
+        self.note_write(Some(&req.name), true);
         Ok(Response::new(pb::UpdateBranchResponse {
             rebased_count,
             conflicts,
@@ -10543,6 +10825,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(key) = &claim_key {
             operation_receipts::settle_applied(&*self.store, key, &receipt_changeset_id).await;
         }
+        self.note_write(Some(&req.name), true);
         Ok(Response::new(pb::ResolveBranchEntryResponse {
             operation_receipt: claim_key.as_ref().map(|_| {
                 operation_receipts::fresh_receipt(&req.operation_id, &receipt_changeset_id)
@@ -10641,6 +10924,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .delete_branch(&req.name)
             .await
             .map_err(store_err)?;
+        self.note_write(Some(&req.name), true);
         self.settle_provisional_namespaces(&req.name).await?;
         Ok(Response::new(pb::DeleteBranchResponse {}))
     }
