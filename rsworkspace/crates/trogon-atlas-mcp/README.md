@@ -53,6 +53,18 @@ For validation repairs, use the
 covers dependency discovery, guarded mutations, verification, and preserving
 the procedure for future runs.
 
+## Task prompts
+
+The server instructions stay within `SERVER_INSTRUCTIONS_BUDGET_BYTES`
+because every session receives them. Task procedures, such as the storyboard
+authoring rules or the validation repair procedure, are MCP prompts instead:
+a session fetches the one for its task with `prompts/get`. Each prompt lives
+in `prompts/` and declares the tools its body names. Crate tests fail when a
+prompt names a tool it does not declare, declares one the registry lacks, or
+is hidden by the profile its task belongs to, and when the instructions name a tool some profile
+hides. The [MCP tool reference](../../../docs/reference/mcp-tools.md#task-prompts)
+lists the prompts.
+
 ## What the tools return
 
 Every read RPC's response is wrapped in a stable JSON envelope:
