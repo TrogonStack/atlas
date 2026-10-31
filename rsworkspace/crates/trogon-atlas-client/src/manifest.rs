@@ -634,6 +634,77 @@ mod tests {
         all.remove(0)
     }
 
+    fn assert_ambiguous_target_rejected(
+        kind: &str,
+        field: &str,
+        ambiguous: Value,
+        explicit: Value,
+    ) {
+        let schema = crate::manifest_schema::generate().unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let mut document = serde_json::json!({
+            "apiVersion": API_VERSION,
+            "kind": kind,
+            "metadata": {"namespace":"catalog","name":"choice","version":1},
+            "spec": {}
+        });
+        document["spec"][field] = ambiguous;
+        assert!(
+            parse_str(&document.to_string(), "ambiguous.yaml").is_err(),
+            "{kind}.{field} must not choose an arm from a bare string"
+        );
+        assert!(!validator.is_valid(&document), "{kind}.{field}");
+
+        document["spec"][field] = explicit;
+        let parsed = parse_str(&document.to_string(), "explicit.yaml").unwrap();
+        assert!(validator.is_valid(&document), "{kind}.{field}");
+        match &parsed[0].entity.kind {
+            Some(pb::entity::Kind::DesignGraph(graph)) => {
+                let Some(pb::topology_step_target::Selection::Subflow(target)) =
+                    &graph.steps[0].target.as_ref().unwrap().selection
+                else {
+                    panic!("expected an explicit subflow");
+                };
+                let id = target.id.as_ref().unwrap();
+                assert_eq!(
+                    (&*id.namespace, &*id.slug, id.version),
+                    ("catalog", "child", 2)
+                );
+            }
+            Some(pb::entity::Kind::Decision(decision)) => {
+                assert!(matches!(
+                    decision.decision_makers[0].assignee,
+                    Some(pb::decision_maker::Assignee::Person(_))
+                ));
+                assert!(matches!(
+                    decision.decision_makers[1].assignee,
+                    Some(pb::decision_maker::Assignee::Team(_))
+                ));
+            }
+            _ => panic!("unexpected owner"),
+        }
+    }
+
+    #[test]
+    fn ambiguous_topology_target_requires_a_typed_arm() {
+        assert_ambiguous_target_rejected(
+            "DesignGraph",
+            "steps",
+            serde_json::json!([{"stepId":{"value":"entry"},"target":"child@2"}]),
+            serde_json::json!([{"stepId":{"value":"entry"},"target":{"subflow":"child@2"}}]),
+        );
+    }
+
+    #[test]
+    fn ambiguous_decision_maker_requires_a_typed_arm() {
+        assert_ambiguous_target_rejected(
+            "Decision",
+            "decisionMakers",
+            serde_json::json!(["reviewer@2"]),
+            serde_json::json!([{"person":"reviewer@2"},{"team":"reviewers@3"}]),
+        );
+    }
+
     #[test]
     fn architecture_resources_roundtrip_exact_selectors_and_optional_claims() {
         let source = r"
