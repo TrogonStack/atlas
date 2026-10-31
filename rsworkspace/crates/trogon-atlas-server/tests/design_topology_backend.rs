@@ -512,47 +512,106 @@ async fn hidden_and_missing_targets_share_one_generic_state() {
         .entity
         .unwrap();
     let hidden_ref = reference(&hidden);
-    let mut missing_ref = hidden_ref.clone();
-    missing_ref.id.as_mut().unwrap().slug = "absent".into();
-    let _ = missing_ref;
+    let missing = put(
+        &mut client,
+        in_namespace(&namespaces[0], component("later-deleted")),
+    )
+    .await
+    .entity
+    .unwrap();
+    let missing_ref = reference(&missing);
     let visible = put(
         &mut client,
         in_namespace(
             &namespaces[0],
             graph(
                 "gateway",
-                vec![step(
-                    "Secret",
-                    Some(pb::topology_step_target::Selection::Component(hidden_ref)),
-                )],
+                vec![
+                    step(
+                        "Secret",
+                        Some(pb::topology_step_target::Selection::Component(hidden_ref)),
+                    ),
+                    step(
+                        "Later deleted",
+                        Some(pb::topology_step_target::Selection::Component(
+                            missing_ref.clone(),
+                        )),
+                    ),
+                ],
             ),
         ),
     )
-    .await;
-    let _ = visible;
-    let response = client
-        .get_design_graph_detail(request(
-            pb::GetDesignGraphDetailRequest {
-                graph: Some(pb::DesignGraphRef {
-                    id: Some(pb::Id {
-                        namespace: namespaces[0].clone(),
-                        slug: "gateway".into(),
-                        version: 1,
-                    }),
-                }),
-            },
-            LIMITED,
-            None,
-        ))
+    .await
+    .entity
+    .unwrap();
+    let query = pb::GetDesignGraphDetailRequest {
+        graph: Some(pb::DesignGraphRef {
+            id: reference(&visible).id,
+        }),
+    };
+    let baseline = client
+        .get_design_graph_detail(request(query.clone(), ADMIN, None))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(response.targets.len(), 1);
+    assert_eq!(baseline.targets.len(), 2);
+    for target in &baseline.targets {
+        assert_eq!(target.state, pb::CatalogResolutionState::Resolved as i32);
+        assert!(target.owner.is_some());
+    }
+    let before = client
+        .get_design_graph_detail(request(query.clone(), LIMITED, None))
+        .await
+        .unwrap()
+        .into_inner();
+    let hidden_step = &steps_of(&visible)[0].step_id;
+    let missing_step = &steps_of(&visible)[1].step_id;
+    let find = |response: &pb::GetDesignGraphDetailResponse, step_id: &Option<pb::LocalValueId>| {
+        response
+            .targets
+            .iter()
+            .find(|target| &target.step_id == step_id)
+            .unwrap()
+            .clone()
+    };
     assert_eq!(
-        response.targets[0].state,
+        find(&before, hidden_step).state,
         pb::CatalogResolutionState::Unavailable as i32
     );
-    assert!(response.targets[0].owner.is_none());
+    assert_eq!(
+        find(&before, missing_step).state,
+        pb::CatalogResolutionState::Resolved as i32
+    );
+    client
+        .delete_entity(request(
+            pb::DeleteEntityRequest {
+                kind: missing_ref.kind,
+                id: missing_ref.id,
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+            ADMIN,
+            None,
+        ))
+        .await
+        .unwrap();
+    let response = client
+        .get_design_graph_detail(request(query, LIMITED, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.targets.len(), 2);
+    let hidden_target = find(&response, hidden_step);
+    let missing_target = find(&response, missing_step);
+    assert_eq!(
+        hidden_target.state,
+        pb::CatalogResolutionState::Unavailable as i32
+    );
+    assert_eq!(missing_target.state, hidden_target.state);
+    assert!(hidden_target.owner.is_none());
+    assert_eq!(missing_target.owner, hidden_target.owner);
+    assert!(!response.incomplete);
+    assert_eq!(response.failures, Vec::new());
     assert!(!format!("{response:?}").contains("Private retained title"));
 }
 
