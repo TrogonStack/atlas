@@ -165,7 +165,7 @@ fn generated_contract_revision_and_canonical_kind_are_complete() {
             MIN_SERVER_CONTRACT_REVISION,
             MIN_CLIENT_CONTRACT_REVISION
         ),
-        (19, 19, 19)
+        (20, 20, 20)
     );
     assert_eq!(
         canonical::parse_kind("specification"),
