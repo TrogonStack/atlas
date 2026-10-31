@@ -4433,11 +4433,40 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let staged_count = u32::try_from(staged.len()).unwrap_or(u32::MAX);
 
-        if req.dry_run || staged.is_empty() {
+        if req.dry_run {
+            let (before, truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
+            let changes: Vec<(pb::EntityKind, &pb::Id, Option<&pb::Entity>)> = staged
+                .iter()
+                .filter_map(|(kind, entity)| {
+                    Some((
+                        *kind,
+                        trogon_atlas_store::refs::entity_id(entity)?,
+                        Some(entity),
+                    ))
+                })
+                .collect();
+            let report = graph::unbridged_removals(
+                &world_after(&before, &changes),
+                std::slice::from_ref(&from),
+            );
             return Ok(Response::new(pb::RetargetReferencesResponse {
                 rewritten: staged_count,
                 failed: load_fail_count,
                 results,
+                unbridged_removals: report.removals,
+                unbridged_removals_incomplete: report.incomplete
+                    || truncated
+                    || !vis.is_unrestricted(),
+            }));
+        }
+        if staged.is_empty() {
+            return Ok(Response::new(pb::RetargetReferencesResponse {
+                rewritten: staged_count,
+                failed: load_fail_count,
+                results,
+                ..Default::default()
             }));
         }
 
@@ -4473,6 +4502,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     rewritten: u32::try_from(outcomes.len()).unwrap_or(u32::MAX),
                     failed: load_fail_count,
                     results,
+                    ..Default::default()
                 }))
             }
             Err(e) => {
@@ -4486,6 +4516,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     rewritten: 0,
                     failed: load_fail_count + staged_count,
                     results,
+                    ..Default::default()
                 }))
             }
         }
@@ -8320,6 +8351,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
                 Err(error) => return Err(store_err(error)),
             };
+            let unbridged = graph::unbridged_removals(
+                &post_world,
+                &merge_retired_versions(&op_metas, &pre_all),
+            );
+            let unbridged_incomplete =
+                unbridged.incomplete || snapshot_truncated || !vis.is_unrestricted();
             let mut validation_issues = validation::validate_store_hygiene(&post_world);
             let has_error = validation_issues
                 .iter()
@@ -8329,6 +8366,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     status: pb::merge_branch_response::Status::Invalid as i32,
                     validation: validation_issues,
                     coverage: Some(merge_coverage(snapshot_truncated, false)),
+                    unbridged_removals: unbridged.removals,
+                    unbridged_removals_incomplete: unbridged_incomplete,
                     ..landed.into_response()
                 }));
             }
@@ -8337,6 +8376,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 status: pb::merge_branch_response::Status::Validated as i32,
                 validation: validation_issues,
                 coverage: Some(merge_coverage(snapshot_truncated, true)),
+                unbridged_removals: unbridged.removals,
+                unbridged_removals_incomplete: unbridged_incomplete,
                 ..landed.into_response()
             }));
         }
@@ -9098,6 +9139,49 @@ impl LandedCounts {
             ..Default::default()
         }
     }
+}
+
+/// Baseline versions a merge leaves behind: every deleted key, and for each
+/// put of a version baseline does not hold yet, the newest older baseline
+/// version of the same slug.
+fn merge_retired_versions(metas: &[OpMetaLike], baseline: &[StoredEntity]) -> Vec<pb::EntityRef> {
+    let held: std::collections::HashSet<pb::EntityKey> = baseline
+        .iter()
+        .filter_map(|se| {
+            let kind = trogon_atlas_store::refs::entity_kind(&se.entity)?;
+            let id = trogon_atlas_store::refs::entity_id(&se.entity)?;
+            Some(pb::EntityKey::new(kind, id))
+        })
+        .collect();
+    metas
+        .iter()
+        .filter_map(|meta| {
+            let retired = if meta.is_put {
+                if held.contains(&pb::EntityKey::new(meta.kind, &meta.id)) {
+                    return None;
+                }
+                baseline
+                    .iter()
+                    .filter_map(|se| {
+                        let kind = trogon_atlas_store::refs::entity_kind(&se.entity)?;
+                        let id = trogon_atlas_store::refs::entity_id(&se.entity)?;
+                        (kind == meta.kind
+                            && id.namespace == meta.id.namespace
+                            && id.slug == meta.id.slug
+                            && id.version < meta.id.version)
+                            .then_some(id)
+                    })
+                    .max_by_key(|id| id.version)?
+                    .clone()
+            } else {
+                meta.id.clone()
+            };
+            Some(pb::EntityRef {
+                kind: meta.kind as i32,
+                id: Some(retired),
+            })
+        })
+        .collect()
 }
 
 /// True for any of the four conflict classes (see

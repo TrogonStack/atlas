@@ -51,6 +51,32 @@ The Tracker is a plan; validation is the truth. Reconcile on demand:
    what the Tracker says. Close remaining items and mark the Tracker itself
    done in its `doc`.
 
+## Catch a version left pinned without a successor link
+
+A partial retarget, or a branch that replaces or deletes a version, can leave
+referrers pinned to a version nothing points forward from. Validation cannot
+tell those pins are part of an unfinished migration, because the new version
+never declared `supersedes`.
+
+1. Before applying, run `retarget_references` or `merge_branch` with
+   `dry_run: true`.
+2. Read `unbridged_removals`. Each entry names a retired version with no
+   successor link and the `remaining_referrers` that still pin it.
+3. Either set `supersedes` on the new version so the old pins surface as
+   `SLICE_STALE_REF` findings, or add each remaining referrer to the Tracker.
+4. When `unbridged_removals_incomplete` is true, the report could not see the
+   whole world: the snapshot was truncated, your credential cannot read every
+   namespace, or the report hit its referrer budget. An empty list then proves
+   nothing; fall back to `get_incoming_references` on the old version.
+
+The report is advisory. It never refuses a retarget or a merge, and applied
+calls leave it empty. Only the latest version of each referring entity
+counts, and `supersedes` links are not treated as pins.
+
+A retarget dry run treats only its `from` version as retired. A merge dry run
+treats as retired every version the branch deletes and the newest earlier
+version of any entity the branch adds a version for.
+
 ## Notes
 
 - Intentionally pinned referrers (those carrying a justification via
