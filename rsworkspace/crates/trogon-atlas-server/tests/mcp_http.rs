@@ -24,6 +24,7 @@ use tonic::transport::{server::TcpIncoming, Server};
 use tonic_health::pb::{health_client::HealthClient, HealthCheckRequest};
 use trogon_atlas_mcp::{
     profile::{ToolProfile, PROFILE_HEADER},
+    prompts::TASK_PROMPTS,
     server::{McpServer, ToolRole, PROFILE_META_KEY, TOOL_POLICIES},
 };
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
@@ -581,6 +582,83 @@ async fn a_tool_outside_the_profile_is_refused_at_dispatch() {
             .unwrap(),
     );
     assert_eq!(me["role"], "admin");
+
+    http.shut_down().await;
+}
+
+fn prompt_names(prompts: &[rmcp::model::Prompt]) -> HashSet<String> {
+    prompts.iter().map(|p| p.name.clone()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prompts_are_listed_only_where_their_tools_are_offered() {
+    let http = McpHttp::start(authenticated_registry()).await;
+    let every: HashSet<String> = TASK_PROMPTS.iter().map(|p| p.name.to_owned()).collect();
+    let reader_can_follow: HashSet<String> = TASK_PROMPTS
+        .iter()
+        .filter(|p| {
+            p.tools.iter().all(|tool| {
+                TOOL_POLICIES
+                    .iter()
+                    .any(|row| row.tool == *tool && row.min_role == ToolRole::Reader)
+            })
+        })
+        .map(|p| p.name.to_owned())
+        .collect();
+
+    let admin = http.client(Some(ADMIN_TOKEN)).await;
+    assert!(admin.peer_info().unwrap().capabilities.prompts.is_some());
+    assert_eq!(
+        prompt_names(&admin.list_all_prompts().await.unwrap()),
+        every
+    );
+    let storyboard = admin
+        .get_prompt(rmcp::model::GetPromptRequestParams::new(
+            "author-storyboard",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(storyboard.messages.len(), 1);
+
+    let reader = http.client(Some(READER_TOKEN)).await;
+    assert_eq!(
+        prompt_names(&reader.list_all_prompts().await.unwrap()),
+        reader_can_follow
+    );
+
+    let repair = http
+        .try_client(Some(ADMIN_TOKEN), Some("repair"))
+        .await
+        .unwrap();
+    assert_eq!(
+        prompt_names(&repair.list_all_prompts().await.unwrap()),
+        every
+    );
+
+    let review = http
+        .try_client(Some(ADMIN_TOKEN), Some("review"))
+        .await
+        .unwrap();
+    assert_eq!(
+        prompt_names(&review.list_all_prompts().await.unwrap()),
+        HashSet::new()
+    );
+    let err = review
+        .get_prompt(rmcp::model::GetPromptRequestParams::new(
+            "author-storyboard",
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("outside the `review` tool profile"),
+        "{err}"
+    );
+    let err = admin
+        .get_prompt(rmcp::model::GetPromptRequestParams::new("everything"))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown prompt"), "{err}");
 
     http.shut_down().await;
 }

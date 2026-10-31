@@ -55,3 +55,8 @@ back to every tool.
 - `initialize` reports the active profile in its `_meta` under
   `trogon-atlas/tool-profile` and in a closing line of its instructions.
   A session without a profile carries neither.
+- `prompts/list` returns only the task prompts whose every named tool the
+  session is offered, and `prompts/get` refuses a prompt that names a tool
+  outside the profile. The
+  [MCP tool reference](mcp-tools.md#task-prompts) lists each prompt's
+  tools and profiles.

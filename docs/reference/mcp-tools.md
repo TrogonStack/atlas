@@ -112,3 +112,18 @@ registered tool and its policy row disagree.
 | `validate_event_model` | reader | read | yes | `authoring`, `repair`, `review`, `source-integration`, `read-only` | `ValidateEventModel` | `json?`, `namespace`, `slug`, `version` | Run full validation over a stored EventModel: structural findings over the model and its members, plus the strategic chain of the model's namespace (its BoundedContext, the Subdomains it realizes, their Domains, and any Domain declared in the namespace). Fix Errors and Warnings. |
 | `validate_project` | reader | read | yes | `authoring`, `repair`, `review`, `source-integration`, `read-only` | `ValidateProject` | `domain_namespace?`, `domain_slug?`, `domain_version?`, `json?`, `namespace?`, `project_namespace?`, `project_slug?`, `project_version?` | Validate every EventModel in a project, domain or namespace in one call instead of N. Returns per-model issue lists plus aggregate Error/Warning/Info counts. Strategic findings (BoundedContext, Domain, Subdomain, Project rules) appear once, on the store-level report whose event_model_id is empty, not on any model report. A namespace, project or domain scope also covers problem-space namespaces that hold no EventModel, so use it after editing only Project/Domain/Subdomain or BoundedContext entities. Scope by project_namespace+project_slug, by domain_namespace+domain_slug, OR by namespace -- set exactly one. |
 | `who_am_i` | reader | read | yes | `authoring`, `repair`, `review`, `source-integration`, `read-only` | `WhoAmI` | none | Who you are authenticated as: name, kind, role, writable namespaces, owner, and whether you're the anonymous principal. |
+
+## Task prompts
+
+Each task procedure is an MCP prompt, fetched with `prompts/get` by the
+session doing that task, so the server instructions stay short. A session is
+offered a prompt only when its profile, and its role when known, offer every
+tool the prompt names.
+
+| Prompt | Description | Tools | Profiles |
+| --- | --- | --- | --- |
+| `author-storyboard` | The storyboard authoring rules validation enforces, and the follow-up after each mutation. | `get_entity_json`, `list_entities`, `put_entity_json`, `validate_event_model` | `authoring`, `repair` |
+| `design-strategic-layout` | Where bounded contexts, the problem space and their language live, and how contexts relate. | `put_entity_json`, `validate_project` | `authoring`, `repair` |
+| `author-specification` | How to record contract artifacts in the native specification entity. | `get_entity_json`, `get_entity_schema`, `put_entity_json` | `authoring`, `repair` |
+| `declare-reliability` | How service level indicators, objectives and alert policies point into the model. | `put_entity_json`, `validate_event_model` | `authoring`, `repair` |
+| `repair-validation-finding` | Scope a finding, gather its dependencies, apply a guarded repair and verify it. | `batch_mutate_json`, `delete_entity`, `get_entity_json`, `get_impact`, `get_incoming_references`, `get_outgoing_references`, `list_validation_rules`, `retarget_references`, `validate_event_model`, `validate_project` | `repair` |
