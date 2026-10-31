@@ -1120,6 +1120,16 @@ struct FailingBatchStore {
     resource_scan_overflow: Arc<std::sync::atomic::AtomicBool>,
     resource_scan_gate: Option<Arc<ResourceScanGate>>,
     reference_scans: std::sync::atomic::AtomicUsize,
+    human_read_probe: Option<Arc<HumanReadProbe>>,
+}
+
+struct HumanReadProbe {
+    active: std::sync::atomic::AtomicBool,
+    armed: std::sync::atomic::AtomicBool,
+    gate_key: pb::EntityKey,
+    calls: std::sync::Mutex<std::collections::HashMap<pb::EntityKey, usize>>,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 #[derive(Default)]
@@ -1145,6 +1155,7 @@ impl FailingBatchStore {
             resource_scan_overflow: Arc::default(),
             resource_scan_gate: None,
             reference_scans: std::sync::atomic::AtomicUsize::new(0),
+            human_read_probe: None,
         }
     }
 }
@@ -1251,7 +1262,19 @@ impl Store for FailingBatchStore {
         }) {
             return Err((self.failure)());
         }
-        self.inner.get(kind, id, branch).await
+        let row = self.inner.get(kind, id, branch).await?;
+        if let Some(probe) = &self.human_read_probe {
+            use std::sync::atomic::Ordering;
+            if probe.active.load(Ordering::SeqCst) {
+                let key = pb::EntityKey::new(kind, id);
+                *probe.calls.lock().unwrap().entry(key.clone()).or_default() += 1;
+                if key == probe.gate_key && probe.armed.swap(false, Ordering::SeqCst) {
+                    probe.entered.notify_one();
+                    probe.release.notified().await;
+                }
+            }
+        }
+        Ok(row)
     }
 
     async fn batch_get(
@@ -5344,4 +5367,321 @@ async fn system_structure_propagates_dependency_read_failures_without_publishing
             pb::ResponsibilityResolutionState::Resolved as i32
         );
     }
+}
+
+fn human_connection(owner: &pb::Entity, path: &str) -> pb::ConnectionRef {
+    let selected = trogon_atlas_core::connections::connection_occurrences(owner)
+        .unwrap()
+        .into_iter()
+        .find(|selected| selected.path == path)
+        .unwrap();
+    pb::ConnectionRef {
+        owner: Some(trogon_atlas_server::conv::entity_to_ref(owner).unwrap()),
+        owner_uid: owner.system.as_ref().unwrap().uid.clone(),
+        id: Some(pb::ConnectionId {
+            value: selected.id.unwrap().to_string(),
+        }),
+    }
+}
+
+async fn seed_human_interaction(
+    service: &EventModelServiceImpl,
+) -> (pb::InspectHumanInteractionRequest, pb::Entity, String) {
+    const NS: &str = "human-handler";
+    for kind in [
+        pb::entity::Kind::Ui(pb::Ui {
+            id: Some(id(NS, "review", 1)),
+            title: "Review".into(),
+            ..Default::default()
+        }),
+        pb::entity::Kind::Persona(pb::Persona {
+            id: Some(id(NS, "reviewer", 1)),
+            title: "Reviewer".into(),
+            ..Default::default()
+        }),
+        pb::entity::Kind::Command(pb::Command {
+            id: Some(id(NS, "approve", 1)),
+            title: "Approve".into(),
+            ..Default::default()
+        }),
+        pb::entity::Kind::Command(pb::Command {
+            id: Some(id(NS, "decline", 1)),
+            title: "Decline".into(),
+            ..Default::default()
+        }),
+    ] {
+        service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(pb::Entity {
+                    kind: Some(kind),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+    }
+    let owner = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::Component(pb::Component {
+                    id: Some(id(NS, "portal", 1)),
+                    title: "Portal".into(),
+                    ui_hostings: vec![pb::UiHosting {
+                        ui: Some(pb::UiRef {
+                            id: Some(id(NS, "review", 1)),
+                        }),
+                        label: Some(pb::CatalogTitle {
+                            value: "Review portal".into(),
+                        }),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .unwrap();
+    let slice = service
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                    id: Some(id(NS, "issue", 1)),
+                    title: "Approve".into(),
+                    persona: Some(pb::PersonaEdge {
+                        persona: Some(pb::PersonaRef {
+                            id: Some(id(NS, "reviewer", 1)),
+                        }),
+                        ..Default::default()
+                    }),
+                    ui: Some(pb::UiEdge {
+                        ui: Some(pb::UiRef {
+                            id: Some(id(NS, "review", 1)),
+                        }),
+                        ..Default::default()
+                    }),
+                    command: Some(pb::CommandEdge {
+                        command: Some(pb::CommandRef {
+                            id: Some(id(NS, "approve", 1)),
+                        }),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let slice_entity = slice.entity.unwrap();
+    let request = pb::InspectHumanInteractionRequest {
+        hosting: Some(human_connection(&owner, "component.ui_hostings[0]")),
+        path: Some(pb::inspect_human_interaction_request::Path::Issuance(
+            pb::HumanIssuanceSelection {
+                persona: Some(human_connection(&slice_entity, "command_slice.persona")),
+                ui: Some(human_connection(&slice_entity, "command_slice.ui")),
+                command: Some(human_connection(&slice_entity, "command_slice.command")),
+            },
+        )),
+    };
+    (request, slice_entity, slice.etag)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn human_inspection_propagates_dependency_failures_and_hosting_writes_publish_nothing() {
+    let failures: [(fn() -> StoreError, tonic::Code); 3] = [
+        (
+            || StoreError::Unavailable("injected dependency outage".into()),
+            tonic::Code::Unavailable,
+        ),
+        (
+            || StoreError::Backend("private backend detail".into()),
+            tonic::Code::Internal,
+        ),
+        (
+            || StoreError::CorruptEntry {
+                key: "private key".into(),
+                reason: "private decode detail".into(),
+            },
+            tonic::Code::Internal,
+        ),
+    ];
+    for (failure, expected) in failures {
+        for slug in ["portal", "issue", "review", "reviewer", "approve"] {
+            let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut backend = FailingBatchStore::with_failure(failure).await;
+            backend.fail_batches = false;
+            backend.get_failure = Some((id("human-handler", slug, 1), armed.clone()));
+            let service =
+                EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+                    .unwrap();
+            let (request, _, _) = seed_human_interaction(&service).await;
+            let before = service
+                .inspect_human_interaction(Request::new(request.clone()))
+                .await
+                .unwrap()
+                .into_inner();
+            armed.store(true, std::sync::atomic::Ordering::SeqCst);
+            let error = service
+                .inspect_human_interaction(Request::new(request.clone()))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), expected, "{slug}: {error}");
+            assert!(!error.message().contains("private"));
+            if slug == "review" {
+                let input = pb::Entity {
+                    kind: Some(pb::entity::Kind::Component(pb::Component {
+                        id: Some(id("human-handler", "refused", 1)),
+                        title: "Refused".into(),
+                        ui_hostings: vec![pb::UiHosting {
+                            ui: Some(pb::UiRef {
+                                id: Some(id("human-handler", "review", 1)),
+                            }),
+                            label: Some(pb::CatalogTitle {
+                                value: "Review".into(),
+                            }),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                };
+                let error = service
+                    .put_entity(Request::new(pb::PutEntityRequest {
+                        entity: Some(input),
+                        ..Default::default()
+                    }))
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code(), expected);
+                assert_eq!(
+                    service
+                        .get_entity(Request::new(pb::GetEntityRequest {
+                            kind: pb::EntityKind::Component as i32,
+                            id: Some(id("human-handler", "refused", 1))
+                        }))
+                        .await
+                        .unwrap_err()
+                        .code(),
+                    tonic::Code::NotFound
+                );
+            }
+            armed.store(false, std::sync::atomic::Ordering::SeqCst);
+            let resolved = service
+                .inspect_human_interaction(Request::new(request))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(resolved, before);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn human_inspection_reads_each_row_once_and_preserves_one_slice_version_under_concurrent_edit(
+) {
+    use std::sync::atomic::Ordering;
+    let probe = Arc::new(HumanReadProbe {
+        active: std::sync::atomic::AtomicBool::new(false),
+        armed: std::sync::atomic::AtomicBool::new(false),
+        gate_key: pb::EntityKey::new(
+            pb::EntityKind::CommandSlice,
+            &id("human-handler", "issue", 1),
+        ),
+        calls: std::sync::Mutex::new(std::collections::HashMap::new()),
+        entered: tokio::sync::Notify::new(),
+        release: tokio::sync::Notify::new(),
+    });
+    let mut backend = FailingBatchStore::new().await;
+    backend.fail_batches = false;
+    backend.human_read_probe = Some(probe.clone());
+    let raw_store = backend.inner.clone();
+    let service = Arc::new(
+        EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default()).unwrap(),
+    );
+    let (request, slice, etag) = seed_human_interaction(&service).await;
+    probe.active.store(true, Ordering::SeqCst);
+    probe.armed.store(true, Ordering::SeqCst);
+    let inspection = tokio::spawn({
+        let service = service.clone();
+        let request = request.clone();
+        async move {
+            service
+                .inspect_human_interaction(Request::new(request))
+                .await
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(15), probe.entered.notified())
+        .await
+        .unwrap();
+    let mut changed = slice.clone();
+    let Some(pb::entity::Kind::CommandSlice(value)) = changed.kind.as_mut() else {
+        panic!()
+    };
+    value.command = Some(pb::CommandEdge {
+        command: Some(pb::CommandRef {
+            id: Some(id("human-handler", "decline", 1)),
+        }),
+        ..Default::default()
+    });
+    value.ui.as_mut().unwrap().connection_id = None;
+    let written = raw_store
+        .update(
+            pb::EntityKind::CommandSlice,
+            &changed,
+            &etag,
+            false,
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    probe.release.notify_one();
+    let result = inspection.await.unwrap().unwrap().into_inner();
+    assert_eq!(result.state, pb::CatalogResolutionState::Resolved as i32);
+    assert_eq!(
+        result.consistency,
+        pb::HumanInteractionConsistency::PerOwnerCheckedReadSet as i32
+    );
+    let calls = probe.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 5);
+    assert!(calls.values().all(|count| *count == 1));
+    let scope = result.scope.as_ref().unwrap();
+    let receipt = scope
+        .visited
+        .iter()
+        .find(|row| {
+            row.owner
+                .as_ref()
+                .is_some_and(|owner| owner.kind == pb::EntityKind::CommandSlice as i32)
+        })
+        .unwrap();
+    assert_eq!(receipt.etag, etag);
+    assert_ne!(receipt.etag, written.etag);
+    let command = result
+        .edges
+        .iter()
+        .find(|edge| edge.role == pb::HumanInteractionRole::Command as i32)
+        .unwrap();
+    assert_eq!(
+        command.target.as_ref().unwrap().id,
+        Some(id("human-handler", "approve", 1))
+    );
+    probe.active.store(false, Ordering::SeqCst);
+    let refreshed = service
+        .inspect_human_interaction(Request::new(request))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(
+        refreshed.state,
+        pb::CatalogResolutionState::Unresolved as i32
+    );
+    assert_ne!(refreshed.scope.as_ref().unwrap().revision, scope.revision);
 }
