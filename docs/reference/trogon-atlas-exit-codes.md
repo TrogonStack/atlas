@@ -10,7 +10,7 @@ it.
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. |
-| `1` | The command ran to completion but reports a finding rather than an error: a diff found drift, `fmt --check` found files that would change, a merge or rebase left conflicts, `validate` found an error. |
+| `1` | The command ran to completion but reports a finding rather than an error: a diff found drift, `fmt --check` found files that would change, a merge or rebase left conflicts, `validate` found an error, `classify-impact` found a breaking dependent. |
 | `2` | Usage error: clap rejected the arguments before any command ran. |
 | `3` | `stale_state` -- a plan was made against a revision the server no longer holds. Read fresh state and plan again. |
 | `4` | `precondition` -- an etag or referrer check refused the request without staling a plan. |
@@ -21,6 +21,7 @@ it.
 | `9` | `operation_conflict` -- reserved; no current failure classifies here. |
 | `10` | `partial_apply` -- a batch left entities in an intermediate state; see the named journal and `docs/how-to/replan-after-a-stale-refusal.md`-style recovery. |
 | `11` | `validate` / `validate-project` found no Error finding, but the server's coverage shows the run did not examine everything it was asked to. See [validation verdicts](#validation-verdicts). |
+| `12` | `classify-impact` found no breaking dependent, but could not prove every dependent bump-only. See [impact classification](impact-classification.md#cli-exit-codes-and-json). |
 | `70` | `internal` -- an unclassified server or local error. |
 | `75` | `unavailable` -- the condition is expected to clear; retry the same request. |
 
