@@ -518,6 +518,7 @@ async fn get_event_model_projection_does_not_project_another_owners_model() {
                 id: Some(id("model")),
                 include_cross_model: true,
                 as_of_changeset: String::new(),
+                as_of_time: String::new(),
             },
             BETA_TOKEN,
         ))
@@ -591,6 +592,7 @@ async fn as_of_projection_does_not_name_another_owners_branch() {
                 id: Some(beta_id("model")),
                 include_cross_model: true,
                 as_of_changeset: target,
+                as_of_time: String::new(),
             },
             BETA_TOKEN,
         ))

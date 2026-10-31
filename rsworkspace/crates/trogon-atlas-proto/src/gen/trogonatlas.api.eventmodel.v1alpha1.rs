@@ -815,6 +815,16 @@ pub struct GetEventModelProjectionRequest {
     /// cannot be rewound. Empty reads the current model.
     #[prost(string, tag="3")]
     pub as_of_changeset: ::prost::alloc::string::String,
+    /// Read-only view of the model as of this RFC 3339 instant. The server
+    /// resolves it to the newest baseline changeset, among those touching a
+    /// namespace the caller can read, whose UUIDv7 id carries a millisecond
+    /// timestamp at or before it, then reads as `as_of_changeset` would.
+    /// Sub-millisecond precision is truncated. An instant later than the
+    /// server clock is INVALID_ARGUMENT, since its answer would still change;
+    /// one older than every such changeset is FAILED_PRECONDITION. Mutually
+    /// exclusive with `as_of_changeset`; same baseline-only rule.
+    #[prost(string, tag="4")]
+    pub as_of_time: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetEventModelProjectionResponse {
@@ -826,6 +836,10 @@ pub struct GetEventModelProjectionResponse {
     /// case to hit for large models.
     #[prost(bool, tag="2")]
     pub truncated: bool,
+    /// The changeset an as-of read resolved to, so a caller that asked by
+    /// time can pin the same view by id. Empty for a current read.
+    #[prost(string, tag="3")]
+    pub as_of_changeset: ::prost::alloc::string::String,
 }
 // ---------- Board manifests --------------------------------------------------
 //

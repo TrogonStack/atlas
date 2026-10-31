@@ -528,6 +528,7 @@ async fn sweep_read_matrix(
                 id: Some(id(beta_ns, MODEL_SLUG)),
                 include_cross_model: true,
                 as_of_changeset: String::new(),
+                as_of_time: String::new(),
             },
             beta_token,
         ))

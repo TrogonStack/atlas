@@ -3280,7 +3280,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Event-model projection: the model plus every transitively reachable entity. Set include_cross_model=true to follow cross-namespace references. Set as_of_changeset to read the baseline model as it was right after that changeset.",
+        description = "Event-model projection: the model plus every transitively reachable entity. Set include_cross_model=true to follow cross-namespace references. Set as_of_changeset to read the baseline model as it was right after that changeset, or as_of_time to read it as of an instant.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -3296,6 +3296,7 @@ impl McpServer {
             id: Some(validated_id_from(&p.namespace, &p.slug, p.version)?),
             include_cross_model: p.include_cross_model,
             as_of_changeset: p.as_of_changeset.unwrap_or_default(),
+            as_of_time: p.as_of_time.unwrap_or_default(),
         };
         let mut client = self.client();
         let resp = client
