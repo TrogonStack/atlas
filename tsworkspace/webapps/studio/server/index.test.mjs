@@ -189,7 +189,7 @@ vi.mock('protobufjs', async (importOriginal) => {
     load: () => Promise.resolve(fakeRoot),
     lookupType: (name) => {
       if (/\.(GetSource|ListSource)/.test(name)) return responsibilityRoot.lookupType(name);
-      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|ListDecisionAmendments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations|GetDesignGraphDetail|ListSubjectDesignGraphs|TraverseDesignGraphTopology|ListIncomingDesignGraphSubflows)Request$/.test(name)) return responsibilityRoot.lookupType(name);
+      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|ListDecisionAmendments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations|GetDesignGraphDetail|ListSubjectDesignGraphs|TraverseDesignGraphTopology|ListIncomingDesignGraphSubflows|InspectHumanInteraction)Request$/.test(name)) return responsibilityRoot.lookupType(name);
       return { decode: () => ({}), toObject: () => ({}) };
     },
     lookupEnum: (name) => {
