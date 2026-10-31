@@ -2850,7 +2850,7 @@ describe('native human interaction gateway', () => {
   });
   it.each([
     ['multiple paths', { ...input, issuance: { persona: input.display.persona, ui: input.display.ui, command: input.display.sourceReadModel } }],
-    ['numeric lossy version', { ...input, hosting: { ...hosting, owner: { ...hosting.owner, id: { ...id('portal'), version: 9007199254740993 } } } }],
+    ['numeric lossy version', { ...input, hosting: { ...hosting, owner: { ...hosting.owner, id: { ...id('portal'), version: Number(version) } } } }],
     ['unknown nested property', { ...input, hosting: { ...hosting, title: 'discarded' } }],
   ])('refuses %s without calling the backend', async (_name, body) => {
     fakeClient.inspectHumanInteraction = vi.fn();

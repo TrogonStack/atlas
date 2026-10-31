@@ -670,7 +670,7 @@ export function Inspector({
           <CommunicationIntentDetails entity={entity} model={model} onSelect={onSelect} />
           <MessageClaimsDetails entity={entity} model={model} onSelect={onSelect} />
           <ChannelStorageDetails entity={entity} model={model} onSelect={onSelect} />
-          <UiHostingDetails entity={entity} model={model} onSelect={onSelect} />
+          <UiHostingDetails entity={entity} model={model} onSelect={onSelect} asOf={asOf} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />
           {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} asOf={asOf} />}
           {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}
