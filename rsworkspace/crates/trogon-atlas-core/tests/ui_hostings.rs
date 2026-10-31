@@ -100,7 +100,7 @@ fn preparation_rejects_invalid_hosting_values_before_identity_assignment() {
             0 => {
                 component.ui_hostings[0].connection_id = Some(trogon_atlas_proto::ConnectionId {
                     value: String::new(),
-                })
+                });
             }
             1 => component.ui_hostings[0].ui = None,
             2 => {
@@ -111,7 +111,7 @@ fn preparation_rejects_invalid_hosting_values_before_identity_assignment() {
                     .id
                     .as_mut()
                     .unwrap()
-                    .version = 0
+                    .version = 0;
             }
             3 => component.ui_hostings[0].label = None,
             4 => component.ui_hostings[0].label.as_mut().unwrap().value = " ".into(),
@@ -119,7 +119,7 @@ fn preparation_rejects_invalid_hosting_values_before_identity_assignment() {
             6 => {
                 component.ui_hostings[0].doc = Some(trogon_atlas_proto::CatalogText {
                     value: "a".repeat(16_385),
-                })
+                });
             }
             _ => component.ui_hostings = vec![component.ui_hostings[0].clone(); 1_025],
         }
@@ -145,7 +145,7 @@ fn hosting_reference_lifecycle_preserves_occurrence_provenance(
             id: trogon_atlas_core::entity_id(&stored).cloned(),
         }),
         owner_uid: stored.system.as_ref().unwrap().uid.clone(),
-        id: occurrence.id.clone().map(Into::into),
+        id: occurrence.id.map(Into::into),
     };
     let refs = outbound_refs(&stored);
     assert_eq!(refs.len(), 1);
@@ -238,8 +238,7 @@ fn explicit_empty_hosting_identity_rejects_before_branch_normalization() {
         prepare_resolution(None, None, &selected),
         prepare_landing(None, Some(&prepared), &selected),
     ] {
-        let error =
-            result.expect_err("explicit empty hosting IDs cannot become fresh branch identities");
+        let error = result.unwrap_err();
         assert!(error.to_string().contains("connection ID"), "{error}");
     }
     assert!(prepare_resolution(None, None, &prepared).is_ok());
