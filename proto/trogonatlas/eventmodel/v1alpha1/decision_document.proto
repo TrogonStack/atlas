@@ -3,15 +3,15 @@ syntax = "proto3";
 package trogonatlas.eventmodel.v1alpha1;
 
 import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/calendar_date.proto";
 import "trogonatlas/type/v1alpha1/id.proto";
 import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/connections.proto";
 import "trogonatlas/eventmodel/v1alpha1/specification.proto";
 import "trogonatlas/eventmodel/v1alpha1/data_product.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
 
-message CatalogTitle { string value = 1; }
-message CatalogText { string value = 1; }
 message LocalValueId { string value = 1; }
 message ExternalDocumentLink { string value = 1; }
 message AnchorFragment { string value = 1; }
@@ -60,6 +60,19 @@ message RelatedDecision {
   DecisionRef decision = 2;
   CatalogText doc = 3;
 }
+message DecisionMaker {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  oneof assignee {
+    PersonRef person = 2;
+    TeamRef team = 3;
+  }
+  CatalogText doc = 4;
+}
+message DecisionAmendment {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DecisionRef decision = 2;
+  CatalogText doc = 3;
+}
 message DocumentAnchorRef {
   DocumentRef document = 1;
   string owner_uid = 2;
@@ -93,11 +106,44 @@ message Decision {
   DecisionReplacement replaced_by = 13;
   repeated RelatedDecision related_decisions = 14;
   repeated SupportingDocument documents = 15;
+  trogonatlas.type.v1alpha1.CalendarDate authored_on = 16;
+  trogonatlas.type.v1alpha1.CalendarDate decided_on = 17;
+  repeated DecisionMaker decision_makers = 18;
+  repeated DecisionAmendment amends = 19;
 }
 message RetainedDocumentText {
   MediaType media_type = 1;
   string content = 2;
   ContentDigest digest = 3;
+}
+message RetainedContent {
+  MediaType media_type = 1;
+  bytes content = 2;
+  ContentDigest digest = 3;
+}
+message LogicalFilename {
+  string value = 1;
+}
+enum DocumentPurpose {
+  DOCUMENT_PURPOSE_UNSPECIFIED = 0;
+  DOCUMENT_PURPOSE_GENERAL = 1;
+  DOCUMENT_PURPOSE_EXAMPLE = 2;
+  DOCUMENT_PURPOSE_DIAGRAM = 3;
+  DOCUMENT_PURPOSE_ATTACHMENT = 4;
+  DOCUMENT_PURPOSE_CHANGELOG = 5;
+}
+enum RelatedContentRole {
+  RELATED_CONTENT_ROLE_UNSPECIFIED = 0;
+  RELATED_CONTENT_ROLE_EXAMPLE = 1;
+  RELATED_CONTENT_ROLE_DIAGRAM = 2;
+  RELATED_CONTENT_ROLE_ATTACHMENT = 3;
+  RELATED_CONTENT_ROLE_CHANGELOG = 4;
+}
+message RelatedContent {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DocumentSelection document = 2;
+  RelatedContentRole role = 3;
+  CatalogTitle label = 4;
 }
 message DocumentAnchor {
   LocalValueId anchor_id = 1;
@@ -119,7 +165,18 @@ message Document {
   oneof body {
     RetainedDocumentText retained = 7;
     ExternalDocumentLink link = 8;
+    RetainedContent retained_content = 13;
   }
   repeated DocumentAnchor anchors = 9;
   repeated DocumentNavigation navigation = 10;
+  optional DocumentPurpose purpose = 11;
+  LogicalFilename filename = 12;
+  repeated RelatedContent related_content = 14;
+}
+
+// Marks a navigation Document as a category container. At most one per
+// Document; membership is declared only through explicit navigation edges.
+message DocumentCollectionAnnotation {
+  CatalogTitle category = 1;
+  CatalogText description = 2;
 }

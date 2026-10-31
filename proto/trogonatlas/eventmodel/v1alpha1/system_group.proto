@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+import "google/protobuf/any.proto";
+import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
+import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
+
+// Descriptive classification of a group. It grants no ownership and does not
+// restrict which authorized members a group may list.
+enum SystemGroupScope {
+  SYSTEM_GROUP_SCOPE_UNSPECIFIED = 0;
+  SYSTEM_GROUP_SCOPE_INTERNAL = 1;
+  SYSTEM_GROUP_SCOPE_EXTERNAL = 2;
+}
+
+message SystemGroupMember {
+  oneof target {
+    SystemGroupRef system_group = 1;
+    ComponentRef component = 2;
+    ExternalSystemRef external_system = 3;
+    DataStoreRef data_store = 4;
+    SchemaRef schema = 5;
+    DesignGraphRef design_graph = 6;
+  }
+}
+
+message SystemGroupMembership {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  SystemGroupMember member = 2;
+  CatalogText doc = 3;
+}
+
+message SystemGroupRelationship {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  SystemGroupRef target = 2;
+  CatalogTitle label = 3;  // optional; omission never erases the authored edge
+  CatalogText doc = 4;
+}
+
+enum SystemActorDirection {
+  SYSTEM_ACTOR_DIRECTION_UNSPECIFIED = 0;
+  SYSTEM_ACTOR_DIRECTION_INBOUND = 1;   // actor toward the group
+  SYSTEM_ACTOR_DIRECTION_OUTBOUND = 2;  // group toward the actor
+}
+
+message SystemActorTarget {
+  oneof target {
+    PersonaRef persona = 1;
+    ComponentRef component = 2;
+    ExternalSystemRef external_system = 3;
+    SystemGroupRef system_group = 4;
+  }
+}
+
+message SystemActorLink {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  SystemActorTarget target = 2;
+  SystemActorDirection direction = 3;
+  CatalogTitle label = 4;  // optional; presence is authored
+  CatalogText doc = 5;
+}
+
+// An abstract grouping of exact architectural entities. It is neither a
+// deployable Component nor a third-party ExternalSystem. Membership is a
+// curation claim made by the group: no ownership, deployment, exclusivity,
+// permission or runtime meaning.
+message SystemGroup {
+  trogonatlas.type.v1alpha1.Id id = 1;
+  string title = 2;
+  string doc = 3;
+  repeated google.protobuf.Any metadata = 4;
+  trogonatlas.type.v1alpha1.Id supersedes = 5;
+  SystemGroupScope scope = 6;
+  repeated SystemGroupMembership members = 7;
+  repeated SystemGroupRelationship relationships = 8;
+  repeated SystemActorLink actors = 9;
+}
+
+message DomainMember {
+  oneof target {
+    DomainRef domain = 1;
+    SystemGroupRef system_group = 2;
+    ComponentRef component = 3;
+    DataProductRef data_product = 4;
+    SchemaRef schema = 5;
+    DesignGraphRef design_graph = 6;
+    ExternalSystemRef external_system = 7;
+  }
+}
+
+message DomainMembership {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  DomainMember member = 2;
+  CatalogText doc = 3;
+}

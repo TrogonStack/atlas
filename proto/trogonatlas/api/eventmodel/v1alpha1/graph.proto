@@ -20,6 +20,19 @@ message Reference {
   trogonatlas.eventmodel.v1alpha1.CatalogSubject catalog_subject = 7;
   trogonatlas.eventmodel.v1alpha1.DocumentSelection document_selection = 8;
   trogonatlas.type.v1alpha1.ConnectionId connection_id = 9;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId step_id = 10;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId target_step_id = 11;
+  // Set only when this RPC checked a business property relationship.
+  // Absent means the hit was not evaluated. Zero is not a resolved status.
+  optional BusinessPropertyReferenceStatus business_property_status = 12;
+}
+
+enum BusinessPropertyReferenceStatus {
+  BUSINESS_PROPERTY_REFERENCE_STATUS_UNSPECIFIED = 0;
+  BUSINESS_PROPERTY_REFERENCE_STATUS_ENTITY_ONLY = 1;
+  BUSINESS_PROPERTY_REFERENCE_STATUS_PROPERTY_RESOLVED = 2;
+  BUSINESS_PROPERTY_REFERENCE_STATUS_PROPERTY_UNRESOLVED = 3;
+  BUSINESS_PROPERTY_REFERENCE_STATUS_UNAVAILABLE = 4;
 }
 
 message ImpactNode {

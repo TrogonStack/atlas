@@ -24,6 +24,14 @@ message CatalogCheckedOwner {
   string uid = 2;
   string etag = 3;
 }
+// Explicitly bounds the owner inventory returned with a Document page.
+// The enclosing revision still fingerprints the complete authorized scan.
+message CatalogPageReceipt {
+  uint64 checked_owner_count = 1;
+  uint64 total_declarations = 2;
+  uint64 start_offset = 3;
+  uint64 end_offset = 4;
+}
 message CatalogCheckedScope {
   optional string branch = 1;
   repeated string authorized_namespaces = 2;
@@ -31,6 +39,10 @@ message CatalogCheckedScope {
   repeated CatalogCheckedOwner visited = 4;
   repeated trogonatlas.eventmodel.v1alpha1.CatalogSubject visited_subjects = 5;
   repeated trogonatlas.eventmodel.v1alpha1.DocumentSelection visited_documents = 6;
+  // Present only for paginated incoming Document declarations. visited then
+  // contains the selected owner and this page's declaring owners, not all
+  // checked owners. Absent retains the full checked inventory contract.
+  CatalogPageReceipt page_receipt = 7;
 }
 message CatalogDeclaration {
   CatalogCheckedOwner owner = 1;
@@ -42,6 +54,9 @@ message CatalogDeclaration {
     trogonatlas.eventmodel.v1alpha1.RelatedDecision related = 6;
     trogonatlas.eventmodel.v1alpha1.SupportingDocument supporting = 7;
     trogonatlas.eventmodel.v1alpha1.DocumentNavigation navigation = 8;
+    trogonatlas.eventmodel.v1alpha1.DecisionMaker maker = 9;
+    trogonatlas.eventmodel.v1alpha1.DecisionAmendment amendment = 10;
+    trogonatlas.eventmodel.v1alpha1.RelatedContent related_content = 11;
   }
 }
 message ListSubjectDecisionsRequest {
@@ -102,10 +117,35 @@ message ListIncomingDecisionDeclarationsResponse {
 }
 message ListIncomingDocumentDeclarationsRequest {
   trogonatlas.eventmodel.v1alpha1.DocumentSelection document = 1;
+  optional trogonatlas.eventmodel.v1alpha1.RelatedContentRole related_content_role = 2;
+  // Omission preserves this query's existing unpaged, budget-bounded inventory.
+  // Explicit zero opts into the default page size.
+  optional int32 page_size = 3;
+  string page_token = 4;
 }
 message ListIncomingDocumentDeclarationsResponse {
   repeated CatalogDeclaration declarations = 1;
   CatalogCheckedScope scope = 2;
   bool incomplete = 3;
   repeated CatalogQueryFailure failures = 4;
+  string next_page_token = 5;
+}
+
+enum DecisionAmendmentDirection {
+  DECISION_AMENDMENT_DIRECTION_UNSPECIFIED = 0;
+  DECISION_AMENDMENT_DIRECTION_OUTGOING = 1;
+  DECISION_AMENDMENT_DIRECTION_INCOMING = 2;
+}
+message ListDecisionAmendmentsRequest {
+  trogonatlas.eventmodel.v1alpha1.DecisionRef decision = 1;
+  DecisionAmendmentDirection direction = 2;
+  uint32 page_size = 3;
+  string page_token = 4;
+}
+message ListDecisionAmendmentsResponse {
+  repeated CatalogDeclaration declarations = 1;
+  CatalogCheckedScope scope = 2;
+  string next_page_token = 3;
+  bool incomplete = 4;
+  CatalogResolutionState decision_state = 5;
 }

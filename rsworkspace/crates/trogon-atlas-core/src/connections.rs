@@ -103,6 +103,8 @@ pub enum ConnectionError {
     Port(String),
     #[error("connection encoding error: {0}")]
     Encoding(String),
+    #[error("business declaration error: {0}")]
+    Business(String),
 }
 
 fn dynamic(entity: &Entity) -> Result<DynamicMessage, ConnectionError> {
@@ -134,13 +136,76 @@ fn wrapper_target(name: &str) -> Option<(&'static str, trogon_atlas_proto::Entit
     }
 }
 
+fn identity_field(message: &DynamicMessage) -> &'static str {
+    if message.descriptor().full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroup" {
+        "group_id"
+    } else {
+        "connection_id"
+    }
+}
+
+fn is_claim_descriptor(name: &str) -> bool {
+    matches!(
+        name,
+        "trogonatlas.eventmodel.v1alpha1.MessageClaim"
+            | "trogonatlas.eventmodel.v1alpha1.ClaimRoute"
+            | "trogonatlas.eventmodel.v1alpha1.ClaimTrigger"
+            | "trogonatlas.eventmodel.v1alpha1.ClaimFieldSelection"
+    )
+}
+fn claim_target(message: &DynamicMessage) -> Option<EntityRef> {
+    let bytes = message.encode_to_vec();
+    let (kind, id) = match message.descriptor().name() {
+        "MessageClaim" => (
+            trogon_atlas_proto::EntityKind::Specification,
+            trogon_atlas_proto::MessageClaim::decode(bytes.as_slice())
+                .ok()?
+                .message?
+                .specification?
+                .id,
+        ),
+        "ClaimTrigger" => (
+            trogon_atlas_proto::EntityKind::Specification,
+            trogon_atlas_proto::ClaimTrigger::decode(bytes.as_slice())
+                .ok()?
+                .message?
+                .specification?
+                .id,
+        ),
+        "ClaimRoute" => (
+            trogon_atlas_proto::EntityKind::Channel,
+            trogon_atlas_proto::ClaimRoute::decode(bytes.as_slice())
+                .ok()?
+                .channel?
+                .id,
+        ),
+        "ClaimFieldSelection" => {
+            return trogon_atlas_proto::ClaimFieldSelection::decode(bytes.as_slice())
+                .ok()?
+                .binding?
+                .owner
+        }
+        _ => return None,
+    };
+    Some(EntityRef {
+        kind: kind as i32,
+        id,
+    })
+}
 fn read_id(message: &DynamicMessage) -> Result<Option<ConnectionId>, ConnectionError> {
-    if !message.has_field_by_name("connection_id") {
+    if !message.has_field_by_name(identity_field(message)) {
         return Ok(None);
     }
-    match message.get_field_by_name("connection_id").as_deref() {
+    match message
+        .get_field_by_name(identity_field(message))
+        .as_deref()
+    {
         Some(Value::Message(id)) => match id.get_field_by_name("value").as_deref() {
-            Some(Value::String(value)) if value.is_empty() => Ok(None),
+            Some(Value::String(value))
+                if value.is_empty() && !is_claim_descriptor(message.descriptor().full_name()) =>
+            {
+                Ok(None)
+            }
             Some(Value::String(value)) => value.parse().map(Some),
             _ => Err(ConnectionError::InvalidId(String::new())),
         },
@@ -198,6 +263,29 @@ fn context_for(message: &DynamicMessage, field: &str) -> Vec<u8> {
     bytes
 }
 
+fn entity_target(
+    message: &DynamicMessage,
+    field: &str,
+    kind: trogon_atlas_proto::EntityKind,
+) -> Result<Option<EntityRef>, ConnectionError> {
+    let id = message
+        .get_field_by_name(field)
+        .as_deref()
+        .and_then(Value::as_message)
+        .and_then(|target| target.get_field_by_name("id"))
+        .and_then(|value| value.as_message().map(Message::encode_to_vec));
+    id.as_deref()
+        .map(trogon_atlas_proto::Id::decode)
+        .transpose()
+        .map_err(|e| ConnectionError::Encoding(e.to_string()))
+        .map(|id| {
+            id.map(|id| EntityRef {
+                kind: kind as i32,
+                id: Some(id),
+            })
+        })
+}
+
 fn visit(
     message: &mut DynamicMessage,
     path: &str,
@@ -206,12 +294,62 @@ fn visit(
     callback: &mut impl FnMut(&mut DynamicMessage, ConnectionOccurrence) -> Result<(), ConnectionError>,
 ) -> Result<(), ConnectionError> {
     let descriptor = message.descriptor();
+    if descriptor.full_name() == "google.protobuf.Any" {
+        let mut any = prost_types::Any::decode(message.encode_to_vec().as_slice())
+            .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
+        if let Some(name) = crate::agent_metadata::known_type(&any.type_url) {
+            let descriptor = POOL
+                .get_message_by_name(name)
+                .ok_or_else(|| ConnectionError::Encoding("annotation descriptor missing".into()))?;
+            let mut payload = DynamicMessage::decode(descriptor, any.value.as_slice())
+                .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
+            crate::agent_metadata::reject_unknown(&payload)
+                .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
+            if name == crate::agent_metadata::GROUPS {
+                visit(&mut payload, path, role, predecessor, callback)?;
+                any.value = payload.encode_to_vec();
+                *message =
+                    DynamicMessage::decode(message.descriptor(), any.encode_to_vec().as_slice())
+                        .map_err(|e| ConnectionError::Encoding(e.to_string()))?;
+            }
+        }
+        return Ok(());
+    }
+    if descriptor.full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroup" {
+        callback(
+            message,
+            ConnectionOccurrence {
+                id: read_id(message)?,
+                path: path.to_owned(),
+                target: None,
+                signature: b"resource-group".to_vec(),
+            },
+        )?;
+    }
     if descriptor.get_field_by_name("connection_id").is_some()
         && wrapper_target(descriptor.full_name()).is_none()
     {
         let mut endpoint = message.clone();
-        for name in ["connection_id", "doc", "label", "condition"] {
+        let descriptive: &[&str] = match descriptor.full_name() {
+            "trogonatlas.eventmodel.v1alpha1.MessageClaim" => &["connection_id", "group", "doc"],
+            "trogonatlas.eventmodel.v1alpha1.ClaimRoute" => {
+                &["connection_id", "parameter_values", "delivery_mode", "doc"]
+            }
+            "trogonatlas.eventmodel.v1alpha1.ClaimTrigger" => {
+                &["connection_id", "condition", "doc"]
+            }
+            "trogonatlas.eventmodel.v1alpha1.ClaimFieldSelection" => {
+                &["connection_id", "selectors", "doc"]
+            }
+            _ => &["connection_id", "doc", "label", "condition"],
+        };
+        for name in descriptive {
             if let Some(field) = descriptor.get_field_by_name(name) {
+                endpoint.clear_field(&field);
+            }
+        }
+        if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.ChannelLink" {
+            if let Some(field) = descriptor.get_field_by_name("parameter_values") {
                 endpoint.clear_field(&field);
             }
         }
@@ -222,7 +360,19 @@ fn visit(
         let occurrence = ConnectionOccurrence {
             id: read_id(message)?,
             path: path.to_owned(),
-            target: if descriptor.full_name()
+            target: if is_claim_descriptor(descriptor.full_name()) {
+                claim_target(message)
+            } else if descriptor.full_name() == "trogonatlas.annotation.v1alpha1.ResourceGroupItem"
+            {
+                message
+                    .get_field_by_name("target")
+                    .as_deref()
+                    .and_then(Value::as_message)
+                    .map(Message::encode_to_vec)
+                    .map(|bytes| EntityRef::decode(bytes.as_slice()))
+                    .transpose()
+                    .map_err(|e| ConnectionError::Encoding(e.to_string()))?
+            } else if descriptor.full_name()
                 == "trogonatlas.eventmodel.v1alpha1.ArchitecturalRelationship"
             {
                 message
@@ -248,8 +398,44 @@ fn visit(
                     })
                     .as_ref()
                     .and_then(crate::architectural_relationships::endpoint_ref)
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.DecisionMaker" {
+                trogon_atlas_proto::DecisionMaker::decode(message.encode_to_vec().as_slice())
+                    .ok()
+                    .as_ref()
+                    .and_then(|maker| crate::decision_document::decision_maker_ref(maker).ok())
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.DecisionAmendment"
+            {
+                trogon_atlas_proto::DecisionAmendment::decode(message.encode_to_vec().as_slice())
+                    .ok()
+                    .and_then(|a| a.decision)
+                    .map(|r| EntityRef {
+                        kind: trogon_atlas_proto::EntityKind::Decision as i32,
+                        id: r.id,
+                    })
+            } else if descriptor.full_name()
+                == "trogonatlas.eventmodel.v1alpha1.BusinessPropertyRelationship"
+            {
+                message
+                    .get_field_by_name("target_entity")
+                    .as_deref()
+                    .and_then(Value::as_message)
+                    .map(Message::encode_to_vec)
+                    .and_then(|bytes| trogon_atlas_proto::SchemaRef::decode(bytes.as_slice()).ok())
+                    .and_then(|schema_ref| schema_ref.id)
+                    .map(|id| EntityRef {
+                        kind: trogon_atlas_proto::EntityKind::Schema as i32,
+                        id: Some(id),
+                    })
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.ChannelLink" {
+                entity_target(message, "target", trogon_atlas_proto::EntityKind::Channel)?
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.StorageAccessClaim"
+            {
+                entity_target(message, "store", trogon_atlas_proto::EntityKind::DataStore)?
             } else {
-                None
+                crate::system_group::occurrence_target(
+                    descriptor.full_name(),
+                    &message.encode_to_vec(),
+                )
             },
             signature,
         };
@@ -305,7 +491,13 @@ fn visit(
         predecessor.to_vec()
     };
     let mut after = after;
-    for identity_field in ["member_id", "port_id"] {
+    let identity_fields: &[&str] =
+        if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.TopologyStep" {
+            &["step_id"]
+        } else {
+            &["member_id", "port_id", "group_id"]
+        };
+    for identity_field in identity_fields {
         if let Some(value) = message.get_field_by_name(identity_field) {
             if let Some(id) = value.as_message() {
                 let encoded = id.encode_to_vec();
@@ -374,7 +566,7 @@ pub fn renew_retargeted_connection_ids(
         {
             let field = message
                 .descriptor()
-                .get_field_by_name("connection_id")
+                .get_field_by_name(identity_field(message))
                 .ok_or_else(|| {
                     ConnectionError::Encoding("connection ID descriptor missing".into())
                 })?;
@@ -398,7 +590,7 @@ pub(crate) fn renew_connection_ids(
         if occurrence.id.is_some_and(|id| selected.contains(&id)) {
             let field = message
                 .descriptor()
-                .get_field_by_name("connection_id")
+                .get_field_by_name(identity_field(message))
                 .ok_or_else(|| {
                     ConnectionError::Encoding("connection ID descriptor missing".into())
                 })?;
@@ -438,7 +630,7 @@ pub fn equivalent_with_unassigned_ids(
     visit(&mut comparison, "", "", &[], &mut |message, _| {
         let field = message
             .descriptor()
-            .get_field_by_name("connection_id")
+            .get_field_by_name(identity_field(message))
             .ok_or_else(|| ConnectionError::Encoding("connection ID descriptor missing".into()))?;
         message.clear_field(&field);
         Ok(())
@@ -450,6 +642,63 @@ pub fn equivalent_with_unassigned_ids(
 
 pub fn validate_connection_ids(entity: &Entity) -> Result<(), ConnectionError> {
     let mut ids = HashMap::new();
+    fn local_ids(
+        message: &DynamicMessage,
+        path: &str,
+        ids: &mut HashMap<ConnectionId, String>,
+    ) -> Result<(), ConnectionError> {
+        for field in message
+            .descriptor()
+            .fields()
+            .filter(|f| message.has_field(f))
+        {
+            let value = message.get_field(&field);
+            let path = format!("{path}.{}", field.name());
+            if matches!(
+                message.descriptor().name(),
+                "ContractArtifact"
+                    | "ContractSchema"
+                    | "ContractMessage"
+                    | "ContractOperation"
+                    | "DataInputPort"
+                    | "DataOutputPort"
+                    | "DecisionOption"
+                    | "DocumentAnchor"
+                    | "TopologyStep"
+            ) && matches!(
+                field.name(),
+                "member_id" | "port_id" | "option_id" | "anchor_id" | "step_id"
+            ) {
+                if let Some(id) = value
+                    .as_message()
+                    .and_then(|m| m.get_field_by_name("value"))
+                {
+                    if let Some(id) = id.as_str().filter(|s| !s.is_empty()) {
+                        let id = id.parse()?;
+                        if let Some(first) = ids.insert(id, path.clone()) {
+                            return Err(ConnectionError::DuplicateId {
+                                id,
+                                first,
+                                second: path,
+                            });
+                        }
+                    }
+                }
+            } else {
+                match value.as_ref() {
+                    Value::Message(child) => local_ids(child, &path, ids)?,
+                    Value::List(values) => {
+                        for (i, child) in values.iter().filter_map(Value::as_message).enumerate() {
+                            local_ids(child, &format!("{path}[{i}]"), ids)?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+    local_ids(&dynamic(entity)?, "", &mut ids)?;
     for occurrence in connection_occurrences(entity)? {
         if let Some(id) = occurrence.id {
             if let Some(first) = ids.insert(id, occurrence.path.clone()) {
@@ -484,7 +733,7 @@ pub fn assign_connection_ids(entity: &mut Entity) -> Result<usize, ConnectionErr
         if occurrence.id.is_none() {
             let field = message
                 .descriptor()
-                .get_field_by_name("connection_id")
+                .get_field_by_name(identity_field(message))
                 .ok_or_else(|| {
                     ConnectionError::Encoding("connection ID descriptor missing".into())
                 })?;
@@ -590,7 +839,7 @@ pub fn resolve_connection(
     validate_stored_connection_ids(entity)?;
     connection_occurrences(entity)?
         .into_iter()
-        .find(|item| item.id == Some(id))
+        .find(|item| item.id == Some(id) && !item.path.contains(".metadata["))
         .ok_or(ConnectionError::NotFound(id))
 }
 

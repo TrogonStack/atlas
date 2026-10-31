@@ -125,6 +125,13 @@ fn active(value: &DataProduct, persisted: bool) -> Result<HashMap<DataPortId, Di
     Ok(ids)
 }
 
+pub(crate) fn port_id_strings(value: &DataProduct, persisted: bool) -> Result<HashSet<String>> {
+    Ok(active(value, persisted)?
+        .keys()
+        .map(ToString::to_string)
+        .collect())
+}
+
 pub fn validate_stored_ports(entity: &Entity) -> Result<()> {
     if let Some(value) = product(entity) {
         active(value, true)?;
@@ -334,6 +341,14 @@ pub(crate) fn restore_ports(
         Ok(())
     })
     .map_err(connection_error)?;
+    for claim in &mut value.storage_claims {
+        if let Some(port) = claim.port_id.as_ref() {
+            let id = port_id(Some(port)).map_err(connection_error)?;
+            if let Some(fresh) = map.get(&id) {
+                claim.port_id = Some(fresh.clone());
+            }
+        }
+    }
     for output in &mut value.outputs {
         if let Some(lineage) = &mut output.derived_from {
             for input in &mut lineage.inputs {
@@ -401,6 +416,100 @@ fn member(reference: Option<&pb::ContractMemberRef>, kind: pb::ContractMemberKin
         .map_err(|e| DataProductError(e.to_string()))?;
     Ok(())
 }
+fn association_contract(value: &pb::ProductResourceContract) -> Result<()> {
+    match value.r#type.as_ref() {
+        Some(pb::product_resource_contract::Type::Schema(r)) => exact(r.id.as_ref()),
+        Some(pb::product_resource_contract::Type::LibraryType(r)) => {
+            exact(r.library.as_ref().and_then(|r| r.id.as_ref()))?;
+            require(
+                r.message.as_ref().is_some_and(|m| {
+                    !m.value.is_empty()
+                        && m.value.split('.').all(|part| {
+                            !part.is_empty()
+                                && part.bytes().enumerate().all(|(i, b)| {
+                                    b.is_ascii_alphabetic()
+                                        || b == b'_'
+                                        || (i > 0 && b.is_ascii_digit())
+                                })
+                        })
+                }),
+                "qualified protobuf message name required",
+            )
+        }
+        Some(pb::product_resource_contract::Type::ContractType(r)) => {
+            member(r.schema.as_ref(), pb::ContractMemberKind::Schema)?;
+            r.expected_artifact_id
+                .as_ref()
+                .ok_or_else(|| DataProductError("missing artifact ID pin".into()))?
+                .value
+                .parse::<crate::specification::MemberId>()
+                .map_err(|e| DataProductError(e.to_string()))?;
+            require(
+                r.expected_digest.as_ref().is_some_and(|d| {
+                    d.sha256.len() == 64
+                        && d.sha256
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                }),
+                "SHA-256 digest pin required",
+            )?;
+            require(
+                r.expected_selector
+                    .as_ref()
+                    .is_none_or(|s| !s.syntax.trim().is_empty() && !s.value.trim().is_empty()),
+                "opaque selector requires syntax and value",
+            )
+        }
+        None => Err(DataProductError(
+            "resource association contract pin requires a type".into(),
+        )),
+    }
+}
+
+fn validate_associations(value: &DataProduct) -> Result<()> {
+    for association in &value.resource_associations {
+        require(
+            matches!(
+                pb::DataPortDirection::try_from(association.direction),
+                Ok(pb::DataPortDirection::Input | pb::DataPortDirection::Output)
+            ),
+            "resource association direction required",
+        )?;
+        match association.target.as_ref() {
+            Some(pb::product_resource_association::Target::Event(r)) => exact(r.id.as_ref())?,
+            Some(pb::product_resource_association::Target::Command(r)) => exact(r.id.as_ref())?,
+            Some(pb::product_resource_association::Target::Component(r)) => exact(r.id.as_ref())?,
+            Some(pb::product_resource_association::Target::ExternalSystem(r)) => {
+                exact(r.id.as_ref())?;
+            }
+            Some(pb::product_resource_association::Target::Channel(r)) => exact(r.id.as_ref())?,
+            Some(pb::product_resource_association::Target::DataStore(r)) => exact(r.id.as_ref())?,
+            Some(pb::product_resource_association::Target::Message(r)) => {
+                member(Some(r), pb::ContractMemberKind::Message)?;
+            }
+            None => {
+                return Err(DataProductError(
+                    "resource association target required".into(),
+                ));
+            }
+        }
+        if let Some(contract) = &association.contract {
+            require(
+                association.direction == pb::DataPortDirection::Output as i32,
+                "input resource association cannot pin an output contract",
+            )?;
+            association_contract(contract)?;
+        }
+        if let Some(doc) = &association.doc {
+            require(
+                !doc.trim().is_empty(),
+                "resource association doc must be nonblank when supplied",
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn contract(value: &pb::OutputContract) -> Result<()> {
     match value.r#type.as_ref() {
         Some(pb::output_contract::Type::Schema(r)) => exact(r.id.as_ref()),
@@ -508,6 +617,11 @@ pub fn validate_values(value: &DataProduct) -> Result<()> {
         "DataProduct encoded size limit exceeded",
     )?;
     let ids = active(value, true)?;
+    crate::storage_claims::validate_claims(
+        &value.storage_claims,
+        Some(&ids.keys().map(ToString::to_string).collect()),
+    )
+    .map_err(|e| DataProductError(e.to_string()))?;
     for names in [
         value
             .inputs
@@ -558,6 +672,7 @@ pub fn validate_values(value: &DataProduct) -> Result<()> {
             }
         }
     }
+    validate_associations(value)?;
     let entity = Entity {
         kind: Some(entity::Kind::DataProduct(value.clone())),
         system: None,

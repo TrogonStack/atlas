@@ -134,21 +134,23 @@ impl EventModelServiceImpl {
                 world.entry(key).or_insert(row);
             }
         }
-        let targets: Vec<_> = world
-            .values()
-            .filter(|row| {
-                matches!(
-                    row.entity.kind,
-                    Some(
-                        pb::entity::Kind::CommandSlice(_)
-                            | pb::entity::Kind::AutomationSlice(_)
-                            | pb::entity::Kind::ReadModelSlice(_)
-                    )
+        let mut targets = Vec::new();
+        for row in world.values().filter(|row| {
+            matches!(
+                row.entity.kind,
+                Some(
+                    pb::entity::Kind::CommandSlice(_)
+                        | pb::entity::Kind::AutomationSlice(_)
+                        | pb::entity::Kind::ReadModelSlice(_)
                 )
-            })
-            .flat_map(|row| trogon_atlas_core::refs::outbound_refs(&row.entity))
-            .filter_map(|r| r.to_kind.map(|kind| (kind, r.to_id)))
-            .collect();
+            )
+        }) {
+            targets.extend(
+                crate::graph::checked_refs(&row.entity)?
+                    .into_iter()
+                    .filter_map(|r| r.to_kind.map(|kind| (kind, r.to_id))),
+            );
+        }
         let mut missing = HashSet::new();
         for (kind, target) in targets {
             let key = pb::EntityKey::new(kind, &target);
@@ -577,12 +579,13 @@ fn redact_access(access: &pb::OutputAccess, lens: &Lens) -> pb::OutputAccess {
     access
 }
 fn has_hidden_refs(product: &pb::DataProduct, lens: &Lens) -> bool {
-    trogon_atlas_core::refs::outbound_refs(&pb::Entity {
+    trogon_atlas_core::refs::try_outbound_refs(&pb::Entity {
         kind: Some(pb::entity::Kind::DataProduct(product.clone())),
         ..Default::default()
     })
-    .iter()
-    .any(|r| !lens.admits(&r.to_id.namespace))
+    .map_or(true, |refs| {
+        refs.iter().any(|r| !lens.admits(&r.to_id.namespace))
+    })
 }
 fn redact_product(product: &pb::DataProduct, lens: &Lens) -> pb::DataProduct {
     let mut product = product.clone();

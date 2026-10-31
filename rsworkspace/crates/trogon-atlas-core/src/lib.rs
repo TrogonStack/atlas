@@ -13,7 +13,11 @@
 //! `trogon_atlas_store::refs` so existing imports keep working with a
 //! single `use` swap.
 
+pub mod agent_metadata;
 pub mod architectural_relationships;
+pub mod authored_date;
+pub mod business_data;
+pub mod channel_links;
 pub mod communication_intent;
 pub mod connection_persistence;
 pub mod connections;
@@ -22,10 +26,15 @@ pub mod data_product;
 mod data_product_refs;
 pub mod decision_document;
 mod decision_document_refs;
+pub mod design_topology;
+mod design_topology_refs;
+pub mod document_catalog_context;
 pub mod id_component;
+pub mod message_claims;
 pub mod namespace;
 pub mod operation_id;
 pub mod refs;
+pub mod resource_associations;
 pub mod responsibility;
 mod responsibility_refs;
 pub mod schema;
@@ -34,6 +43,8 @@ pub mod source_bundle;
 pub mod source_integration;
 pub mod specification;
 mod specification_refs;
+pub mod storage_claims;
+pub mod system_group;
 pub mod system_meta;
 pub mod transcode;
 pub mod writer_lease;

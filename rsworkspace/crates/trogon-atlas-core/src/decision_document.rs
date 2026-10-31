@@ -38,7 +38,7 @@ fn failure(error: impl fmt::Display) -> CatalogError {
 fn connection_error(error: CatalogError) -> ConnectionError {
     ConnectionError::Catalog(error.0)
 }
-fn exact(id: Option<&pb::Id>) -> Result<()> {
+pub(crate) fn exact(id: Option<&pb::Id>) -> Result<()> {
     let id = id.ok_or_else(|| CatalogError("exact entity ID required".into()))?;
     require(
         id.version > 0
@@ -47,7 +47,7 @@ fn exact(id: Option<&pb::Id>) -> Result<()> {
         "invalid exact entity ID",
     )
 }
-fn text(value: &str, limit: usize) -> Result<()> {
+pub(crate) fn text(value: &str, limit: usize) -> Result<()> {
     require(
         !value.trim().is_empty() && value.len() <= limit,
         "catalog text blank or byte limit exceeded",
@@ -204,7 +204,7 @@ pub fn resolve_document_selection<'a>(
     validate_stored_values(owner)?;
     connections::validate_stored_connection_ids(owner).map_err(failure)?;
     let Some(pb::document::Body::Retained(body)) = &document.body else {
-        return Err(CatalogError("anchor requires retained body".into()));
+        return Err(CatalogError("anchor requires retained text body".into()));
     };
     if let Some(pin) = &reference.expected_digest {
         digest(pin)?;
@@ -226,13 +226,14 @@ pub fn subjects(entity: &Entity) -> &[pb::SubjectAssociation] {
     match &entity.kind {
         Some(entity::Kind::Decision(v)) => &v.subjects,
         Some(entity::Kind::Document(v)) => &v.subjects,
+        Some(entity::Kind::DesignGraph(v)) => &v.subjects,
         _ => &[],
     }
 }
-fn validate_subjects(entity: &Entity) -> Result<()> {
+pub(crate) fn validate_subjects(entity: &Entity, required: bool) -> Result<()> {
     let values = subjects(entity);
     require(
-        !values.is_empty() && values.len() <= MAX_SUBJECTS,
+        (!required || !values.is_empty()) && values.len() <= MAX_SUBJECTS,
         "subject collection outside bounds",
     )?;
     let mut seen = HashSet::new();
@@ -285,6 +286,21 @@ fn validate_selection_list<'a>(
     Ok(())
 }
 fn validate_decision(value: &pb::Decision) -> Result<()> {
+    let authored_on = value
+        .authored_on
+        .as_ref()
+        .map(|date| date.value.parse::<crate::authored_date::AuthoredDate>())
+        .transpose()
+        .map_err(failure)?;
+    let decided_on = value
+        .decided_on
+        .as_ref()
+        .map(|date| date.value.parse::<crate::authored_date::AuthoredDate>())
+        .transpose()
+        .map_err(failure)?;
+    if let (Some(authored), Some(decided)) = (&authored_on, &decided_on) {
+        require(decided >= authored, "decided_on precedes authored_on")?;
+    }
     validate_catalog_title(value.title.as_ref())?;
     validate_catalog_text(value.context.as_ref())?;
     validate_catalog_text(value.rationale.as_ref())?;
@@ -371,6 +387,36 @@ fn validate_decision(value: &pb::Decision) -> Result<()> {
             validate_catalog_text(related.doc.as_ref())?;
         }
     }
+    require(
+        value.decision_makers.len() <= 128 && value.amends.len() <= 128,
+        "decision relationship limit exceeded",
+    )?;
+    seen.clear();
+    for maker in &value.decision_makers {
+        let reference = decision_maker_ref(maker)?;
+        require(
+            seen.insert(reference.encode_to_vec()),
+            "duplicate decision maker",
+        )?;
+        if maker.doc.is_some() {
+            validate_catalog_text(maker.doc.as_ref())?;
+        }
+    }
+    seen.clear();
+    for amendment in &value.amends {
+        let target = amendment
+            .decision
+            .as_ref()
+            .ok_or_else(|| CatalogError("amended decision required".into()))?;
+        exact(target.id.as_ref())?;
+        require(
+            target.id != value.id && seen.insert(target.encode_to_vec()),
+            "self or duplicate amendment",
+        )?;
+        if amendment.doc.is_some() {
+            validate_catalog_text(amendment.doc.as_ref())?;
+        }
+    }
     validate_selection_list(
         value
             .documents
@@ -381,6 +427,8 @@ fn validate_decision(value: &pb::Decision) -> Result<()> {
     )?;
     require(
         value.subjects.len()
+            + value.decision_makers.len()
+            + value.amends.len()
             + value.related_decisions.len()
             + value.documents.len()
             + usize::from(value.replaced_by.is_some())
@@ -426,8 +474,10 @@ fn validate_document(value: &pb::Document) -> Result<()> {
             };
             responsibility::validate_contact(&contact).map_err(failure)?;
         }
+        Some(pb::document::Body::RetainedContent(_)) => {}
         None => return Err(CatalogError("document body required".into())),
     }
+    crate::document_catalog_context::validate_document_extensions(value)?;
     require(
         value.anchors.len() <= 256 && value.navigation.len() <= 128,
         "document collection limit exceeded",
@@ -464,7 +514,8 @@ fn validate_document(value: &pb::Document) -> Result<()> {
         }
     }
     require(
-        value.subjects.len() + value.navigation.len() <= MAX_ASSOCIATIONS,
+        value.subjects.len() + value.navigation.len() + value.related_content.len()
+            <= MAX_ASSOCIATIONS,
         "association limit exceeded",
     )
 }
@@ -479,7 +530,7 @@ pub fn validate_values(entity: &Entity) -> Result<()> {
         entity.encoded_len() <= MAX_ENCODED_BYTES,
         "catalog entity byte limit exceeded",
     )?;
-    validate_subjects(entity)?;
+    validate_subjects(entity, true)?;
     inventory(entity, false)?;
     connections::validate_connection_ids(entity).map_err(failure)
 }
@@ -712,4 +763,20 @@ pub(crate) fn restore_values(
 
 pub fn decorate_reference(entity: &Entity, reference: &mut pb::Reference) {
     crate::decision_document_refs::decorate_reference(entity, reference);
+    crate::design_topology_refs::decorate_reference(entity, reference);
+}
+
+pub fn decision_maker_ref(maker: &pb::DecisionMaker) -> Result<pb::EntityRef> {
+    let (kind, id) = match &maker.assignee {
+        Some(pb::decision_maker::Assignee::Person(reference)) => {
+            (EntityKind::Person, &reference.id)
+        }
+        Some(pb::decision_maker::Assignee::Team(reference)) => (EntityKind::Team, &reference.id),
+        None => return Err(CatalogError("decision maker required".into())),
+    };
+    exact(id.as_ref())?;
+    Ok(pb::EntityRef {
+        kind: kind as i32,
+        id: id.clone(),
+    })
 }
