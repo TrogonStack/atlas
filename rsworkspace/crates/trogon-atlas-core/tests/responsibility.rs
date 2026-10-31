@@ -130,7 +130,7 @@ fn wire_allocations_revision_and_presence_are_native() {
             MIN_CLIENT_CONTRACT_REVISION,
             MIN_SERVER_CONTRACT_REVISION
         ),
-        (19, 19, 19)
+        (20, 20, 20)
     );
     assert_eq!(canonical::parse_kind("team"), Some(EntityKind::Team));
     assert_eq!(canonical::parse_kind("person"), Some(EntityKind::Person));
