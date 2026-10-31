@@ -901,6 +901,7 @@ struct FailingBatchStore {
     protection_passes: std::sync::atomic::AtomicUsize,
     unconfirmed_protections: std::sync::atomic::AtomicUsize,
     protection_read_failures: std::sync::atomic::AtomicUsize,
+    protection_reads_hidden: std::sync::atomic::AtomicUsize,
     unconfirmed_protections_unreadable: std::sync::atomic::AtomicBool,
     changeset_append_failures: std::sync::atomic::AtomicUsize,
     delete_on_get: Option<(pb::Id, Arc<std::sync::atomic::AtomicBool>)>,
@@ -932,6 +933,7 @@ impl FailingBatchStore {
             protection_passes: std::sync::atomic::AtomicUsize::new(0),
             unconfirmed_protections: std::sync::atomic::AtomicUsize::new(0),
             protection_read_failures: std::sync::atomic::AtomicUsize::new(0),
+            protection_reads_hidden: std::sync::atomic::AtomicUsize::new(0),
             unconfirmed_protections_unreadable: std::sync::atomic::AtomicBool::new(false),
             changeset_append_failures: std::sync::atomic::AtomicUsize::new(0),
             delete_on_get: None,
@@ -1001,6 +1003,14 @@ impl Store for FailingBatchStore {
             return Err(StoreError::Backend(
                 "injected protection read failure".into(),
             ));
+        }
+        let hidden = self.protection_reads_hidden.try_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |left| left.checked_sub(1),
+        );
+        if hidden.is_ok() {
+            return Ok(trogon_atlas_store::ProtectionState::Unprotected);
         }
         self.inner.get_protection(identity).await
     }
@@ -5455,6 +5465,71 @@ async fn delete_entity_refused_by_protection_can_retry_its_operation_id_once_lif
     svc.delete_entity(Request::new(delete()))
         .await
         .expect("once the mark is lifted the same operation_id must delete");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revert_refused_by_a_protection_landing_mid_request_can_retry_once_lifted() {
+    let mut store = FailingBatchStore::new().await;
+    store.fail_batches = false;
+    let store = Arc::new(store);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-revert-retry";
+    let created = svc
+        .put_entity(Request::new(pb::PutEntityRequest {
+            entity: Some(make_event(ns, "placed", 1)),
+            operation_id: "op-protect-revert-retry-create".into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .operation_receipt
+        .unwrap()
+        .changeset_id;
+    svc.protect_entity(as_protecting_admin(pb::ProtectEntityRequest {
+        kind: pb::EntityKind::Event as i32,
+        namespace: ns.into(),
+        slug: "placed".into(),
+        reason: "published contract".into(),
+        validate_only: false,
+    }))
+    .await
+    .unwrap();
+    let revert = || pb::RevertChangesetRequest {
+        id: created.clone(),
+        dry_run: false,
+        operation_id: "op-protect-revert-retry".into(),
+    };
+
+    store
+        .protection_reads_hidden
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let refused = svc
+        .revert_changeset(Request::new(revert()))
+        .await
+        .expect_err("the protection seen under the lock refuses the revert");
+    assert_eq!(
+        refused.get_details_error_info().unwrap().reason,
+        reason::ENTITY_PROTECTED
+    );
+
+    svc.unprotect_entity(as_protecting_admin(pb::UnprotectEntityRequest {
+        kind: pb::EntityKind::Event as i32,
+        namespace: ns.into(),
+        slug: "placed".into(),
+        validate_only: false,
+        if_match: 0,
+    }))
+    .await
+    .unwrap();
+
+    let reverted = svc
+        .revert_changeset(Request::new(revert()))
+        .await
+        .expect("once the mark is lifted the same operation_id must revert")
+        .into_inner();
+    assert!(!reverted.dry_run);
+    assert_ne!(reverted.changeset_id, "");
 }
 
 #[tokio::test(flavor = "multi_thread")]

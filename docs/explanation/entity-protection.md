@@ -50,7 +50,8 @@ mark, so that proof holds even when the changeset itself was never stored. A
 retry that only finds its protections already in place records nothing new,
 and its receipt names the changeset that landed its content. When a server stops after a protecting batch's
 content is durable, batch recovery leaves its `operation_id` not applied so
-a retry completes the protections. Whenever content landed but a protection
+a retry completes the protections. Recovery only settles a claim the request
+left pending, so a batch that already settled its own outcome keeps it. Whenever content landed but a protection
 did not, the not-applied claim remembers the changeset that landed the
 content. A retry that finds the stored entities still exactly as that
 changeset left them skips the write and resumes at the protection step, so
@@ -170,9 +171,10 @@ does not read a gap as "unprotected". See the
   operation is refused rather than answered from the stored result. `DeleteEntity` is the exception: it
   answers a replay from its receipt, because protection cannot apply to a
   delete that already happened.
-- Default chosen for review: a `DeleteEntity` refused by protection leaves
-  its `operation_id` free, as `PutEntity` and `BatchMutate` do, so the same
-  id deletes once the mark is lifted instead of replaying the refusal.
+- Default chosen for review: a `DeleteEntity` or `RevertChangeset` refused
+  by protection leaves its `operation_id` free, as `PutEntity` and
+  `BatchMutate` do, so the same id deletes or reverts once the mark is lifted
+  instead of replaying the refusal.
 
 - Default chosen for review: an identity whose protection cannot be read is
   refused like a protected one, with its own reason, rather than allowed.
