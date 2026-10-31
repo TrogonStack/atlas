@@ -142,13 +142,15 @@ pub mod changeset_validation {
         Validated(super::ChangesetValidated),
     }
 }
-/// The write path ran no validation suites. Issue counts are absent rather
-/// than zero, because no suite looked.
+/// No validation coverage was declared for this write, so no issue counts
+/// are recorded: counts without coverage would read as a clean result.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChangesetUnvalidated {
-    /// Stable reason token: `no_declared_coverage` for paths that run no
-    /// suites by design (delete, revert, retarget, import), `recovered` for a
-    /// changeset reconstructed by crash recovery, which cannot know what ran.
+    /// Stable reason token: `no_declared_coverage` for paths that report no
+    /// coverage (delete, revert, retarget, delete by query, import, source
+    /// reconciliation), `recovered` for a changeset reconstructed by crash
+    /// recovery, which cannot know what ran. Treat an unknown token like
+    /// either: nothing is claimed.
     #[prost(string, tag="1")]
     pub reason: ::prost::alloc::string::String,
 }
