@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use prost::Message;
 use trogon_atlas_core::{
     connection_persistence::prepare_entity, connections::connection_occurrences,
@@ -211,4 +213,11 @@ fn source_cannot_create_or_clear_native_hostings() {
     };
     assert_eq!(component.ui_hostings, original.ui_hostings);
     assert_eq!(component.title, "Updated");
+}
+
+#[test]
+fn hosting_writers_require_revision_twenty() {
+    assert_eq!(trogon_atlas_proto::CONTRACT_REVISION, 20);
+    assert_eq!(trogon_atlas_proto::MIN_SERVER_CONTRACT_REVISION, 20);
+    assert_eq!(trogon_atlas_proto::MIN_CLIENT_CONTRACT_REVISION, 20);
 }
