@@ -92,6 +92,10 @@ pub struct InferDataFlowResponse {
     /// are comma-separated in attempt order. No provider error content is exposed.
     #[prost(string, tag="3")]
     pub fallback_reason: ::prost::alloc::string::String,
+    /// True when the server's entity load hit its cap, so entities beyond it
+    /// were never examined. A short or empty list is then not complete.
+    #[prost(bool, tag="4")]
+    pub snapshot_truncated: bool,
 }
 /// A field-flow information-completeness problem the engine surfaced.
 /// Trigger-story authoring invariants, such as missing or ambiguous command
@@ -181,6 +185,10 @@ pub struct CheckInformationCompletenessResponse {
     /// in logs and is never surfaced here.
     #[prost(string, tag="4")]
     pub fallback_reason: ::prost::alloc::string::String,
+    /// True when the server's entity load hit its cap, so entities beyond it
+    /// were never examined. A short or empty list is then not complete.
+    #[prost(bool, tag="5")]
+    pub snapshot_truncated: bool,
 }
 /// Origin classifications the inference engine can assign when a value
 /// doesn't come from another field. Parallels what a human would write in
@@ -3077,6 +3085,10 @@ pub struct ListEntitiesResponse {
     pub entities: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::Entity>,
     #[prost(string, tag="2")]
     pub next_page_token: ::prost::alloc::string::String,
+    /// True when the server's entity load hit its cap, so entities beyond it
+    /// were never examined. A short or empty list is then not complete.
+    #[prost(bool, tag="3")]
+    pub snapshot_truncated: bool,
 }
 /// SearchEntitiesRequest always searches the baseline index. The
 /// `x-trogon-atlas-branch` metadata header (see the branch context note above)
@@ -3121,6 +3133,10 @@ pub struct ListVersionsResponse {
     pub versions: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::Entity>,
     #[prost(string, tag="2")]
     pub next_page_token: ::prost::alloc::string::String,
+    /// True when the server's entity load hit its cap, so entities beyond it
+    /// were never examined. A short or empty list is then not complete.
+    #[prost(bool, tag="3")]
+    pub snapshot_truncated: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetLatestVersionRequest {
@@ -3624,6 +3640,10 @@ pub struct ListEntitiesByDomainResponse {
     pub entities: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::Entity>,
     #[prost(string, tag="2")]
     pub next_page_token: ::prost::alloc::string::String,
+    /// True when the server's entity load hit its cap, so entities beyond it
+    /// were never examined. A short or empty list is then not complete.
+    #[prost(bool, tag="3")]
+    pub snapshot_truncated: bool,
 }
 // ---------- Impact analysis --------------------------------------------------
 //
@@ -3637,8 +3657,9 @@ pub struct ListEntitiesByDomainResponse {
 pub struct GetImpactRequest {
     #[prost(message, optional, tag="1")]
     pub root: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
-    /// Maximum hops from root. 0 = unlimited. Default 0; large models with
-    /// dense fan-out should set a bound to keep responses tractable.
+    /// Maximum hops from root. 0 asks for the server maximum, and a larger
+    /// value is clamped to it; `GetImpactResponse.effective_max_depth` reports
+    /// the bound that applied.
     #[prost(uint32, tag="2")]
     pub max_depth: u32,
     /// Restrict the traversal to entities of these kinds. Empty = all kinds.
@@ -3657,6 +3678,21 @@ pub struct GetImpactResponse {
     pub nodes: ::prost::alloc::vec::Vec<ImpactNode>,
     #[prost(string, tag="2")]
     pub next_page_token: ::prost::alloc::string::String,
+    /// True when the server's entity load hit its cap, so entities beyond it
+    /// were never examined. A short or empty list is then not complete.
+    #[prost(bool, tag="3")]
+    pub snapshot_truncated: bool,
+    /// The hop bound the traversal actually used.
+    #[prost(uint32, tag="4")]
+    pub effective_max_depth: u32,
+    /// True when the server replaced the requested `max_depth` with its own
+    /// maximum, either because the request asked for 0 or for more.
+    #[prost(bool, tag="5")]
+    pub depth_clamped: bool,
+    /// True when an entity at `effective_max_depth` has a reference the
+    /// traversal did not follow, so the impact set continues past the bound.
+    #[prost(bool, tag="6")]
+    pub depth_limited: bool,
 }
 // ---------- Bulk reference retargeting (version promotion) -------------------
 //

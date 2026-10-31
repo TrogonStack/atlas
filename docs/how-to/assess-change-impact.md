@@ -25,7 +25,9 @@ the change or bump-only.
    referrers and outgoing references, ordered by depth. Inspect each path's
    direction before treating a node as a dependent. Use `filter_kinds` to
    narrow returned kinds after understanding the paths, and `max_depth` on
-   dense models. Check paging and depth limits as described in the
+   dense models. When `depth_limited` or `snapshot_truncated` is set, the
+   node list is a lower bound, not the whole blast radius. Check paging and
+   depth limits as described in the
    [repair playbook](repair-validation-findings.md#discover-the-full-dependency-context).
 
 3. **Classify each affected entity.**
