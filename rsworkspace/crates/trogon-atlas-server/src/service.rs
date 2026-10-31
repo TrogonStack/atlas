@@ -8360,7 +8360,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Real merge: land verbatim, then validate the *actual* post-merge
         // world. If invalid, nothing was persisted -- `land_branch_merge`
         // has not been called yet, so there is nothing to roll back.
-        let (strategic_findings, merge_snapshot_truncated) = {
+        let (merge_findings, merge_snapshot_truncated) = {
             let (pre_all, snapshot_truncated) = self.snapshot_with_truncation(None, &vis).await?;
             let mut projected: Vec<StoredEntity> = (*pre_all).clone();
             let mut by_key: std::collections::HashMap<pb::EntityKey, usize> =
@@ -8408,7 +8408,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     projected.push(se);
                 }
             }
-            let validation_issues = validation::validate_store_hygiene(&projected);
+            let mut validation_issues = validation::validate_store_hygiene(&projected);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
@@ -8423,10 +8423,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     ..landed.into_response()
                 }));
             }
-            (
-                merge_strategic_findings(&op_metas, &pre_all, &projected),
-                snapshot_truncated,
-            )
+            validation_issues.extend(merge_strategic_findings(&op_metas, &pre_all, &projected));
+            (validation_issues, snapshot_truncated)
         };
 
         // Claimed here, past every validation failure above (conflicts,
@@ -8540,7 +8538,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         changeset.record_batch(&op_metas, &outcomes);
         changeset.validated_by(
             &merge_coverage(merge_snapshot_truncated, true),
-            &strategic_findings,
+            &merge_findings,
         );
         self.record_changeset(
             changeset,
@@ -8568,7 +8566,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         Ok(Response::new(pb::MergeBranchResponse {
             status: pb::merge_branch_response::Status::Applied as i32,
-            validation: strategic_findings,
+            validation: merge_findings,
             operation_receipt: claim_key
                 .as_ref()
                 .map(|_| operation_receipts::fresh_receipt(&req.operation_id, &merge_changeset_id)),
