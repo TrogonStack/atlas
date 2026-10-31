@@ -175,8 +175,9 @@ preserving repeated equal observations. The
 [acceptance requirements](../reference/human-interaction-acceptance.md) define
 identity, role, visibility and lifecycle obligations before implementation.
 
-This is a documentation-only proposal. No hosting field, interaction inspector
-RPC or runtime behavior is implemented. Exhaustive actor discovery, persisted
+Native hosting and checked interaction inspection are being implemented under
+the linked contract. Final integrated acceptance remains pending. Exhaustive
+actor discovery, persisted
 composite interaction subjects and ExternalSystem hosting remain deferred.
 Checked per-owner revisions would describe a read set, not an atomic
 multi-owner snapshot or evidence of a human's runtime permissions.
