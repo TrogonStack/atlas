@@ -7774,12 +7774,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let _guard = self.lock_mutations().await;
+        // Protection can be lifted, so refusing on it is not a final answer
+        // for this id: release the claim, as `DeleteEntity` does.
         if let Err(status) = self
             .refuse_protected(inverse.iter().map(|(kind, id, _)| (*kind, id)))
             .await
         {
             if let Some(key) = &claim_key {
-                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                operation_receipts::settle_not_applied(&*self.store, key).await;
             }
             return Err(status);
         }
