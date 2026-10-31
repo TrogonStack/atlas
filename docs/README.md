@@ -33,6 +33,7 @@ Solve a specific problem:
 
 Look up exact behavior:
 
+- [Consequence delta](reference/consequence-delta.md)
 - [Failure reasons](reference/failure-reasons.md)
 - [MCP tool reference](reference/mcp-tools.md)
 - [MCP tool profiles](reference/mcp-tool-profiles.md)
@@ -82,6 +83,7 @@ Understand how Atlas works and why:
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)
 - [Changesets](explanation/changesets.md)
+- [Consequence deltas](explanation/consequence-delta.md)
 - [Entity protection](explanation/entity-protection.md)
 - [Reliability overlays](explanation/reliability-overlays.md)
 - [Single-writer fencing](explanation/single-writer.md)

@@ -1322,6 +1322,17 @@ pub fn validate_store_with_architecture_context(
     all: &[StoredEntity],
     architecture_context: &[StoredEntity],
 ) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate_architecture_resources(all, architecture_context);
+    issues.extend(validate_store_hygiene(all));
+    issues
+}
+
+/// Architecture resource rules and membership advisories for every resource in
+/// `all`, resolved against `all` plus `architecture_context`.
+pub(crate) fn validate_architecture_resources(
+    all: &[StoredEntity],
+    architecture_context: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
     let mut resources = all
         .iter()
@@ -1339,7 +1350,6 @@ pub fn validate_store_with_architecture_context(
         }
     }
     issues.extend(membership_advisories(all, architecture_context));
-    issues.extend(validate_store_hygiene(all));
     issues
 }
 

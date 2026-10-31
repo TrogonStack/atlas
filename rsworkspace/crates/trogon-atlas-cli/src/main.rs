@@ -1203,6 +1203,7 @@ async fn run(
                 "issues": outcome.issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
             });
             apply::insert_coverage(&mut data, outcome.coverage.as_ref());
+            apply::insert_consequence_delta(&mut data, outcome.consequence_delta.as_ref());
             Ok((ExitCode::SUCCESS, Some(data)))
         }
         Cmd::Diff { filenames } => {
@@ -2658,6 +2659,7 @@ async fn run(
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
                         apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Validated => {
@@ -2687,6 +2689,7 @@ async fn run(
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
                         apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Conflicts => {
@@ -2722,6 +2725,7 @@ async fn run(
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
                         apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Unspecified => {
