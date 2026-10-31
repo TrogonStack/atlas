@@ -189,7 +189,7 @@ vi.mock('protobufjs', async (importOriginal) => {
     load: () => Promise.resolve(fakeRoot),
     lookupType: (name) => {
       if (/\.(GetSource|ListSource)/.test(name)) return responsibilityRoot.lookupType(name);
-      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations)Request$/.test(name)) return responsibilityRoot.lookupType(name);
+      if (/\.(ListSubjectAssignments|ListAssigneeResponsibilities|ListTeamMembers|ListPersonTeams|GetTeamContacts|ListSubjectDecisions|ListSubjectDocuments|ListDecisionAmendments|GetDecisionDetail|GetDocumentDetail|ListIncomingDecisionDeclarations|ListIncomingDocumentDeclarations|GetDesignGraphDetail|ListSubjectDesignGraphs|TraverseDesignGraphTopology|ListIncomingDesignGraphSubflows)Request$/.test(name)) return responsibilityRoot.lookupType(name);
       return { decode: () => ({}), toObject: () => ({}) };
     },
     lookupEnum: (name) => {
@@ -2624,6 +2624,7 @@ describe('catalog strict gateway serializer boundary', () => {
   const document = { anchor: { document: { id }, ownerUid: 'incarnation', anchorId: { value: 'anchor-b' }, expectedDigest: { sha256: 'a'.repeat(64) } } };
   const subject = { entity: { kind: 'ENTITY_KIND_EVENT', id } };
   it.each([
+    ...[null, '1', -1, 1.5, 4294967296].map((pageSize) => ['decision-amendments', 'ListDecisionAmendments', { decision: { id }, direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING', pageSize }]),
     ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'TYPO' }],
     ['subject-decisions', 'ListSubjectDecisions', { subject, status: 991 }],
     ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: 'false' }],
@@ -2644,6 +2645,7 @@ describe('catalog strict gateway serializer boundary', () => {
   });
   it.each([
     ...['ENTITY_KIND_COMPONENT', 'ENTITY_KIND_EXTERNAL_SYSTEM'].flatMap((kind) => ['subject-decisions', 'subject-documents'].map((route) => [route, route === 'subject-decisions' ? 'ListSubjectDecisions' : 'ListSubjectDocuments', { subject: { connection: { owner: { kind, id }, ownerUid: 'opaque-owner-UID', id: { value: 'occurrence-b' } } } }])),
+    ['decision-amendments', 'ListDecisionAmendments', { decision: { id }, direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING', pageSize: 1, pageToken: 'opaque-token' }],
     ['subject-decisions', 'ListSubjectDecisions', { subject, status: 'DECISION_STATUS_ACCEPTED' }],
     ['subject-documents', 'ListSubjectDocuments', { subject }],
     ['decision-detail', 'GetDecisionDetail', { decision: { id }, followReplacement: false }],
@@ -2714,5 +2716,92 @@ describe('source read-only gateway', () => {
   it('exposes no source mutation route or historical hydration', async () => {
     for (const query of ['apply', 'recover', 'cancel', 'preview', 'create-registration']) expect((await request(app).get(`/api/source/${query}`).query({ request: '{}' })).status).toBe(400);
     expect((await request(app).get('/api/source/run').query({ request: '{"registrationId":"r","runId":"x"}', asOf: 'old' })).status).toBe(400);
+  });
+});
+
+describe('design topology gateway response codec', () => {
+  const version = '9007199254740993';
+  const graphId = { namespace: 'topology', slug: 'flow', version };
+  const step = (value) => ({ value });
+  const owner = { owner: { kind: 'ENTITY_KIND_DESIGN_GRAPH', id: graphId }, ownerUid: 'incarnation-1' };
+  const scope = { revision: '42', authorizedNamespaces: ['topology'], visited: [owner] };
+  const loadCodec = async (rpc) => {
+    const loader = (await vi.importActual('@grpc/proto-loader')).default;
+    const protoRoot = path.resolve(here, '../../../../proto');
+    const definitions = loader.loadSync(path.join(protoRoot, 'trogonatlas/api/eventmodel/v1alpha1/service.proto'), { keepCase: false, longs: String, enums: String, defaults: false, oneofs: false, includeDirs: [protoRoot] });
+    const method = Object.values(definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService']).find((value) => value.path.endsWith(`/${rpc}`));
+    return (message) => method.responseDeserialize(method.responseSerialize(message));
+  };
+  it.each([
+    ['design-graph-detail', 'GetDesignGraphDetail', { graph: { id: graphId } }, {
+      entity: { designGraph: { title: { value: 'Flow' }, steps: [{ stepId: step('step-a') }, { stepId: step('step-b') }] } },
+      etag: 'etag-1',
+      targets: [
+        { stepId: step('step-a'), field: 'steps[0].target', state: 'CATALOG_RESOLUTION_STATE_RESOLVED', owner },
+        { stepId: step('step-b'), field: 'steps[1].target', state: 'CATALOG_RESOLUTION_STATE_UNAVAILABLE' },
+      ],
+      layoutState: 'CATALOG_RESOLUTION_STATE_UNAVAILABLE',
+      scope,
+      incomplete: true,
+      failures: [{ field: 'layout', code: 14, message: 'Unavailable' }],
+    }],
+    ['subject-design-graphs', 'ListSubjectDesignGraphs', { subject: { entity: { kind: 'ENTITY_KIND_COMPONENT', id: graphId } } }, {
+      scope,
+      subjectState: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+    }],
+    ['design-topology', 'TraverseDesignGraphTopology', { root: { id: graphId }, followSubflows: true, maxDepth: 4 }, {
+      nodes: [{ graph: owner, stepId: step('step-a'), depth: 0, authoredEntry: true, targetState: 'CATALOG_RESOLUTION_STATE_RESOLVED' }, { graph: owner, stepId: step('step-b'), depth: 1 }],
+      edges: [
+        { kind: 'KIND_TRANSITION', graph: owner, fromStepId: step('step-a'), connectionId: step('edge-1'), label: { value: 'next' }, toStepId: step('step-b') },
+        { kind: 'KIND_TRANSITION', graph: owner, fromStepId: step('step-a'), connectionId: step('edge-2'), label: { value: 'next' }, toStepId: step('step-b') },
+        { kind: 'KIND_SUBFLOW', graph: owner, fromStepId: step('step-b'), toGraph: { id: { ...graphId, slug: 'callee' } } },
+      ],
+      subflows: [{ graph: owner, stepId: step('step-b'), subflow: { id: { ...graphId, slug: 'callee' } }, state: 'TOPOLOGY_SUBFLOW_STATE_UNAVAILABLE', depth: 1 }],
+      scope,
+      appliedMaxDepth: 4,
+      followSubflows: true,
+    }],
+    ['incoming-subflows', 'ListIncomingDesignGraphSubflows', { graph: { id: graphId } }, {
+      references: [{ owner, field: 'steps[1].target.subflow', state: 'CATALOG_RESOLUTION_STATE_RESOLVED', stepId: step('step-b'), subflow: { id: graphId } }],
+      scope,
+      graphState: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+    }],
+  ])('returns the production %s response codec output unchanged with identities, presence and unavailable states', async (route, rpc, input, response) => {
+    const decode = await loadCodec(rpc);
+    const decoded = decode(response);
+    const name = rpc[0].toLowerCase() + rpc.slice(1);
+    fakeClient[name] = vi.fn((_req, _meta, _opts, cb) => cb(null, decoded));
+    try {
+      const result = await request(app).get(`/api/catalog/${route}`).query({ request: JSON.stringify(input), branch: 'review' });
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual(JSON.parse(JSON.stringify(decoded)));
+      expect(JSON.stringify(result.body)).toContain(version);
+      expect(JSON.stringify(result.body)).not.toMatch(/"version":9007/);
+      expect(result.body.scope.revision).toBe('42');
+      if (route === 'design-graph-detail') {
+        expect(result.body.layoutState).toBe('CATALOG_RESOLUTION_STATE_UNAVAILABLE');
+        expect(result.body.targets[1].state).toBe('CATALOG_RESOLUTION_STATE_UNAVAILABLE');
+        expect(result.body.targets[1]).not.toHaveProperty('owner');
+        expect(result.body.incomplete).toBe(true);
+        expect(result.body.failures[0].code).toBe(14);
+      }
+      if (route === 'design-topology') {
+        expect(result.body.edges.map((edge) => edge.connectionId?.value)).toEqual(['edge-1', 'edge-2', undefined]);
+        expect(result.body.nodes[1]).not.toHaveProperty('authoredEntry');
+        expect(result.body.subflows[0].state).toBe('TOPOLOGY_SUBFLOW_STATE_UNAVAILABLE');
+        expect(result.body).not.toHaveProperty('incomplete');
+      }
+      if (route === 'incoming-subflows') expect(result.body.references[0].stepId.value).toBe('step-b');
+    } finally { delete fakeClient[name]; }
+  });
+  it('omits absent layout state, incompleteness and failures instead of inventing defaults', async () => {
+    const decode = await loadCodec('GetDesignGraphDetail');
+    const decoded = decode({ entity: { designGraph: { title: { value: 'Flow' } } }, etag: 'e', scope });
+    fakeClient.getDesignGraphDetail = vi.fn((_req, _meta, _opts, cb) => cb(null, decoded));
+    try {
+      const result = await request(app).get('/api/catalog/design-graph-detail').query({ request: JSON.stringify({ graph: { id: graphId } }) });
+      expect(result.status).toBe(200);
+      for (const field of ['layoutState', 'incomplete', 'failures', 'targets', 'declarations']) expect(result.body).not.toHaveProperty(field);
+    } finally { delete fakeClient.getDesignGraphDetail; }
   });
 });

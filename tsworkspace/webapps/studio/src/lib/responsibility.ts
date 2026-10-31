@@ -139,10 +139,34 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
   ],
   swimlane: ['transitions.*.next.*'],
   ui: ['transitions.*'],
-  component: ['relationships.*', 'communications.*'],
-  externalSystem: ['relationships.*', 'communications.*'],
-  channel: ['bindings.*'],
+  component: [
+    'relationships.*',
+    'communications.*',
+    'storageClaims.*',
+    'messageClaims.claims.*',
+    'messageClaims.routes.*',
+    'messageClaims.triggers.*',
+    'messageClaims.fieldSelections.*',
+  ],
+  externalSystem: [
+    'relationships.*',
+    'communications.*',
+    'storageClaims.*',
+    'messageClaims.claims.*',
+    'messageClaims.routes.*',
+    'messageClaims.triggers.*',
+    'messageClaims.fieldSelections.*',
+  ],
+  domain: [
+    'members.*',
+    'messageClaims.claims.*',
+    'messageClaims.routes.*',
+    'messageClaims.triggers.*',
+    'messageClaims.fieldSelections.*',
+  ],
+  channel: ['bindings.*', 'links.*'],
   dataStore: ['attachments.*'],
+  systemGroup: ['members.*', 'relationships.*', 'actors.*'],
   specification: [
     'schemas.*.definition',
     'messages.*.schemas.*',
@@ -159,8 +183,51 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
     'outputs.*.contract',
     'outputs.*.access.*',
     'outputs.*.derivedFrom.inputs.*',
+    'resourceAssociations.*',
+    'storageClaims.*',
   ],
 };
+
+function visit(
+  value: unknown,
+  parts: string[],
+  path: string,
+  found: (value: Record<string, unknown>, path: string) => void,
+) {
+  if (value === undefined) return;
+  if (!parts.length) return found(record(value), path);
+  const [part, ...rest] = parts;
+  if (part === '*') {
+    if (Array.isArray(value)) value.forEach((item, index) => visit(item, rest, `${path}[${index}]`, found));
+  } else visit(record(value)[part], rest, path ? `${path}.${part}` : part, found);
+}
+
+export function hasUnambiguousOwnerIdentities(entity: Entity): boolean {
+  const ids: unknown[] = [];
+  for (const path of occurrencePaths[entity.kind] ?? []) {
+    visit(entity.raw, path.split('.'), '', (value) => ids.push(record(value.connectionId).value));
+  }
+  if (entity.kind === 'dataProduct') {
+    for (const field of ['inputs', 'outputs']) {
+      visit(entity.raw, [field, '*'], '', (value) => ids.push(record(value.portId).value));
+    }
+  }
+  for (const annotation of Array.isArray(entity.raw.metadata) ? entity.raw.metadata : []) {
+    const body = record(annotation);
+    const type = body['@type'] ?? body.typeUrl;
+    if (
+      typeof type !== 'string' ||
+      type.split('/').at(-1) !== 'trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation'
+    )
+      continue;
+    if (!body['@type'] || (body.groups !== undefined && !Array.isArray(body.groups))) return false;
+    visit(body, ['groups', '*'], '', (group) => {
+      ids.push(record(group.groupId).value);
+      visit(group, ['items', '*'], '', (item) => ids.push(record(item.connectionId).value));
+    });
+  }
+  return ids.every((value) => typeof value === 'string' && value.length > 0) && new Set(ids).size === ids.length;
+}
 
 export function responsibilitySubjects(entity: Entity): { label: string; subject: ResponsibilitySubject }[] {
   const owner = nativeEntityRef(entity);
@@ -180,18 +247,6 @@ export function responsibilitySubjects(entity: Entity): { label: string; subject
   }
   const ownerUid = entity.uid;
   if (!ownerUid) return subjects;
-  const visit = (
-    value: unknown,
-    parts: string[],
-    path: string,
-    found: (value: Record<string, unknown>, path: string) => void,
-  ) => {
-    if (!parts.length) return found(record(value), path);
-    const [part, ...rest] = parts;
-    if (part === '*') {
-      if (Array.isArray(value)) value.forEach((item, index) => visit(item, rest, `${path}[${index}]`, found));
-    } else visit(record(value)[part], rest, path ? `${path}.${part}` : part, found);
-  };
   for (const path of occurrencePaths[entity.kind] ?? []) {
     visit(entity.raw, path.split('.'), '', (value, label) => {
       const id = record(value.connectionId).value;
