@@ -38,3 +38,39 @@ pub fn validate_values(entity: &Entity) -> Result<(), ConnectionError> {
     }
     connections::validate_connection_ids(entity)
 }
+
+pub(crate) fn outbound(
+    values: &[trogon_atlas_proto::UiHosting],
+    out: &mut Vec<crate::refs::OutboundRef>,
+) {
+    for (index, value) in values.iter().enumerate() {
+        if let Some(id) = value.ui.as_ref().and_then(|ui| ui.id.as_ref()) {
+            out.push(crate::refs::OutboundRef {
+                to_kind: Some(trogon_atlas_proto::EntityKind::Ui),
+                to_id: id.clone(),
+                from_field: format!("ui_hostings[{index}].ui"),
+            });
+        }
+    }
+}
+
+pub(crate) fn retarget(
+    values: &mut [trogon_atlas_proto::UiHosting],
+    kind: trogon_atlas_proto::EntityKind,
+    from: &trogon_atlas_proto::Id,
+    to: &trogon_atlas_proto::Id,
+    rewritten: &mut Vec<String>,
+) {
+    if kind != trogon_atlas_proto::EntityKind::Ui || from == to {
+        return;
+    }
+    for (index, value) in values.iter_mut().enumerate() {
+        if let Some(ui) = value.ui.as_mut() {
+            if ui.id.as_ref() == Some(from) {
+                ui.id = Some(to.clone());
+                value.connection_id = None;
+                rewritten.push(format!("ui_hostings[{index}].ui"));
+            }
+        }
+    }
+}

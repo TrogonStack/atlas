@@ -590,6 +590,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
             }
         }
         EntityOneof::Component(x) => {
+            crate::ui_hosting::outbound(&x.ui_hostings, &mut out);
             crate::architectural_relationships::outbound(&x.relationships, &mut out);
             crate::communication_intent::outbound(&x.communications, &mut out);
             crate::storage_claims::outbound(&x.storage_claims, &mut out);
@@ -1876,6 +1877,7 @@ pub fn retarget_refs(
             }
         }
         EntityOneof::Component(x) => {
+            crate::ui_hosting::retarget(&mut x.ui_hostings, from_kind, from_id, to_id, &mut rewritten);
             crate::communication_intent::retarget(
                 &mut x.communications,
                 from_kind,
