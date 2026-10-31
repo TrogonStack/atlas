@@ -175,7 +175,7 @@ async fn authenticated_cli_authors_and_inspects_exact_hosting_through_export_rea
         &namespace,
         "Document",
         "hosting-note",
-        json!({
+        &json!({
             "title":{"value":"Hosting assertion"},"link":{"value":"https://example.invalid/hosting"},
             "subjects":[{"subject":{"connection":issuance["hosting"]}}]
         }),
@@ -242,7 +242,7 @@ async fn authenticated_cli_authors_and_inspects_exact_hosting_through_export_rea
             &namespace,
             "Component",
             "reader-write",
-            json!({"title":"Reader cannot author"}),
+            &json!({"title":"Reader cannot author"}),
         ),
     )
     .unwrap();
