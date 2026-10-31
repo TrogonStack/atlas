@@ -4827,6 +4827,11 @@ impl Store for NatsStore {
             .await
     }
 
+    async fn settle_operation_unfinished(&self, key: &str, changeset_id: &str) -> StoreResult<()> {
+        self.source_guarded(async { self.settle_operation_unfinished(key, changeset_id).await })
+            .await
+    }
+
     async fn get_operation(&self, key: &str) -> StoreResult<Option<OperationRecord>> {
         self.source_guarded(async { self.get_operation(key).await })
             .await

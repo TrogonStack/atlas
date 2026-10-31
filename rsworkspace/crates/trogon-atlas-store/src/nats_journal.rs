@@ -714,7 +714,7 @@ impl NatsStore {
                 RecoveryAction::RollForward | RecoveryAction::CompleteChangeset
                     if header.settlement_deferred =>
                 {
-                    self.settle_operation_not_applied(&header.operation_key)
+                    self.settle_operation_unfinished(&header.operation_key, &header.changeset_id)
                         .await
                 }
                 RecoveryAction::RollForward | RecoveryAction::CompleteChangeset => {

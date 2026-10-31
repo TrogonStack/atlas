@@ -2491,6 +2491,113 @@ impl EventModelServiceImpl {
         resumed
     }
 
+    /// The changeset in which an earlier attempt of this same operation
+    /// landed its content before a later step failed, as its not-applied
+    /// claim records it. The digest proves the retry carries the very same
+    /// writes, and the changeset must carry this operation's own
+    /// attribution.
+    async fn content_landed_by(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        rpc: &str,
+        operation_id: &str,
+        author: &str,
+    ) -> Option<String> {
+        let attempt = attempt?;
+        let record = match self.store.get_operation(&attempt.claim_key).await {
+            Ok(Some(record))
+                if record.status == OperationStatus::NotApplied
+                    && !record.changeset_id.is_empty()
+                    && record.digest == attempt.digest
+                    && record.rpc == rpc
+                    && record.branch.is_none() =>
+            {
+                record
+            }
+            _ => return None,
+        };
+        let changeset = self.store.get_changeset(&record.changeset_id).await.ok()?;
+        (changeset.rpc == rpc
+            && changeset.branch.is_none()
+            && changeset.author == author
+            && changeset.operation_id.as_deref() == Some(operation_id))
+        .then_some(changeset.id)
+    }
+
+    /// What `changeset_id` left at `kind`/`id` on baseline, when that is
+    /// still what the store holds: `Some(Some(_))` for the entity it wrote,
+    /// `Some(None)` for a key it deleted, `None` once anything moved since.
+    async fn still_as_landed(
+        &self,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        changeset_id: &str,
+    ) -> Option<Option<trogon_atlas_store::store::StoredEntity>> {
+        let revision = self
+            .store
+            .get_entity_revision(kind, id, changeset_id, None)
+            .await
+            .ok()?;
+        let current = match self.store.get(kind, id, None).await {
+            Ok(current) => Some(current),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(_) => return None,
+        };
+        match (revision.after, current) {
+            (Some(after), Some(current)) if after == current.entity => Some(Some(current)),
+            (None, None) => Some(None),
+            _ => None,
+        }
+    }
+
+    /// The content an earlier attempt of this `PutEntity` landed, when it is
+    /// still current, with the changeset that landed it.
+    async fn put_landed_by(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        operation_id: &str,
+        author: &str,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+    ) -> Option<(String, trogon_atlas_store::store::StoredEntity)> {
+        let changeset_id = self
+            .content_landed_by(attempt, "PutEntity", operation_id, author)
+            .await?;
+        let current = self.still_as_landed(kind, id, &changeset_id).await??;
+        Some((changeset_id, current))
+    }
+
+    /// The outcomes an earlier attempt of this `BatchMutate` landed, when
+    /// every op's result is still current, with the changeset that landed
+    /// them.
+    async fn batch_landed_by(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        operation_id: &str,
+        author: &str,
+        metas: &[OpMetaLike],
+    ) -> Option<(String, Vec<MutationOutcome>)> {
+        let changeset_id = self
+            .content_landed_by(attempt, "BatchMutate", operation_id, author)
+            .await?;
+        let mut outcomes = Vec::with_capacity(metas.len());
+        for meta in metas {
+            let outcome = match self
+                .still_as_landed(meta.kind, &meta.id, &changeset_id)
+                .await?
+            {
+                Some(current) if meta.is_put => MutationOutcome::Noop {
+                    etag: current.etag,
+                    entity: current.entity,
+                },
+                None if !meta.is_put => MutationOutcome::Deleted,
+                _ => return None,
+            };
+            outcomes.push(outcome);
+        }
+        Some((changeset_id, outcomes))
+    }
+
     /// The latest stored version of `identity` on baseline, through the
     /// caller's lens.
     async fn latest_of(
@@ -5533,6 +5640,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .put_replay(kind, &id, branch.as_deref(), &req.operation_id, &record)
                 .await;
         }
+        // An earlier attempt landed this content and then failed to protect
+        // it. Writing again would only trip its own `create_only` or
+        // `if_match`, so a retry finds that content still current and
+        // resumes at the protection step.
+        let landed = match (&protect_reason, &resumed) {
+            (Some(_), None) => {
+                self.put_landed_by(attempt.as_ref(), &req.operation_id, &author.name, kind, &id)
+                    .await
+            }
+            _ => None,
+        };
 
         if req.validate_only {
             self.validate_architecture_write(&entity, branch.as_deref(), &vis)
@@ -5626,21 +5744,30 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }));
         }
 
-        if let Err(status) = self
-            .validate_architecture_write(&entity, branch.as_deref(), &vis)
-            .await
-        {
-            if let Some(key) = &claim_key {
-                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+        if landed.is_none() {
+            if let Err(status) = self
+                .validate_architecture_write(&entity, branch.as_deref(), &vis)
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
             }
-            return Err(status);
         }
 
         let mut changeset = PendingChangeset::mint("PutEntity", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
             .with_operation_key(claim_key.as_deref());
         let create_only = req.create_only;
-        let write_result = if create_only {
+        let (landed_changeset_id, landed) = landed.unzip();
+        let write_result = if let Some(current) = landed {
+            Ok(trogon_atlas_store::store::Written {
+                etag: current.etag,
+                wrote: false,
+                entity: current.entity,
+            })
+        } else if create_only {
             self.store
                 .create(kind, &entity, changeset.write_ctx())
                 .await
@@ -5737,6 +5864,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .map(|stored| stored.is_some()),
             _ => Ok(false),
         };
+        let content_changeset_id = if written.wrote {
+            Some(changeset.id.clone())
+        } else {
+            landed_changeset_id
+        };
         let changed = written.wrote || matches!(protected, Ok(true));
         // A no-op write (e.g. `put` with content identical to what is
         // already stored, and no new protection) never gets recorded as a
@@ -5775,7 +5907,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         if let Err(status) = protected {
             if let Some(key) = &claim_key {
-                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                match &content_changeset_id {
+                    Some(changeset_id) => {
+                        operation_receipts::settle_unfinished_for_status(
+                            &*self.store,
+                            key,
+                            &status,
+                            changeset_id,
+                        )
+                        .await;
+                    }
+                    None => {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                }
             }
             return Err(status);
         }
@@ -6349,6 +6494,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(record) = settled {
             return Self::batch_replay(&req.operation_id, &record);
         }
+        // See `put_entity`: a retry whose content already landed resumes at
+        // the protection step instead of tripping its own preconditions.
+        let landed = if protect_requests.is_empty() || dry_run {
+            None
+        } else {
+            self.batch_landed_by(attempt.as_ref(), &req.operation_id, &author.name, &metas)
+                .await
+        };
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
@@ -6795,14 +6948,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             };
 
-            if let Err(status) = self
-                .validate_architecture_writes(&metas, branch.as_deref(), &vis)
-                .await
-            {
-                if let Some(key) = &claim_key {
-                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            if landed.is_none() {
+                if let Err(status) = self
+                    .validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                    .await
+                {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
                 }
-                return Err(status);
             }
 
             if let Some(execution) = source_execution {
@@ -6838,11 +6993,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
                 .with_operation_key(claim_key.as_deref())
                 .deferring_settlement(!protect_requests.is_empty());
-            match self
-                .store
-                .batch_apply(&mutations, changeset.write_ctx())
-                .await
-            {
+            let (landed_changeset_id, landed_outcomes) = landed.unzip();
+            let resuming = landed_changeset_id.is_some();
+            let applied = match landed_outcomes {
+                Some(outcomes) => Ok(outcomes),
+                None => {
+                    self.store
+                        .batch_apply(&mutations, changeset.write_ctx())
+                        .await
+                }
+            };
+            match applied {
                 Ok(outcomes) => {
                     let results = build_op_results(
                         &metas,
@@ -6853,7 +7014,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         referrers_incomplete,
                     );
                     let receipt_changeset_id = changeset.id.clone();
-                    changeset.record_batch(&metas, &outcomes);
+                    let content_changeset_id = landed_changeset_id.or_else(|| {
+                        changeset.record_batch(&metas, &outcomes);
+                        (!changeset.ops.is_empty()).then(|| changeset.id.clone())
+                    });
                     let mut protected = Ok(());
                     for (identity, reason, version) in protect_requests {
                         if let Err(status) = self
@@ -6875,8 +7039,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     // the first place (see the "Branch overlays" note on
                     // `put_entity`/`delete_entity`).
                     if branch.is_none() {
-                        self.apply_batch_side_effects(&metas, &outcomes, author)
-                            .await;
+                        if !resuming {
+                            self.apply_batch_side_effects(&metas, &outcomes, author)
+                                .await;
+                        }
                         self.invalidate_snapshot().await;
                     }
                     // Settled only after every requested protection landed,
@@ -6891,10 +7057,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                 )
                                 .await;
                             }
-                            Err(status) => {
-                                operation_receipts::settle_for_status(&*self.store, key, status)
+                            Err(status) => match &content_changeset_id {
+                                Some(changeset_id) => {
+                                    operation_receipts::settle_unfinished_for_status(
+                                        &*self.store,
+                                        key,
+                                        status,
+                                        changeset_id,
+                                    )
                                     .await;
-                            }
+                                }
+                                None => {
+                                    operation_receipts::settle_for_status(
+                                        &*self.store,
+                                        key,
+                                        status,
+                                    )
+                                    .await;
+                                }
+                            },
                         }
                     }
                     protected?;

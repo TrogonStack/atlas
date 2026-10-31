@@ -1217,6 +1217,16 @@ pub trait Store: Send + Sync {
         Ok(())
     }
 
+    /// Settle a claim as not-applied although changeset `changeset_id`
+    /// already landed its content: a later step of the same operation
+    /// failed, so a retry is free to claim again and can recognise that
+    /// content as its own instead of tripping its own precondition. A
+    /// backend that cannot record the changeset settles plain not-applied.
+    async fn settle_operation_unfinished(&self, key: &str, changeset_id: &str) -> StoreResult<()> {
+        let _ = changeset_id;
+        self.settle_operation_not_applied(key).await
+    }
+
     /// Look up a claim by key, for `GetOperation`. `None` means no record:
     /// never claimed, or past the backend's retention.
     async fn get_operation(&self, key: &str) -> StoreResult<Option<OperationRecord>> {
@@ -1338,7 +1348,9 @@ pub struct OperationRecord {
     /// Branch the mutation applied to. `None` = baseline.
     pub branch: Option<String>,
     pub status: OperationStatus,
-    /// Set when `status == Applied`.
+    /// Set when `status == Applied`, and on a `NotApplied` claim whose
+    /// content landed before a later step failed (see
+    /// [`Store::settle_operation_unfinished`]).
     pub changeset_id: String,
     /// Set when `status == Rejected`.
     pub rejection_code: String,
