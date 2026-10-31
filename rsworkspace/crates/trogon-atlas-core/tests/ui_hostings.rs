@@ -221,3 +221,27 @@ fn hosting_writers_require_revision_twenty() {
     assert_eq!(trogon_atlas_proto::MIN_SERVER_CONTRACT_REVISION, 20);
     assert_eq!(trogon_atlas_proto::MIN_CLIENT_CONTRACT_REVISION, 20);
 }
+
+#[test]
+fn explicit_empty_hosting_identity_rejects_before_branch_normalization() {
+    use trogon_atlas_core::connection_persistence::{prepare_landing, prepare_resolution};
+    let prepared = prepare_entity(None, &owner()).unwrap();
+    let mut selected = prepared.clone();
+    let Some(entity::Kind::Component(component)) = selected.kind.as_mut() else {
+        unreachable!()
+    };
+    component.title = "Explicit resolution".into();
+    component.ui_hostings[0].connection_id = Some(trogon_atlas_proto::ConnectionId {
+        value: String::new(),
+    });
+    for result in [
+        prepare_resolution(None, None, &selected),
+        prepare_landing(None, Some(&prepared), &selected),
+    ] {
+        let error =
+            result.expect_err("explicit empty hosting IDs cannot become fresh branch identities");
+        assert!(error.to_string().contains("connection ID"), "{error}");
+    }
+    assert!(prepare_resolution(None, None, &prepared).is_ok());
+    assert!(prepare_landing(None, Some(&prepared), &prepared).is_ok());
+}
