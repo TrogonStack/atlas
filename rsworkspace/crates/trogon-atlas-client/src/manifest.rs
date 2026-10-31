@@ -425,6 +425,10 @@ fn str_field(map: &Map<String, Value>, key: &str) -> Result<String> {
 /// True when `md` is a Ref-style wrapper: a single `id` field of type Id
 /// (EventRef, CommandRef, ..., and EntityRef which adds a `kind` field).
 pub(crate) fn is_ref_like(md: &MessageDescriptor) -> bool {
+    // An EntityRef without its kind names no exact target.
+    if md.full_name() == "trogonatlas.eventmodel.v1alpha1.EntityRef" {
+        return false;
+    }
     md.get_field_by_name("id").is_some_and(|f| match f.kind() {
         FieldKind::Message(inner) => inner.full_name() == ID_MESSAGE,
         _ => false,
@@ -439,9 +443,13 @@ pub(crate) fn shorthand_ref_field(
     if matches!(
         md.full_name(),
         "trogonatlas.eventmodel.v1alpha1.ArchitecturalEndpoint"
+            | "trogonatlas.eventmodel.v1alpha1.SystemGroupMember"
+            | "trogonatlas.eventmodel.v1alpha1.DomainMember"
+            | "trogonatlas.eventmodel.v1alpha1.SystemActorTarget"
             | "trogonatlas.eventmodel.v1alpha1.ContractMemberRef"
             | "trogonatlas.eventmodel.v1alpha1.ChannelAccess"
             | "trogonatlas.eventmodel.v1alpha1.StoreAccess"
+            | "trogonatlas.eventmodel.v1alpha1.ConnectionRef"
             | "trogonatlas.eventmodel.v1alpha1.ResponsibilitySubject"
             | "trogonatlas.eventmodel.v1alpha1.CatalogSubject"
             | "trogonatlas.eventmodel.v1alpha1.DocumentSelection"
@@ -561,6 +569,12 @@ fn normalize_message(value: &mut Value, desc: &MessageDescriptor, default_ns: &s
     let Value::Object(map) = value else {
         return Ok(());
     };
+    if desc.full_name() == "trogonatlas.eventmodel.v1alpha1.ClaimFieldSelector"
+        && !map.contains_key("path")
+        && !map.contains_key("opaque")
+    {
+        crate::invalid_input!("a field selector requires exactly one of path or opaque");
+    }
     for (key, val) in map.iter_mut() {
         let Some(field) = desc
             .fields()

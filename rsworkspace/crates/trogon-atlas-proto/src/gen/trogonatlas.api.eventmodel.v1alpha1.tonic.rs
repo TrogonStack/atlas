@@ -812,6 +812,36 @@ pub mod event_model_service_client {
             self.inner.unary(req, path, codec).await
         }
         ///
+        pub async fn list_decision_amendments(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListDecisionAmendmentsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListDecisionAmendmentsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListDecisionAmendments",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListDecisionAmendments",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn get_decision_detail(
             &mut self,
             request: impl tonic::IntoRequest<super::GetDecisionDetailRequest>,
@@ -867,6 +897,36 @@ pub mod event_model_service_client {
                     GrpcMethod::new(
                         "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
                         "GetDocumentDetail",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn list_term_domain_declarations(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListTermDomainDeclarationsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTermDomainDeclarationsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTermDomainDeclarations",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListTermDomainDeclarations",
                     ),
                 );
             self.inner.unary(req, path, codec).await
@@ -931,6 +991,128 @@ pub mod event_model_service_client {
                     GrpcMethod::new(
                         "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
                         "ListIncomingDocumentDeclarations",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn get_design_graph_detail(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetDesignGraphDetailRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetDesignGraphDetailResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDesignGraphDetail",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetDesignGraphDetail",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn list_subject_design_graphs(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListSubjectDesignGraphsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSubjectDesignGraphsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSubjectDesignGraphs",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListSubjectDesignGraphs",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn traverse_design_graph_topology(
+            &mut self,
+            request: impl tonic::IntoRequest<super::TraverseDesignGraphTopologyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TraverseDesignGraphTopologyResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/TraverseDesignGraphTopology",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "TraverseDesignGraphTopology",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn list_incoming_design_graph_subflows(
+            &mut self,
+            request: impl tonic::IntoRequest<
+                super::ListIncomingDesignGraphSubflowsRequest,
+            >,
+        ) -> std::result::Result<
+            tonic::Response<super::ListIncomingDesignGraphSubflowsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDesignGraphSubflows",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListIncomingDesignGraphSubflows",
                     ),
                 );
             self.inner.unary(req, path, codec).await
@@ -2701,6 +2883,39 @@ pub mod event_model_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Inverse discovery preserves independent specification declarations,
+ claim routes and operation-message occurrences for one exact channel.
+ Branch context uses x-trogon-atlas-branch.
+*/
+        pub async fn list_channel_messages(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListChannelMessagesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListChannelMessagesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListChannelMessages",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "ListChannelMessages",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -2909,6 +3124,14 @@ pub mod event_model_service_server {
             tonic::Status,
         >;
         ///
+        async fn list_decision_amendments(
+            &self,
+            request: tonic::Request<super::ListDecisionAmendmentsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListDecisionAmendmentsResponse>,
+            tonic::Status,
+        >;
+        ///
         async fn get_decision_detail(
             &self,
             request: tonic::Request<super::GetDecisionDetailRequest>,
@@ -2925,6 +3148,14 @@ pub mod event_model_service_server {
             tonic::Status,
         >;
         ///
+        async fn list_term_domain_declarations(
+            &self,
+            request: tonic::Request<super::ListTermDomainDeclarationsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListTermDomainDeclarationsResponse>,
+            tonic::Status,
+        >;
+        ///
         async fn list_incoming_decision_declarations(
             &self,
             request: tonic::Request<super::ListIncomingDecisionDeclarationsRequest>,
@@ -2938,6 +3169,38 @@ pub mod event_model_service_server {
             request: tonic::Request<super::ListIncomingDocumentDeclarationsRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ListIncomingDocumentDeclarationsResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn get_design_graph_detail(
+            &self,
+            request: tonic::Request<super::GetDesignGraphDetailRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetDesignGraphDetailResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn list_subject_design_graphs(
+            &self,
+            request: tonic::Request<super::ListSubjectDesignGraphsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSubjectDesignGraphsResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn traverse_design_graph_topology(
+            &self,
+            request: tonic::Request<super::TraverseDesignGraphTopologyRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::TraverseDesignGraphTopologyResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn list_incoming_design_graph_subflows(
+            &self,
+            request: tonic::Request<super::ListIncomingDesignGraphSubflowsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListIncomingDesignGraphSubflowsResponse>,
             tonic::Status,
         >;
         ///
@@ -3455,6 +3718,17 @@ pub mod event_model_service_server {
             request: tonic::Request<super::GetTypeLibraryDescriptorSetRequest>,
         ) -> std::result::Result<
             tonic::Response<super::GetTypeLibraryDescriptorSetResponse>,
+            tonic::Status,
+        >;
+        /** Inverse discovery preserves independent specification declarations,
+ claim routes and operation-message occurrences for one exact channel.
+ Branch context uses x-trogon-atlas-branch.
+*/
+        async fn list_channel_messages(
+            &self,
+            request: tonic::Request<super::ListChannelMessagesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListChannelMessagesResponse>,
             tonic::Status,
         >;
     }
@@ -4709,6 +4983,55 @@ pub mod event_model_service_server {
                     };
                     Box::pin(fut)
                 }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListDecisionAmendments" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListDecisionAmendmentsSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::ListDecisionAmendmentsRequest>
+                    for ListDecisionAmendmentsSvc<T> {
+                        type Response = super::ListDecisionAmendmentsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListDecisionAmendmentsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_decision_amendments(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListDecisionAmendmentsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDecisionDetail" => {
                     #[allow(non_camel_case_types)]
                     struct GetDecisionDetailSvc<T: EventModelService>(pub Arc<T>);
@@ -4792,6 +5115,60 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetDocumentDetailSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListTermDomainDeclarations" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListTermDomainDeclarationsSvc<T: EventModelService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<
+                        super::ListTermDomainDeclarationsRequest,
+                    > for ListTermDomainDeclarationsSvc<T> {
+                        type Response = super::ListTermDomainDeclarationsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ListTermDomainDeclarationsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_term_domain_declarations(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListTermDomainDeclarationsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -4900,6 +5277,214 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListIncomingDocumentDeclarationsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetDesignGraphDetail" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetDesignGraphDetailSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::GetDesignGraphDetailRequest>
+                    for GetDesignGraphDetailSvc<T> {
+                        type Response = super::GetDesignGraphDetailResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetDesignGraphDetailRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::get_design_graph_detail(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetDesignGraphDetailSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListSubjectDesignGraphs" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListSubjectDesignGraphsSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::ListSubjectDesignGraphsRequest>
+                    for ListSubjectDesignGraphsSvc<T> {
+                        type Response = super::ListSubjectDesignGraphsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ListSubjectDesignGraphsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_subject_design_graphs(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListSubjectDesignGraphsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/TraverseDesignGraphTopology" => {
+                    #[allow(non_camel_case_types)]
+                    struct TraverseDesignGraphTopologySvc<T: EventModelService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<
+                        super::TraverseDesignGraphTopologyRequest,
+                    > for TraverseDesignGraphTopologySvc<T> {
+                        type Response = super::TraverseDesignGraphTopologyResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::TraverseDesignGraphTopologyRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::traverse_design_graph_topology(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = TraverseDesignGraphTopologySvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListIncomingDesignGraphSubflows" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListIncomingDesignGraphSubflowsSvc<T: EventModelService>(
+                        pub Arc<T>,
+                    );
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<
+                        super::ListIncomingDesignGraphSubflowsRequest,
+                    > for ListIncomingDesignGraphSubflowsSvc<T> {
+                        type Response = super::ListIncomingDesignGraphSubflowsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<
+                                super::ListIncomingDesignGraphSubflowsRequest,
+                            >,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_incoming_design_graph_subflows(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListIncomingDesignGraphSubflowsSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -7608,6 +8193,55 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetTypeLibraryDescriptorSetSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListChannelMessages" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListChannelMessagesSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::ListChannelMessagesRequest>
+                    for ListChannelMessagesSvc<T> {
+                        type Response = super::ListChannelMessagesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListChannelMessagesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::list_channel_messages(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListChannelMessagesSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

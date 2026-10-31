@@ -37,6 +37,8 @@ message SwimlaneRef   { trogonatlas.type.v1alpha1.Id id = 1; }
 
 message ExternalSystemRef { trogonatlas.type.v1alpha1.Id id = 1; }
 
+message SystemGroupRef    { trogonatlas.type.v1alpha1.Id id = 1; }
+
 message DomainRef         { trogonatlas.type.v1alpha1.Id id = 1; }
 
 message SubdomainRef      { trogonatlas.type.v1alpha1.Id id = 1; }
@@ -98,6 +100,8 @@ enum EntityKind {
   ENTITY_KIND_PERSON = 35;
   ENTITY_KIND_DECISION = 36;
   ENTITY_KIND_DOCUMENT = 37;
+  ENTITY_KIND_DESIGN_GRAPH = 38;
+  ENTITY_KIND_SYSTEM_GROUP = 39;
 }
 
 message TeamRef { trogonatlas.type.v1alpha1.Id id = 1; }
@@ -105,3 +109,4 @@ message PersonRef { trogonatlas.type.v1alpha1.Id id = 1; }
 
 message DecisionRef { trogonatlas.type.v1alpha1.Id id = 1; }
 message DocumentRef { trogonatlas.type.v1alpha1.Id id = 1; }
+message DesignGraphRef { trogonatlas.type.v1alpha1.Id id = 1; }

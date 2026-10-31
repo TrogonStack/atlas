@@ -542,6 +542,7 @@ fn lifecycle_ann_any(status: &str) -> prost_types::Any {
     let ann = pb::LifecycleAnnotation {
         status: status.into(),
         doc: String::new(),
+        ..Default::default()
     };
     prost_types::Any {
         type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation".into(),
@@ -781,42 +782,38 @@ async fn list_entities_lifecycle_status_in_filters_non_event_entity_kind() {
     );
 }
 
-/// `entity_lifecycle_status` must treat an Any payload whose `type_url`
-/// matches `LifecycleAnnotation` but whose bytes fail to decode as absent
-/// (`None`), not panic and not surface a decode error to the caller.
 #[tokio::test(flavor = "multi_thread")]
-async fn list_entities_lifecycle_filter_treats_undecodable_annotation_as_absent() {
+async fn rejected_lifecycle_annotation_does_not_publish_a_listable_entity() {
     let svc = svc().await;
 
     let malformed_any = prost_types::Any {
         type_url: "type.googleapis.com/trogonatlas.annotation.v1alpha1.LifecycleAnnotation".into(),
         value: vec![0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
     };
-    svc.put_entity(Request::new(pb::PutEntityRequest {
-        operation_id: String::new(),
-        entity: Some(pb::Entity {
-            system: None,
-            kind: Some(pb::entity::Kind::Event(pb::Event {
-                id: Some(id("lifecycle-malformed", "corrupt-ann", 1)),
-                title: "Corrupt".into(),
-                doc: String::new(),
-                swimlane: None,
-                metadata: vec![malformed_any],
-                supersedes: None,
-                schema: None,
-            })),
-        }),
-        create_only: true,
-        if_match: String::new(),
-        validate_only: false,
-        force: false,
-    }))
-    .await
-    .unwrap();
+    let error = svc
+        .put_entity(Request::new(pb::PutEntityRequest {
+            operation_id: String::new(),
+            entity: Some(pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Event(pb::Event {
+                    id: Some(id("lifecycle-malformed", "corrupt-ann", 1)),
+                    title: "Corrupt".into(),
+                    doc: String::new(),
+                    swimlane: None,
+                    metadata: vec![malformed_any],
+                    supersedes: None,
+                    schema: None,
+                })),
+            }),
+            create_only: true,
+            if_match: String::new(),
+            validate_only: false,
+            force: false,
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
 
-    // status_not_in: [""] means "exclude entities with no annotation at
-    // all"; an undecodable annotation must be treated the same as absent,
-    // so this entity must be excluded.
     let resp = svc
         .list_entities(Request::new(pb::ListEntitiesRequest {
             namespaces: vec!["lifecycle-malformed".into()],
@@ -833,7 +830,7 @@ async fn list_entities_lifecycle_filter_treats_undecodable_annotation_as_absent(
 
     assert!(
         resp.entities.is_empty(),
-        "an entity with an undecodable LifecycleAnnotation must be treated as unannotated"
+        "rejected lifecycle metadata must not publish an entity"
     );
 }
 
@@ -894,6 +891,7 @@ struct FailingBatchStore {
     failure: fn() -> StoreError,
     fail_batches: bool,
     get_failure: Option<(pb::Id, Arc<std::sync::atomic::AtomicBool>)>,
+    term_read_fault: Arc<std::sync::atomic::AtomicU8>,
     resource_scan_overflow: Arc<std::sync::atomic::AtomicBool>,
     resource_scan_gate: Option<Arc<ResourceScanGate>>,
     reference_scans: std::sync::atomic::AtomicUsize,
@@ -918,6 +916,7 @@ impl FailingBatchStore {
             failure,
             fail_batches: true,
             get_failure: None,
+            term_read_fault: Arc::default(),
             resource_scan_overflow: Arc::default(),
             resource_scan_gate: None,
             reference_scans: std::sync::atomic::AtomicUsize::new(0),
@@ -986,6 +985,15 @@ impl Store for FailingBatchStore {
     async fn list_namespaces(
         &self,
     ) -> trogon_atlas_store::StoreResult<Vec<trogon_atlas_store::NamespaceRecord>> {
+        if self
+            .term_read_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 2
+        {
+            return Err(StoreError::Backend(
+                "injected namespace authority failure".into(),
+            ));
+        }
         self.inner.list_namespaces().await
     }
 
@@ -1003,6 +1011,16 @@ impl Store for FailingBatchStore {
         id: &pb::Id,
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<StoredEntity> {
+        if kind == pb::EntityKind::Domain
+            && self
+                .term_read_fault
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == 4
+        {
+            return Err(StoreError::Backend(
+                "injected exact Domain hydration failure".into(),
+            ));
+        }
         if self.get_failure.as_ref().is_some_and(|(target, armed)| {
             target == id && armed.load(std::sync::atomic::Ordering::SeqCst)
         }) {
@@ -1068,6 +1086,15 @@ impl Store for FailingBatchStore {
     ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
         self.reference_scans
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .term_read_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 3
+        {
+            return Err(StoreError::Backend(
+                "injected complete reference guard failure".into(),
+            ));
+        }
         self.inner.referenced_targets(targets, branch).await
     }
 
@@ -1079,6 +1106,15 @@ impl Store for FailingBatchStore {
     ) -> trogon_atlas_store::StoreResult<std::collections::HashSet<pb::EntityKey>> {
         self.reference_scans
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .term_read_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 3
+        {
+            return Err(StoreError::Backend(
+                "injected complete reference guard failure".into(),
+            ));
+        }
         self.inner
             .referenced_targets_with_overlay(targets, branch, overlay)
             .await
@@ -1090,6 +1126,13 @@ impl Store for FailingBatchStore {
         limit: Option<usize>,
         branch: Option<&str>,
     ) -> trogon_atlas_store::StoreResult<Vec<StoredEntity>> {
+        if self
+            .term_read_fault
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
+            return Err(StoreError::Backend("injected resource list failure".into()));
+        }
         let resource_scan = filter.kinds.contains(&pb::EntityKind::Channel)
             || filter.kinds.contains(&pb::EntityKind::DataStore)
             || filter.kinds.contains(&pb::EntityKind::Specification);
@@ -3880,6 +3923,7 @@ fn make_domain(ns: &str, slug: &str, project_ns: Option<&str>) -> pb::Entity {
             doc: String::new(),
             metadata: Vec::new(),
             supersedes: None,
+            message_claims: None,
             project: project_ns.map(|pns| pb::ProjectRef {
                 id: Some(pb::Id {
                     namespace: pns.into(),
@@ -3887,6 +3931,7 @@ fn make_domain(ns: &str, slug: &str, project_ns: Option<&str>) -> pb::Entity {
                     version: 1,
                 }),
             }),
+            members: Vec::new(),
         })),
     }
 }
@@ -4603,5 +4648,475 @@ async fn retarget_references_rejects_incomplete_resource_scan_before_preview_or_
                 "architecture reference scan exceeds its entity budget"
             );
         }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn term_public_faults_preserve_operational_errors_and_never_publish() {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    use trogon_atlas_server::{
+        auth::{BearerAuth, TokenRegistry},
+        ownership::{NamespaceDirectory, RegistryAuthorizer},
+    };
+    let fault = Arc::new(AtomicU8::new(0));
+    let target = id("fault-fixture", "domain", 1);
+    let mut backend = FailingBatchStore::new().await;
+    backend.fail_batches = false;
+    backend.term_read_fault = fault.clone();
+    let store = Arc::new(backend);
+    let directory = Arc::new(NamespaceDirectory::new());
+    let implementation = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default())
+        .unwrap()
+        .with_snapshot_cap(10_000)
+        .with_authorizer(Arc::new(RegistryAuthorizer::new(
+            directory.clone(),
+            store.clone(),
+        )));
+    let registry = TokenRegistry::from_file_contents(
+        toml::from_str(
+            r#"
+[principals.admin]
+role="admin"
+tokens=["term-fault-admin"]
+[principals.writer]
+role="writer"
+parent="visible"
+tokens=["term-fault-writer"]
+"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let grpc = trogon_atlas_server::mcp::data_plane(
+        pb::event_model_service_server::EventModelServiceServer::new(implementation),
+        BearerAuth::new(Arc::new(registry)),
+    );
+    let running = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(grpc)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let mut client = pb::event_model_service_client::EventModelServiceClient::connect(format!(
+        "http://{address}"
+    ))
+    .await
+    .unwrap();
+    fn authenticated<T>(value: T, token: &str) -> Request<T> {
+        let mut r = Request::new(value);
+        r.metadata_mut()
+            .insert("authorization", format!("Bearer {token}").parse().unwrap());
+        r
+    }
+    let namespace = client
+        .register_namespace(authenticated(
+            pb::RegisterNamespaceRequest {
+                name: "term-fault".into(),
+                parent: "visible".into(),
+            },
+            "term-fault-admin",
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    let target = pb::Id {
+        namespace: namespace.clone(),
+        ..target
+    };
+    let domain = pb::Entity {
+        kind: Some(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(target.clone()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    let word = pb::Entity {
+        kind: Some(pb::entity::Kind::Term(pb::Term {
+            id: Some(id(&namespace, "word", 1)),
+            owning_domain: Some(pb::DomainRef {
+                id: Some(target.clone()),
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    client
+        .put_entity(authenticated(
+            pb::PutEntityRequest {
+                entity: Some(domain),
+                ..Default::default()
+            },
+            "term-fault-admin",
+        ))
+        .await
+        .unwrap();
+    client
+        .put_entity(authenticated(
+            pb::PutEntityRequest {
+                entity: Some(word.clone()),
+                ..Default::default()
+            },
+            "term-fault-admin",
+        ))
+        .await
+        .unwrap();
+    let before = store
+        .inner
+        .get(pb::EntityKind::Domain, &target, None)
+        .await
+        .unwrap();
+    let word_before = store
+        .inner
+        .get(pb::EntityKind::Term, &id(&namespace, "word", 1), None)
+        .await
+        .unwrap();
+    let sequence = store.inner.current_change_seq().await.unwrap();
+    let query = pb::ListTermDomainDeclarationsRequest {
+        domain: Some(pb::DomainRef {
+            id: Some(target.clone()),
+        }),
+        ..Default::default()
+    };
+    for mode in [1, 2, 3, 4] {
+        let guard_scans = store.reference_scans.load(Ordering::SeqCst);
+        directory.invalidate().await;
+        fault.store(mode, Ordering::SeqCst);
+        if mode != 3 {
+            let error = client
+                .list_term_domain_declarations(authenticated(query.clone(), "term-fault-writer"))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    error.code(),
+                    tonic::Code::Unavailable | tonic::Code::Internal
+                ),
+                "{error}"
+            );
+        }
+        if mode == 4 {
+            let mut edited = word.clone();
+            if let Some(pb::entity::Kind::Term(value)) = &mut edited.kind {
+                value.title = "Must not publish".into();
+            }
+            let error = client
+                .put_entity(authenticated(
+                    pb::PutEntityRequest {
+                        entity: Some(edited),
+                        ..Default::default()
+                    },
+                    "term-fault-writer",
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), tonic::Code::Internal);
+        }
+        let error = client
+            .delete_entity(authenticated(
+                pb::DeleteEntityRequest {
+                    kind: pb::EntityKind::Domain as i32,
+                    id: Some(target.clone()),
+                    mode: pb::delete_entity_request::Mode::FailIfReferenced as i32,
+                    ..Default::default()
+                },
+                "term-fault-writer",
+            ))
+            .await
+            .unwrap_err();
+        if mode == 1 {
+            assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+        } else {
+            assert!(
+                matches!(
+                    error.code(),
+                    tonic::Code::Unavailable | tonic::Code::Internal
+                ),
+                "mode={mode}: {error}"
+            );
+        }
+        if mode == 3 {
+            assert!(store.reference_scans.load(Ordering::SeqCst) > guard_scans);
+        }
+        fault.store(0, Ordering::SeqCst);
+        assert_eq!(
+            store
+                .inner
+                .get(pb::EntityKind::Domain, &target, None)
+                .await
+                .unwrap()
+                .entity,
+            before.entity
+        );
+        assert_eq!(
+            store
+                .inner
+                .get(pb::EntityKind::Domain, &target, None)
+                .await
+                .unwrap()
+                .etag,
+            before.etag
+        );
+        assert_eq!(
+            store
+                .inner
+                .get(pb::EntityKind::Term, &id(&namespace, "word", 1), None)
+                .await
+                .unwrap()
+                .entity,
+            word_before.entity
+        );
+        assert_eq!(
+            store
+                .inner
+                .get(pb::EntityKind::Term, &id(&namespace, "word", 1), None)
+                .await
+                .unwrap()
+                .etag,
+            word_before.etag
+        );
+        assert_eq!(store.inner.current_change_seq().await.unwrap(), sequence);
+    }
+    assert_eq!(
+        client
+            .list_term_domain_declarations(authenticated(query, "term-fault-writer"))
+            .await
+            .unwrap()
+            .into_inner()
+            .declarations
+            .len(),
+        1
+    );
+    running.abort();
+}
+
+fn structure_component_ref(ns: &str, slug: &str) -> pb::ComponentRef {
+    pb::ComponentRef {
+        id: Some(id(ns, slug, 1)),
+    }
+}
+
+fn structure_group(ns: &str, slug: &str, member: &str) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::SystemGroup(pb::SystemGroup {
+            id: Some(id(ns, slug, 1)),
+            title: slug.into(),
+            scope: pb::SystemGroupScope::Internal as i32,
+            members: vec![structure_group_member(ns, member)],
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+fn structure_group_member(ns: &str, member: &str) -> pb::SystemGroupMembership {
+    pb::SystemGroupMembership {
+        member: Some(pb::SystemGroupMember {
+            target: Some(pb::system_group_member::Target::Component(
+                structure_component_ref(ns, member),
+            )),
+        }),
+        ..Default::default()
+    }
+}
+
+fn structure_domain(ns: &str, slug: &str, member: &str) -> pb::Entity {
+    pb::Entity {
+        kind: Some(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(id(ns, slug, 1)),
+            title: slug.into(),
+            members: vec![pb::DomainMembership {
+                member: Some(pb::DomainMember {
+                    target: Some(pb::domain_member::Target::Component(
+                        structure_component_ref(ns, member),
+                    )),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn system_structure_propagates_dependency_read_failures_without_publishing() {
+    const NS: &str = "structure-errors";
+    let failures: [(fn() -> StoreError, tonic::Code); 3] = [
+        (
+            || StoreError::Unavailable("injected dependency outage".into()),
+            tonic::Code::Unavailable,
+        ),
+        (
+            || StoreError::Backend("injected dependency failure".into()),
+            tonic::Code::Internal,
+        ),
+        (
+            || StoreError::CorruptEntry {
+                key: "dependency".into(),
+                reason: "injected decode failure".into(),
+            },
+            tonic::Code::Internal,
+        ),
+    ];
+    for (failure, expected) in failures {
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut backend = FailingBatchStore::with_failure(failure).await;
+        backend.fail_batches = false;
+        backend.get_failure = Some((id(NS, "worker", 1), armed.clone()));
+        let service = EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+            .unwrap()
+            .with_snapshot_cap(0);
+        let put = |entity: pb::Entity| {
+            service.put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(entity),
+                ..Default::default()
+            }))
+        };
+        put(pb::Entity {
+            kind: Some(pb::entity::Kind::Component(pb::Component {
+                id: Some(id(NS, "worker", 1)),
+                title: "Worker".into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        put(structure_group(NS, "platform", "worker"))
+            .await
+            .unwrap();
+        put(structure_domain(NS, "retail", "worker")).await.unwrap();
+        let group = service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::SystemGroup as i32,
+                id: Some(id(NS, "platform", 1)),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let domain = service
+            .get_entity(Request::new(pb::GetEntityRequest {
+                kind: pb::EntityKind::Domain as i32,
+                id: Some(id(NS, "retail", 1)),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let selector = pb::ConnectionRef {
+            owner: Some(
+                trogon_atlas_server::conv::entity_to_ref(group.entity.as_ref().unwrap()).unwrap(),
+            ),
+            owner_uid: group
+                .entity
+                .as_ref()
+                .unwrap()
+                .system
+                .as_ref()
+                .unwrap()
+                .uid
+                .clone(),
+            id: match group.entity.as_ref().unwrap().kind.as_ref().unwrap() {
+                pb::entity::Kind::SystemGroup(value) => value.members[0].connection_id.clone(),
+                _ => unreachable!(),
+            },
+        };
+        put(pb::Entity {
+            kind: Some(pb::entity::Kind::Person(pb::Person {
+                id: Some(id(NS, "maintainer", 1)),
+                title: Some(pb::DirectoryDisplayName {
+                    value: "Maintainer".into(),
+                }),
+                responsibilities: vec![pb::Responsibility {
+                    kind: pb::ResponsibilityKind::Owner as i32,
+                    subject: Some(pb::ResponsibilitySubject {
+                        selection: Some(pb::responsibility_subject::Selection::Connection(
+                            selector,
+                        )),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+        armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut edited_group = group.entity.clone().unwrap();
+        if let Some(pb::entity::Kind::SystemGroup(value)) = edited_group.kind.as_mut() {
+            value.members.push(structure_group_member(NS, "worker"));
+        }
+        let mut edited_domain = domain.entity.clone().unwrap();
+        if let Some(pb::entity::Kind::Domain(value)) = edited_domain.kind.as_mut() {
+            value.members.push(pb::DomainMembership {
+                member: Some(pb::DomainMember {
+                    target: Some(pb::domain_member::Target::Component(
+                        structure_component_ref(NS, "worker"),
+                    )),
+                }),
+                ..Default::default()
+            });
+        }
+        for entity in [edited_group, edited_domain] {
+            let error = put(entity).await.unwrap_err();
+            assert_eq!(error.code(), expected, "{error:?}");
+        }
+        let error = service
+            .list_assignee_responsibilities(Request::new(pb::ListAssigneeResponsibilitiesRequest {
+                assignee: Some(pb::ResponsibilityAssignee {
+                    selection: Some(pb::responsibility_assignee::Selection::Person(
+                        pb::PersonRef {
+                            id: Some(id(NS, "maintainer", 1)),
+                        },
+                    )),
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), expected, "{error:?}");
+
+        armed.store(false, std::sync::atomic::Ordering::SeqCst);
+        for (kind, slug, before) in [
+            (pb::EntityKind::SystemGroup, "platform", &group),
+            (pb::EntityKind::Domain, "retail", &domain),
+        ] {
+            let after = service
+                .get_entity(Request::new(pb::GetEntityRequest {
+                    kind: kind as i32,
+                    id: Some(id(NS, slug, 1)),
+                }))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(after.etag, before.etag);
+            assert_eq!(after.entity, before.entity);
+        }
+        let recovered = service
+            .list_assignee_responsibilities(Request::new(pb::ListAssigneeResponsibilitiesRequest {
+                assignee: Some(pb::ResponsibilityAssignee {
+                    selection: Some(pb::responsibility_assignee::Selection::Person(
+                        pb::PersonRef {
+                            id: Some(id(NS, "maintainer", 1)),
+                        },
+                    )),
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            recovered.assignments[0].state,
+            pb::ResponsibilityResolutionState::Resolved as i32
+        );
     }
 }

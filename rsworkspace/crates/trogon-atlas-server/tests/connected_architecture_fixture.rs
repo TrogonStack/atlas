@@ -867,6 +867,7 @@ async fn exercise() -> Fixture {
         .list_incoming_document_declarations(Request::new(
             pb::ListIncomingDocumentDeclarationsRequest {
                 document: Some(pinned),
+                ..Default::default()
             },
         ))
         .await

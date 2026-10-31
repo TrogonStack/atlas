@@ -75,6 +75,10 @@ pub struct LifecycleAnnotation {
     pub status: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub doc: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="3")]
+    pub draft: ::core::option::Option<DraftNotice>,
+    #[prost(message, optional, tag="4")]
+    pub deprecated_on: ::core::option::Option<super::super::r#type::v1alpha1::CalendarDate>,
 }
 /// An unanswered design question pinned to an entity: the model does not
 /// yet say what happens here. The validator surfaces these as Info findings;
@@ -105,5 +109,90 @@ pub struct AssumptionAnnotation {
     pub author: ::prost::alloc::string::String,
     #[prost(string, tag="4")]
     pub created_at: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MetadataTitle {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BadgeText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MetadataText {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct IconToken {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HexColor {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MetadataUrl {
+    #[prost(string, tag="1")]
+    pub value: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DraftNotice {
+    #[prost(message, optional, tag="1")]
+    pub title: ::core::option::Option<MetadataTitle>,
+    #[prost(message, optional, tag="2")]
+    pub message: ::core::option::Option<MetadataText>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Badge {
+    #[prost(message, optional, tag="1")]
+    pub content: ::core::option::Option<BadgeText>,
+    #[prost(message, optional, tag="2")]
+    pub background_color: ::core::option::Option<HexColor>,
+    #[prost(message, optional, tag="3")]
+    pub text_color: ::core::option::Option<HexColor>,
+    #[prost(message, optional, tag="4")]
+    pub icon: ::core::option::Option<IconToken>,
+    #[prost(message, optional, tag="5")]
+    pub url: ::core::option::Option<MetadataUrl>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BadgesAnnotation {
+    #[prost(message, repeated, tag="1")]
+    pub badges: ::prost::alloc::vec::Vec<Badge>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PositiveDisplayLimit {
+    #[prost(uint32, tag="1")]
+    pub value: u32,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResourceGroupItem {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub target: ::core::option::Option<super::super::eventmodel::v1alpha1::EntityRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResourceGroup {
+    #[prost(message, optional, tag="1")]
+    pub group_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub title: ::core::option::Option<MetadataTitle>,
+    #[prost(message, repeated, tag="3")]
+    pub items: ::prost::alloc::vec::Vec<ResourceGroupItem>,
+    #[prost(message, optional, tag="4")]
+    pub display_limit: ::core::option::Option<PositiveDisplayLimit>,
+    #[prost(bool, optional, tag="5")]
+    pub sidebar: ::core::option::Option<bool>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResourceGroupsAnnotation {
+    #[prost(message, repeated, tag="1")]
+    pub groups: ::prost::alloc::vec::Vec<ResourceGroup>,
 }
 // @@protoc_insertion_point(module)

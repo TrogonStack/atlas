@@ -139,6 +139,7 @@ async fn put_entity_reports_only_the_suites_its_kind_reaches() {
         .coverage
         .expect("PutEntity must report coverage");
     assert_check(&coverage, "strategic", State::Completed, "", 1);
+    assert_check(&coverage, "architecture", State::Completed, "", 1);
     assert_write_path_skips(&coverage);
 }
 
@@ -168,13 +169,7 @@ async fn batch_mutate_reports_coverage_across_its_ops() {
             "kind_not_applicable",
             0,
         );
-        assert_check(
-            &coverage,
-            "architecture",
-            State::Skipped,
-            "kind_not_applicable",
-            0,
-        );
+        assert_check(&coverage, "architecture", State::Completed, "", 1);
         assert_write_path_skips(&coverage);
     }
 }
@@ -223,13 +218,7 @@ async fn merge_branch_reports_that_it_skips_model_and_scenarios() {
         let coverage = response.coverage.expect("MergeBranch must report coverage");
         assert_check(&coverage, "store_hygiene", State::Completed, "", 1);
         assert_check(&coverage, "strategic", State::Completed, "", 1);
-        assert_check(
-            &coverage,
-            "architecture",
-            State::Skipped,
-            "kind_not_applicable",
-            0,
-        );
+        assert_check(&coverage, "architecture", State::Completed, "", 1);
         assert_check(&coverage, "model", State::Skipped, "merge_path", 0);
         assert_check(&coverage, "scenarios", State::Skipped, "merge_path", 0);
         assert_eq!(coverage.requested_scope.unwrap().branch, branch);

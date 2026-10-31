@@ -62,6 +62,15 @@ struct Context {
     branch: Option<String>,
     metadata: tonic::metadata::MetadataMap,
 }
+/// Marks a source preview or apply batch. `preview_source_run_attempt` inserts
+/// it before the validate-only `batch_mutate`. `apply_source_run_attempt`
+/// inserts `SourceExecution` and then this flag before the real `batch_mutate`.
+/// The flag is not a blanket admission skip: only a stored schema whose
+/// aggregate root, identifiers, and property relationships are unchanged may
+/// skip target admission, so a title update can keep a dangling target property.
+#[derive(Clone, Copy)]
+pub(super) struct SourceBusinessBypass;
+
 #[derive(Clone)]
 pub(super) struct SourceExecution {
     pub(super) publication: SourcePublication,
@@ -96,6 +105,7 @@ fn missing() -> Status {
 fn source_error(error: core::SourceError) -> Status {
     match error {
         core::SourceError::Budget => Status::resource_exhausted("source work budget exhausted"),
+        core::SourceError::NativeSchemaVariants => Status::invalid_argument(error.to_string()),
         _ => invalid(),
     }
 }
@@ -873,25 +883,182 @@ fn selection_owner(selection: &pb::SourceSelection) -> Result<pb::EntityRef, Sta
         }
     }
 }
-fn native_relationships_only(
+fn carries_slice_authoring(entity: &pb::Entity) -> bool {
+    match &entity.kind {
+        Some(pb::entity::Kind::DataProduct(product)) => !product.resource_associations.is_empty(),
+        Some(pb::entity::Kind::Specification(specification)) => {
+            !specification.message_channels.is_empty()
+                || specification.messages.iter().any(|message| {
+                    message.schemas.iter().any(|binding| {
+                        !binding.environments.is_empty() || binding.is_default.is_some()
+                    })
+                })
+        }
+        _ => false,
+    }
+}
+
+fn forbidden_native_selection(entity: &pb::Entity, path: &str) -> bool {
+    // Connection occurrence paths are rooted at the entity oneof field
+    // (`data_product.resource_associations[0]`), while the native guards
+    // name the field on the kind body.
+    let path = path.split_once('.').map_or(path, |(_, rest)| rest);
+    match &entity.kind {
+        Some(pb::entity::Kind::DataProduct(_)) => path.starts_with("resource_associations["),
+        Some(pb::entity::Kind::Specification(specification)) => {
+            if path.starts_with("message_channels[") {
+                return true;
+            }
+            let Some(rest) = path.strip_prefix("messages[") else {
+                return false;
+            };
+            let Some((message, rest)) = rest.split_once("].schemas[") else {
+                return false;
+            };
+            let Some((binding, suffix)) = rest.split_once(']') else {
+                return false;
+            };
+            if !(suffix.is_empty() || suffix.starts_with('.')) {
+                return false;
+            }
+            let Ok(message) = message.parse::<usize>() else {
+                return false;
+            };
+            let Ok(binding) = binding.parse::<usize>() else {
+                return false;
+            };
+            specification
+                .messages
+                .get(message)
+                .and_then(|message| message.schemas.get(binding))
+                .is_some_and(|binding| {
+                    !binding.environments.is_empty() || binding.is_default.is_some()
+                })
+        }
+        _ => false,
+    }
+}
+
+fn native_document_context_only(
     current: Option<&pb::Entity>,
     incoming: Option<&pb::Entity>,
     ownership: &pb::SourceFieldOwnership,
 ) -> Result<(), Status> {
-    let has_relationships = |entity: &pb::Entity| {
-        !trogon_atlas_core::architectural_relationships::relationships(entity).is_empty()
-            || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
+    let has_extensions = |entity: &pb::Entity| {
+        trogon_atlas_core::document_catalog_context::document_has_native_extensions(entity)
+            .unwrap_or(false)
     };
     let whole_owner = matches!(
         ownership.policy,
         Some(pb::source_field_ownership::Policy::WholeOwner(_))
     );
-    if (current.is_none() && incoming.is_some_and(has_relationships))
+    if (current.is_none() && incoming.is_some_and(has_extensions))
         || (whole_owner
-            && (current.is_some_and(has_relationships) || incoming.is_some_and(has_relationships)))
+            && (current.is_some_and(has_extensions) || incoming.is_some_and(has_extensions)))
     {
         return Err(Status::invalid_argument(
-            "architectural relationships and communications support native authoring only",
+            "document catalog context supports native authoring only",
+        ));
+    }
+    Ok(())
+}
+
+fn native_relationships_only(
+    current: Option<&pb::Entity>,
+    incoming: Option<&pb::Entity>,
+    ownership: &pb::SourceFieldOwnership,
+) -> Result<(), Status> {
+    if let Some(incoming) = incoming {
+        let unit = if matches!(
+            ownership.policy,
+            Some(pb::source_field_ownership::Policy::WholeOwner(_))
+        ) {
+            core::OwnershipUnit::WholeOwner
+        } else {
+            core::OwnershipUnit::Field(pb::SourceOwnedField::Title)
+        };
+        trogon_atlas_core::message_claims::validate_source_write(current, incoming, unit).map_err(
+            |_| Status::invalid_argument("message claims support native authoring only"),
+        )?;
+    } else if matches!(
+        ownership.policy,
+        Some(pb::source_field_ownership::Policy::WholeOwner(_))
+    ) && current.is_some_and(trogon_atlas_core::message_claims::has_content)
+    {
+        return Err(Status::invalid_argument(
+            "message claims support native authoring only",
+        ));
+    }
+    let has_native_authoring = |entity: &pb::Entity| -> Result<bool, Status> {
+        Ok(
+            matches!(&entity.kind, Some(pb::entity::Kind::Decision(value)) if value.authored_on.is_some() || value.decided_on.is_some() || !value.decision_makers.is_empty() || !value.amends.is_empty())
+                || matches!(&entity.kind, Some(pb::entity::Kind::Term(term)) if term.owning_domain.is_some())
+                || matches!(&entity.kind, Some(pb::entity::Kind::SystemGroup(v)) if !v.members.is_empty() || !v.relationships.is_empty() || !v.actors.is_empty())
+                || matches!(&entity.kind, Some(pb::entity::Kind::Domain(v)) if !v.members.is_empty())
+                || !trogon_atlas_core::architectural_relationships::relationships(entity)
+                    .is_empty()
+                || !trogon_atlas_core::communication_intent::declarations(entity).is_empty()
+                || !trogon_atlas_core::channel_links::links(entity).is_empty()
+                || !trogon_atlas_core::storage_claims::claims(entity).is_empty()
+                || trogon_atlas_core::design_topology::graph(entity)
+                    .is_some_and(|graph| !graph.steps.is_empty() || !graph.entry_steps.is_empty())
+                || trogon_atlas_core::agent_metadata::has_native_additions(entity)
+                    .map_err(|_| invalid())?,
+        )
+    };
+    let whole_owner = matches!(
+        ownership.policy,
+        Some(pb::source_field_ownership::Policy::WholeOwner(_))
+    );
+    let incoming_native = incoming
+        .map(has_native_authoring)
+        .transpose()?
+        .unwrap_or(false);
+    let current_native = current
+        .map(has_native_authoring)
+        .transpose()?
+        .unwrap_or(false);
+    if (current.is_none() && incoming_native)
+        || (whole_owner && (current_native || incoming_native))
+    {
+        return Err(Status::invalid_argument(
+            if trogon_atlas_core::design_topology::graph(incoming.or(current).ok_or_else(invalid)?)
+                .is_some()
+            {
+                "design topology support native authoring only"
+            } else {
+                "selected extensions support native authoring only"
+            },
+        ));
+    }
+    if (current.is_none() && incoming.is_some_and(carries_slice_authoring))
+        || (whole_owner
+            && (current.is_some_and(carries_slice_authoring)
+                || incoming.is_some_and(carries_slice_authoring)))
+    {
+        return Err(Status::invalid_argument(
+            "resource associations, message channels, and schema variants support native authoring only",
+        ));
+    }
+    Ok(())
+}
+fn native_business_data_only(
+    current: Option<&pb::Entity>,
+    incoming: Option<&pb::Entity>,
+    ownership: &pb::SourceFieldOwnership,
+) -> Result<(), Status> {
+    let whole_owner = matches!(
+        ownership.policy,
+        Some(pb::source_field_ownership::Policy::WholeOwner(_))
+    );
+    if (current.is_none()
+        && incoming.is_some_and(trogon_atlas_core::business_data::declares_business))
+        || (whole_owner
+            && (current.is_some_and(trogon_atlas_core::business_data::declares_business)
+                || incoming.is_some_and(trogon_atlas_core::business_data::declares_business)))
+    {
+        return Err(Status::invalid_argument(
+            "business declarations support native authoring only",
         ));
     }
     Ok(())
@@ -906,8 +1073,19 @@ fn resolve_selection(selection: &pb::SourceSelection, entity: &pb::Entity) -> Re
             }
         }
         Selection::Connection(r) => {
-            trogon_atlas_core::connections::resolve_connection(entity, r)
+            let occurrence = trogon_atlas_core::connections::resolve_connection(entity, r)
                 .map_err(|_| conflict())?;
+            if occurrence.path.contains(".decision_makers[") || occurrence.path.contains(".amends[")
+            {
+                return Err(Status::invalid_argument(
+                    "decision makers and amendments support native authoring only",
+                ));
+            }
+            if forbidden_native_selection(entity, &occurrence.path) {
+                return Err(Status::invalid_argument(
+                    "resource associations, message channels, and schema variants support native authoring only",
+                ));
+            }
         }
         Selection::ContractMember(r) => {
             trogon_atlas_core::specification::resolve_member(entity, r).map_err(|_| conflict())?;
@@ -1077,6 +1255,8 @@ async fn prepare_mapping(
     match checked_selection(service, ctx, selection).await {
         Ok(current) => {
             native_relationships_only(Some(&current.entity), None, policy)?;
+            native_document_context_only(Some(&current.entity), None, policy)?;
+            native_business_data_only(Some(&current.entity), None, policy)?;
             bounded(core::validate_ownership(&current.entity, policy))?;
             let observation = observed(&owner, &current);
             let adoption = value.adoption.as_ref().ok_or_else(|| {
@@ -1860,6 +2040,27 @@ async fn preview_source_run_attempt(
                 return Err(invalid());
             }
             crate::conv::validate_entity_content(incoming)?;
+            if trogon_atlas_core::message_claims::has_content(incoming) {
+                let id = entity_id(incoming)?;
+                service.require_visible(&ctx.vis, &id.namespace).await?;
+                let previous = match service
+                    .store
+                    .get(entity_kind(incoming)?, id, ctx.branch.as_deref())
+                    .await
+                {
+                    Ok(row) => Some(row.entity),
+                    Err(StoreError::NotFound) => None,
+                    Err(e) => return Err(store_err(e)),
+                };
+                trogon_atlas_core::message_claims::validate_source_write(
+                    previous.as_ref(),
+                    incoming,
+                    core::OwnershipUnit::Field(pb::SourceOwnedField::Title),
+                )
+                .map_err(|_| {
+                    Status::invalid_argument("message claims support native authoring only")
+                })?;
+            }
             let Some(mapping) = doc.state.mappings.iter().find(|m| {
                 !m.detached && m.source.as_ref() == Some(source) && m.branch == ctx.branch
             }) else {
@@ -1890,6 +2091,16 @@ async fn preview_source_run_attempt(
                 Err(e) => return Err(store_err(e)),
             };
             native_relationships_only(
+                current.as_ref().map(|value| &value.entity),
+                Some(incoming),
+                ownership,
+            )?;
+            native_document_context_only(
+                current.as_ref().map(|value| &value.entity),
+                Some(incoming),
+                ownership,
+            )?;
+            native_business_data_only(
                 current.as_ref().map(|value| &value.entity),
                 Some(incoming),
                 ownership,
@@ -1937,7 +2148,7 @@ async fn preview_source_run_attempt(
             }
             match (&mapping.base, &current) {
                 (None, None) => {
-                    bounded(core::validate_ownership(incoming, ownership))?;
+                    bounded(core::validate_create_ownership(incoming, ownership))?;
                     proposed = Some(incoming.clone());
                     results.push(result(
                         source,
@@ -2069,6 +2280,8 @@ async fn preview_source_run_attempt(
                 deleted: false,
             });
             if let Some(entity) = proposed {
+                trogon_atlas_core::business_data::reject_source_local_paths(&entity)
+                    .map_err(|error| Status::invalid_argument(error.to_string()))?;
                 plan.operations.push(pb::SourceNativeOperation {
                     mapping_id: mapping.id.clone(),
                     source: Some(source.clone()),
@@ -2157,6 +2370,16 @@ async fn preview_source_run_attempt(
                     .await
                     .map_err(store_err)?;
                 native_relationships_only(
+                    Some(&current.entity),
+                    None,
+                    mapping.ownership.as_ref().ok_or_else(invalid)?,
+                )?;
+                native_document_context_only(
+                    Some(&current.entity),
+                    None,
+                    mapping.ownership.as_ref().ok_or_else(invalid)?,
+                )?;
+                native_business_data_only(
                     Some(&current.entity),
                     None,
                     mapping.ownership.as_ref().ok_or_else(invalid)?,
@@ -2296,10 +2519,9 @@ async fn preview_source_run_attempt(
         ))?;
         drop(lock);
         if !conflicts && !req.overlay_only {
-            let validation = service
-                .batch_mutate(ctx.request(batch_request(&plan, true)?))
-                .await?
-                .into_inner();
+            let mut preview = ctx.request(batch_request(&plan, true)?);
+            preview.extensions_mut().insert(SourceBusinessBypass);
+            let validation = service.batch_mutate(preview).await?.into_inner();
             if validation.status != pb::batch_mutate_response::Status::Validated as i32 {
                 return Err(Status::failed_precondition(
                     "native source plan does not pass admission",
@@ -2786,6 +3008,17 @@ async fn apply_source_run_attempt(
         }));
     }
     live_publication_bases(&doc.state, index)?;
+    for operation in &plan.operations {
+        let Some(pb::source_native_operation::Operation::Put(put)) = &operation.operation else {
+            continue;
+        };
+        let previous = doc.state.runs[index].values.iter()
+            .find(|value| value.mapping_id == operation.mapping_id)
+            .ok_or_else(conflict)?;
+        bounded(core::validate_native_schema_variants(
+            previous.entity.as_ref(), put.entity.as_ref().ok_or_else(conflict)?,
+        ))?;
+    }
     let mut publication = SourcePublication {
         registration: doc.key.clone(),
         control_revision: doc.revision,
@@ -2826,6 +3059,7 @@ async fn apply_source_run_attempt(
     drop(lock);
     let mut native = ctx.request(batch_request(&plan, false)?);
     native.extensions_mut().insert(execution.clone());
+    native.extensions_mut().insert(SourceBusinessBypass);
     let result = tokio::time::timeout_at(deadline, service.batch_mutate(native)).await;
     let _lock = service.lock_mutations().await;
     let mut doc = load(service, &ctx, &req.registration_id, true).await?;
@@ -3362,4 +3596,164 @@ async fn sweep_registration(
             .await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod native_authoring_tests {
+    use super::*;
+
+    fn id(slug: &str) -> pb::Id {
+        pb::Id {
+            namespace: "groups".into(),
+            slug: slug.into(),
+            version: 1,
+        }
+    }
+
+    fn group(members: usize, relationships: usize, actors: usize, title: &str) -> pb::Entity {
+        let member = pb::SystemGroupMembership {
+            member: Some(pb::SystemGroupMember {
+                target: Some(pb::system_group_member::Target::Component(
+                    pb::ComponentRef {
+                        id: Some(id("worker")),
+                    },
+                )),
+            }),
+            ..Default::default()
+        };
+        let relationship = pb::SystemGroupRelationship {
+            target: Some(pb::SystemGroupRef {
+                id: Some(id("other")),
+            }),
+            ..Default::default()
+        };
+        let actor = pb::SystemActorLink {
+            target: Some(pb::SystemActorTarget {
+                target: Some(pb::system_actor_target::Target::Persona(pb::PersonaRef {
+                    id: Some(id("operator")),
+                })),
+            }),
+            direction: pb::SystemActorDirection::Inbound as i32,
+            ..Default::default()
+        };
+        pb::Entity {
+            kind: Some(pb::entity::Kind::SystemGroup(pb::SystemGroup {
+                id: Some(id("platform")),
+                title: title.into(),
+                members: vec![member; members],
+                relationships: vec![relationship; relationships],
+                actors: vec![actor; actors],
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn domain(members: usize) -> pb::Entity {
+        let member = pb::DomainMembership {
+            member: Some(pb::DomainMember {
+                target: Some(pb::domain_member::Target::Component(pb::ComponentRef {
+                    id: Some(id("worker")),
+                })),
+            }),
+            ..Default::default()
+        };
+        pb::Entity {
+            kind: Some(pb::entity::Kind::Domain(pb::Domain {
+                id: Some(id("commerce")),
+                members: vec![member; members],
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn policies() -> Vec<pb::SourceFieldOwnership> {
+        let policy = |value| pb::SourceFieldOwnership {
+            policy: Some(value),
+        };
+        vec![
+            policy(pb::source_field_ownership::Policy::None(
+                pb::SourceNoOwnership {},
+            )),
+            policy(pb::source_field_ownership::Policy::Fields(
+                pb::SourceOwnedFields {
+                    fields: vec![pb::SourceOwnedField::Title as i32],
+                },
+            )),
+            policy(pb::source_field_ownership::Policy::WholeOwner(
+                pb::SourceWholeOwnerOwnership {},
+            )),
+        ]
+    }
+
+    fn whole_owner() -> pb::SourceFieldOwnership {
+        pb::SourceFieldOwnership {
+            policy: Some(pb::source_field_ownership::Policy::WholeOwner(
+                pb::SourceWholeOwnerOwnership {},
+            )),
+        }
+    }
+
+    fn field_owner() -> pb::SourceFieldOwnership {
+        pb::SourceFieldOwnership {
+            policy: Some(pb::source_field_ownership::Policy::Fields(
+                pb::SourceOwnedFields {
+                    fields: vec![pb::SourceOwnedField::Title as i32],
+                },
+            )),
+        }
+    }
+
+    #[test]
+    fn initial_creation_with_native_curation_is_refused_under_every_policy() {
+        for ownership in policies() {
+            for incoming in [
+                group(1, 0, 0, "t"),
+                group(0, 1, 0, "t"),
+                group(0, 0, 1, "t"),
+                domain(1),
+            ] {
+                let refused = native_relationships_only(None, Some(&incoming), &ownership);
+                assert_eq!(refused.unwrap_err().code(), tonic::Code::InvalidArgument);
+            }
+            assert!(
+                native_relationships_only(None, Some(&group(0, 0, 0, "t")), &ownership).is_ok()
+            );
+            assert!(native_relationships_only(None, Some(&domain(0)), &ownership).is_ok());
+        }
+    }
+
+    #[test]
+    fn whole_owner_refuses_current_proposed_and_clearing_curation() {
+        let ownership = whole_owner();
+        let curated = group(2, 1, 1, "t");
+        let empty = group(0, 0, 0, "t");
+        for (current, incoming) in [
+            (Some(&curated), Some(&curated)),
+            (Some(&empty), Some(&curated)),
+            (Some(&curated), Some(&empty)),
+            (Some(&curated), None),
+        ] {
+            let refused = native_relationships_only(current, incoming, &ownership);
+            assert_eq!(refused.unwrap_err().code(), tonic::Code::InvalidArgument);
+        }
+        assert_eq!(
+            native_relationships_only(Some(&domain(1)), Some(&domain(0)), &ownership)
+                .unwrap_err()
+                .code(),
+            tonic::Code::InvalidArgument
+        );
+        assert!(native_relationships_only(Some(&empty), Some(&empty), &ownership).is_ok());
+    }
+
+    #[test]
+    fn unrelated_field_writes_preserve_local_curation_under_field_ownership() {
+        let ownership = field_owner();
+        let curated = group(2, 1, 1, "before");
+        let retitled = group(2, 1, 1, "after");
+        assert!(native_relationships_only(Some(&curated), Some(&retitled), &ownership).is_ok());
+        assert!(native_relationships_only(Some(&domain(1)), Some(&domain(1)), &ownership).is_ok());
+    }
 }

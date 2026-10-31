@@ -617,6 +617,16 @@ impl NatsStore {
         let client = connect_options.connect(&config.url).await.map_err(|e| {
             StoreError::Unavailable(format!("nats connect {url}: {e}", url = config.url))
         })?;
+        client
+            .flush()
+            .await
+            .map_err(|e| StoreError::Unavailable(format!("NATS capacity negotiation: {e}")))?;
+        let max_payload = client.max_payload();
+        if max_payload < 8_388_608 {
+            return Err(StoreError::Unavailable(format!(
+                "NATS max_payload is {max_payload} bytes; Atlas requires at least 8388608 bytes for accepted entity sizes and storage envelopes; configure max_payload: 8388608"
+            )));
+        }
         let js = jetstream::new(client);
         let config = Arc::new(config);
         let kv = ensure_kv(
@@ -1259,6 +1269,70 @@ impl NatsStore {
 
         out.truncate(effective_limit);
         Ok(out)
+    }
+
+    async fn preflight_catalog_batch(
+        &self,
+        ops: &[MutationOp],
+        ctx: WriteContext<'_>,
+    ) -> StoreResult<()> {
+        let mut projected: BTreeMap<String, Option<Entity>> = BTreeMap::new();
+        for (index, op) in ops.iter().enumerate() {
+            let kind = match op {
+                MutationOp::Create { kind, .. }
+                | MutationOp::Put { kind, .. }
+                | MutationOp::Delete { kind, .. } => *kind,
+            };
+            if !matches!(kind, EntityKind::Document | EntityKind::Decision) {
+                continue;
+            }
+            let (id, proposed) = match op {
+                MutationOp::Create { entity, .. } | MutationOp::Put { entity, .. } => {
+                    let id =
+                        Self::validate(kind, entity).map_err(|source| StoreError::BatchFailed {
+                            index,
+                            source: Box::new(source),
+                        })?;
+                    (id, Some(entity))
+                }
+                MutationOp::Delete { id, .. } => (id, None),
+            };
+            let key = entity_key(kind, id);
+            if !projected.contains_key(&key) {
+                let previous = match self.get(kind, id, ctx.branch_name()).await {
+                    Ok(stored) => Some(stored.entity),
+                    Err(StoreError::NotFound) => None,
+                    Err(error) => return Err(error),
+                };
+                projected.insert(key.clone(), previous);
+            }
+            let Some(entity) = proposed else {
+                projected.insert(key, None);
+                continue;
+            };
+            let previous = if matches!(op, MutationOp::Create { .. }) {
+                None
+            } else {
+                projected.get(&key).and_then(Option::as_ref)
+            };
+            let prepared = match ctx.connection_admission() {
+                crate::store::ConnectionAdmission::Active => prepare_entity(previous, entity),
+                crate::store::ConnectionAdmission::BranchMerge { base } => {
+                    trogon_atlas_core::connection_persistence::prepare_landing(
+                        Some(base),
+                        previous,
+                        entity,
+                    )
+                    .map_err(|error| StoreError::InvalidArgument(error.to_string()))
+                }
+            }
+            .map_err(|source| StoreError::BatchFailed {
+                index,
+                source: Box::new(source),
+            })?;
+            projected.insert(key, Some(prepared));
+        }
+        Ok(())
     }
 
     /// Branch-scoped `batch_apply`: applies each op sequentially against the
@@ -2115,12 +2189,24 @@ fn encode_entity(entity: &Entity) -> Bytes {
     Bytes::from(entity.encode_to_vec())
 }
 
+fn validate_native_owner_metadata(entity: &Entity) -> StoreResult<()> {
+    if trogon_atlas_core::message_claims::declarations(entity).is_some() {
+        trogon_atlas_core::agent_metadata::group_refs(entity).map_err(|error| {
+            StoreError::Backend(format!("native owner metadata decode: {error}"))
+        })?;
+    }
+    Ok(())
+}
+
 fn decode_entity(bytes: &[u8]) -> StoreResult<Entity> {
-    Entity::decode(bytes).map_err(|e| StoreError::Backend(format!("entity decode: {e}")))
+    let entity =
+        Entity::decode(bytes).map_err(|e| StoreError::Backend(format!("entity decode: {e}")))?;
+    validate_native_owner_metadata(&entity)?;
+    Ok(entity)
 }
 
 fn decode_entity_logged(bytes: &[u8], key: &str) -> StoreResult<Entity> {
-    Entity::decode(bytes).map_err(|e| {
+    let entity = Entity::decode(bytes).map_err(|e| {
         tracing::error!(
             key = %key,
             error = %e,
@@ -2130,7 +2216,9 @@ fn decode_entity_logged(bytes: &[u8], key: &str) -> StoreResult<Entity> {
             key: key.to_string(),
             reason: e.to_string(),
         }
-    })
+    })?;
+    validate_native_owner_metadata(&entity)?;
+    Ok(entity)
 }
 
 fn kind_of(entity: &Entity) -> Option<EntityKind> {
@@ -2233,8 +2321,12 @@ fn encode_branch_delta(delta: &trogon_atlas_proto::BranchDelta) -> Bytes {
 }
 
 fn decode_branch_delta(bytes: &[u8]) -> StoreResult<trogon_atlas_proto::BranchDelta> {
-    trogon_atlas_proto::BranchDelta::decode(bytes)
-        .map_err(|e| StoreError::Backend(format!("branch delta decode: {e}")))
+    let delta = trogon_atlas_proto::BranchDelta::decode(bytes)
+        .map_err(|e| StoreError::Backend(format!("branch delta decode: {e}")))?;
+    for entity in delta.base.iter().chain(delta.ours.iter()) {
+        validate_native_owner_metadata(entity)?;
+    }
+    Ok(delta)
 }
 
 /// Merged-view read for a single key on a branch: the branch's delta wins
@@ -3418,21 +3510,37 @@ impl Store for NatsStore {
                         }
                     }
                 }
-                let references = |entity: &Entity| {
-                    trogon_atlas_core::refs::outbound_refs(entity)
-                        .iter()
-                        .filter_map(|reference| {
-                            let kind = reference.to_kind.or_else(|| {
-                                untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
-                            })?;
-                            let target = EntityKey::new(kind, &reference.to_id);
-                            targets.contains(&target).then_some(target)
-                        })
-                        .collect::<Vec<_>>()
-                };
+                let references =
+                    |owner_key: &EntityKey, entity: &Entity| -> StoreResult<Vec<EntityKey>> {
+                        let refs = trogon_atlas_core::refs::try_outbound_refs(entity).map_err(
+                            |error| StoreError::CorruptEntry {
+                                key: trogon_atlas_core::refs::entity_kind(entity)
+                                    .zip(trogon_atlas_core::refs::entity_id(entity))
+                                    .map_or_else(String::new, |(kind, id)| {
+                                        crate::key::entity_key(kind, id)
+                                    }),
+                                reason: error.to_string(),
+                            },
+                        )?;
+                        Ok(refs
+                            .iter()
+                            .filter_map(|reference| {
+                                let kind = reference.to_kind.or_else(|| {
+                                    untyped_kinds.get(&IdKey::new(&reference.to_id)).copied()
+                                })?;
+                                let target = EntityKey::new(kind, &reference.to_id);
+                                if &target == owner_key {
+                                    return None;
+                                }
+                                targets.contains(&target).then_some(target)
+                            })
+                            .collect())
+                    };
                 let mut referenced = HashSet::new();
-                for entity in replacements.values().flatten() {
-                    referenced.extend(references(entity));
+                for (owner_key, entity) in &replacements {
+                    if let Some(entity) = entity {
+                        referenced.extend(references(owner_key, entity)?);
+                    }
                 }
 
                 for (kv, delta_keys) in [(&self.kv, false), (&self.branches_kv, true)] {
@@ -3462,7 +3570,8 @@ impl Store for NatsStore {
                             let Some((owner_kind, owner_id)) = owner else {
                                 return Ok(Vec::new());
                             };
-                            if replacements.contains_key(&EntityKey::new(owner_kind, &owner_id)) {
+                            let owner_key = EntityKey::new(owner_kind, &owner_id);
+                            if replacements.contains_key(&owner_key) {
                                 return Ok(Vec::new());
                             }
                             // Merged gets suppress tombstones and replaced baseline references.
@@ -3471,7 +3580,7 @@ impl Store for NatsStore {
                                 Err(StoreError::NotFound) => return Ok(Vec::new()),
                                 Err(error) => return Err(error),
                             };
-                            Ok(references(&stored.entity))
+                            references(&owner_key, &stored.entity)
                         })
                         .buffer_unordered(LIST_FETCH_CONCURRENCY);
                     while let Some(found) = checks.next().await {
@@ -3866,6 +3975,7 @@ impl Store for NatsStore {
                 BATCH_APPLY_MAX_OPS,
             )));
         }
+        self.preflight_catalog_batch(ops, ctx).await?;
         if ctx.branch_name().is_some() {
             return self.batch_apply_branch(ops, ctx).await;
         }
@@ -4995,12 +5105,35 @@ impl Store for NatsStore {
                     .and_then(|prior| prior.as_ref().map(|(entity, _)| entity.clone()))
             };
 
+            let prepared_owners = ops
+                .iter()
+                .enumerate()
+                .map(|(index, op)| match op {
+                    BranchLandOp::Put {
+                        kind, ours, base, ..
+                    } => {
+                        let id = Self::validate(*kind, ours)?;
+                        trogon_atlas_core::connection_persistence::prepare_landing(
+                            base.as_deref(),
+                            baseline_before(*kind, id).as_ref(),
+                            ours,
+                        )
+                        .map(Some)
+                        .map_err(|error| StoreError::BatchFailed {
+                            index,
+                            source: Box::new(StoreError::InvalidArgument(error.to_string())),
+                        })
+                    }
+                    BranchLandOp::Delete { .. } => Ok(None),
+                })
+                .collect::<StoreResult<Vec<_>>>()?;
+
             for (i, op) in ops.iter().enumerate() {
                 let result: StoreResult<(MutationOutcome, Revision)> = match op {
                     BranchLandOp::Put {
                         kind,
                         ours,
-                        base,
+                        base: _,
                         expected_baseline_etag,
                     } => 'put: {
                         let id = match Self::validate(*kind, ours) {
@@ -5008,18 +5141,9 @@ impl Store for NatsStore {
                             Err(e) => break 'put Err(e),
                         };
                         let key = entity_key(*kind, &id);
-                        let before = baseline_before(*kind, &id);
-                        let prepared =
-                            match trogon_atlas_core::connection_persistence::prepare_landing(
-                                base.as_deref(),
-                                before.as_ref(),
-                                ours,
-                            ) {
-                                Ok(prepared) => prepared,
-                                Err(error) => {
-                                    break 'put Err(StoreError::InvalidArgument(error.to_string()));
-                                }
-                            };
+                        let prepared = prepared_owners[i].clone().ok_or_else(|| {
+                            StoreError::InvalidArgument("missing prepared landing owner".into())
+                        })?;
                         let bytes = encode_entity(&prepared);
                         let cas_result = match expected_baseline_etag {
                             Some(exp) => match exp.parse::<u64>() {
@@ -5258,7 +5382,7 @@ impl Store for NatsStore {
     ) -> StoreResult<u32> {
         self.source_guarded(async {
             self.require_writer()?;
-            let mut count = 0u32;
+            let mut pending = Vec::new();
             for (kind, id, new_base) in rebases {
                 let delta_key = branch_delta_key(branch, *kind, id);
                 let Some(entry) =
@@ -5269,16 +5393,7 @@ impl Store for NatsStore {
                 let delta = decode_branch_delta(&entry.value)?;
                 match new_base {
                     None => {
-                        // CONVERGED: the delta collapses to nothing since
-                        // `ours` already matches the new baseline.
-                        tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&delta_key))
-                            .await
-                            .map_err(|_| {
-                                StoreError::Backend(format!("branch kv.purge {delta_key}: timeout"))
-                            })?
-                            .map_err(|e| {
-                                StoreError::Backend(format!("branch kv.purge {delta_key}: {e}"))
-                            })?;
+                        pending.push((delta_key, entry.revision, None));
                     }
                     Some((base_entity, base_etag)) => {
                         let ours = delta
@@ -5300,20 +5415,36 @@ impl Store for NatsStore {
                             tombstone: delta.tombstone,
                         };
                         let bytes = encode_branch_delta(&updated);
+                        pending.push((delta_key, entry.revision, Some(bytes)));
+                    }
+                }
+            }
+            let count = u32::try_from(pending.len())
+                .map_err(|_| StoreError::InvalidArgument("too many branch rebases".into()))?;
+            for (key, revision, bytes) in pending {
+                match bytes {
+                    Some(bytes) => {
                         tokio::time::timeout(
                             KV_OP_TIMEOUT,
-                            self.branches_kv.update(&delta_key, bytes, entry.revision),
+                            self.branches_kv.update(&key, bytes, revision),
                         )
                         .await
                         .map_err(|_| {
-                            StoreError::Backend(format!("branch kv.update {delta_key}: timeout"))
+                            StoreError::Backend(format!("branch kv.update {key}: timeout"))
                         })?
-                        .map_err(|e| {
-                            StoreError::Backend(format!("branch kv.update {delta_key}: {e}"))
-                        })?;
+                        .map_err(|e| StoreError::Backend(format!("branch kv.update {key}: {e}")))?;
+                    }
+                    None => {
+                        tokio::time::timeout(KV_OP_TIMEOUT, self.branches_kv.purge(&key))
+                            .await
+                            .map_err(|_| {
+                                StoreError::Backend(format!("branch kv.purge {key}: timeout"))
+                            })?
+                            .map_err(|e| {
+                                StoreError::Backend(format!("branch kv.purge {key}: {e}"))
+                            })?;
                     }
                 }
-                count += 1;
             }
             Ok(count)
         })

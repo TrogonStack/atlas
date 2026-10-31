@@ -306,12 +306,55 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
             );
         for name in names {
             let enum_name = format!("SOURCE_OWNED_FIELD_{}", name.to_ascii_uppercase());
-            if name == "communications"
+            if (name == "links" && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Channel")
+                || (name == "storage_claims"
+                    && matches!(
+                        owner.full_name(),
+                        "trogonatlas.eventmodel.v1alpha1.Component"
+                            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
+                            | "trogonatlas.eventmodel.v1alpha1.DataProduct"
+                    ))
+                || (matches!(name.as_str(), "scope" | "actors")
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.SystemGroup")
+                || name == "message_claims"
+                    && matches!(
+                        owner.full_name(),
+                        "trogonatlas.eventmodel.v1alpha1.Component"
+                            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
+                            | "trogonatlas.eventmodel.v1alpha1.Domain"
+                    )
+            {
+                assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
+                continue;
+            }
+            if (owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Decision"
                 && matches!(
-                    owner.full_name(),
-                    "trogonatlas.eventmodel.v1alpha1.Component"
-                        | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-                )
+                    name.as_str(),
+                    "authored_on" | "decided_on" | "decision_makers" | "amends"
+                ))
+                || (owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Document"
+                    && matches!(name.as_str(), "filename" | "related_content"))
+                || (owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Schema"
+                    && matches!(
+                        name.as_str(),
+                        "aggregate_root" | "identifiers" | "property_relationships"
+                    ))
+            {
+                assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
+                continue;
+            }
+            if (name == "message_channels"
+                && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Specification")
+                || (name == "resource_associations"
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.DataProduct")
+                || (name == "owning_domain"
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Term")
+                || name == "communications"
+                    && matches!(
+                        owner.full_name(),
+                        "trogonatlas.eventmodel.v1alpha1.Component"
+                            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
+                    )
             {
                 assert!(SourceOwnedField::from_str_name(&enum_name).is_none());
                 continue;
@@ -324,12 +367,20 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
             use prost::Message;
             let entity = Entity::decode(dynamic.encode_to_vec().as_slice()).expect("entity");
             let result = validate_ownership(&entity, &ownership(&[field]));
-            if name == "relationships"
-                && matches!(
-                    owner.full_name(),
-                    "trogonatlas.eventmodel.v1alpha1.Component"
-                        | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-                )
+            if (matches!(name.as_str(), "members" | "relationships")
+                && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.SystemGroup")
+                || (name == "members"
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Domain")
+                || (name == "purpose"
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Document")
+                || (name == "relationships"
+                    && matches!(
+                        owner.full_name(),
+                        "trogonatlas.eventmodel.v1alpha1.Component"
+                            | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
+                    ))
+                || (matches!(name.as_str(), "steps" | "entry_steps")
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.DesignGraph")
             {
                 assert_eq!(result, Err(SourceError::UnsupportedUnit));
             } else {
@@ -464,4 +515,33 @@ fn contextual_comparison_failure_propagates_after_eager_historical_pair() {
     );
     assert_eq!(outcome.unwrap_err(), SourceError::NativeValue);
     assert_eq!(calls, 2);
+}
+
+fn design_graph(steps: &serde_json::Value) -> Entity {
+    decode(&serde_json::json!({"designGraph":{"id":{"namespace":"test","slug":"flow","version":1},"title":{"value":"Flow"},"profile":"DESIGN_GRAPH_PROFILE_FLOW","steps":steps}})).expect("valid native input")
+}
+
+#[test]
+fn design_topology_steps_are_native_only_for_source_ownership() {
+    let populated = design_graph(&serde_json::json!([{"title":{"value":"Start"}}]));
+    let empty = design_graph(&serde_json::json!([]));
+    let whole = SourceFieldOwnership {
+        policy: Some(Policy::WholeOwner(SourceWholeOwnerOwnership {})),
+    };
+    assert_eq!(
+        validate_ownership(&populated, &whole),
+        Err(SourceError::UnsupportedUnit)
+    );
+    assert!(validate_ownership(&empty, &whole).is_ok());
+    for field in [SourceOwnedField::Steps, SourceOwnedField::EntrySteps] {
+        assert_eq!(
+            validate_ownership(&empty, &ownership(&[field])),
+            Err(SourceError::UnsupportedUnit)
+        );
+    }
+    assert!(validate_ownership(
+        &populated,
+        &ownership(&[SourceOwnedField::Title, SourceOwnedField::Profile])
+    )
+    .is_ok());
 }
