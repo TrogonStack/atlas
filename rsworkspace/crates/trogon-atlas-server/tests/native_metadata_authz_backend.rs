@@ -788,7 +788,7 @@ async fn stale_guards_publish_nothing_for_group_changes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn clones_and_recreated_owners_never_inherit_group_selectors() {
+async fn clones_and_recreated_owners_preserve_local_ids_with_distinct_selector_owners() {
     let mut world = world().await;
     let visible = world.visible.clone();
     world.put(component(&visible, "target", vec![])).await;
@@ -808,6 +808,7 @@ async fn clones_and_recreated_owners_never_inherit_group_selectors() {
         .entity
         .unwrap();
     let ids = item_ids(&original);
+    let groups = group_ids(&original);
     assert!(world.bound("target", &original, &ids[0]).await);
 
     let mut copy = original.clone();
@@ -826,7 +827,9 @@ async fn clones_and_recreated_owners_never_inherit_group_selectors() {
     next_version.system = None;
     let next_version = world.put(next_version).await.entity.unwrap();
     assert_ne!(uid(&next_version), uid(&original));
-    assert!(world.bound("target", &original, &ids[0]).await);
+    for occurrence in &ids {
+        assert!(world.bound("target", &original, occurrence).await);
+    }
 
     world
         .delete_as(
@@ -842,9 +845,29 @@ async fn clones_and_recreated_owners_never_inherit_group_selectors() {
     recreated.system = None;
     let recreated = world.put(recreated).await.entity.unwrap();
     assert_ne!(uid(&recreated), uid(&original));
-    assert!(
-        !world.bound("target", &original, &ids[0]).await,
-        "the old incarnation never binds to the recreated owner"
+    assert_ne!(uid(&copy), uid(&next_version));
+    assert_ne!(uid(&copy), uid(&recreated));
+    assert_ne!(uid(&next_version), uid(&recreated));
+    for occurrence in &ids {
+        assert!(
+            !world.bound("target", &original, occurrence).await,
+            "the deleted owner UID must leave the incoming-reference index"
+        );
+    }
+    for new_owner in [&copy, &next_version, &recreated] {
+        assert_eq!(item_ids(new_owner), ids);
+        assert_eq!(group_ids(new_owner), groups);
+        for occurrence in &ids {
+            assert!(world.bound("target", new_owner, occurrence).await);
+        }
+    }
+    assert_eq!(
+        world
+            .incoming_as(ADMIN, &visible, "target")
+            .await
+            .unwrap()
+            .len(),
+        3 * ids.len()
     );
     assert_eq!(item_ids(&original), ids);
 }
@@ -1343,7 +1366,7 @@ async fn branch_landing_and_resolution_revalidate_group_targets() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn branch_owner_deletion_and_restore_renew_group_identity() {
+async fn branch_owner_deletion_and_restore_preserve_local_ids_with_new_owner_uid() {
     let mut world = world().await;
     let visible = world.visible.clone();
     world.put(component(&visible, "target", vec![])).await;
@@ -1357,6 +1380,7 @@ async fn branch_owner_deletion_and_restore_renew_group_identity() {
         .entity
         .unwrap();
     let ids = item_ids(&baseline);
+    let groups = group_ids(&baseline);
     world.create_branch().await;
     world
         .delete_as(
@@ -1378,15 +1402,22 @@ async fn branch_owner_deletion_and_restore_renew_group_identity() {
     restored.system = None;
     let restored = world.put_on_branch(restored).await;
     assert_ne!(uid(&restored), uid(&baseline));
+    assert_eq!(group_ids(&restored), groups);
+    assert_eq!(item_ids(&restored), ids);
 
     let landed = world.merge(false).await;
     assert!(merged(&landed, false), "{landed:?}");
     let stored = world.stored("owner").await.entity.unwrap();
     assert_eq!(uid(&stored), uid(&restored));
-    assert!(
-        !world.bound("target", &baseline, &ids[0]).await,
-        "the deleted incarnation's selector never binds to the restored owner"
-    );
+    assert_eq!(group_ids(&stored), group_ids(&restored));
+    assert_eq!(item_ids(&stored), item_ids(&restored));
+    for occurrence in &ids {
+        assert!(
+            !world.bound("target", &baseline, occurrence).await,
+            "the deleted incarnation must leave the incoming-reference index"
+        );
+        assert!(world.bound("target", &stored, occurrence).await);
+    }
     assert_eq!(
         world
             .incoming_as(ADMIN, &visible, "target")
