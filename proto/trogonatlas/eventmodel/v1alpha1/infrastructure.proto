@@ -38,13 +38,6 @@ message CommunicationDeclaration {
   CatalogText doc = 7;
 }
 
-// A Component is a living implementation unit: the deployable thing that
-// hosts processors, serves UIs, projects read models, exposes APIs, and owns
-// its technology choices -- including the messaging it relies on (Kafka
-// topics, NATS subjects, webhooks). This is where those facts are
-// documented. Members are a curated listing (same pattern as EventModel:
-// flat keyspace stays canonical, the component only points). Grouping is
-// implementation intent and never affects model-semantics validation.
 message UiHosting {
   trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
   UIRef ui = 2;
@@ -52,6 +45,13 @@ message UiHosting {
   CatalogText doc = 4;
 }
 
+// A Component is a living implementation unit: the deployable thing that
+// hosts processors, serves UIs, projects read models, exposes APIs, and owns
+// its technology choices -- including the messaging it relies on (Kafka
+// topics, NATS subjects, webhooks). This is where those facts are
+// documented. Members are a curated listing (same pattern as EventModel:
+// flat keyspace stays canonical, the component only points). Grouping is
+// implementation intent and never affects model-semantics validation.
 message Component {
   trogonatlas.type.v1alpha1.Id id = 1;
   string title = 2;

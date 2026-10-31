@@ -1447,6 +1447,12 @@
         },
         "title": {
           "type": "string"
+        },
+        "uiHostings": {
+          "items": {
+            "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.UiHosting"
+          },
+          "type": "array"
         }
       },
       "type": "object"
@@ -8707,6 +8713,31 @@
           "properties": {
             "id": {
               "$ref": "#/$defs/trogonatlas.type.v1alpha1.Id"
+            }
+          },
+          "type": "object"
+        }
+      ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.UiHosting": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/_ShorthandRef"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "connectionId": {
+              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
+            },
+            "doc": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+            },
+            "label": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+            },
+            "ui": {
+              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.UIRef"
             }
           },
           "type": "object"

@@ -4918,13 +4918,6 @@ pub struct CommunicationDeclaration {
     #[prost(message, optional, tag="7")]
     pub doc: ::core::option::Option<CatalogText>,
 }
-/// A Component is a living implementation unit: the deployable thing that
-/// hosts processors, serves UIs, projects read models, exposes APIs, and owns
-/// its technology choices -- including the messaging it relies on (Kafka
-/// topics, NATS subjects, webhooks). This is where those facts are
-/// documented. Members are a curated listing (same pattern as EventModel:
-/// flat keyspace stays canonical, the component only points). Grouping is
-/// implementation intent and never affects model-semantics validation.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UiHosting {
     #[prost(message, optional, tag="1")]
@@ -4936,6 +4929,13 @@ pub struct UiHosting {
     #[prost(message, optional, tag="4")]
     pub doc: ::core::option::Option<CatalogText>,
 }
+/// A Component is a living implementation unit: the deployable thing that
+/// hosts processors, serves UIs, projects read models, exposes APIs, and owns
+/// its technology choices -- including the messaging it relies on (Kafka
+/// topics, NATS subjects, webhooks). This is where those facts are
+/// documented. Members are a curated listing (same pattern as EventModel:
+/// flat keyspace stays canonical, the component only points). Grouping is
+/// implementation intent and never affects model-semantics validation.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Component {
     #[prost(message, optional, tag="1")]
