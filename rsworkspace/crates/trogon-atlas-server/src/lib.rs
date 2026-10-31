@@ -1,4 +1,5 @@
 pub mod analysis;
+mod annotation_type;
 pub mod artifacts;
 pub mod as_of;
 pub mod assessment;
