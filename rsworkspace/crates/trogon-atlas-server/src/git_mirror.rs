@@ -441,6 +441,111 @@ pub fn walk_repo(root: &Path) -> Result<Vec<pb::Entity>> {
     Ok(out)
 }
 
+/// `rpc` recorded on every changeset an `import-git` run mints.
+pub const IMPORT_RPC: &str = "ImportGit";
+
+/// Author of an imported changeset. The import runs outside any RPC, so no
+/// principal authenticated it; this names that fact instead of inventing
+/// someone who did.
+pub const IMPORT_AUTHOR: &str = "unauthenticated";
+
+/// Most entities one import changeset covers, so a large mirror does not
+/// produce a changeset row too big to store.
+pub const IMPORT_CHANGESET_ENTITIES: usize = 1024;
+
+/// What an [`import_entities`] run landed.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ImportReport {
+    pub imported: usize,
+    pub skipped: usize,
+    /// Changesets recorded, oldest first.
+    pub changesets: Vec<String>,
+    /// Changesets whose entities landed but whose append failed. Their
+    /// writes cannot be rewound until the run is investigated.
+    pub unrecorded: Vec<String>,
+}
+
+/// Create every entity not already in the store, recording what landed as
+/// baseline changesets so it can be inspected, reverted and read past.
+///
+/// An entity that already exists is skipped and not attributed, which keeps
+/// a retried import from recording anything twice: a retry that finds every
+/// entity present mints no changeset at all.
+pub async fn import_entities(
+    store: &dyn trogon_atlas_store::Store,
+    entities: &[pb::Entity],
+) -> ImportReport {
+    use trogon_atlas_store::store::{
+        ChangeKind, ChangesetOp, ChangesetRecord, ChangesetRef, WriteContext,
+    };
+
+    let mut report = ImportReport::default();
+    for chunk in entities.chunks(IMPORT_CHANGESET_ENTITIES) {
+        let changeset_id = uuid::Uuid::now_v7().to_string();
+        let ctx = || {
+            WriteContext::baseline().attributed(ChangesetRef {
+                id: &changeset_id,
+                author: IMPORT_AUTHOR,
+                rpc: IMPORT_RPC,
+                operation_id: None,
+            })
+        };
+        let mut ops = Vec::new();
+        for entity in chunk {
+            let (Some(kind), Some(id)) = (entity_kind(entity), entity_id(entity)) else {
+                continue;
+            };
+            match store.create(kind, entity, ctx()).await {
+                Ok(_) => {
+                    report.imported += 1;
+                    ops.push(ChangesetOp {
+                        kind: ChangeKind::Put,
+                        entity_ref: pb::EntityRef {
+                            kind: kind as i32,
+                            id: Some(id.clone()),
+                        },
+                    });
+                }
+                Err(trogon_atlas_store::StoreError::AlreadyExists) => report.skipped += 1,
+                Err(err) => {
+                    tracing::warn!(error = %err, "skipping entity that failed to import");
+                    report.skipped += 1;
+                }
+            }
+        }
+        if ops.is_empty() {
+            continue;
+        }
+        let record = ChangesetRecord {
+            id: changeset_id.clone(),
+            author: IMPORT_AUTHOR.to_owned(),
+            at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            message: format!(
+                "{IMPORT_RPC}: {} entities imported from a git mirror",
+                ops.len()
+            ),
+            rpc: IMPORT_RPC.to_owned(),
+            branch: None,
+            ops,
+            operation_id: None,
+        };
+        match store.append_changeset(&record).await {
+            Ok(()) => report.changesets.push(changeset_id),
+            Err(err) => {
+                tracing::error!(
+                    changeset_id = %record.id,
+                    op_count = record.ops.len(),
+                    error = %err,
+                    "import changeset append failed after its entities landed; \
+                     those entities have no durable attribution"
+                );
+                report.unrecorded.push(changeset_id);
+            }
+        }
+    }
+    report
+}
+
 /// Namespaces the given entities live in that the registry does not name.
 ///
 /// The mirror is entity-only. Ownership lives in its own bucket, which no
