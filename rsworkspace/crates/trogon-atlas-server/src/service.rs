@@ -9,6 +9,9 @@ mod term_domains;
 mod architecture_admission;
 #[path = "business_admission.rs"]
 mod business_admission;
+#[cfg(test)]
+#[path = "business_reference_identity_test.rs"]
+mod business_reference_identity_test;
 #[path = "data_product_events.rs"]
 mod data_product_events;
 #[path = "data_product_inspection.rs"]
