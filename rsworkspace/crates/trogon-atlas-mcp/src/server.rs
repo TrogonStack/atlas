@@ -22,9 +22,9 @@ use crate::{
     error::{attach_operation_id, tool_err, McpError},
     tools::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
-        BatchMutateParams, CatalogQueryParams, CompileTypeLibraryParams, CreateBranchParams,
-        DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams, DiffBranchParams,
-        DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySpec,
+        BatchMutateParams, CatalogQueryParams, ClassifyImpactParams, CompileTypeLibraryParams,
+        CreateBranchParams, DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams,
+        DiffBranchParams, DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySpec,
         EventModelProjectionParams, ExportNamespaceParams, ExportOpensloParams,
         ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
         GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
@@ -517,6 +517,11 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     ToolPolicy {
         tool: "get_impact",
         rpcs: &["GetImpact"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "classify_impact",
+        rpcs: &["ClassifyImpact", "GetServerInfo"],
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
@@ -3178,6 +3183,46 @@ impl McpServer {
             .map_err(tool_err("get_impact"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "Classify every dependent (referrer) of an exact version as breaking, bump_only or unknown against an exact candidate version of the same kind, with the diff ops that cause it and the fields each reference consumes. Anything not provably bump-only, including any incomplete or hidden traversal, is unknown. Read clientVerdict for the overall answer.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn classify_impact(
+        &self,
+        Parameters(p): Parameters<ClassifyImpactParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let entity_ref = |spec: &EntitySpec| -> Result<pb::EntityRef, rmcp::ErrorData> {
+            let kind = parse_kind(&spec.kind).map_err(rmcp::ErrorData::from)?;
+            Ok(pb::EntityRef {
+                kind: kind as i32,
+                id: Some(validated_id_from(
+                    &spec.namespace,
+                    &spec.slug,
+                    spec.version,
+                )?),
+            })
+        };
+        let current = entity_ref(&p.current)?;
+        let candidate = entity_ref(&p.candidate)?;
+        let result = trogon_atlas_client::impact::classify(
+            &mut self.client(),
+            current,
+            candidate,
+            p.max_depth,
+        )
+        .await
+        .and_then(|classification| classification.to_json())
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
     }
 
     #[tool(

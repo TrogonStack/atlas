@@ -343,7 +343,40 @@ impl PendingChangeset {
     }
 }
 
-type OwnerSnapshotCache = tokio::sync::RwLock<HashMap<OwnerId, (Lens, Arc<Vec<StoredEntity>>)>>;
+/// The cached baseline view and whether the load that produced it hit the
+/// entity cap. Kept together so readers never see one load's entities with
+/// another load's truncation flag.
+#[derive(Clone)]
+struct BaselineSnapshot {
+    entities: Arc<Vec<StoredEntity>>,
+    truncated: bool,
+}
+
+/// One owner's filtered view, remembered together with the lens that
+/// filtered it and the baseline it was filtered from.
+///
+/// The baseline is part of the key because a caller holding one baseline
+/// must never be handed a view filtered from another: a reader comparing the
+/// two would treat entities that only exist in the newer load as hidden or
+/// missing ones as absent.
+#[derive(Clone)]
+struct OwnerView {
+    lens: Lens,
+    source: Arc<Vec<StoredEntity>>,
+    entities: Arc<Vec<StoredEntity>>,
+}
+
+impl OwnerView {
+    fn serves(
+        &self,
+        lens: &Lens,
+        source: &Arc<Vec<StoredEntity>>,
+    ) -> Option<Arc<Vec<StoredEntity>>> {
+        (&self.lens == lens && Arc::ptr_eq(&self.source, source)).then(|| self.entities.clone())
+    }
+}
+
+type OwnerSnapshotCache = tokio::sync::RwLock<HashMap<OwnerId, OwnerView>>;
 
 pub struct EventModelServiceImpl {
     pub store: Arc<dyn Store>,
@@ -386,7 +419,7 @@ pub struct EventModelServiceImpl {
     ///
     /// Uses `tokio::sync::RwLock` so reads and writes are async-aware and
     /// cannot block the runtime (`parking_lot::RwLock` would block the thread).
-    snapshot_cache: tokio::sync::RwLock<Option<Arc<Vec<StoredEntity>>>>,
+    snapshot_cache: tokio::sync::RwLock<Option<BaselineSnapshot>>,
     /// Entity cap of the baseline snapshot load.
     snapshot_cap: usize,
     /// Cached `ReverseIndex` co-located with the snapshot. Invalidated in
@@ -415,10 +448,6 @@ pub struct EventModelServiceImpl {
     /// records a bound caller cannot see. See `change_cursor` for why a raw
     /// sequence number cannot be handed back in that case.
     change_cursor_seal: Arc<crate::change_cursor::ChangeCursorSeal>,
-    /// True when the last snapshot load hit the entity cap exactly, meaning
-    /// the in-process view may be incomplete. Destructive operations
-    /// (`delete_by_query`) refuse to proceed on a truncated snapshot.
-    snapshot_truncated: Arc<AtomicBool>,
     /// Which namespaces refuse direct baseline writes. Mutating RPCs
     /// (`PutEntity`, `DeleteEntity`, `BatchMutate`, `RetargetReferences`,
     /// `DeleteByQuery`) reject a request that carries no
@@ -593,7 +622,6 @@ impl EventModelServiceImpl {
             change_cursor_seal: Arc::new(crate::change_cursor::ChangeCursorSeal::new(
                 &crate::change_cursor::ChangeCursorKey::generate(),
             )),
-            snapshot_truncated: Arc::new(AtomicBool::new(false)),
             baseline_protection: BaselineProtection::Off,
             directory: directory.clone(),
             authorizer: Arc::new(RegistryAuthorizer::new(directory, store_for_authorizer)),
@@ -616,6 +644,13 @@ impl EventModelServiceImpl {
     /// (~15 MB at 1500 entities × ~10 KB), which was the dominant
     /// allocation cost on the read path.
     async fn baseline_snapshot(&self) -> Result<Arc<Vec<StoredEntity>>, Status> {
+        Ok(self.baseline_snapshot_with_truncation().await?.entities)
+    }
+
+    /// [`baseline_snapshot`](Self::baseline_snapshot) together with the
+    /// truncation flag of the very load that produced it, so a concurrent
+    /// rebuild can never pair one load's entities with another's flag.
+    async fn baseline_snapshot_with_truncation(&self) -> Result<BaselineSnapshot, Status> {
         if let Some(snap) = self.snapshot_cache.read().await.clone() {
             self.metrics.record_snapshot_cache_hit();
             return Ok(snap);
@@ -636,13 +671,12 @@ impl EventModelServiceImpl {
                 .instrument(tracing::info_span!("snapshot_rebuild"))
                 .await?
         };
-        // Persist the truncation flag on the service so destructive callers
-        // (delete_by_query) can refuse to proceed on a partial view.
-        self.snapshot_truncated
-            .store(result.truncated, std::sync::atomic::Ordering::Release);
-        let all = Arc::new(result.entities);
-        *self.snapshot_cache.write().await = Some(all.clone());
-        Ok(all)
+        let snap = BaselineSnapshot {
+            entities: Arc::new(result.entities),
+            truncated: result.truncated,
+        };
+        *self.snapshot_cache.write().await = Some(snap.clone());
+        Ok(snap)
     }
 
     /// The caller's view of the store.
@@ -695,16 +729,24 @@ impl EventModelServiceImpl {
             return Ok(all);
         };
         let lens = self.lens(vis).await?;
-        if let Some((cached, hit)) = self.owner_snapshot_cache.read().await.get(owner) {
-            if cached == &lens {
-                return Ok(hit.clone());
-            }
+        if let Some(hit) = self
+            .owner_snapshot_cache
+            .read()
+            .await
+            .get(owner)
+            .and_then(|view| view.serves(&lens, &all))
+        {
+            return Ok(hit);
         }
         let filtered = Self::apply_lens(&all, &lens);
-        self.owner_snapshot_cache
-            .write()
-            .await
-            .insert(owner.clone(), (lens, filtered.clone()));
+        self.owner_snapshot_cache.write().await.insert(
+            owner.clone(),
+            OwnerView {
+                lens,
+                source: all,
+                entities: filtered.clone(),
+            },
+        );
         Ok(filtered)
     }
 
@@ -745,6 +787,36 @@ impl EventModelServiceImpl {
             .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
             .await?;
         self.narrow(Arc::new(result.entities), vis).await
+    }
+
+    /// A `ClassifyImpact` input read from the snapshot the answer uses. Only a
+    /// truncated snapshot falls back to the store, and that answer already
+    /// reports the truncation.
+    async fn impact_input(
+        &self,
+        snapshot: &[StoredEntity],
+        truncated: bool,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        branch: Option<&str>,
+    ) -> Result<pb::Entity, Status> {
+        let found = snapshot.iter().find(|stored| {
+            entity_kind(&stored.entity).is_ok_and(|k| k == kind)
+                && entity_id(&stored.entity).is_ok_and(|i| i == id)
+        });
+        match found {
+            Some(stored) => Ok(stored.entity.clone()),
+            None if truncated => Ok(self
+                .store
+                .get(kind, id, branch)
+                .await
+                .map_err(store_err)?
+                .entity),
+            None => Err(Status::not_found(format!(
+                "{} not found",
+                trogon_atlas_store::key::entity_key(kind, id)
+            ))),
+        }
     }
 
     /// Strategic findings deleting `kind`/`id` would leave on the entities
@@ -972,9 +1044,9 @@ impl EventModelServiceImpl {
         vis: &Visibility,
     ) -> Result<(Arc<Vec<StoredEntity>>, bool), Status> {
         let Some(branch) = branch else {
-            let all = self.snapshot(vis).await?;
-            let truncated = self.snapshot_truncated.load(Ordering::Acquire);
-            return Ok((all, truncated));
+            let snap = self.baseline_snapshot_with_truncation().await?;
+            let all = self.narrow_baseline(snap.entities, vis).await?;
+            return Ok((all, snap.truncated));
         };
         use tracing::Instrument as _;
         let result = graph::load_all(&self.store, Some(branch))
@@ -998,9 +1070,6 @@ impl EventModelServiceImpl {
         *self.reverse_index_cache.write().await = None;
         self.owner_snapshot_cache.write().await.clear();
         self.owner_reverse_index_cache.write().await.clear();
-        // Reset the truncation flag so the next load re-evaluates.
-        self.snapshot_truncated
-            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Returns a cached `ReverseIndex` built from the current snapshot. The index
@@ -1035,7 +1104,7 @@ impl EventModelServiceImpl {
             let snapshots = self.owner_snapshot_cache.read().await;
             if snapshots
                 .get(owner)
-                .is_some_and(|(cached, current)| cached == &lens && Arc::ptr_eq(current, &snap))
+                .is_some_and(|view| view.lens == lens && Arc::ptr_eq(&view.entities, &snap))
             {
                 indexes.insert(owner.clone(), (lens, idx.clone()));
             }
@@ -1064,7 +1133,7 @@ impl EventModelServiceImpl {
             .read()
             .await
             .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &snap))
+            .is_some_and(|current| Arc::ptr_eq(&current.entities, &snap))
         {
             *guard = Some(idx.clone());
         }
@@ -2941,6 +3010,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 owned_branches: true,
                 who_am_i: true,
                 type_libraries: true,
+                impact_classification: true,
             }),
             limits: Some(pb::get_server_info_response::Limits {
                 max_page_size: ADVERTISED_MAX_PAGE_SIZE,
@@ -3215,16 +3285,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 continue;
             }
             let kind = entity_kind(&se.entity)?;
-            let key = trogon_atlas_store::key::entity_key(kind, id);
-            let hash = trogon_atlas_core::entity_content_hash(&se.entity).map_err(|e| {
-                // An entity that cannot render as canonical JSON has no
-                // content identity, so the snapshot has none either. Failing
-                // is the honest answer: silently skipping it would produce an
-                // id for a model that is missing an entity.
-                Status::failed_precondition(format!(
-                    "entity {key} has no content identity, so no snapshot id can be computed: {e}"
-                ))
-            })?;
+            let (key, hash) = snapshot_entry(&se.entity, kind, id)?;
             if req.include_entries {
                 entries.push(pb::SnapshotEntry {
                     key: key.clone(),
@@ -3235,11 +3296,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     content_hash: hash.to_hex(),
                 });
             }
-            hasher.insert(key, hash).map_err(|e| {
-                // Two rows for one key means the store enumeration is
-                // broken; hashing on would name a state that never existed.
-                Status::internal(format!("snapshot enumeration produced {e}"))
-            })?;
+            insert_snapshot_entry(&mut hasher, key, hash)?;
         }
         // `SnapshotHasher` keeps its own sorted order; sort the response
         // entries to match, since the proto promises key order.
@@ -4197,6 +4254,138 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         Ok(Response::new(pb::GetImpactResponse {
             nodes,
             next_page_token,
+        }))
+    }
+
+    async fn classify_impact(
+        &self,
+        req: Request<pb::ClassifyImpactRequest>,
+    ) -> Result<Response<pb::ClassifyImpactResponse>, Status> {
+        use crate::impact_classification::{self as ic, Incompleteness};
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let req = req.into_inner();
+        let current = req
+            .current
+            .ok_or_else(|| Status::invalid_argument("current is required"))?;
+        let candidate = req
+            .candidate
+            .ok_or_else(|| Status::invalid_argument("candidate is required"))?;
+        let kind = kind_from_i32(current.kind, "current.kind")?;
+        if kind_from_i32(candidate.kind, "candidate.kind")? != kind {
+            return Err(Status::invalid_argument(
+                "candidate must be the same kind as current",
+            ));
+        }
+        let current_id = require_id(current.id.as_ref(), "current")?;
+        let candidate_id = require_id(candidate.id.as_ref(), "candidate")?;
+        if current_id == candidate_id {
+            return Err(Status::invalid_argument(
+                "candidate must be a different version from current",
+            ));
+        }
+        self.require_visible(&vis, &current_id.namespace).await?;
+        self.require_visible(&vis, &candidate_id.namespace).await?;
+        let max_depth = if req.max_depth == 0 {
+            ADVERTISED_MAX_IMPACT_DEPTH
+        } else {
+            req.max_depth.min(ADVERTISED_MAX_IMPACT_DEPTH)
+        };
+        let page_size = clamp_page_size(
+            req.page_size,
+            ADVERTISED_DEFAULT_PAGE_SIZE,
+            ADVERTISED_MAX_PAGE_SIZE,
+        );
+        let offset = parse_page_token(&req.page_token)?;
+
+        let (everything, truncated) = match branch.as_deref() {
+            None => {
+                let snap = self.baseline_snapshot_with_truncation().await?;
+                (snap.entities, snap.truncated)
+            }
+            Some(name) => {
+                let loaded = graph::load_all(&self.store, Some(name)).await?;
+                (Arc::new(loaded.entities), loaded.truncated)
+            }
+        };
+        let all = match branch.as_deref() {
+            None => self.narrow_baseline(everything.clone(), &vis).await?,
+            Some(_) => self.narrow(everything.clone(), &vis).await?,
+        };
+        let snapshot_id = snapshot_id_of(&all)?;
+        let current_entity = self
+            .impact_input(&all, truncated, kind, current_id, branch.as_deref())
+            .await?;
+        let candidate_entity = self
+            .impact_input(&all, truncated, kind, candidate_id, branch.as_deref())
+            .await?;
+        let ops = diff::diff_entities(&current_entity, &candidate_entity);
+        graph::validate_responsibility_discovery_budget(&all)?;
+        let index = graph::ReverseIndex::build(&all);
+        let root = pb::EntityKey::new(kind, current_id);
+        let excluded = pb::EntityKey::new(kind, candidate_id);
+        let dependents = ic::Dependents::walk(&index, &root, &excluded, max_depth);
+
+        let mut incompleteness = std::collections::BTreeSet::new();
+        if truncated {
+            incompleteness.insert(Incompleteness::SnapshotTruncated);
+        }
+        if dependents.depth_limited() {
+            incompleteness.insert(Incompleteness::DepthLimited);
+        }
+        if dependents.has_unresolved_referrers() {
+            incompleteness.insert(Incompleteness::UnresolvedReferrers);
+        }
+        if !vis.is_unrestricted() {
+            let unseen = ic::Dependents::walk(
+                &graph::ReverseIndex::build(&everything),
+                &root,
+                &excluded,
+                max_depth,
+            );
+            if !unseen.is_subset_of(&dependents)
+                || (unseen.depth_limited() && !dependents.depth_limited())
+            {
+                incompleteness.insert(Incompleteness::HiddenDependents);
+            }
+        }
+
+        let report = ic::classify(&ic::Comparison {
+            current: &current_entity,
+            candidate: &candidate_entity,
+            ops: &ops,
+            snapshot: &all,
+            index: &index,
+            dependents: &dependents,
+            incompleteness,
+        });
+        let total = report.dependents.len();
+        let verdict = report.verdict_proto() as i32;
+        let page: Vec<pb::DependentImpact> = report
+            .dependents
+            .into_iter()
+            .skip(offset)
+            .take(page_size)
+            .collect();
+        let next_offset = offset + page.len();
+        let next_page_token = if next_offset >= total {
+            String::new()
+        } else {
+            encode_page_token(next_offset)
+        };
+        Ok(Response::new(pb::ClassifyImpactResponse {
+            ops,
+            verdict,
+            incompleteness: report
+                .incompleteness
+                .into_iter()
+                .map(|reason| reason as i32)
+                .collect(),
+            uncovered_changes: report.uncovered_changes,
+            counts: Some(report.counts),
+            dependents: page,
+            next_page_token,
+            snapshot_id,
         }))
     }
 
@@ -9226,6 +9415,48 @@ fn walk_json_diff(
     }
 }
 
+fn snapshot_entry(
+    entity: &pb::Entity,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Result<(String, trogon_atlas_core::ContentHash), Status> {
+    let key = trogon_atlas_store::key::entity_key(kind, id);
+    let hash = trogon_atlas_core::entity_content_hash(entity).map_err(|e| {
+        // An entity that cannot render as canonical JSON has no
+        // content identity, so the snapshot has none either. Failing
+        // is the honest answer: silently skipping it would produce an
+        // id for a model that is missing an entity.
+        Status::failed_precondition(format!(
+            "entity {key} has no content identity, so no snapshot id can be computed: {e}"
+        ))
+    })?;
+    Ok((key, hash))
+}
+
+fn insert_snapshot_entry(
+    hasher: &mut trogon_atlas_core::SnapshotHasher,
+    key: String,
+    hash: trogon_atlas_core::ContentHash,
+) -> Result<(), Status> {
+    hasher.insert(key, hash).map_err(|e| {
+        // Two rows for one key means the store enumeration is
+        // broken; hashing on would name a state that never existed.
+        Status::internal(format!("snapshot enumeration produced {e}"))
+    })
+}
+
+/// The `GetSnapshotId` identity of `entities` without a namespace filter.
+fn snapshot_id_of(entities: &[StoredEntity]) -> Result<String, Status> {
+    let mut hasher = trogon_atlas_core::SnapshotHasher::new();
+    for se in entities {
+        let kind = entity_kind(&se.entity)?;
+        let id = entity_id(&se.entity)?;
+        let (key, hash) = snapshot_entry(&se.entity, kind, id)?;
+        insert_snapshot_entry(&mut hasher, key, hash)?;
+    }
+    Ok(hasher.finish().to_hex())
+}
+
 #[cfg(test)]
 mod put_if_match_holds_tests {
     use super::put_if_match_holds;
@@ -10336,5 +10567,24 @@ mod scope_filter_tests {
     fn empty_scopes_list_produces_empty_closure_keys() {
         let keys = resolve_scope_closure(&[], &[], &ServerMetrics::default()).unwrap();
         assert!(keys.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod owner_view_tests {
+    use super::*;
+
+    #[test]
+    fn a_view_filtered_from_another_baseline_is_not_served() {
+        let filtered_from = Arc::new(Vec::new());
+        let newer_load = Arc::new(Vec::new());
+        let view = OwnerView {
+            lens: Lens::Everything,
+            source: filtered_from.clone(),
+            entities: Arc::new(Vec::new()),
+        };
+
+        assert!(view.serves(&Lens::Everything, &filtered_from).is_some());
+        assert!(view.serves(&Lens::Everything, &newer_load).is_none());
     }
 }

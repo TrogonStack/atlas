@@ -289,6 +289,18 @@ enum Cmd {
         #[arg(long)]
         request: String,
     },
+    /// Classify each dependent of an exact version as breaking, bump-only or
+    /// unknown against an exact candidate version. Exits 1 when any
+    /// dependent breaks and 12 when bump-only cannot be proven.
+    ClassifyImpact {
+        /// Exact `<kind>/<namespace>/<slug>@<version>` address dependents pin today.
+        current: String,
+        /// Exact address of the version that would replace it.
+        candidate: String,
+        /// Maximum referrer hops from `current`. 0 = the server maximum.
+        #[arg(long, default_value_t = 0)]
+        max_depth: u32,
+    },
     /// Inspect authoritative DataProduct selections and checked model evidence.
     InspectDataProduct {
         /// Exact `data_product/<namespace>/<slug>@<version>` address.
@@ -640,6 +652,80 @@ const EXIT_FINDINGS: u8 = 1;
 /// whose coverage shows a suite or the snapshot was not fully examined, so a
 /// gate never mistakes "nothing found in part of the model" for a pass.
 const EXIT_VALIDATION_INCOMPLETE: u8 = 11;
+
+/// Exit code for a `classify-impact` run where no dependent provably breaks
+/// but at least one could not be proven bump-only, or the result is
+/// incomplete, so a gate never mistakes "unproven" for "safe".
+const EXIT_IMPACT_UNKNOWN: u8 = 12;
+
+fn exact_entity_ref(address: &str, role: &str) -> anyhow::Result<pb::EntityRef> {
+    let address = view::parse_address(address)?;
+    let version = address.version.ok_or_else(|| {
+        trogon_atlas_client::failure::invalid_input(format!("{role} requires an exact version"))
+    })?;
+    Ok(pb::EntityRef {
+        kind: address.kind as i32,
+        id: Some(pb::Id {
+            namespace: address.namespace,
+            slug: address.slug,
+            version,
+        }),
+    })
+}
+
+fn print_impact(classification: &trogon_atlas_client::impact::ImpactClassification) {
+    let response = classification.response();
+    let label = |value: i32| {
+        pb::DependentClassification::try_from(value).map_or("unknown", |c| match c {
+            pb::DependentClassification::Breaking => "breaking",
+            pb::DependentClassification::BumpOnly => "bump_only",
+            _ => "unknown",
+        })
+    };
+    println!("verdict: {}", classification.verdict().as_str());
+    for reason in &response.incompleteness {
+        let name =
+            pb::ImpactIncompleteness::try_from(*reason).map_or("unspecified", |r| r.as_str_name());
+        println!("incomplete: {name}");
+    }
+    for path in &response.uncovered_changes {
+        println!("uncovered change: {path}");
+    }
+    for dependent in &response.dependents {
+        let Some(entity) = dependent.dependent.as_ref() else {
+            continue;
+        };
+        let kind = pb::EntityKind::try_from(entity.kind).map_or("unspecified", |k| k.as_str_name());
+        let id = entity.id.as_ref().map_or_else(String::new, |id| {
+            format!("{}/{}@{}", id.namespace, id.slug, id.version)
+        });
+        println!(
+            "{} {kind} {id} (depth {})",
+            label(dependent.classification),
+            dependent.depth
+        );
+        for occurrence in &dependent.occurrences {
+            let site = occurrence
+                .reference
+                .as_ref()
+                .map_or("", |r| r.from_field.as_str());
+            let causes: Vec<&str> = occurrence
+                .causal_ops
+                .iter()
+                .map(|op| op.path.as_str())
+                .collect();
+            if causes.is_empty() {
+                println!("  {site}: {}", label(occurrence.classification));
+            } else {
+                println!(
+                    "  {site}: {} because {}",
+                    label(occurrence.classification),
+                    causes.join(", ")
+                );
+            }
+        }
+    }
+}
 
 fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
     match verdict {
@@ -1788,6 +1874,33 @@ async fn run(
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
             Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ClassifyImpact {
+            current,
+            candidate,
+            max_depth,
+        } => {
+            let current = exact_entity_ref(&current, "current")?;
+            let candidate = exact_entity_ref(&candidate, "candidate")?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let classification =
+                trogon_atlas_client::impact::classify(&mut client, current, candidate, max_depth)
+                    .await?;
+            let result = classification.to_json()?;
+            if text {
+                print_impact(&classification);
+            }
+            let code = match classification.verdict() {
+                trogon_atlas_client::impact::ImpactVerdict::BumpOnly => ExitCode::SUCCESS,
+                trogon_atlas_client::impact::ImpactVerdict::Breaking => {
+                    ExitCode::from(EXIT_FINDINGS)
+                }
+                trogon_atlas_client::impact::ImpactVerdict::Unknown => {
+                    ExitCode::from(EXIT_IMPACT_UNKNOWN)
+                }
+            };
+            Ok((code, Some(result)))
         }
         Cmd::InspectDataProduct { entity } => {
             let address = view::parse_address(&entity)?;

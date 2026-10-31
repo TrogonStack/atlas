@@ -14,6 +14,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/analysis.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/projections.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/search.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/graph.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/impact_classification.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/batch.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/entity_kinds.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
@@ -797,6 +798,7 @@ message GetServerInfoResponse {
     bool owned_branches = 16;                 // "@owner:name" branches are attributed to an owner for delegation and filtering
     bool who_am_i = 17;                       // WhoAmI; MCP tool listing is filtered by the caller's role
     bool type_libraries = 18;                 // CompileTypeLibrary, ResolveType, GetTypeLibraryDescriptorSet
+    bool impact_classification = 19;          // ClassifyImpact
   }
   Features features = 3;
 
@@ -1241,6 +1243,9 @@ service EventModelService {
   rpc GetOutgoingReferences(GetReferencesRequest) returns (GetReferencesResponse);
   // Transitive reverse-reference closure: "what depends on this?"
   rpc GetImpact(GetImpactRequest) returns (GetImpactResponse);
+  // Classify each referrer of an exact version as BREAKING, BUMP_ONLY or
+  // UNKNOWN against an exact candidate version.
+  rpc ClassifyImpact(ClassifyImpactRequest) returns (ClassifyImpactResponse);
   // Rewrite every stored reference to `from` so it points at `to`. Used as
   // the rewire step in the promotion workflow: create v+1 with supersedes,
   // call retarget_references (dry_run first to preview), then drain any
