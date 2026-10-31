@@ -25,16 +25,16 @@ use crate::{
         BatchMutateParams, CatalogQueryParams, CompileTypeLibraryParams, CreateBranchParams,
         DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams, DiffBranchParams,
         DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySpec,
-        EventModelProjectionParams, ExportNamespaceParams, ExportOpensloParams,
-        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
-        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
-        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams,
-        MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
-        PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
-        ResolveTypeParams, ResponsibilityQueryParams, RetargetReferencesParams,
-        RevertChangesetParams, SearchParams, SliceProjectionParams, SourceRequestParams,
-        SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
-        ValidateProjectParams,
+        EventModelProjectionParams, ExportAttestedModelParams, ExportNamespaceParams,
+        ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
+        GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts,
+        ListChangesParams, ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams,
+        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
+        PutEntityJsonParams, PutEntityParams, ReferencesParams, RegisterNamespaceParams,
+        ResolveBranchEntryParams, ResolveTypeParams, ResponsibilityQueryParams,
+        RetargetReferencesParams, RevertChangesetParams, SearchParams, SliceProjectionParams,
+        SourceRequestParams, SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
+        ValidateProjectParams, VerifyAttestedBundleParams,
     },
 };
 
@@ -661,6 +661,18 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     ToolPolicy {
         tool: "export_namespace",
         rpcs: &["ListEntities"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "export_attested_model",
+        rpcs: &["ExportAttestedModel"],
+        min_role: ToolRole::Reader,
+    },
+    // verify_attested_bundle checks a bundle the caller already holds and
+    // never reaches the server, so any role may use it.
+    ToolPolicy {
+        tool: "verify_attested_bundle",
+        rpcs: &[],
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
@@ -4343,6 +4355,100 @@ impl McpServer {
     }
 
     #[tool(
+        description = "Export a stored EventModel as an attested bundle: its manifests, its validation findings and coverage, and the snapshot both were read from, sealed by one digest that verify_attested_bundle checks offline. Reads only what the caller may see. Refuses with EXPORT_INCOMPLETE (data.next_action_detail.incomplete_reasons) when the export cannot cover its whole scope, unless allow_incomplete is set; then complete is false and incomplete_reasons and unresolved say why. Set include_bundle to receive the bundle itself.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn export_attested_model(
+        &self,
+        Parameters(p): Parameters<ExportAttestedModelParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        validated_id_from(&p.namespace, &p.slug, p.version)?;
+        let request = trogon_atlas_client::attested::ExportRequest {
+            address: trogon_atlas_client::view::EntityAddress {
+                kind: pb::EntityKind::EventModel,
+                namespace: p.namespace,
+                slug: p.slug,
+                version: Some(p.version),
+            },
+            as_of_changeset: p.as_of_changeset.filter(|c| !c.is_empty()),
+            allow_incomplete: p.allow_incomplete,
+        };
+        let mut client = self.client();
+        let (bundle, verified) =
+            trogon_atlas_client::attested::export_attested_model(&mut client, &request)
+                .await
+                .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        let json = trogon_atlas_core::attested_bundle::bundle_to_json(&bundle)
+            .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
+        let mut body = trogon_atlas_client::attested::outcome_json(&bundle, &verified);
+        if let Some(state) = &bundle.state {
+            body["state"] = serde_json::json!({
+                "mode": state.mode().as_str_name(),
+                "snapshot_id": state.snapshot_id,
+                "closure_id": state.closure_id,
+                "baseline_changeset_id": state.baseline_changeset_id,
+                "branch_changeset_id": state.branch_changeset_id,
+            });
+        }
+        body["bundle_bytes"] = json.len().into();
+        if !p.include_bundle {
+            body["bundle_omitted"] = "not_requested".into();
+        } else if json.len() > MAX_JSON_BYTES {
+            body["bundle_omitted"] = "exceeds_mcp_limit".into();
+        } else {
+            body["bundle_json"] = json.into();
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Check an attested bundle offline, without reading the store: its digest, and that what it says about its own completeness holds. An intact bundle returns verified true with complete, incomplete_reasons and unresolved; a malformed or altered one returns a tool error with verified false and the first check that failed. Proves integrity only, not which server sealed it.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn verify_attested_bundle(
+        &self,
+        Parameters(p): Parameters<VerifyAttestedBundleParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if p.bundle_json.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "bundle_json exceeds the 4 MiB limit ({} bytes)",
+                    p.bundle_json.len()
+                ),
+                None,
+            ));
+        }
+        let body = match trogon_atlas_client::attested::verify_json(&p.bundle_json) {
+            Ok((bundle, verified)) => {
+                let mut body = trogon_atlas_client::attested::outcome_json(&bundle, &verified);
+                body["verified"] = true.into();
+                body
+            }
+            Err(e) => {
+                let body = serde_json::json!({ "verified": false, "error": e.to_string() });
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    body.to_string(),
+                )]));
+            }
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
+    }
+
+    #[tool(
         description = "Create a new branch (Phase 1: Isolation): a server-side overlay of copy-on-write deltas over the baseline store. Fails if a branch with this name already exists. Scope subsequent tool calls to it by sending the branch name in the x-trogon-atlas-branch HTTP header on each MCP request.",
         annotations(
             read_only_hint = false,
@@ -5150,6 +5256,10 @@ mod tests {
     /// only reads, so it is deliberately annotated read_only_hint = true.
     const READ_ONLY_ROLE_EXEMPT: &[&str] = &["get_operation"];
 
+    /// Tools that work only on their input and never call the server, so
+    /// they have no RPC to take a role from and are offered to every role.
+    const OFFLINE_TOOLS: &[&str] = &["verify_attested_bundle"];
+
     #[test]
     fn every_tool_has_annotations_matching_the_role_map() {
         let live_tools = McpServer::tool_router().list_all();
@@ -5176,6 +5286,22 @@ mod tests {
                 .iter()
                 .find(|r| r.tool == name)
                 .unwrap_or_else(|| panic!("tool {name}: no TOOL_POLICIES row (checked above)"));
+            if OFFLINE_TOOLS.contains(&name) {
+                assert!(row.rpcs.is_empty(), "offline tool {name} must call no RPC");
+                assert_eq!(row.min_role, ToolRole::Reader, "offline tool {name}");
+                let annotations = tool.annotations.as_ref().unwrap();
+                assert_eq!(
+                    annotations.read_only_hint,
+                    Some(true),
+                    "offline tool {name}"
+                );
+                assert_eq!(
+                    annotations.destructive_hint,
+                    Some(false),
+                    "offline tool {name}"
+                );
+                continue;
+            }
             assert!(!row.rpcs.is_empty(), "tool {name}: empty rpcs list");
 
             let annotations = tool

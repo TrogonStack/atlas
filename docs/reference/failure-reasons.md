@@ -38,7 +38,7 @@ instead of re-deriving category from code or reason on its own.
 | `NOT_WRITER` | `UNAVAILABLE` | `unavailable` | `role`, this process's configured role (`writer`, `standby`, or `reader`); `epoch`, the lease epoch it last observed |
 | `CURSOR_REJECTED` | `INVALID_ARGUMENT` | `validation` | none |
 | `BREAKING_CHANGE` | `FAILED_PRECONDITION` | `precondition` | none |
-| `EXPORT_INCOMPLETE` | `FAILED_PRECONDITION` | `precondition` | `reasons`, the comma-separated incomplete reasons of the refused bundle, such as `REASON_SNAPSHOT_TRUNCATED` |
+| `EXPORT_INCOMPLETE` | `FAILED_PRECONDITION` | `precondition` | `reasons`, the comma-separated incomplete reasons of the refused bundle, such as `REASON_SNAPSHOT_TRUNCATED`. The client gives it as a list in the failure details (MCP `next_action_detail.incomplete_reasons`). |
 
 `PARTIAL_APPLY` and `UNAVAILABLE` share the `UNAVAILABLE` gRPC code on
 purpose: both mean "retry later", but only `PARTIAL_APPLY` means a batch

@@ -5,7 +5,8 @@
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
-use trogon_atlas_core::attested_bundle::{self, VerifiedBundle};
+use serde_json::{json, Value};
+use trogon_atlas_core::attested_bundle::{self, BundleError, Completeness, VerifiedBundle};
 use trogon_atlas_proto as pb;
 
 use crate::{
@@ -57,14 +58,59 @@ pub async fn export_attested_model(
     Ok((bundle, verified))
 }
 
+/// Parse a bundle's saved proto3 JSON and verify it, without a server.
+pub fn verify_json(json: &str) -> Result<(pb::AttestedModelBundle, VerifiedBundle), BundleError> {
+    let bundle = attested_bundle::bundle_from_json(json)?;
+    let verified = attested_bundle::verify(&bundle)?;
+    Ok((bundle, verified))
+}
+
 /// Read a saved bundle and verify it. A malformed or tampered file is
 /// reported as invalid input.
-pub fn verify_file(path: &Path) -> Result<VerifiedBundle> {
+pub fn verify_file(path: &Path) -> Result<(pb::AttestedModelBundle, VerifiedBundle)> {
     let json = crate::manifest::read_text(path)?;
-    let bundle = attested_bundle::bundle_from_json(&json).map_err(|e| {
-        crate::failure::invalid_input(format!("{} is not an attested bundle: {e}", path.display()))
-    })?;
-    attested_bundle::verify(&bundle).map_err(|e| {
+    verify_json(&json).map_err(|e| {
         crate::failure::invalid_input(format!("{} failed verification: {e}", path.display()))
+    })
+}
+
+/// The incomplete reasons of a verified bundle, by proto enum name. Empty
+/// when it is complete.
+#[must_use]
+pub fn incomplete_reason_names(verified: &VerifiedBundle) -> Vec<&'static str> {
+    match &verified.completeness {
+        Completeness::Complete => Vec::new(),
+        Completeness::Incomplete(reasons) => reasons
+            .iter()
+            .map(pb::attested_completeness::Reason::as_str_name)
+            .collect(),
+    }
+}
+
+/// What a verified bundle says about itself, in the shape every surface
+/// reports: its digest, whether it is complete, and when it is not, why
+/// and which entities it could not attest.
+#[must_use]
+pub fn outcome_json(bundle: &pb::AttestedModelBundle, verified: &VerifiedBundle) -> Value {
+    let unresolved: Vec<Value> = bundle
+        .unresolved
+        .iter()
+        .map(|row| {
+            let entity = row.entity.as_ref().and_then(|entity| {
+                let kind = pb::EntityKind::try_from(entity.kind).ok()?;
+                Some(pb::canonical::id_string(kind, entity.id.as_ref()?))
+            });
+            json!({
+                "key": row.key,
+                "entity": entity,
+                "cause": row.cause().as_str_name(),
+            })
+        })
+        .collect();
+    json!({
+        "bundle_digest": verified.digest.to_hex(),
+        "complete": verified.completeness.is_complete(),
+        "incomplete_reasons": incomplete_reason_names(verified),
+        "unresolved": unresolved,
     })
 }

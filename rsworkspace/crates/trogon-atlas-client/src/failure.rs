@@ -423,6 +423,9 @@ impl Failure {
                 // slugs with a comma, which a valid slug can never contain.
                 let slugs: Vec<&str> = slugs.split(',').filter(|s| !s.is_empty()).collect();
                 FailureDetails::from_json(json!({ "did_you_mean": slugs }))
+            } else if let Some(reasons) = metadata.get("reasons") {
+                let reasons: Vec<&str> = reasons.split(',').filter(|r| !r.is_empty()).collect();
+                FailureDetails::from_json(json!({ "incomplete_reasons": reasons }))
             } else {
                 FailureDetails::empty()
             };
@@ -709,6 +712,29 @@ mod tests {
         assert_eq!(
             failure.details.0["did_you_mean"],
             json!(["place-order-slice", "place-orders"])
+        );
+    }
+
+    #[test]
+    fn export_incomplete_carries_the_reasons_as_a_list() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "EXPORT_INCOMPLETE",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([(
+                "reasons".to_string(),
+                "REASON_SNAPSHOT_TRUNCATED,REASON_UNRESOLVED_ENTITIES".to_string(),
+            )]),
+        );
+        let status = Status::with_error_details(Code::FailedPrecondition, "incomplete", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(
+            failure.details.0["incomplete_reasons"],
+            json!(["REASON_SNAPSHOT_TRUNCATED", "REASON_UNRESOLVED_ENTITIES"])
         );
     }
 
