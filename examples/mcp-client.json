@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "trogon-atlas": {
+      "type": "http",
+      "url": "http://localhost:50069/mcp",
+      "headers": {
+        "Authorization": "Bearer ${TROGON_ATLAS_MCP_TOKEN}",
+        "x-trogon-atlas-profile": "read-only"
+      }
+    }
+  }
+}

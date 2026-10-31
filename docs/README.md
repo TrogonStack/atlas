@@ -15,6 +15,7 @@ Solve a specific problem:
 
 - [Assess the blast radius of a change](how-to/assess-change-impact.md)
 - [Check code against the model](how-to/check-code-drift.md)
+- [Connect an MCP client](how-to/connect-an-mcp-client.md)
 - [Declare an SLO](how-to/declare-an-slo.md)
 - [Draft and land a new entity version](how-to/draft-then-land.md)
 - [Issue an API key to a client](how-to/issue-an-api-key.md)
