@@ -25,6 +25,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
 
 import "trogonatlas/api/eventmodel/v1alpha1/channel_messages.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/human_interactions.proto";
 
 
 // =============================================================================
@@ -1176,6 +1177,7 @@ message ResolveBranchEntryResponse {
 //     DeleteBranch                       : branch lifecycle (Phase 1: Isolation)
 
 service EventModelService {
+  rpc InspectHumanInteraction(InspectHumanInteractionRequest) returns (InspectHumanInteractionResponse);
   rpc CreateSourceRegistration(CreateSourceRegistrationRequest) returns (CreateSourceRegistrationResponse);
   rpc UpdateSourceRegistration(UpdateSourceRegistrationRequest) returns (UpdateSourceRegistrationResponse);
   rpc GetSourceRegistration(GetSourceRegistrationRequest) returns (GetSourceRegistrationResponse);

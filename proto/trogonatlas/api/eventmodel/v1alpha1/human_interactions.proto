@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/connections.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
+
+message HumanIssuanceSelection {
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef persona = 1;
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef ui = 2;
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef command = 3;
+}
+
+message HumanDisplaySelection {
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef persona = 1;
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef ui = 2;
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef source_read_model = 3;
+}
+
+message InspectHumanInteractionRequest {
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef hosting = 1;
+  oneof path {
+    HumanIssuanceSelection issuance = 2;
+    HumanDisplaySelection display = 3;
+  }
+}
+
+enum HumanInteractionRole {
+  HUMAN_INTERACTION_ROLE_UNSPECIFIED = 0;
+  HUMAN_INTERACTION_ROLE_HOSTED_UI = 1;
+  HUMAN_INTERACTION_ROLE_PERSONA = 2;
+  HUMAN_INTERACTION_ROLE_SLICE_UI = 3;
+  HUMAN_INTERACTION_ROLE_COMMAND = 4;
+  HUMAN_INTERACTION_ROLE_READ_MODEL = 5;
+}
+
+message HumanInteractionCheckedEdge {
+  HumanInteractionRole role = 1;
+  trogonatlas.eventmodel.v1alpha1.ConnectionRef selection = 2;
+  string field = 3;
+  trogonatlas.eventmodel.v1alpha1.EntityRef target = 4;
+  CatalogResolutionState state = 5;
+  CatalogCheckedOwner checked_target = 6;
+}
+
+enum HumanInteractionConsistency {
+  HUMAN_INTERACTION_CONSISTENCY_UNSPECIFIED = 0;
+  HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET = 1;
+}
+
+message InspectHumanInteractionResponse {
+  InspectHumanInteractionRequest request = 1;
+  CatalogResolutionState state = 2;
+  repeated HumanInteractionCheckedEdge edges = 3;
+  CatalogCheckedScope scope = 4;
+  HumanInteractionConsistency consistency = 5;
+}
