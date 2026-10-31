@@ -277,6 +277,7 @@ pub struct WriteContext<'a> {
     branch: Option<&'a str>,
     changeset: Option<ChangesetRef<'a>>,
     operation_key: Option<&'a str>,
+    settlement_deferred: bool,
     connection_admission: ConnectionAdmission<'a>,
 }
 
@@ -294,6 +295,7 @@ impl<'a> WriteContext<'a> {
             branch: Some(name),
             changeset: None,
             operation_key: None,
+            settlement_deferred: false,
             connection_admission: ConnectionAdmission::Active,
         }
     }
@@ -306,6 +308,7 @@ impl<'a> WriteContext<'a> {
             branch,
             changeset: None,
             operation_key: None,
+            settlement_deferred: false,
             connection_admission: ConnectionAdmission::Active,
         }
     }
@@ -335,6 +338,20 @@ impl<'a> WriteContext<'a> {
     pub fn with_operation_key(mut self, key: &'a str) -> Self {
         self.operation_key = Some(key);
         self
+    }
+
+    /// Mark the claimed receipt as settled by the caller only after work
+    /// that follows this write, so a recovery pass that finds the write
+    /// durable does not settle it applied on the caller's behalf.
+    #[must_use]
+    pub fn with_deferred_settlement(mut self) -> Self {
+        self.settlement_deferred = true;
+        self
+    }
+
+    #[must_use]
+    pub fn settlement_deferred(self) -> bool {
+        self.settlement_deferred
     }
 
     #[must_use]

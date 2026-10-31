@@ -98,8 +98,8 @@ or the registry did not answer. The write is refused as if the identity were
 protected, so an outage never lets a protected identity change. It is kept
 apart from `ENTITY_PROTECTED` because the recovery differs: retry first. When
 `row_revision` is present the row itself is unreadable and retrying will not
-help; an admin reads it with `GetEntityProtection` and removes it with
-`UnprotectEntity` at that revision.
+help, so the next action is `request_unprotect`: an admin reads it with
+`GetEntityProtection` and removes it with `UnprotectEntity` at that revision.
 
 A status without an `ErrorInfo` at all (most `INVALID_ARGUMENT` statuses
 raised directly by request validation, for instance) still classifies

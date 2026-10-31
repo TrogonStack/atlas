@@ -94,6 +94,28 @@ pub async fn claim(
     }
 }
 
+/// The settled outcome a retry of `attempt` would replay, read without
+/// claiming, so a handler can answer it before the checks that only guard
+/// a fresh write. A failed read is `None`; the claim still decides.
+pub async fn settled(
+    store: &dyn Store,
+    attempt: Option<&OperationAttempt>,
+) -> Option<OperationRecord> {
+    let attempt = attempt?;
+    match store.get_operation(&attempt.claim_key).await {
+        Ok(Some(record))
+            if record.digest == attempt.digest
+                && matches!(
+                    record.status,
+                    OperationStatus::Applied | OperationStatus::Rejected
+                ) =>
+        {
+            Some(record)
+        }
+        _ => None,
+    }
+}
+
 /// Reject `operation_id` combined with a flag that persists nothing. The two
 /// do not compose: idempotent replay is a property of a write that actually
 /// happened, and a dry run / validate-only call never produces one.

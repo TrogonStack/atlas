@@ -38,7 +38,16 @@ unchanged but which newly protects the identity is not a no-op: it records a
 changeset and its receipt names it. An `operation_id` settles only once the
 protection has landed, so when the registry fails after the content write, a
 retry with the same id runs again and finishes protecting instead of
-replaying a success that never protected anything. Anyone else's annotation,
+replaying a success that never protected anything. A `BatchMutate` that
+protected some identities before the registry failed resumes the same way:
+the retry is not refused by protections its own earlier attempt set, because
+the claim's digest proves it carries the same writes, and it protects the
+identities the first attempt never reached. A `PutEntity` whose protection
+landed but could not be confirmed finishes on retry from what landed instead
+of writing again, and replaying a settled write is not refused by the
+protection that write set. When a server stops after a protecting batch's
+content is durable, batch recovery leaves its `operation_id` not applied so
+a retry completes the protections. Anyone else's annotation,
 and every annotation that arrives through `import-git`, is dropped without
 effect.
 
@@ -53,7 +62,11 @@ identity it would touch, one key per identity, inside the section where it
 already holds the mutation lock. Nothing scans the registry and no lock is
 held longer than the write already held it. `ProtectEntity` takes the same
 lock for its own read and write, so a protect and a write cannot interleave:
-whichever goes first wins, and the other sees its result.
+whichever goes first wins, and the other sees its result. Under the lock
+it re-reads the version it found beforehand, and when a delete removed it
+in between it looks up that identity's latest version again, failing with
+`NOT_FOUND` when nothing is left, so a delete that wins the race does not
+leave a protection behind on an identity with nothing stored.
 
 | Route | Refused when |
 | --- | --- |
@@ -141,8 +154,8 @@ does not read a gap as "unprotected". See the
   of a protected identity is allowed, because it leaves the identity as it
   is.
 - Default chosen for review: replaying an `operation_id` that targets an
-  identity protected since the first attempt is refused rather than
-  answered from the stored result. `DeleteEntity` is the exception: it
+  identity protected since the first attempt by anything other than that
+  operation is refused rather than answered from the stored result. `DeleteEntity` is the exception: it
   answers a replay from its receipt, because protection cannot apply to a
   delete that already happened.
 
