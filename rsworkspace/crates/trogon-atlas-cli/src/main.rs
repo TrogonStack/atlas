@@ -404,6 +404,13 @@ enum Cmd {
         #[command(subcommand)]
         cmd: OperationCmd,
     },
+    /// Freeze an identity (every version of `<kind>/<namespace>/<slug>`) so
+    /// no route can change it, lift that freeze, or inspect which
+    /// identities are frozen. Protection is not branch-scoped.
+    Protection {
+        #[command(subcommand)]
+        cmd: ProtectionCmd,
+    },
     Fmt {
         /// Manifest files or directories (directories are walked
         /// recursively for .yaml/.yml).
@@ -427,6 +434,44 @@ enum Cmd {
 enum OperationCmd {
     /// Report the status of one operation_id.
     Get { operation_id: String },
+}
+
+#[derive(Subcommand)]
+enum ProtectionCmd {
+    /// Protect `<kind>/<namespace>/<slug>`. Requires an admin token; the
+    /// identity must already have a stored version.
+    Protect {
+        identity: String,
+        /// Why the identity is frozen; shown to every refused writer.
+        #[arg(long)]
+        reason: String,
+        /// Check the request without protecting anything.
+        #[arg(long)]
+        validate_only: bool,
+    },
+    /// Lift protection from `<kind>/<namespace>/<slug>`. Requires an admin
+    /// token.
+    Unprotect {
+        identity: String,
+        /// Lift only the row at this revision (as `get` or `list` report
+        /// it); refused with exit 3 once the row has moved. Also how an
+        /// unreadable row is lifted.
+        #[arg(long)]
+        if_match: Option<String>,
+        /// Check the request without lifting anything.
+        #[arg(long)]
+        validate_only: bool,
+    },
+    /// Report whether `<kind>/<namespace>/<slug>` is protected,
+    /// unprotected, or unknown. Exits 11 when unknown.
+    Get { identity: String },
+    /// List protected identities and unreadable protection rows. Exits 11
+    /// when the listing is partial.
+    List {
+        /// Only identities in this namespace.
+        #[arg(long)]
+        namespace: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -636,16 +681,18 @@ fn summary_json(counts: branch::SeverityCounts) -> Value {
 /// conflicts. Also used by `trogon-atlas fmt --check`.
 const EXIT_FINDINGS: u8 = 1;
 
-/// Exit code for a `validate` / `validate-project` run with no Error finding
-/// whose coverage shows a suite or the snapshot was not fully examined, so a
-/// gate never mistakes "nothing found in part of the model" for a pass.
-const EXIT_VALIDATION_INCOMPLETE: u8 = 11;
+/// Exit code for an answer the server could not finish: a `validate` /
+/// `validate-project` run with no Error finding whose coverage shows a
+/// suite or the snapshot was not fully examined, or a protection read with
+/// unknown state. A gate never mistakes "nothing found in part of the
+/// model" for a pass.
+const EXIT_INCOMPLETE: u8 = 11;
 
 fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
     match verdict {
         validate::ValidationVerdict::Clean => ExitCode::SUCCESS,
         validate::ValidationVerdict::Findings => ExitCode::from(EXIT_FINDINGS),
-        validate::ValidationVerdict::Incomplete => ExitCode::from(EXIT_VALIDATION_INCOMPLETE),
+        validate::ValidationVerdict::Incomplete => ExitCode::from(EXIT_INCOMPLETE),
     }
 }
 
@@ -827,6 +874,115 @@ async fn connect_checked_client(
     let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, branch).await?;
     compat::ensure_can_mutate(&mut client, intent).await?;
     Ok(client)
+}
+
+async fn run_protection(
+    cmd: ProtectionCmd,
+    endpoint: &str,
+    auth_token: Option<&str>,
+    rpc_timeout_secs: u64,
+    branch: Option<String>,
+    text: bool,
+) -> Result<(ExitCode, Option<Value>)> {
+    use trogon_atlas_client::protection::{
+        self, Effect, ListingVerdict, NamespaceFilter, ProtectedIdentity, ProtectionReason,
+        RowRevision,
+    };
+    let refuse_branch = || -> Result<()> {
+        if let Some(branch) = &branch {
+            trogon_atlas_client::invalid_input!(
+                "protection applies to an identity on every branch; drop --branch {branch}"
+            );
+        }
+        Ok(())
+    };
+    let connect_admin = |validate_only: bool| async move {
+        let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+        compat::ensure_can_mutate_requiring(
+            &mut client,
+            compat::MutationIntent {
+                validate_only,
+                ..Default::default()
+            },
+            &[compat::Capability::EntityProtection],
+        )
+        .await?;
+        anyhow::Ok(client)
+    };
+    match cmd {
+        ProtectionCmd::Protect {
+            identity,
+            reason,
+            validate_only,
+        } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let reason = ProtectionReason::new(&reason)?;
+            refuse_branch()?;
+            let mut client = connect_admin(validate_only).await?;
+            let outcome = protection::protect(
+                &mut client,
+                &identity,
+                &reason,
+                Effect::from_validate_only(validate_only),
+            )
+            .await?;
+            if text {
+                println!("{}", outcome.render());
+            }
+            Ok((ExitCode::SUCCESS, Some(outcome.to_json())))
+        }
+        ProtectionCmd::Unprotect {
+            identity,
+            if_match,
+            validate_only,
+        } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let if_match = if_match
+                .as_deref()
+                .map(str::parse::<RowRevision>)
+                .transpose()?;
+            refuse_branch()?;
+            let mut client = connect_admin(validate_only).await?;
+            let outcome = protection::unprotect(
+                &mut client,
+                &identity,
+                if_match,
+                Effect::from_validate_only(validate_only),
+            )
+            .await?;
+            if text {
+                println!("{}", outcome.render());
+            }
+            Ok((ExitCode::SUCCESS, Some(outcome.to_json())))
+        }
+        ProtectionCmd::Get { identity } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+            let lookup = protection::get_protection(&mut client, &identity).await?;
+            if text {
+                println!("{}", lookup.render());
+            }
+            let code = if lookup.is_unknown() {
+                ExitCode::from(EXIT_INCOMPLETE)
+            } else {
+                ExitCode::SUCCESS
+            };
+            Ok((code, Some(lookup.to_json())))
+        }
+        ProtectionCmd::List { namespace } => {
+            let namespace = namespace.as_deref().map(NamespaceFilter::new).transpose()?;
+            let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+            let listing = protection::list_protections(&mut client, namespace.as_ref()).await?;
+            if text {
+                print!("{}", listing.render());
+            }
+            let code = match listing.verdict() {
+                ListingVerdict::Complete => ExitCode::SUCCESS,
+                ListingVerdict::Partial => ExitCode::from(EXIT_INCOMPLETE),
+            };
+            Ok((code, Some(listing.to_json())))
+        }
+    }
 }
 
 struct PreparedNativeOwner {
@@ -2127,6 +2283,17 @@ async fn run(
                 "rejection_message": resp.rejection_message,
             });
             Ok((ExitCode::SUCCESS, Some(data)))
+        }
+        Cmd::Protection { cmd } => {
+            run_protection(
+                cmd,
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch,
+                text,
+            )
+            .await
         }
         Cmd::Branch { cmd } => match cmd {
             BranchCmd::Create { name, doc } => {

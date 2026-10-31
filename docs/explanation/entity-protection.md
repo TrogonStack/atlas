@@ -134,6 +134,16 @@ records the changeset that created it, so "who froze this, when and why" is
 answered from the same log as every content change. See
 [changesets](changesets.md).
 
+## Clients
+
+`trogon-atlas protection` and the `protect_entity`, `unprotect_entity`,
+`get_entity_protection` and `list_entity_protections` MCP tools call these
+RPCs. A protection read the server could not finish exits `11` from the CLI
+and reports `verdict: "partial"` or `state: "unknown"`, so a script or agent
+does not read a gap as "unprotected". See the
+[command reference](../reference/entity-protection-commands.md) and
+[how to protect a published entity](../how-to/protect-a-published-entity.md).
+
 ## Defaults chosen for review
 
 - Default chosen for review: a server without an auth stack refuses
@@ -173,10 +183,16 @@ answered from the same log as every content change. See
 - Default chosen for review: an unreadable row is lifted with
   `UnprotectEntity`, which records a `KIND_UNPROTECTED` changeset like any
   other lift.
+- Default chosen for review: `trogon-atlas protection list` exits `11` when
+  the listing is partial and `protection get` exits `11` when the state is
+  unknown, so a gate does not pass on an answer the server could not finish.
+- Default chosen for review: a `GetEntityProtection` answer with no
+  recognizable state, or `protected` without a row, is reported as unknown
+  by the CLI and MCP tools, never as unprotected.
+- Default chosen for review: the CLI and MCP tools refuse protect and
+  unprotect while a branch is set, before sending anything.
 
 ## Not covered yet
 
-- CLI and MCP commands for the protection RPCs. Clients reach them over gRPC
-  for now.
 - `export` does not write the annotation back out; a re-import would not
   restore protection, which is also what the import rule requires.

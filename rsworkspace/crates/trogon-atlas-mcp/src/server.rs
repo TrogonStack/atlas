@@ -12,6 +12,7 @@ use trogon_atlas_client::{
     client::{client_for_transport, Client, ConnectOptions, Transport},
     compat::{self, MutationIntent},
     precondition::{BranchEntryState, StalePlan},
+    protection,
     tenant_types::{self, TypeScope},
 };
 use trogon_atlas_core::transcode::TranscodePool;
@@ -26,15 +27,16 @@ use crate::{
         DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams, DiffBranchParams,
         DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySpec,
         EventModelProjectionParams, ExportNamespaceParams, ExportOpensloParams,
-        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
-        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
-        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams,
-        MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
-        PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
-        ResolveTypeParams, ResponsibilityQueryParams, RetargetReferencesParams,
-        RevertChangesetParams, SearchParams, SliceProjectionParams, SourceRequestParams,
-        SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
-        ValidateProjectParams,
+        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
+        GetEntityProtectionParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
+        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
+        ListEntitiesByDomainParams, ListEntitiesParams, ListEntityProtectionsParams,
+        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
+        ProtectEntityParams, PutEntityJsonParams, PutEntityParams, ReferencesParams,
+        RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
+        ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
+        SliceProjectionParams, SourceRequestParams, SupersessionChainParams, UnprotectEntityParams,
+        UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
     },
 };
 
@@ -463,6 +465,26 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "move_namespace",
         rpcs: &["MoveNamespace"],
         min_role: ToolRole::Admin,
+    },
+    ToolPolicy {
+        tool: "protect_entity",
+        rpcs: &["ProtectEntity"],
+        min_role: ToolRole::Admin,
+    },
+    ToolPolicy {
+        tool: "unprotect_entity",
+        rpcs: &["UnprotectEntity"],
+        min_role: ToolRole::Admin,
+    },
+    ToolPolicy {
+        tool: "get_entity_protection",
+        rpcs: &["GetEntityProtection"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_entity_protections",
+        rpcs: &["ListEntityProtections"],
+        min_role: ToolRole::Reader,
     },
     ToolPolicy {
         tool: "get_snapshot_id",
@@ -930,6 +952,33 @@ impl McpServer {
         .await
     }
 
+    /// Protection is not branch-scoped and the server refuses a branch
+    /// header on its writes, so refuse here before any request is sent.
+    async fn protection_admin_client(
+        &self,
+        validate_only: bool,
+    ) -> Result<Client, rmcp::ErrorData> {
+        if let Some(branch) = self.options.branch.as_deref() {
+            return Err(mcp_error_data(trogon_atlas_client::failure::invalid_input(
+                format!(
+                    "protection applies to an identity on every branch; call this without branch {branch}"
+                ),
+            )));
+        }
+        let mut client = self.client();
+        compat::ensure_can_mutate_requiring(
+            &mut client,
+            MutationIntent {
+                validate_only,
+                ..Default::default()
+            },
+            &[compat::Capability::EntityProtection],
+        )
+        .await
+        .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        Ok(client)
+    }
+
     async fn ensure_intent(
         &self,
         client: &mut Client,
@@ -988,6 +1037,23 @@ fn role_name(role: pb::Role) -> &'static str {
         pb::Role::Writer => "writer",
         pb::Role::Admin => "admin",
     }
+}
+
+fn mcp_error_data(e: anyhow::Error) -> rmcp::ErrorData {
+    McpError::from(e).into()
+}
+
+fn json_result(body: &serde_json::Value) -> CallToolResult {
+    CallToolResult::success(vec![ContentBlock::text(body.to_string())])
+}
+
+fn protected_identity(
+    kind: &str,
+    namespace: &str,
+    slug: &str,
+) -> Result<protection::ProtectedIdentity, rmcp::ErrorData> {
+    let kind = parse_kind(kind).map_err(rmcp::ErrorData::from)?;
+    protection::ProtectedIdentity::new(kind, namespace, slug).map_err(mcp_error_data)
 }
 
 fn parse_kind(s: &str) -> Result<pb::EntityKind, McpError> {
@@ -1469,6 +1535,114 @@ impl McpServer {
             .map_err(tool_err("move_namespace"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "Freeze every version of an identity (kind, namespace, slug), including versions not written yet, so every write route refuses it with ENTITY_PROTECTED until an admin lifts it. Admin only, baseline only, and the identity must already have a stored version. changed=false means it was already protected; protection then holds the existing row, whose reason may differ.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn protect_entity(
+        &self,
+        Parameters(p): Parameters<ProtectEntityParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let reason = protection::ProtectionReason::new(&p.reason).map_err(mcp_error_data)?;
+        let mut client = self.protection_admin_client(p.validate_only).await?;
+        let outcome = protection::protect(
+            &mut client,
+            &identity,
+            &reason,
+            protection::Effect::from_validate_only(p.validate_only),
+        )
+        .await
+        .map_err(mcp_error_data)?;
+        Ok(json_result(&outcome.to_json()))
+    }
+
+    #[tool(
+        description = "Lift protection from an identity (kind, namespace, slug) so writes to it are accepted again. Admin only, baseline only. Pass if_match with the row revision get_entity_protection or list_entity_protections reported to lift only that row; that is also how an unreadable (unknown) row is removed. changed=false means it was not protected.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn unprotect_entity(
+        &self,
+        Parameters(p): Parameters<UnprotectEntityParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let if_match = match p.if_match {
+            None => None,
+            Some(revision) => Some(protection::RowRevision::new(revision).ok_or_else(|| {
+                mcp_error_data(trogon_atlas_client::failure::invalid_input(
+                    "if_match must be a positive row revision; omit it to lift whatever is current",
+                ))
+            })?),
+        };
+        let mut client = self.protection_admin_client(p.validate_only).await?;
+        let outcome = protection::unprotect(
+            &mut client,
+            &identity,
+            if_match,
+            protection::Effect::from_validate_only(p.validate_only),
+        )
+        .await
+        .map_err(mcp_error_data)?;
+        Ok(json_result(&outcome.to_json()))
+    }
+
+    #[tool(
+        description = "Whether an identity (kind, namespace, slug) is protected, unprotected, or unknown. state=unknown means the protection row could not be read: writes to the identity are refused, and an admin can lift the row with unprotect_entity if_match=unknown.revision when unknown.liftable is true.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_entity_protection(
+        &self,
+        Parameters(p): Parameters<GetEntityProtectionParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let mut client = self.client();
+        let lookup = protection::get_protection(&mut client, &identity)
+            .await
+            .map_err(mcp_error_data)?;
+        Ok(json_result(&lookup.to_json()))
+    }
+
+    #[tool(
+        description = "List protected identities and unreadable protection rows. verdict=partial (complete=false, or any entry in unknown) means the listing is not the whole registry: an identity missing from it may still be protected, so do not treat absence as permission to write.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_entity_protections(
+        &self,
+        Parameters(p): Parameters<ListEntityProtectionsParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let namespace = p
+            .namespace
+            .as_deref()
+            .map(protection::NamespaceFilter::new)
+            .transpose()
+            .map_err(mcp_error_data)?;
+        let mut client = self.client();
+        let listing = protection::list_protections(&mut client, namespace.as_ref())
+            .await
+            .map_err(mcp_error_data)?;
+        Ok(json_result(&listing.to_json()))
     }
 
     #[tool(
