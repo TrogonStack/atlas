@@ -1413,6 +1413,19 @@ tokens = ["assoc-limited"]
         }
         request
     };
+    let readable = client
+        .list_channel_messages(admin(Request::new(pb::ListChannelMessagesRequest {
+            channel: Some(pb::ChannelRef {
+                id: Some(secret.clone()),
+            }),
+            ..Default::default()
+        })))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(readable.records.len(), 3);
+    assert!(readable.complete);
+    assert!(!readable.incomplete);
     let hidden_status = client
         .list_channel_messages(limited(
             pb::ListChannelMessagesRequest {
