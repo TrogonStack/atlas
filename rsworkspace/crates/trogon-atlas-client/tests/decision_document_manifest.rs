@@ -163,6 +163,7 @@ fn unchanged_native_catalog_reapply_classifies_as_unchanged_without_stripping_ed
 fn typed_delete_report_distinguishes_incomplete_empty_reporting_from_complete_absence() {
     use prost::Message as _;
     let response = pb::DeleteEntityResponse {
+        invariant_check: None,
         operation_receipt: None,
         referrers: vec![],
         referrers_incomplete: true,

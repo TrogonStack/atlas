@@ -1059,6 +1059,95 @@ pub struct DomainTagAnnotation {
     #[prost(string, tag="1")]
     pub tag: ::prost::alloc::string::String,
 }
+/// Declares an invariant over the event model that carries it: a write that
+/// would leave the model's own validation reporting a forbidden finding is
+/// refused before anything applies. Only an EventModel may carry it, so only
+/// writers of the model's namespace can add, change or remove it. See
+/// docs/explanation/invariant-gates.md.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InvariantAnnotation {
+    /// Required. Names the invariant in refusals; unique among the carrier's
+    /// invariants.
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    /// Optional. Why the invariant exists, for the writer who trips it.
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    /// Model rule codes the carrier must never report, e.g. "MEMBER_NOT_FOUND".
+    #[prost(string, repeated, tag="3")]
+    pub forbidden_codes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Any model finding at or above this severity violates the invariant.
+    /// Unspecified forbids nothing by severity.
+    #[prost(enumeration="invariant_annotation::Severity", tag="4")]
+    pub forbidden_severity: i32,
+    /// What a write does when the invariant cannot be evaluated.
+    #[prost(enumeration="invariant_annotation::Unevaluable", tag="5")]
+    pub on_unevaluable: i32,
+}
+/// Nested message and enum types in `InvariantAnnotation`.
+pub mod invariant_annotation {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Severity {
+        Unspecified = 0,
+        Warning = 1,
+        Error = 2,
+    }
+    impl Severity {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "SEVERITY_UNSPECIFIED",
+                Self::Warning => "SEVERITY_WARNING",
+                Self::Error => "SEVERITY_ERROR",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "SEVERITY_UNSPECIFIED" => Some(Self::Unspecified),
+                "SEVERITY_WARNING" => Some(Self::Warning),
+                "SEVERITY_ERROR" => Some(Self::Error),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Unevaluable {
+        /// Treated as UNEVALUABLE_REFUSE.
+        Unspecified = 0,
+        /// Refuse the write: an invariant that cannot be checked is not held.
+        Refuse = 1,
+        /// Let the write through and report the invariant as unevaluated.
+        Advise = 2,
+    }
+    impl Unevaluable {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "UNEVALUABLE_UNSPECIFIED",
+                Self::Refuse => "UNEVALUABLE_REFUSE",
+                Self::Advise => "UNEVALUABLE_ADVISE",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "UNEVALUABLE_UNSPECIFIED" => Some(Self::Unspecified),
+                "UNEVALUABLE_REFUSE" => Some(Self::Refuse),
+                "UNEVALUABLE_ADVISE" => Some(Self::Advise),
+                _ => None,
+            }
+        }
+    }
+}
 /// Command slice: Command -> Event(s)
 ///
 /// When persona and UI are present, the command is human-issued from that
