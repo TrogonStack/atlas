@@ -1105,6 +1105,19 @@ fn catalog_provenance(
             .get(index)
             .and_then(|declaration| declaration.connection_id.clone());
     }
+    if let Some(index) = field
+        .strip_prefix("ui_hostings[")
+        .and_then(|rest| rest.split_once(']'))
+        .and_then(|(index, suffix)| (suffix == ".ui").then_some(index))
+        .and_then(|index| index.parse::<usize>().ok())
+    {
+        if let Some(pb::entity::Kind::Component(component)) = &entity.kind {
+            reference.connection_id = component
+                .ui_hostings
+                .get(index)
+                .and_then(|hosting| hosting.connection_id.clone());
+        }
+    }
     if let Some(id) = group_ids.get(field) {
         reference.connection_id = Some(id.clone());
     }
