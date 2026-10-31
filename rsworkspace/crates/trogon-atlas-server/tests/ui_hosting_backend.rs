@@ -905,7 +905,7 @@ async fn hosting_reference_occurrences_and_subjects_keep_exact_siblings_and_hidd
         .await
         .unwrap()
         .into_inner();
-    assert!(visible_report.referrers.is_empty());
+    assert_eq!(visible_report.referrers, [] as [pb::Reference; 0]);
     let before = get(&mut client, pb::EntityKind::Ui, &target).await.unwrap();
     let error = client
         .delete_entity(authed(
@@ -1893,7 +1893,7 @@ async fn global_ui_retarget_renews_hosting_occurrences_and_preserves_parallel_pr
         .await
         .unwrap()
         .into_inner();
-    assert!(old.references.is_empty());
+    assert_eq!(old.references, [] as [pb::Reference; 0]);
     let new = client
         .get_incoming_references(authed(
             pb::GetReferencesRequest {
@@ -2018,7 +2018,7 @@ async fn landing_revalidates_new_hostings_while_metadata_rebase_preserves_dangli
         .unwrap()
         .into_inner();
     assert_eq!(retained.entity, branched.entity);
-    assert!(!retained.etag.is_empty());
+    assert_ne!(retained.etag, "");
     let still_invalid = client
         .merge_branch(authed(
             pb::MergeBranchRequest {
