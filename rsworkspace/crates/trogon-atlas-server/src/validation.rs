@@ -12,6 +12,8 @@ use trogon_atlas_store::{
     StoredEntity,
 };
 
+use crate::ownership::Lens;
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct IssuerId {
     namespace: String,
@@ -361,6 +363,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("DANGLING_REF", Error, "Model carries a dangling reference",
           "An entity reached transitively from this model references something that does not exist in the store.",
           Unspecified, "", "model"),
+        r("REF_OUTSIDE_VISIBLE_SCOPE", Info, "Reference target lies outside the caller's visibility",
+          "A reference or member points into a namespace this caller cannot read, so whether the target exists was not checked. Validate with a caller that can read that namespace to resolve it.",
+          Unspecified, "", "model"),
         r("CROSS_MODEL_BOUNDARY_VIOLATION", Error, "Member belongs to another model",
           "A member of this event model is owned by another event model and no seam is declared between them. Members must respect model ownership.",
           Unspecified, "", "model"),
@@ -681,6 +686,7 @@ mod catalog_drift_tests {
         "READ_MODEL_SHARED_CONSUMERS_DOC_EMPTY",
         "READ_MODEL_DUPLICATE_SHAPE",
         "REALIZES_DANGLING",
+        "REF_OUTSIDE_VISIBLE_SCOPE",
         "REALIZES_MISSING_REF",
         "REALIZES_MIXED_CLASSIFICATIONS",
         "REALIZES_MULTIPLE",
@@ -2994,7 +3000,20 @@ pub fn strategic_issues_for_deletes(
 /// problem space are not hidden until someone validates those entities.
 #[must_use]
 pub fn validate_model(model: &pb::EventModel, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
-    let mut issues = validate_model_content(model, all);
+    validate_model_within(model, all, &Lens::Everything)
+}
+
+/// [`validate_model`] for a caller that reads only the namespaces `lens`
+/// admits. A target in a namespace the lens excludes is absent from `all`
+/// whether or not it exists, so it is reported as outside the caller's
+/// visibility instead of as missing.
+#[must_use]
+pub fn validate_model_within(
+    model: &pb::EventModel,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate_model_content_within(model, all, lens);
     if let Some(id) = model.id.as_ref() {
         issues.extend(strategic_chain_issues([id.namespace.as_str()], all));
     }
@@ -3188,6 +3207,41 @@ pub fn validate_model_content(
     model: &pb::EventModel,
     all: &[StoredEntity],
 ) -> Vec<pb::ValidationIssue> {
+    validate_model_content_within(model, all, &Lens::Everything)
+}
+
+fn outside_visible_scope(
+    subject: pb::EntityRef,
+    subject_field: String,
+    target: &str,
+) -> pb::ValidationIssue {
+    pb::ValidationIssue {
+        severity: pb::validation_issue::Severity::Info as i32,
+        code: "REF_OUTSIDE_VISIBLE_SCOPE".into(),
+        message: format!(
+            "{target} lies in a namespace outside this caller's visibility, so it was not resolved"
+        ),
+        subject: Some(subject),
+        subject_field,
+        ..Default::default()
+    }
+}
+
+/// Members from another context are validated by their own model, so the
+/// outbound-ref pass only walks members in the model's namespace.
+fn outbound_pass_walks(model: &pb::EventModel, member: &pb::Id) -> bool {
+    model
+        .id
+        .as_ref()
+        .is_none_or(|i| i.namespace == member.namespace)
+}
+
+#[must_use]
+pub fn validate_model_content_within(
+    model: &pb::EventModel,
+    all: &[StoredEntity],
+    lens: &Lens,
+) -> Vec<pb::ValidationIssue> {
     let mut issues: Vec<pb::ValidationIssue> = Vec::new();
 
     let known: HashSet<pb::EntityKey> = all
@@ -3237,7 +3291,19 @@ pub fn validate_model_content(
             continue;
         };
         let key = pb::EntityKey::new(k, id);
-        if !known.contains(&key) {
+        if !known.contains(&key) && !lens.admits(&id.namespace) {
+            issues.push(outside_visible_scope(
+                m.clone(),
+                String::new(),
+                &format!(
+                    "member {}:{}/{}@{}",
+                    trogon_atlas_proto::canonical::kind_short(k),
+                    id.namespace,
+                    id.slug,
+                    id.version
+                ),
+            ));
+        } else if !known.contains(&key) {
             issues.push(pb::ValidationIssue {
                 severity: pb::validation_issue::Severity::Error as i32,
                 code: "MEMBER_NOT_FOUND".into(),
@@ -5677,6 +5743,19 @@ pub fn validate_model_content(
                 continue;
             };
             if !known.contains(&pb::EntityKey::new(pb::EntityKind::Ui, to_id)) {
+                if !lens.admits(&to_id.namespace) {
+                    if !outbound_pass_walks(model, ui_id) {
+                        issues.push(outside_visible_scope(
+                            pb::EntityRef {
+                                kind: pb::EntityKind::Ui as i32,
+                                id: Some(ui_id.clone()),
+                            },
+                            format!("transitions[{ti}].to"),
+                            &format!("ui:{}/{}@{}", to_id.namespace, to_id.slug, to_id.version),
+                        ));
+                    }
+                    continue;
+                }
                 issues.push(pb::ValidationIssue {
                     severity: pb::validation_issue::Severity::Error as i32,
                     code: "UI_TRANSITION_DANGLING".into(),
@@ -6170,10 +6249,8 @@ pub fn validate_model_content(
         // subscription view names) is validated by ITS model; walking its
         // internals from here only produces noise about a boundary we
         // deliberately do not own.
-        if let Some(model_ns) = model.id.as_ref().map(|i| i.namespace.as_str()) {
-            if id.namespace != model_ns {
-                continue;
-            }
+        if !outbound_pass_walks(model, id) {
+            continue;
         }
         for o in outbound_refs(&se.entity) {
             // Bounded contexts touch at exactly ONE seam: an upstream EVENT
@@ -6270,6 +6347,19 @@ pub fn validate_model_content(
                 Some(k) => trogon_atlas_proto::canonical::kind_short(k),
             };
             match resolved {
+                None if !lens.admits(&o.to_id.namespace) => {
+                    issues.push(outside_visible_scope(
+                        pb::EntityRef {
+                            kind: k as i32,
+                            id: Some(id.clone()),
+                        },
+                        o.from_field.clone(),
+                        &format!(
+                            "{}:{}/{}@{}",
+                            to_kind_label, o.to_id.namespace, o.to_id.slug, o.to_id.version,
+                        ),
+                    ));
+                }
                 None => {
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
@@ -8156,6 +8246,160 @@ mod boundary_tests {
 
     fn count(issues: &[pb::ValidationIssue], code: &str) -> usize {
         issues.iter().filter(|i| i.code == code).count()
+    }
+
+    fn subscriber(source_ns: &str) -> (pb::EventModel, pb::Entity) {
+        let view = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::ReadModel(pb::ReadModel {
+                id: Some(id("downstream", "orders.delivered")),
+                title: "orders.delivered".into(),
+                source_events: vec![pb::EventRef {
+                    id: Some(id(source_ns, "order.fulfilled")),
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(
+                pb::EntityKind::ReadModel,
+                "downstream",
+                "orders.delivered",
+            )],
+            ..Default::default()
+        };
+        (model, view)
+    }
+
+    #[allow(clippy::unwrap_used)]
+    fn lens_over(namespaces: &[&str]) -> Lens {
+        Lens::Only(std::sync::Arc::new(
+            namespaces
+                .iter()
+                .map(|ns| trogon_atlas_core::NamespaceId::parse(ns).unwrap())
+                .collect(),
+        ))
+    }
+
+    #[test]
+    fn missing_target_inside_the_visible_scope_is_dangling() {
+        let (model, view) = subscriber("downstream");
+        let issues = validate_model_within(&model, &[stored(view)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 1, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
+    }
+
+    #[test]
+    fn visible_cross_namespace_seam_resolves() {
+        let (model, view) = subscriber("upstream");
+        let all = vec![stored(view), stored(event("upstream", "order.fulfilled"))];
+        let issues = validate_model_within(&model, &all, &lens_over(&["downstream", "upstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
+    }
+
+    #[test]
+    fn target_outside_the_visible_scope_is_not_called_dangling() {
+        let (model, view) = subscriber("upstream");
+        let issues = validate_model_within(&model, &[stored(view)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "DANGLING_REF"), 0, "{issues:?}");
+        let outside: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "REF_OUTSIDE_VISIBLE_SCOPE")
+            .collect();
+        assert_eq!(outside.len(), 1, "{issues:?}");
+        assert_eq!(
+            outside[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+    }
+
+    #[test]
+    fn member_outside_the_visible_scope_is_not_called_missing() {
+        let (mut model, view) = subscriber("downstream");
+        model
+            .members
+            .push(member(pb::EntityKind::Event, "upstream", "order.fulfilled"));
+        let all = vec![stored(view), stored(event("downstream", "order.fulfilled"))];
+        let issues = validate_model_within(&model, &all, &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "MEMBER_NOT_FOUND"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn ui_transition_outside_the_visible_scope_is_not_called_dangling() {
+        let ui = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("downstream", "home")),
+                title: "home".into(),
+                transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
+                    to: Some(pb::UiRef {
+                        id: Some(id("upstream", "checkout")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::Ui, "downstream", "home")],
+            ..Default::default()
+        };
+        let issues = validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn ui_member_from_another_visible_namespace_classifies_its_hidden_transition() {
+        let ui = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("shell", "home")),
+                title: "home".into(),
+                transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
+                    to: Some(pb::UiRef {
+                        id: Some(id("upstream", "checkout")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::Ui, "shell", "home")],
+            ..Default::default()
+        };
+        let issues =
+            validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream", "shell"]));
+        assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
+        let outside: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "REF_OUTSIDE_VISIBLE_SCOPE")
+            .collect();
+        assert_eq!(outside.len(), 1, "{issues:?}");
+        assert_eq!(outside[0].subject_field, "transitions[0].to");
+        assert_eq!(
+            outside[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
+    }
+
+    #[test]
+    fn full_visibility_reports_a_missing_cross_namespace_target_as_dangling() {
+        let (model, view) = subscriber("upstream");
+        let issues = validate_model_within(&model, &[stored(view)], &Lens::Everything);
+        assert_eq!(count(&issues, "DANGLING_REF"), 1, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 0, "{issues:?}");
     }
 
     #[test]
