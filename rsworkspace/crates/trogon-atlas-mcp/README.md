@@ -12,6 +12,8 @@ Enable it on the server with `TROGON_ATLAS_MCP` (see the
 [server README](../trogon-atlas-server/README.md)), then point an MCP client
 at `http://<host>:<grpc-port>/mcp`. The endpoint is stateless, so any replica
 can answer any request.
+[Connect an MCP client](../../../docs/how-to/connect-an-mcp-client.md)
+walks through installing the example client configuration.
 
 The endpoint holds no credential of its own. Each MCP request acts as its
 own `Authorization: Bearer <token>` header, so the server authenticates and
