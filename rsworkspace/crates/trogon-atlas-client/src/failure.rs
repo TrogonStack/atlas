@@ -411,6 +411,11 @@ impl Failure {
                     "ENTITY_PROTECTED",
                     Some(NextAction::RequestUnprotect),
                 ),
+                "PROTECTION_STATE_UNKNOWN" if metadata.contains_key("row_revision") => (
+                    FailureCategory::Unavailable,
+                    "PROTECTION_STATE_UNKNOWN",
+                    Some(NextAction::RequestUnprotect),
+                ),
                 "PROTECTION_STATE_UNKNOWN" => (
                     FailureCategory::Unavailable,
                     "PROTECTION_STATE_UNKNOWN",
@@ -858,32 +863,47 @@ mod tests {
         assert_eq!(failure.details.0["protected_by"], json!("ops"));
     }
 
-    #[test]
-    fn status_with_protection_state_unknown_is_retryable_not_a_lift_request() {
-        use std::collections::HashMap;
-
+    fn protection_state_unknown_status(metadata: &[(&str, &str)]) -> Status {
         use tonic_types::{ErrorDetails, StatusExt};
 
         let details = ErrorDetails::with_error_info(
             "PROTECTION_STATE_UNKNOWN",
             SERVER_ERROR_DOMAIN,
-            HashMap::from([
-                ("identity".to_string(), "event/orders/placed".to_string()),
-                ("row_revision".to_string(), "7".to_string()),
-            ]),
+            metadata
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect::<std::collections::HashMap<_, _>>(),
         );
-        let status = Status::with_error_details(
+        Status::with_error_details(
             Code::Unavailable,
             "protection state of event/orders/placed is unknown",
             details,
-        );
+        )
+    }
+
+    #[test]
+    fn status_with_protection_state_unknown_is_retryable_not_a_lift_request() {
+        let status = protection_state_unknown_status(&[("identity", "event/orders/placed")]);
         let failure = Failure::from_status(&status);
         assert_eq!(failure.category, FailureCategory::Unavailable);
         assert_eq!(failure.next_action, NextAction::Retry);
         assert_eq!(failure.code.unwrap().as_str(), "PROTECTION_STATE_UNKNOWN");
         assert_eq!(failure.details.0["identity"], json!("event/orders/placed"));
-        assert_eq!(failure.details.0["row_revision"], json!("7"));
+        assert!(failure.details.0.get("row_revision").is_none());
         assert!(failure.details.0.get("protected_by").is_none());
+    }
+
+    #[test]
+    fn status_with_an_unreadable_protection_row_asks_for_a_lift_not_a_retry() {
+        let status = protection_state_unknown_status(&[
+            ("identity", "event/orders/placed"),
+            ("row_revision", "7"),
+        ]);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Unavailable);
+        assert_eq!(failure.next_action, NextAction::RequestUnprotect);
+        assert_eq!(failure.code.unwrap().as_str(), "PROTECTION_STATE_UNKNOWN");
+        assert_eq!(failure.details.0["row_revision"], json!("7"));
     }
 
     #[test]
