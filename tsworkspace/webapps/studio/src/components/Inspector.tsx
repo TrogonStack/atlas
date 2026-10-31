@@ -5,6 +5,7 @@ import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ResponsibilityInspector } from '@/components/ResponsibilityInspector';
 import { DataProductInspector } from '@/components/DataProductInspector';
+import { UiHostingDetails } from '@/components/UiHostingDetails';
 import { ChannelStorageDetails } from '@/components/ChannelStorageDetails';
 import { CommunicationIntentDetails } from '@/components/CommunicationIntentDetails';
 import { MessageClaimsDetails } from '@/components/MessageClaimsDetails';
@@ -669,6 +670,7 @@ export function Inspector({
           <CommunicationIntentDetails entity={entity} model={model} onSelect={onSelect} />
           <MessageClaimsDetails entity={entity} model={model} onSelect={onSelect} />
           <ChannelStorageDetails entity={entity} model={model} onSelect={onSelect} />
+          <UiHostingDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />
           {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} asOf={asOf} />}
           {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}
