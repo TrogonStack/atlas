@@ -20,6 +20,59 @@ use crate::ownership::Lens;
 /// hold a request open for as long as the log is long.
 pub const MAX_REWIND_CHANGESETS: usize = 1000;
 
+/// An instant an as-of read resolves to a changeset, held at the
+/// millisecond precision a UUIDv7 id carries.
+///
+/// Wall-clock time is only used to pick a position in the changeset log. The
+/// view itself is the one `as_of_changeset` gives for that position, so its
+/// meaning comes from log order, never from comparing clocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct AsOfTime {
+    unix_millis: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AsOfTimeError {
+    #[error("as_of_time {0:?} is not an RFC 3339 timestamp")]
+    Malformed(String),
+    #[error("as_of_time {0:?} is before the Unix epoch")]
+    BeforeEpoch(String),
+    #[error("as_of_time {0:?} is later than the server clock, so its view could still change")]
+    InFuture(String),
+}
+
+impl AsOfTime {
+    /// Parse an RFC 3339 instant, refusing one later than `now`: a view of a
+    /// moment that has not finished happening would differ on every read.
+    pub fn parse(raw: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Self, AsOfTimeError> {
+        let at = chrono::DateTime::parse_from_rfc3339(raw)
+            .map_err(|_| AsOfTimeError::Malformed(raw.to_owned()))?
+            .with_timezone(&chrono::Utc);
+        if at > now {
+            return Err(AsOfTimeError::InFuture(raw.to_owned()));
+        }
+        let unix_millis = u64::try_from(at.timestamp_millis())
+            .map_err(|_| AsOfTimeError::BeforeEpoch(raw.to_owned()))?;
+        Ok(Self { unix_millis })
+    }
+
+    /// Whether the changeset `id` was minted at or before this instant.
+    /// `None` when `id` is not a UUIDv7, which no recorded changeset is.
+    #[must_use]
+    pub fn admits(self, id: &str) -> Option<bool> {
+        changeset_unix_millis(id).map(|minted| minted <= self.unix_millis)
+    }
+}
+
+fn changeset_unix_millis(id: &str) -> Option<u64> {
+    let uuid = uuid::Uuid::parse_str(id).ok()?;
+    if uuid.get_version() != Some(uuid::Version::SortRand) {
+        return None;
+    }
+    let (secs, nanos) = uuid.get_timestamp()?.to_unix();
+    Some(secs * 1000 + u64::from(nanos / 1_000_000))
+}
+
 /// The ops of `record` an as-of read undoes for a caller limited to `lens`,
 /// one per key.
 ///
@@ -142,6 +195,67 @@ mod tests {
         ops.iter()
             .map(|op| op.entity_ref.id.as_ref().unwrap().slug.clone())
             .collect()
+    }
+
+    fn instant(raw: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(raw)
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+    }
+
+    /// A UUIDv7 minted at `millis` since the epoch.
+    fn minted_at(millis: u64) -> String {
+        let ts = uuid::Timestamp::from_unix(
+            uuid::NoContext,
+            millis / 1000,
+            (millis % 1000) as u32 * 1_000_000,
+        );
+        uuid::Uuid::new_v7(ts).to_string()
+    }
+
+    #[test]
+    fn as_of_time_includes_a_changeset_minted_in_the_same_millisecond() {
+        let now = instant("2026-10-30T00:00:00Z");
+        let at = AsOfTime::parse("2025-01-01T00:00:00.0429Z", now).unwrap();
+        let millis = 1_735_689_600_042;
+        assert_eq!(at.admits(&minted_at(millis)), Some(true));
+        assert_eq!(at.admits(&minted_at(millis - 1)), Some(true));
+        assert_eq!(at.admits(&minted_at(millis + 1)), Some(false));
+    }
+
+    #[test]
+    fn as_of_time_accepts_any_offset() {
+        let now = instant("2026-10-30T00:00:00Z");
+        assert_eq!(
+            AsOfTime::parse("2025-01-01T02:00:00+02:00", now).unwrap(),
+            AsOfTime::parse("2025-01-01T00:00:00Z", now).unwrap()
+        );
+    }
+
+    #[test]
+    fn as_of_time_refuses_the_future_and_bad_input() {
+        let now = instant("2026-10-30T00:00:00Z");
+        assert!(matches!(
+            AsOfTime::parse("2026-10-30T00:00:00.001Z", now),
+            Err(AsOfTimeError::InFuture(_))
+        ));
+        assert!(AsOfTime::parse("2026-10-30T00:00:00Z", now).is_ok());
+        assert!(matches!(
+            AsOfTime::parse("yesterday", now),
+            Err(AsOfTimeError::Malformed(_))
+        ));
+        assert!(matches!(
+            AsOfTime::parse("1969-12-31T23:59:59Z", now),
+            Err(AsOfTimeError::BeforeEpoch(_))
+        ));
+    }
+
+    #[test]
+    fn as_of_time_admits_no_id_that_is_not_a_uuid_v7() {
+        let at = AsOfTime::parse("2025-01-01T00:00:00Z", instant("2026-10-30T00:00:00Z")).unwrap();
+        assert_eq!(at.admits("not-a-uuid"), None);
+        let v4 = uuid::Builder::from_random_bytes([7; 16]).into_uuid();
+        assert_eq!(at.admits(&v4.to_string()), None);
     }
 
     #[test]

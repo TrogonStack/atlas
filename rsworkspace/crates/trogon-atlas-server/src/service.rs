@@ -958,6 +958,67 @@ impl EventModelServiceImpl {
         }
     }
 
+    /// The newest baseline changeset with an op in `lens` minted at or
+    /// before `at`.
+    ///
+    /// Changesets with no op the caller can read are passed over, so the
+    /// answer never names another owner's changeset, and they do not count
+    /// toward the rewind cap, matching
+    /// [`baseline_changesets_after`](Self::baseline_changesets_after).
+    async fn baseline_changeset_at(
+        &self,
+        at: as_of::AsOfTime,
+        raw: &str,
+        lens: &Lens,
+    ) -> Result<String, Status> {
+        let limit = usize::try_from(CHANGESETS_MAX_PAGE_SIZE).unwrap_or(500);
+        let mut newer = 0usize;
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = self
+                .store
+                .list_changesets(ChangesetPage {
+                    before: cursor.as_deref(),
+                    limit,
+                    scope: ChangesetScope::Baseline,
+                    namespace: None,
+                })
+                .await
+                .map_err(store_err)?;
+            let exhausted = page.len() < limit;
+            cursor = page.last().map(|r| r.id.clone());
+            for record in page {
+                if as_of::ops_to_rewind(&record, lens).is_empty() {
+                    continue;
+                }
+                match at.admits(&record.id) {
+                    Some(true) => return Ok(record.id),
+                    Some(false) => {}
+                    None => {
+                        return Err(Status::internal(format!(
+                            "baseline changeset {} has no UUIDv7 timestamp",
+                            record.id
+                        )))
+                    }
+                }
+                if newer >= as_of::MAX_REWIND_CHANGESETS {
+                    return Err(Status::failed_precondition(format!(
+                        "as_of_time {raw} is more than {} baseline changesets old; \
+                         an as-of read rewinds at most that many",
+                        as_of::MAX_REWIND_CHANGESETS
+                    )));
+                }
+                newer += 1;
+            }
+            if exhausted || cursor.is_none() {
+                return Err(Status::failed_precondition(format!(
+                    "no baseline changeset in a readable namespace was recorded at or before \
+                     as_of_time {raw}, so no recorded state can be rewound to"
+                )));
+            }
+        }
+    }
+
     /// [`snapshot_for`](Self::snapshot_for) plus whether the view hit the
     /// entity cap.
     ///
@@ -4618,15 +4679,36 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
         let id = require_id(req.id.as_ref(), "")?;
-        if !req.as_of_changeset.is_empty() && branch.is_some() {
+        if !req.as_of_changeset.is_empty() && !req.as_of_time.is_empty() {
             return Err(Status::invalid_argument(
-                "as_of_changeset reads baseline history only; send it without a branch header",
+                "as_of_changeset and as_of_time are mutually exclusive; send one",
+            ));
+        }
+        let as_of_time = if req.as_of_time.is_empty() {
+            None
+        } else {
+            Some(
+                as_of::AsOfTime::parse(&req.as_of_time, chrono::Utc::now())
+                    .map_err(|e| Status::invalid_argument(e.to_string()))?,
+            )
+        };
+        if (!req.as_of_changeset.is_empty() || as_of_time.is_some()) && branch.is_some() {
+            return Err(Status::invalid_argument(
+                "as-of reads cover baseline history only; send them without a branch header",
             ));
         }
         // The root is fetched by key, so the lensed snapshot below
         // narrows the neighbourhood but never the root itself.
         self.require_visible(&vis, &id.namespace).await?;
-        let (em, all, as_of_incomplete) = if req.as_of_changeset.is_empty() {
+        let as_of_changeset = match as_of_time {
+            Some(at) => {
+                let lens = self.lens(&vis).await?;
+                self.baseline_changeset_at(at, &req.as_of_time, &lens)
+                    .await?
+            }
+            None => req.as_of_changeset.clone(),
+        };
+        let (em, all, as_of_incomplete) = if as_of_changeset.is_empty() {
             let kind = pb::EntityKind::EventModel;
             let stored = match self.store.get(kind, id, branch.as_deref()).await {
                 Ok(stored) => stored,
@@ -4641,7 +4723,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         } else {
             let (all, incomplete) = self
                 .snapshot_as_of(
-                    &req.as_of_changeset,
+                    &as_of_changeset,
                     &vis,
                     principal.as_ref(),
                     (pb::EntityKind::EventModel, id),
@@ -4678,6 +4760,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 entities,
             }),
             truncated: truncated || as_of_incomplete,
+            as_of_changeset,
         }))
     }
 

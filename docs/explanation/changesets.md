@@ -310,6 +310,51 @@ GetEventModelProjection(id: {namespace: "acme", slug: "checkout", version: 1},
 
 The MCP tool `get_event_model_projection` takes the same `as_of_changeset`.
 
+### As of an instant
+
+`as_of_time` takes an RFC 3339 instant instead of an id. The server turns it
+into a changeset, then reads exactly what `as_of_changeset` would read for
+that changeset, and returns the id it chose in the response's
+`as_of_changeset` so the caller can pin the same view later.
+
+The instant picks a position in the log; it does not reconstruct a clock.
+A UUIDv7 id carries the millisecond its RPC minted it, and the chosen
+changeset is the newest baseline changeset with an op in a namespace the
+caller can read whose millisecond is at or before the instant. That keeps
+the view defined by log order, the same order every other as-of rule uses,
+rather than by comparing timestamps written by different processes.
+
+- **Precision.** Milliseconds. A sub-millisecond part is truncated, so every
+  changeset minted in the instant's millisecond is in the view.
+- **Boundary.** Inclusive: a changeset minted in the instant's millisecond is
+  in the view; one minted a millisecond later is not.
+- **Equal timestamps.** Several changesets minted in one millisecond keep
+  their id order, so the newest of them is chosen and all of them are in the
+  view, matching `as_of_changeset` for that newest id.
+- **Other owners.** A changeset with no op the caller can read is never
+  chosen, so the response cannot name another owner's changeset. Leaving it
+  out does not change the caller's view, which is narrowed to readable
+  namespaces anyway.
+- **Branches.** Baseline only, under the same rule as `as_of_changeset`.
+  Sending both fields is `INVALID_ARGUMENT`.
+- **The future.** An instant later than the server clock is
+  `INVALID_ARGUMENT`. Its answer would change as writes keep landing, so it
+  could not name a state.
+- **Before the log.** No readable changeset at or before the instant is
+  `FAILED_PRECONDITION`. The state before the first recorded changeset may
+  include unattributed writes, which the log cannot place in time.
+- **Cost.** One extra walk of the log from newest down to the chosen
+  changeset, under the same rewind cap.
+
+```text
+# The board as it was at the end of a review meeting.
+GetEventModelProjection(id: {namespace: "acme", slug: "checkout", version: 1},
+                        as_of_time: "2026-10-01T17:30:00Z")
+  -> projection, as_of_changeset: <the changeset it resolved to>
+```
+
+The MCP tool `get_event_model_projection` takes `as_of_time` too.
+
 ## Cost, and when to move off this
 
 `list_changesets` scans the bucket's keyspace per page, keeping at most

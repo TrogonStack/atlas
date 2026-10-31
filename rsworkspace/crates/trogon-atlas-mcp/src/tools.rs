@@ -183,6 +183,11 @@ pub struct EventModelProjectionParams {
     )]
     #[serde(default)]
     pub as_of_changeset: Option<String>,
+    #[schemars(
+        description = "RFC 3339 instant. Returns the baseline model as of the newest changeset recorded at or before it, at millisecond precision; the response names that changeset. Not allowed with as_of_changeset or a branch, or later than the server clock."
+    )]
+    #[serde(default)]
+    pub as_of_time: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

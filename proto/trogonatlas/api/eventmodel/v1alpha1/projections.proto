@@ -79,6 +79,15 @@ message GetEventModelProjectionRequest {
   // from its recorded pre-images, so a write that recorded no changeset
   // cannot be rewound. Empty reads the current model.
   string as_of_changeset = 3;
+  // Read-only view of the model as of this RFC 3339 instant. The server
+  // resolves it to the newest baseline changeset, among those touching a
+  // namespace the caller can read, whose UUIDv7 id carries a millisecond
+  // timestamp at or before it, then reads as `as_of_changeset` would.
+  // Sub-millisecond precision is truncated. An instant later than the
+  // server clock is INVALID_ARGUMENT, since its answer would still change;
+  // one older than every such changeset is FAILED_PRECONDITION. Mutually
+  // exclusive with `as_of_changeset`; same baseline-only rule.
+  string as_of_time = 4;
 }
 
 message GetEventModelProjectionResponse {
@@ -88,6 +97,9 @@ message GetEventModelProjectionResponse {
   // was clipped. With `include_cross_model = true`, this is the most common
   // case to hit for large models.
   bool truncated = 2;
+  // The changeset an as-of read resolved to, so a caller that asked by
+  // time can pin the same view by id. Empty for a current read.
+  string as_of_changeset = 3;
 }
 
 // ---------- Board manifests --------------------------------------------------
