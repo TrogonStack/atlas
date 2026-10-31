@@ -265,6 +265,9 @@ message PutEntityResponse {
   // `validation` means only the suites listed here ran, not a full model
   // check.
   ValidationCoverage coverage = 6;
+  // How the change would move the model's findings. Set only on
+  // `validate_only`; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 7;
 }
 
 message DeleteEntityRequest {
@@ -411,6 +414,9 @@ message BatchMutateResponse {
   // referrer gate). Never invent coverage client-side; empty per-op
   // `validation` is not a full-model clean bill of health.
   ValidationCoverage coverage = 7;
+  // How the batch would move the model's findings. Set only on
+  // STATUS_VALIDATED; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 8;
 }
 
 // Bulk delete by structural query, replacing the "list every entity then
@@ -1082,6 +1088,9 @@ message MergeBranchResponse {
   // not run full `model` or write-path `scenarios`; coverage reports that
   // honestly so empty `validation` is not read as a clean full-model gate.
   ValidationCoverage coverage = 9;
+  // How landing the branch would move baseline's findings. Set only on
+  // `dry_run` once validation was reached; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 10;
 }
 
 message UpdateBranchRequest {

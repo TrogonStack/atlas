@@ -36,7 +36,7 @@ use trogon_atlas_store::{
 };
 
 use crate::{
-    analysis, as_of,
+    analysis, as_of, consequence,
     conv::{
         entity_id, entity_kind, kind_from_i32, require_id, store_err, validate_branch_name,
         validate_entity_content,
@@ -982,6 +982,65 @@ impl EventModelServiceImpl {
             .await?;
         let entities = self.narrow(Arc::new(result.entities), vis).await?;
         Ok((entities, result.truncated))
+    }
+
+    /// How replacing `before` with `after` moves the findings of every
+    /// compared suite. `truncated` says the `before` view hit the entity
+    /// cap; `after` is derived from it, so it inherits the gap.
+    /// Advisory: a failure to compute the delta never fails the dry run it
+    /// rides on, so this reports `None` instead of an error.
+    async fn consequence_delta(
+        &self,
+        before: &[StoredEntity],
+        after: &[StoredEntity],
+        truncated: bool,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Option<pb::ConsequenceDelta> {
+        let started = std::time::Instant::now();
+        let contexts = async {
+            Ok::<_, Status>((
+                self.architecture_validation_context(before, branch, vis)
+                    .await?,
+                self.architecture_validation_context(after, branch, vis)
+                    .await?,
+            ))
+        };
+        let (before_context, after_context) = match contexts.await {
+            Ok(contexts) => contexts,
+            Err(status) => {
+                tracing::warn!(error = %status, "consequence delta skipped");
+                return None;
+            }
+        };
+        let before_context = consequence::context_outside(before_context, &[before]);
+        let after_context = consequence::context_outside(after_context, &[before, after]);
+        let scope = pb::ValidationScope {
+            branch: branch.unwrap_or_default().to_owned(),
+            ..Default::default()
+        };
+        let all_namespaces = std::collections::BTreeSet::new();
+        let snapshot_id = |world: &[StoredEntity]| {
+            snapshot_digest(world, &all_namespaces, false).map(|digest| digest.snapshot_id)
+        };
+        let mut delta = consequence::compare(
+            &consequence::Scan::of(before, &before_context, truncated, &scope),
+            &consequence::Scan::of(after, &after_context, truncated, &scope),
+            String::new(),
+            String::new(),
+        );
+        match (snapshot_id(before), snapshot_id(after)) {
+            (Ok(before_id), Ok(after_id)) => {
+                delta.before_snapshot_id = before_id;
+                delta.after_snapshot_id = after_id;
+            }
+            (Err(status), _) | (_, Err(status)) => {
+                tracing::debug!(error = %status, "consequence delta has no snapshot binding");
+                delta.complete = false;
+            }
+        }
+        self.metrics.record_consequence_delta(started.elapsed());
+        Some(delta)
     }
 
     async fn lock_mutations(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -2317,6 +2376,7 @@ impl EventModelServiceImpl {
             precondition_failure: None,
             operation_receipt: None,
             coverage: None,
+            consequence_delta: None,
         }
     }
 
@@ -2382,6 +2442,7 @@ impl EventModelServiceImpl {
             precondition_failure: None,
             operation_receipt: None,
             coverage: None,
+            consequence_delta: None,
         }
     }
 
@@ -2582,6 +2643,82 @@ fn world_after(
     world.into_iter().flatten().collect()
 }
 
+/// `base` after the overlay `outcomes`, each paired with the key it landed
+/// on. Etags are dropped: the overlay's are not the store's.
+fn world_with_outcomes<'a>(
+    base: &[StoredEntity],
+    keys: impl IntoIterator<Item = (pb::EntityKind, &'a pb::Id)>,
+    outcomes: &[MutationOutcome],
+) -> Vec<StoredEntity> {
+    let changes: Vec<_> = keys
+        .into_iter()
+        .zip(outcomes)
+        .filter_map(|((kind, id), outcome)| match outcome {
+            MutationOutcome::Wrote { entity, .. } => Some((kind, id, Some(entity))),
+            MutationOutcome::Deleted => Some((kind, id, None)),
+            MutationOutcome::Noop { .. } => None,
+        })
+        .collect();
+    world_after(base, &changes)
+}
+
+struct SnapshotDigest {
+    snapshot_id: String,
+    entity_count: u32,
+    entries: Vec<pb::SnapshotEntry>,
+}
+
+/// Content identity of `all`, restricted to `scope` when it is not empty.
+fn snapshot_digest(
+    all: &[StoredEntity],
+    scope: &std::collections::BTreeSet<&str>,
+    include_entries: bool,
+) -> Result<SnapshotDigest, Status> {
+    let mut hasher = trogon_atlas_core::SnapshotHasher::new();
+    let mut entries = Vec::new();
+    for se in all {
+        let id = entity_id(&se.entity)?;
+        if !scope.is_empty() && !scope.contains(id.namespace.as_str()) {
+            continue;
+        }
+        let kind = entity_kind(&se.entity)?;
+        let key = trogon_atlas_store::key::entity_key(kind, id);
+        let hash = trogon_atlas_core::entity_content_hash(&se.entity).map_err(|e| {
+            // An entity that cannot render as canonical JSON has no
+            // content identity, so the snapshot has none either. Failing
+            // is the honest answer: silently skipping it would produce an
+            // id for a model that is missing an entity.
+            Status::failed_precondition(format!(
+                "entity {key} has no content identity, so no snapshot id can be computed: {e}"
+            ))
+        })?;
+        if include_entries {
+            entries.push(pb::SnapshotEntry {
+                key: key.clone(),
+                entity: Some(pb::EntityRef {
+                    kind: kind as i32,
+                    id: Some(id.clone()),
+                }),
+                content_hash: hash.to_hex(),
+            });
+        }
+        hasher.insert(key, hash).map_err(|e| {
+            // Two rows for one key means the store enumeration is
+            // broken; hashing on would name a state that never existed.
+            Status::internal(format!("snapshot enumeration produced {e}"))
+        })?;
+    }
+    // `SnapshotHasher` keeps its own sorted order; sort the response
+    // entries to match, since the proto promises key order.
+    entries.sort_by(|a, b| a.key.cmp(&b.key));
+
+    Ok(SnapshotDigest {
+        snapshot_id: hasher.finish().to_hex(),
+        entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
+        entries,
+    })
+}
+
 fn runs_scenarios(kind: pb::EntityKind) -> bool {
     matches!(
         kind,
@@ -2640,6 +2777,7 @@ fn build_op_results(
                             // Suite coverage for the batch lives on
                             // BatchMutateResponse.coverage.
                             coverage: None,
+                            consequence_delta: None,
                         },
                     )),
                 }
@@ -3207,49 +3345,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let scope: std::collections::BTreeSet<&str> =
             req.namespaces.iter().map(String::as_str).collect();
 
-        let mut hasher = trogon_atlas_core::SnapshotHasher::new();
-        let mut entries = Vec::new();
-        for se in all.iter() {
-            let id = entity_id(&se.entity)?;
-            if !scope.is_empty() && !scope.contains(id.namespace.as_str()) {
-                continue;
-            }
-            let kind = entity_kind(&se.entity)?;
-            let key = trogon_atlas_store::key::entity_key(kind, id);
-            let hash = trogon_atlas_core::entity_content_hash(&se.entity).map_err(|e| {
-                // An entity that cannot render as canonical JSON has no
-                // content identity, so the snapshot has none either. Failing
-                // is the honest answer: silently skipping it would produce an
-                // id for a model that is missing an entity.
-                Status::failed_precondition(format!(
-                    "entity {key} has no content identity, so no snapshot id can be computed: {e}"
-                ))
-            })?;
-            if req.include_entries {
-                entries.push(pb::SnapshotEntry {
-                    key: key.clone(),
-                    entity: Some(pb::EntityRef {
-                        kind: kind as i32,
-                        id: Some(id.clone()),
-                    }),
-                    content_hash: hash.to_hex(),
-                });
-            }
-            hasher.insert(key, hash).map_err(|e| {
-                // Two rows for one key means the store enumeration is
-                // broken; hashing on would name a state that never existed.
-                Status::internal(format!("snapshot enumeration produced {e}"))
-            })?;
-        }
-        // `SnapshotHasher` keeps its own sorted order; sort the response
-        // entries to match, since the proto promises key order.
-        entries.sort_by(|a, b| a.key.cmp(&b.key));
-
+        let digest = snapshot_digest(&all, &scope, req.include_entries)?;
         Ok(Response::new(pb::GetSnapshotIdResponse {
-            snapshot_id: hasher.finish().to_hex(),
-            entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
+            snapshot_id: digest.snapshot_id,
+            entity_count: digest.entity_count,
             truncated,
-            entries,
+            entries: digest.entries,
         }))
     }
 
@@ -4969,7 +5070,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // `if_match` see a stable view and report the same typed refusal as a
         // real write. The lock is released when this call returns; a preview
         // is never a reservation.
-        let _guard = self.lock_mutations().await;
+        let guard = self.lock_mutations().await;
 
         if req.validate_only {
             self.validate_architecture_write(&entity, branch.as_deref(), &vis)
@@ -5002,6 +5103,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let prepared =
                 trogon_atlas_core::connection_persistence::prepare_entity(previous, &entity)
                     .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if branch.is_none() {
+                self.invalidate_snapshot().await;
+            }
+            let (before, truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
+            let after = world_after(&before, &[(kind, &id, Some(&prepared))]);
+            drop(guard);
+            let consequence_delta = self
+                .consequence_delta(&before, &after, truncated, branch.as_deref(), &vis)
+                .await;
             return Ok(Response::new(pb::PutEntityResponse {
                 entity: Some(prepared),
                 etag: String::new(),
@@ -5009,6 +5121,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 no_op: false,
                 operation_receipt: None,
                 coverage: Some(put_coverage),
+                consequence_delta,
             }));
         }
 
@@ -5080,6 +5193,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             // Replay reconstructs current state; it did not
                             // re-run write-path suites for this call.
                             coverage: None,
+                            consequence_delta: None,
                         }));
                     }
                 }
@@ -5233,6 +5347,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 operation_receipts::fresh_receipt(&req.operation_id, &receipt_changeset_id)
             }),
             coverage: Some(put_coverage),
+            consequence_delta: None,
         }))
     }
 
@@ -5719,7 +5834,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // Serialize against every other writer: dry-run applies and rolls
         // back, so nothing may interleave with it, and concurrent batches
         // must not interleave with each other.
-        let _guard = self.lock_mutations().await;
+        let guard = self.lock_mutations().await;
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
@@ -5897,6 +6012,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         subject_count(metas.len()),
                         reached,
                     )),
+                    consequence_delta: None,
                 }));
             }
         }
@@ -6001,7 +6117,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if branch.is_none() {
                 self.invalidate_snapshot().await;
             }
-            let snapshot = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let (snapshot, snapshot_truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
             let mut exact: HashMap<_, _> = snapshot
                 .iter()
                 .filter_map(|stored| {
@@ -6131,6 +6249,21 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         &per_op_referrers,
                         referrers_incomplete,
                     );
+                    let after = world_with_outcomes(
+                        &pre_all_arc,
+                        metas.iter().map(|meta| (meta.kind, &meta.id)),
+                        &outcomes,
+                    );
+                    drop(guard);
+                    let consequence_delta = self
+                        .consequence_delta(
+                            &pre_all_arc,
+                            &after,
+                            snapshot_truncated,
+                            branch.as_deref(),
+                            &vis,
+                        )
+                        .await;
                     Ok(Response::new(pb::BatchMutateResponse {
                         status: pb::batch_mutate_response::Status::Validated as i32,
                         results,
@@ -6139,6 +6272,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         precondition_failure: None,
                         operation_receipt: None,
                         coverage: Some(batch_coverage.clone()),
+                        consequence_delta,
                     }))
                 }
                 Err(err) => Ok(Response::new(
@@ -6201,6 +6335,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                     &record,
                                 )),
                                 coverage: None,
+                                consequence_delta: None,
                             }));
                         }
                     }
@@ -6301,6 +6436,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             )
                         }),
                         coverage: Some(batch_coverage),
+                        consequence_delta: None,
                     }))
                 }
                 // A partial apply leaves the claim deliberately unsettled:
@@ -8103,7 +8239,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             return Err(branch_not_found(&req.name));
         }
 
-        let _guard = self.lock_mutations().await;
+        let guard = self.lock_mutations().await;
 
         let deltas = self
             .store
@@ -8274,61 +8410,28 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // Full detection already ran above; validate the post-merge
             // world via an in-memory overlay without persisting anything.
             let (pre_all, snapshot_truncated) = self.snapshot_with_truncation(None, &vis).await?;
-            let post_world: Vec<StoredEntity> = match dry_run::apply_landing(&pre_all, &ops) {
-                Ok(outcomes) => {
-                    let mut world: Vec<StoredEntity> = (*pre_all).clone();
-                    let mut by_key: std::collections::HashMap<pb::EntityKey, usize> =
-                        std::collections::HashMap::new();
-                    for (i, se) in world.iter().enumerate() {
-                        if let (Some(k), Some(id)) = (
-                            trogon_atlas_store::refs::entity_kind(&se.entity),
-                            trogon_atlas_store::refs::entity_id(&se.entity),
-                        ) {
-                            by_key.insert(pb::EntityKey::new(k, id), i);
-                        }
-                    }
-                    for (meta, oc) in op_metas.iter().zip(outcomes.iter()) {
-                        let key = pb::EntityKey::new(meta.kind, &meta.id);
-                        match oc {
-                            MutationOutcome::Wrote { entity, etag } => {
-                                let se = StoredEntity {
-                                    entity: entity.clone(),
-                                    etag: etag.clone(),
-                                };
-                                if let Some(&i) = by_key.get(&key) {
-                                    world[i] = se;
-                                } else {
-                                    by_key.insert(key, world.len());
-                                    world.push(se);
-                                }
-                            }
-                            MutationOutcome::Noop { .. } => {}
-                            MutationOutcome::Deleted => {
-                                if let Some(&i) = by_key.get(&key) {
-                                    world.remove(i);
-                                    by_key.remove(&key);
-                                    for v in by_key.values_mut() {
-                                        if *v > i {
-                                            *v -= 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    world
-                }
+            let post_world = match dry_run::apply_landing(&pre_all, &ops) {
+                Ok(outcomes) => world_with_outcomes(
+                    &pre_all,
+                    op_metas.iter().map(|meta| (meta.kind, &meta.id)),
+                    &outcomes,
+                ),
                 Err(error) => return Err(store_err(error)),
             };
             let mut validation_issues = validation::validate_store_hygiene(&post_world);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
+            drop(guard);
+            let consequence_delta = self
+                .consequence_delta(&pre_all, &post_world, snapshot_truncated, None, &vis)
+                .await;
             if has_error {
                 return Ok(Response::new(pb::MergeBranchResponse {
                     status: pb::merge_branch_response::Status::Invalid as i32,
                     validation: validation_issues,
                     coverage: Some(merge_coverage(snapshot_truncated, false)),
+                    consequence_delta,
                     ..landed.into_response()
                 }));
             }
@@ -8337,6 +8440,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 status: pb::merge_branch_response::Status::Validated as i32,
                 validation: validation_issues,
                 coverage: Some(merge_coverage(snapshot_truncated, true)),
+                consequence_delta,
                 ..landed.into_response()
             }));
         }

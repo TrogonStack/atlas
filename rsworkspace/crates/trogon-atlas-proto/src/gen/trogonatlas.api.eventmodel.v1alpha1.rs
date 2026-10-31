@@ -1372,6 +1372,128 @@ pub struct ValidationCoverage {
     #[prost(message, optional, tag="4")]
     pub requested_scope: ::core::option::Option<ValidationScope>,
 }
+// ---------- Consequence delta ------------------------------------------------
+//
+// What a proposed change would do to the findings of the model it lands in.
+// Both worlds are scanned with the same suites over the caller's whole
+// visible snapshot, then compared by finding identity. Advisory only: a
+// delta never refuses a write. See docs/explanation/consequence-delta.md.
+
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FindingChange {
+    #[prost(enumeration="finding_change::Kind", tag="1")]
+    pub kind: i32,
+    /// Suite the finding belongs to, as on ValidationCheckResult.check_id.
+    #[prost(string, tag="2")]
+    pub check_id: ::prost::alloc::string::String,
+    /// Representative issue on each side. Unset on the side where the
+    /// identity has no occurrence.
+    #[prost(message, optional, tag="3")]
+    pub before: ::core::option::Option<ValidationIssue>,
+    #[prost(message, optional, tag="4")]
+    pub after: ::core::option::Option<ValidationIssue>,
+    /// Occurrences of this identity this change accounts for.
+    #[prost(uint32, tag="5")]
+    pub occurrences: u32,
+    /// Total occurrences of the identity in each world, so repeated findings
+    /// are visible as counts rather than as duplicate entries.
+    #[prost(uint32, tag="6")]
+    pub occurrences_before: u32,
+    #[prost(uint32, tag="7")]
+    pub occurrences_after: u32,
+    /// Why the change is KIND_UNKNOWN. Empty for every other kind.
+    #[prost(string, tag="8")]
+    pub reason: ::prost::alloc::string::String,
+    /// The entity whose validation pass produced the finding, for suites that
+    /// run once per entity (`model`, `scenarios`). Part of the finding's
+    /// identity: one rule on one subject reported by two models is two
+    /// findings. Absent for suites that scan the whole store.
+    #[prost(message, optional, tag="9")]
+    pub origin: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+}
+/// Nested message and enum types in `FindingChange`.
+pub mod finding_change {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        /// Present after the change and absent before, with the before scan
+        /// complete for its suite.
+        Introduced = 1,
+        /// Present before and absent after, with the after scan complete for its
+        /// suite and the subject still present.
+        Resolved = 2,
+        /// Same identity on both sides with a different severity.
+        SeverityChanged = 3,
+        /// The change removes the finding's subject, so the finding goes with it.
+        SubjectRemoved = 4,
+        /// The finding now also appears on a newer version of its subject: the
+        /// successor inherited it rather than introducing a new problem.
+        CarriedToSuccessor = 5,
+        /// Seen on one side only, but the other side's scan could not cover the
+        /// finding's suite. `before` set alone: resolution is unproven. `after`
+        /// set alone: novelty is unproven. `reason` names the gap.
+        Unknown = 6,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Introduced => "KIND_INTRODUCED",
+                Self::Resolved => "KIND_RESOLVED",
+                Self::SeverityChanged => "KIND_SEVERITY_CHANGED",
+                Self::SubjectRemoved => "KIND_SUBJECT_REMOVED",
+                Self::CarriedToSuccessor => "KIND_CARRIED_TO_SUCCESSOR",
+                Self::Unknown => "KIND_UNKNOWN",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "KIND_INTRODUCED" => Some(Self::Introduced),
+                "KIND_RESOLVED" => Some(Self::Resolved),
+                "KIND_SEVERITY_CHANGED" => Some(Self::SeverityChanged),
+                "KIND_SUBJECT_REMOVED" => Some(Self::SubjectRemoved),
+                "KIND_CARRIED_TO_SUCCESSOR" => Some(Self::CarriedToSuccessor),
+                "KIND_UNKNOWN" => Some(Self::Unknown),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConsequenceDelta {
+    /// Every identity whose occurrences or severity differ, sorted by suite,
+    /// code and subject.
+    #[prost(message, repeated, tag="1")]
+    pub changes: ::prost::alloc::vec::Vec<FindingChange>,
+    /// Occurrences present on both sides with the same severity.
+    #[prost(uint32, tag="2")]
+    pub unchanged_count: u32,
+    /// Coverage of the scan over the world before the change.
+    #[prost(message, optional, tag="3")]
+    pub before_coverage: ::core::option::Option<ValidationCoverage>,
+    /// Coverage of the scan over the candidate world.
+    #[prost(message, optional, tag="4")]
+    pub after_coverage: ::core::option::Option<ValidationCoverage>,
+    /// True only when every suite the delta compares completed on both sides
+    /// and no applicable suite was left out. False never means "no change";
+    /// it means some finding may be missing from `changes`.
+    #[prost(bool, tag="5")]
+    pub complete: bool,
+    /// Snapshot identity of the visible world the change was compared
+    /// against, computed like GetSnapshotId with no namespace filter.
+    #[prost(string, tag="6")]
+    pub before_snapshot_id: ::prost::alloc::string::String,
+    /// Snapshot identity of the candidate world the change would produce.
+    #[prost(string, tag="7")]
+    pub after_snapshot_id: ::prost::alloc::string::String,
+}
 // Tenant type libraries are stored as proto source text and compiled on
 // demand. These messages let a client check a library and look up the
 // compiled types before it writes anything that depends on them. Every RPC
@@ -3293,6 +3415,10 @@ pub struct PutEntityResponse {
     /// check.
     #[prost(message, optional, tag="6")]
     pub coverage: ::core::option::Option<ValidationCoverage>,
+    /// How the change would move the model's findings. Set only on
+    /// `validate_only`; advisory, never a refusal.
+    #[prost(message, optional, tag="7")]
+    pub consequence_delta: ::core::option::Option<ConsequenceDelta>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteEntityRequest {
@@ -3489,6 +3615,10 @@ pub struct BatchMutateResponse {
     /// `validation` is not a full-model clean bill of health.
     #[prost(message, optional, tag="7")]
     pub coverage: ::core::option::Option<ValidationCoverage>,
+    /// How the batch would move the model's findings. Set only on
+    /// STATUS_VALIDATED; advisory, never a refusal.
+    #[prost(message, optional, tag="8")]
+    pub consequence_delta: ::core::option::Option<ConsequenceDelta>,
 }
 /// Nested message and enum types in `BatchMutateResponse`.
 pub mod batch_mutate_response {
@@ -4366,6 +4496,10 @@ pub struct MergeBranchResponse {
     /// honestly so empty `validation` is not read as a clean full-model gate.
     #[prost(message, optional, tag="9")]
     pub coverage: ::core::option::Option<ValidationCoverage>,
+    /// How landing the branch would move baseline's findings. Set only on
+    /// `dry_run` once validation was reached; advisory, never a refusal.
+    #[prost(message, optional, tag="10")]
+    pub consequence_delta: ::core::option::Option<ConsequenceDelta>,
 }
 /// Nested message and enum types in `MergeBranchResponse`.
 pub mod merge_branch_response {
