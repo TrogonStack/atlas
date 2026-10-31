@@ -1130,3 +1130,43 @@ async fn an_unreadable_protection_row_fails_closed_until_an_admin_lifts_it() {
         Some("Edited")
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_identity_can_be_protected_again_after_a_lift() {
+    let mut c = start().await;
+    seed(&mut c, event("ep-reprotect", "placed", 1, "Placed")).await;
+    seed(&mut c, event("ep-reprotect", "shipped", 1, "Shipped")).await;
+
+    let first = protect(&mut c, pb::EntityKind::Event, "ep-reprotect", "placed").await;
+    c.unprotect_entity(as_token(
+        lift_req("ep-reprotect", "placed", first.revision),
+        ADMIN,
+    ))
+    .await
+    .unwrap();
+    let again = protect(&mut c, pb::EntityKind::Event, "ep-reprotect", "placed").await;
+    assert_ne!(again.changeset_id, first.changeset_id);
+    assert!(protection_of(&mut c, "ep-reprotect", "placed")
+        .await
+        .is_some());
+
+    let shipped = protect(&mut c, pb::EntityKind::Event, "ep-reprotect", "shipped").await;
+    c.unprotect_entity(as_token(
+        lift_req("ep-reprotect", "shipped", shipped.revision),
+        ADMIN,
+    ))
+    .await
+    .unwrap();
+    c.put_entity(as_token(
+        put(annotated(
+            event("ep-reprotect", "shipped", 1, "Shipped"),
+            "published contract",
+        )),
+        ADMIN,
+    ))
+    .await
+    .unwrap();
+    assert!(protection_of(&mut c, "ep-reprotect", "shipped")
+        .await
+        .is_some());
+}
