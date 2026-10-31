@@ -855,6 +855,25 @@ pub struct MoveNamespaceParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct GetBackingReportParams {
+    #[schemars(
+        description = "Count only subjects in these namespace ids. Omit for every visible namespace. Evidence is read from the whole visible model either way."
+    )]
+    #[serde(default)]
+    pub namespaces: Option<Vec<String>>,
+    #[schemars(
+        description = "Also return an ENTITY_UNBACKED Info finding per subject settled as unbacked. Off by default."
+    )]
+    #[serde(default)]
+    pub include_unbacked_findings: bool,
+    /// When true, return the response as proto3-rendered JSON inside a
+    /// `{ "json": "..." }` envelope instead of `{ "binpb_base64": "..." }`.
+    #[serde(default)]
+    pub json: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct GetSnapshotIdParams {
     #[schemars(
         description = "Restrict the snapshot to these namespaces. Omit for every namespace. Two snapshot ids are comparable only when taken over the same scope."

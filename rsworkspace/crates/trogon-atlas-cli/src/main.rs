@@ -336,6 +336,19 @@ enum Cmd {
     },
     /// List the namespaces the caller can see, with their ids and entity counts.
     Namespaces,
+    /// Report which entities carry an accepted Decision, a Document or a
+    /// complete code reference. Exits 11 when any subject could not be
+    /// settled or the snapshot was truncated, so a gate never reads a
+    /// partial count as a rate. With --branch, reports the branch's view.
+    BackingReport {
+        /// Count only subjects in this namespace id. Repeat for several;
+        /// omit for every visible namespace.
+        #[arg(long = "namespace")]
+        namespaces: Vec<String>,
+        /// Also return an `ENTITY_UNBACKED` Info finding per unbacked subject.
+        #[arg(long)]
+        unbacked_findings: bool,
+    },
     /// Run full validation on a stored event model: the rules that need the
     /// whole model in view, which `apply --dry-run` does not run, plus the
     /// strategic chain of the model's namespace (its BoundedContext, the
@@ -638,7 +651,8 @@ const EXIT_FINDINGS: u8 = 1;
 
 /// Exit code for a `validate` / `validate-project` run with no Error finding
 /// whose coverage shows a suite or the snapshot was not fully examined, so a
-/// gate never mistakes "nothing found in part of the model" for a pass.
+/// gate never mistakes "nothing found in part of the model" for a pass. Also
+/// a `backing-report` whose counts leave some subject unsettled.
 const EXIT_VALIDATION_INCOMPLETE: u8 = 11;
 
 fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
@@ -646,6 +660,40 @@ fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
         validate::ValidationVerdict::Clean => ExitCode::SUCCESS,
         validate::ValidationVerdict::Findings => ExitCode::from(EXIT_FINDINGS),
         validate::ValidationVerdict::Incomplete => ExitCode::from(EXIT_VALIDATION_INCOMPLETE),
+    }
+}
+
+fn print_backing_report(report: &trogon_atlas_client::backing::BackingReport) {
+    let response = report.response();
+    let totals = response.totals.unwrap_or_default();
+    let rate = totals.unbacked_rate.map_or_else(
+        || "not established".to_owned(),
+        |rate| format!("{:.1}%", rate * 100.0),
+    );
+    println!(
+        "snapshot {}: {} subjects, {} backed, {} unbacked, {} unknown, unbacked rate {rate}",
+        response.snapshot_id, totals.total, totals.backed, totals.unbacked, totals.unknown
+    );
+    for kind in &response.kinds {
+        let name = pb::EntityKind::try_from(kind.kind)
+            .map_or("unknown", |kind| kind.as_str_name())
+            .trim_start_matches("ENTITY_KIND_")
+            .to_lowercase();
+        let totals = kind.totals.unwrap_or_default();
+        println!(
+            "  {name}: {} subjects, {} backed, {} unbacked, {} unknown",
+            totals.total, totals.backed, totals.unbacked, totals.unknown
+        );
+    }
+    for reason in &response.incomplete_reasons {
+        let name = pb::BackingIncompleteReason::try_from(*reason)
+            .map_or("UNRECOGNIZED", |reason| reason.as_str_name())
+            .trim_start_matches("BACKING_INCOMPLETE_REASON_")
+            .to_lowercase();
+        println!("incomplete: {name}");
+    }
+    for issue in &response.findings {
+        println!("{}", apply::format_issue(issue));
     }
 }
 
@@ -1951,6 +1999,30 @@ async fn run(
                 print!("{}", view::render_namespaces(&namespaces));
             }
             Ok((ExitCode::SUCCESS, Some(view::namespaces_json(&namespaces))))
+        }
+        Cmd::BackingReport {
+            namespaces,
+            unbacked_findings,
+        } => {
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let report = trogon_atlas_client::backing::get_backing_report(
+                &mut client,
+                pb::GetBackingReportRequest {
+                    namespaces,
+                    include_unbacked_findings: unbacked_findings,
+                },
+            )
+            .await?;
+            if text {
+                print_backing_report(&report);
+            }
+            let code = if report.is_complete() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(EXIT_VALIDATION_INCOMPLETE)
+            };
+            Ok((code, Some(report.to_json()?)))
         }
         Cmd::Validate { model } => {
             let address = validate::parse_model_address(&model)?;

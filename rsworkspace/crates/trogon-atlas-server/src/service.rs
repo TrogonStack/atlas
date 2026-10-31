@@ -3,6 +3,8 @@ mod source_integration;
 
 #[path = "architecture_admission.rs"]
 mod architecture_admission;
+#[path = "backing_report.rs"]
+mod backing_report;
 #[path = "data_product_events.rs"]
 mod data_product_events;
 #[path = "data_product_inspection.rs"]
@@ -54,6 +56,65 @@ use crate::{
     scope::{BaselineProtection, OutOfScope, WriteTargets},
     validation,
 };
+
+struct SnapshotDigest {
+    snapshot_id: String,
+    entity_count: u32,
+    entries: Vec<pb::SnapshotEntry>,
+}
+
+/// Content identity of `rows` restricted to `scope`, where an empty scope
+/// means every namespace. A set rather than a scan per entity so a wide
+/// filter stays linear.
+fn snapshot_digest(
+    rows: &[StoredEntity],
+    scope: &std::collections::BTreeSet<&str>,
+    include_entries: bool,
+) -> Result<SnapshotDigest, Status> {
+    let mut hasher = trogon_atlas_core::SnapshotHasher::new();
+    let mut entries = Vec::new();
+    for se in rows {
+        let id = entity_id(&se.entity)?;
+        if !scope.is_empty() && !scope.contains(id.namespace.as_str()) {
+            continue;
+        }
+        let kind = entity_kind(&se.entity)?;
+        let key = trogon_atlas_store::key::entity_key(kind, id);
+        let hash = trogon_atlas_core::entity_content_hash(&se.entity).map_err(|e| {
+            // An entity that cannot render as canonical JSON has no
+            // content identity, so the snapshot has none either. Failing
+            // is the honest answer: silently skipping it would produce an
+            // id for a model that is missing an entity.
+            Status::failed_precondition(format!(
+                "entity {key} has no content identity, so no snapshot id can be computed: {e}"
+            ))
+        })?;
+        if include_entries {
+            entries.push(pb::SnapshotEntry {
+                key: key.clone(),
+                entity: Some(pb::EntityRef {
+                    kind: kind as i32,
+                    id: Some(id.clone()),
+                }),
+                content_hash: hash.to_hex(),
+            });
+        }
+        hasher.insert(key, hash).map_err(|e| {
+            // Two rows for one key means the store enumeration is
+            // broken; hashing on would name a state that never existed.
+            Status::internal(format!("snapshot enumeration produced {e}"))
+        })?;
+    }
+    // `SnapshotHasher` keeps its own sorted order; sort the response
+    // entries to match, since the proto promises key order.
+    entries.sort_by(|a, b| a.key.cmp(&b.key));
+
+    Ok(SnapshotDigest {
+        snapshot_id: hasher.finish().to_hex(),
+        entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
+        entries,
+    })
+}
 
 #[derive(Clone, Copy)]
 enum ReferenceIndexPurpose {
@@ -3202,55 +3263,34 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .snapshot_with_truncation(branch.as_deref(), &vis)
             .await?;
 
-        // Empty means every namespace. A set rather than a scan per entity so
-        // a wide filter stays linear.
         let scope: std::collections::BTreeSet<&str> =
             req.namespaces.iter().map(String::as_str).collect();
-
-        let mut hasher = trogon_atlas_core::SnapshotHasher::new();
-        let mut entries = Vec::new();
-        for se in all.iter() {
-            let id = entity_id(&se.entity)?;
-            if !scope.is_empty() && !scope.contains(id.namespace.as_str()) {
-                continue;
-            }
-            let kind = entity_kind(&se.entity)?;
-            let key = trogon_atlas_store::key::entity_key(kind, id);
-            let hash = trogon_atlas_core::entity_content_hash(&se.entity).map_err(|e| {
-                // An entity that cannot render as canonical JSON has no
-                // content identity, so the snapshot has none either. Failing
-                // is the honest answer: silently skipping it would produce an
-                // id for a model that is missing an entity.
-                Status::failed_precondition(format!(
-                    "entity {key} has no content identity, so no snapshot id can be computed: {e}"
-                ))
-            })?;
-            if req.include_entries {
-                entries.push(pb::SnapshotEntry {
-                    key: key.clone(),
-                    entity: Some(pb::EntityRef {
-                        kind: kind as i32,
-                        id: Some(id.clone()),
-                    }),
-                    content_hash: hash.to_hex(),
-                });
-            }
-            hasher.insert(key, hash).map_err(|e| {
-                // Two rows for one key means the store enumeration is
-                // broken; hashing on would name a state that never existed.
-                Status::internal(format!("snapshot enumeration produced {e}"))
-            })?;
-        }
-        // `SnapshotHasher` keeps its own sorted order; sort the response
-        // entries to match, since the proto promises key order.
-        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        let digest = snapshot_digest(&all, &scope, req.include_entries)?;
 
         Ok(Response::new(pb::GetSnapshotIdResponse {
-            snapshot_id: hasher.finish().to_hex(),
-            entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
+            snapshot_id: digest.snapshot_id,
+            entity_count: digest.entity_count,
             truncated,
-            entries,
+            entries: digest.entries,
         }))
+    }
+
+    async fn get_backing_report(
+        &self,
+        req: Request<pb::GetBackingReportRequest>,
+    ) -> Result<Response<pb::GetBackingReportResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.backing_report(req.into_inner(), branch, &vis)
+            .await
+            .map(Response::new)
     }
 
     async fn list_subject_decisions(

@@ -935,6 +935,37 @@ pub mod event_model_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Evidence presence across the visible model, bound to its snapshot id.
+*/
+        pub async fn get_backing_report(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetBackingReportRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetBackingReportResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetBackingReport",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetBackingReport",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         ///
         pub async fn list_subject_assignments(
             &mut self,
@@ -2940,6 +2971,15 @@ pub mod event_model_service_server {
             tonic::Response<super::ListIncomingDocumentDeclarationsResponse>,
             tonic::Status,
         >;
+        /** Evidence presence across the visible model, bound to its snapshot id.
+*/
+        async fn get_backing_report(
+            &self,
+            request: tonic::Request<super::GetBackingReportRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetBackingReportResponse>,
+            tonic::Status,
+        >;
         ///
         async fn list_subject_assignments(
             &self,
@@ -4900,6 +4940,55 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListIncomingDocumentDeclarationsSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetBackingReport" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetBackingReportSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::GetBackingReportRequest>
+                    for GetBackingReportSvc<T> {
+                        type Response = super::GetBackingReportResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetBackingReportRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::get_backing_report(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetBackingReportSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

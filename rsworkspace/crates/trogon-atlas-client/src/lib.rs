@@ -9,6 +9,7 @@
 //! spec IS the proto3-JSON body of the entity message, so the schema stays
 //! derived from the proto, never hand-maintained.
 pub mod apply;
+pub mod backing;
 pub mod branch;
 pub mod client;
 pub mod compat;

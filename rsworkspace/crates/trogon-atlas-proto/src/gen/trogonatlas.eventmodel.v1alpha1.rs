@@ -268,102 +268,6 @@ impl EntityKind {
         }
     }
 }
-/// Field paths are diagnostics only; references survive collection reordering.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ConnectionRef {
-    #[prost(message, optional, tag="1")]
-    pub owner: ::core::option::Option<EntityRef>,
-    #[prost(message, optional, tag="2")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
-    #[prost(string, tag="3")]
-    pub owner_uid: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct TypeLibraryRef {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// A tenant-owned set of protobuf definitions, stored as source text and
-/// compiled by the server on demand. `id.slug` is the package prefix the
-/// library owns: every file's `package` must equal it or start with it
-/// followed by a dot, and no two live libraries in the same namespace and
-/// branch may own overlapping prefixes.
-///
-/// The source is the only stored form. The compiled descriptors are derived
-/// state the server rebuilds whenever it needs them.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct TypeLibrary {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="4")]
-    pub files: ::prost::alloc::vec::Vec<ProtoSourceFile>,
-    /// Libraries whose files these files may import, in the same namespace.
-    #[prost(message, repeated, tag="5")]
-    pub dependencies: ::prost::alloc::vec::Vec<TypeLibraryRef>,
-    #[prost(message, optional, tag="6")]
-    pub provenance: ::core::option::Option<TypeLibraryProvenance>,
-    #[prost(message, repeated, tag="7")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="8")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ProtoSourceFile {
-    /// Relative import path, e.g. "acme/orders/v1/orders.proto".
-    #[prost(string, tag="1")]
-    pub path: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub content: ::prost::alloc::string::String,
-}
-/// Where the source text came from. A record only: the server never fetches
-/// anything it names. Remote origins are pulled client-side and arrive as
-/// `TypeLibrary.files`.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct TypeLibraryProvenance {
-    #[prost(oneof="type_library_provenance::Source", tags="1, 2, 3")]
-    pub source: ::core::option::Option<type_library_provenance::Source>,
-}
-/// Nested message and enum types in `TypeLibraryProvenance`.
-pub mod type_library_provenance {
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct InlineSource {
-    }
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct BufModuleSnapshot {
-        #[prost(string, tag="1")]
-        pub remote: ::prost::alloc::string::String,
-        #[prost(string, tag="2")]
-        pub owner: ::prost::alloc::string::String,
-        #[prost(string, tag="3")]
-        pub module: ::prost::alloc::string::String,
-        #[prost(string, tag="4")]
-        pub commit: ::prost::alloc::string::String,
-    }
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct GitSnapshot {
-        #[prost(string, tag="1")]
-        pub repository_url: ::prost::alloc::string::String,
-        #[prost(string, tag="2")]
-        pub r#ref: ::prost::alloc::string::String,
-        #[prost(string, tag="3")]
-        pub commit: ::prost::alloc::string::String,
-        #[prost(string, tag="4")]
-        pub subdirectory: ::prost::alloc::string::String,
-    }
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
-    pub enum Source {
-        #[prost(message, tag="1")]
-        Inline(InlineSource),
-        #[prost(message, tag="2")]
-        BufModule(BufModuleSnapshot),
-        #[prost(message, tag="3")]
-        Git(GitSnapshot),
-    }
-}
 /// One typed edge message per type kind. An Edge is a Ref + free-form doc +
 /// a typed annotation list (repeated google.protobuf.Any). Edges are used
 /// wherever a slice or storyboard endpoint may want to carry design data
@@ -638,6 +542,343 @@ impl TypeKind {
             _ => None,
         }
     }
+}
+/// A swim lane is the event-sourcing stream / aggregate boundary, not just a
+/// visual band. It identifies the stream (in the event-sourcing sense) that
+/// the events on this lane are appended to and that the commands on this
+/// lane target. All events on the same swim lane share the same stream;
+/// every resource that has its own stream at runtime has its swim lane as
+/// its stream *type*. This makes the swim lane the consistency / transaction
+/// boundary for the events and commands assigned to it.
+///
+/// Read models, UIs, processors, and personas are cross-cutting and do not
+/// belong to a stream -- they have their own dedicated bands on a diagram and
+/// do not reference a swim lane.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Swimlane {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    /// rendering order, top-to-bottom
+    #[prost(uint32, tag="4")]
+    pub order: u32,
+    /// optional hint for visualization
+    #[prost(string, tag="5")]
+    pub color: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="6")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    /// previous version this entity replaces (optional)
+    #[prost(message, optional, tag="7")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// Runtime stream identity, e.g. "order-{order_id}". Placeholders reference
+    /// FieldSpec names of the events/commands on this stream, or a derived
+    /// identity registered by name in a Uuidv5IdentityAnnotation on this
+    /// swimlane (e.g. "review-eligibility-{eligibility_id}" with an annotation
+    /// named "eligibility_id" carrying the UUIDv5 template). Conceptual like
+    /// ExternalSource.descriptor -- environment-specific prefixes stay out.
+    #[prost(string, tag="8")]
+    pub stream_id: ::prost::alloc::string::String,
+    /// The stream's lifecycle as data: after `after` lands on a stream
+    /// instance, exactly ONE of `next` follows. This is where a fork in the
+    /// road is DECIDED. Read models projected from the fork state carry the
+    /// condition data each road observes; observers (entries) are the
+    /// branches; but exclusivity -- what makes alternatives a fork instead of
+    /// a parallel fan-out -- comes from the consistency boundary: competing
+    /// commands append to this same stream and the aggregate accepts one
+    /// successor. `doc` on each Next is the guard ("registration completes
+    /// before expires_at"). Cycles are legal (expired -> reserved): the table
+    /// is a state machine, not a tree. Tools DERIVE everything else from it:
+    /// the storyboard fork graph (a storyboard whose outcome emits `after`
+    /// forks into the storyboards emitting each `next`), and scenario
+    /// checking (a GWT may only emit a legal successor of the last given
+    /// lifecycle event). Events listed here must belong to this swimlane.
+    #[prost(message, repeated, tag="9")]
+    pub transitions: ::prost::alloc::vec::Vec<swimlane::Transition>,
+    /// Aggregate state -- the fields the stream's aggregate carries
+    /// internally, beyond what commands pass in. These are values the
+    /// runtime sets (a generated UUID, a clock, a context token), values
+    /// an upstream actor picks at execution time (an LLM choosing a tool,
+    /// a router selecting a partition), or derived projections of the
+    /// aggregate's prior events that downstream events read off the
+    /// aggregate rather than off any single command.
+    ///
+    /// The validator counts a name in `state` as a valid source for the
+    /// EVENT_FIELD_UNSOURCED check, alongside the command's own fields
+    /// and the union of lane-command fields. Declaring a field here is a
+    /// load-bearing architectural claim: it says "the aggregate owns
+    /// this value." Use it instead of saga-decomposing every runtime
+    /// emission into its own command -- one command, many events, with
+    /// derived fields anchored to the aggregate they belong to.
+    #[prost(message, repeated, tag="10")]
+    pub state: ::prost::alloc::vec::Vec<FieldSpec>,
+}
+/// Nested message and enum types in `Swimlane`.
+pub mod swimlane {
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Transition {
+        #[prost(message, optional, tag="1")]
+        pub after: ::core::option::Option<super::EventRef>,
+        #[prost(message, repeated, tag="2")]
+        pub next: ::prost::alloc::vec::Vec<transition::Next>,
+    }
+    /// Nested message and enum types in `Transition`.
+    pub mod transition {
+        /// A Next is a real connection (the fork's branch), so like every other
+        /// Edge it carries design data: the guard doc plus Any annotations.
+        #[derive(Clone, PartialEq, ::prost::Message)]
+        pub struct Next {
+            #[prost(message, optional, tag="1")]
+            pub event: ::core::option::Option<super::super::EventRef>,
+            #[prost(string, tag="2")]
+            pub doc: ::prost::alloc::string::String,
+            #[prost(message, repeated, tag="3")]
+            pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+            #[prost(message, optional, tag="4")]
+            pub connection_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::ConnectionId>,
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Event {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub swimlane: ::core::option::Option<SwimlaneRef>,
+    #[prost(message, repeated, tag="6")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="7")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// The payload shape (Decision #33). Holds a `Schema` message
+    /// (anonymous when its Id is unset, named when set) or a message
+    /// declared by a TypeLibrary in the same namespace. The server
+    /// refuses a type no live TypeLibrary declares and a value that does
+    /// not decode as that type. Same `type_url` + same bytes across two
+    /// events = same payload type by declaration, no structural
+    /// inference required.
+    #[prost(message, optional, tag="8")]
+    pub schema: ::core::option::Option<::prost_types::Any>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Command {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub swimlane: ::core::option::Option<SwimlaneRef>,
+    #[prost(message, repeated, tag="6")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="7")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// The argument shape (Decision #33), held the same way as
+    /// `Event.schema`.
+    #[prost(message, optional, tag="8")]
+    pub schema: ::core::option::Option<::prost_types::Any>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ReadModel {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    /// Source of the read model. Either internal events or an external source
+    /// descriptor for read models projected from outside the system.
+    #[prost(message, repeated, tag="5")]
+    pub source_events: ::prost::alloc::vec::Vec<EventRef>,
+    #[prost(message, optional, tag="6")]
+    pub external_source: ::core::option::Option<read_model::ExternalSource>,
+    #[prost(message, repeated, tag="7")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="8")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// The projection shape (Decision #33), held the same way as
+    /// `Event.schema`. Two read models pointing at the same `schema`
+    /// (same Any bytes OR same named Schema entity) are nominally
+    /// same-type -- the historical "twin" question dissolves into the
+    /// schema identity.
+    #[prost(message, optional, tag="9")]
+    pub schema: ::core::option::Option<::prost_types::Any>,
+    /// The field names that identify one row of this read model. Every
+    /// name here must appear in the `schema` fields; when this list is non-empty,
+    /// every ReadModelSlice that projects into this read model must
+    /// source ALL key fields from its source events
+    /// (validated: RM_SLICE_KEY_UNSOURCED). An empty list means the
+    /// row identity is undeclared, surfaced as Info (RM_KEY_MISSING)
+    /// during the migration window.
+    #[prost(string, repeated, tag="10")]
+    pub key: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+/// Nested message and enum types in `ReadModel`.
+pub mod read_model {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct ExternalSource {
+        /// the documented boundary this feed comes from
+        #[prost(message, optional, tag="1")]
+        pub system: ::core::option::Option<super::ExternalSystemRef>,
+        /// free-form, e.g. webhook name, table name
+        #[prost(string, tag="2")]
+        pub descriptor: ::prost::alloc::string::String,
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Processor {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    /// when does this processor fire?
+    #[prost(string, tag="4")]
+    pub doc_trigger: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="5")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="6")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// The OUTBOUND external seam, mirroring ReadModel.external_source
+    /// (the inbound seam): the external systems this processor calls as its
+    /// side effect. With both declared, an integration round trip is fully
+    /// structural -- processor --calls--> ExternalSystem --webhook--> the
+    /// ExternalSource views it feeds back into.
+    #[prost(message, repeated, tag="7")]
+    pub calls: ::prost::alloc::vec::Vec<ExternalSystemRef>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Ui {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    /// URL, Figma node id, asset id, etc.
+    #[prost(string, tag="4")]
+    pub design_ref: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="5")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="6")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// Declared navigation: surface-to-surface transitions that carry NO
+    /// command and NO event -- tab bars, back affordances, menu links, deep
+    /// links. This is the ONE place pure navigation lives; any hop a command
+    /// path already explains is DERIVED from the storyboards and must not be
+    /// declared here (validated: UI_TRANSITION_DERIVABLE). Cycles are legal
+    /// in the data (Home -> Settings -> Home is a navigation map, like the
+    /// Swimlane lifecycle state machine); renderers keep time forward by
+    /// unrolling occurrences per Decision #24.
+    #[prost(message, repeated, tag="7")]
+    pub transitions: ::prost::alloc::vec::Vec<ui::Transition>,
+    /// Composition metadata only: the UI remains the Event Modeling moment;
+    /// Screen declares the URL-addressable surface this UI contributes to.
+    #[prost(message, optional, tag="8")]
+    pub slot: ::core::option::Option<ScreenSlotRef>,
+}
+/// Nested message and enum types in `UI`.
+pub mod ui {
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Transition {
+        #[prost(message, optional, tag="1")]
+        pub to: ::core::option::Option<super::UiRef>,
+        /// "tab bar", "link in confirmation email"
+        #[prost(string, tag="2")]
+        pub doc: ::prost::alloc::string::String,
+        #[prost(message, repeated, tag="3")]
+        pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+        #[prost(message, optional, tag="4")]
+        pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ScreenSlotRef {
+    #[prost(message, optional, tag="1")]
+    pub screen: ::core::option::Option<ScreenRef>,
+    #[prost(string, tag="2")]
+    pub slot: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Slot {
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub required: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Screen {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub route: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub audience: ::prost::alloc::string::String,
+    #[prost(string, tag="6")]
+    pub layout: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="7")]
+    pub slots: ::prost::alloc::vec::Vec<Slot>,
+    #[prost(message, repeated, tag="8")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="9")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+/// A Persona is a named human profile that uses a UI to issue a Command.
+/// Personas are always human. There is no "system persona" -- internal
+/// automation is a Processor (AutomationSlice), and external systems are
+/// modeled as ReadModels (with ExternalSource).
+///
+/// Classic Event Modeling does not have a formal persona entity; the UI swim
+/// lane implicitly stands in for "the user." We give it a name (`Persona`)
+/// because the same human profile appears across many slices and storyboards
+/// and needs a stable reference. Examples: "Bob the manager", "Billy the
+/// customer", "Alice the support agent". The persona is the unit of reuse:
+/// every slice that needs a manager-issuing-a-command references the same
+/// `Persona{slug:"bob-the-manager"}`, so refinements propagate everywhere.
+///
+/// One role per Persona. The role is a descriptive label on the persona
+/// ("manager", "customer", "admin"), not a separate entity, and not a list.
+/// Rationale: a Persona represents an *intent in context*, not a real-world
+/// human's full identity. If the same real person acts as a manager in one
+/// flow and as a customer in another, model them as two distinct personas
+/// ("Bob the manager", "Bob the customer") because the behavior, permissions,
+/// and UI they touch are different. Multi-role personas would force every
+/// reference site to disambiguate which role is active, defeating the point
+/// of a stable PersonaRef. Finer-grained context (tenant tier, seniority,
+/// etc.) belongs in `doc`.
+///
+/// A Persona does NOT belong to a Swimlane. Swimlanes here are event-sourcing
+/// streams (a server-side concept). Personas are on the human/UI side of the
+/// model and are cross-cutting across streams.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Persona {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    /// human-readable persona name, e.g. "Bob"
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    /// single role label, e.g. "manager"
+    #[prost(string, tag="3")]
+    pub role: ::prost::alloc::string::String,
+    #[prost(string, tag="4")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="5")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="6")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
 }
 /// Concrete instance of a typed payload, used in Given / When / Then sections
 /// and in storyboard traces.
@@ -1256,343 +1497,6 @@ impl ProjectionRole {
         }
     }
 }
-/// A swim lane is the event-sourcing stream / aggregate boundary, not just a
-/// visual band. It identifies the stream (in the event-sourcing sense) that
-/// the events on this lane are appended to and that the commands on this
-/// lane target. All events on the same swim lane share the same stream;
-/// every resource that has its own stream at runtime has its swim lane as
-/// its stream *type*. This makes the swim lane the consistency / transaction
-/// boundary for the events and commands assigned to it.
-///
-/// Read models, UIs, processors, and personas are cross-cutting and do not
-/// belong to a stream -- they have their own dedicated bands on a diagram and
-/// do not reference a swim lane.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Swimlane {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    /// rendering order, top-to-bottom
-    #[prost(uint32, tag="4")]
-    pub order: u32,
-    /// optional hint for visualization
-    #[prost(string, tag="5")]
-    pub color: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="6")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    /// previous version this entity replaces (optional)
-    #[prost(message, optional, tag="7")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// Runtime stream identity, e.g. "order-{order_id}". Placeholders reference
-    /// FieldSpec names of the events/commands on this stream, or a derived
-    /// identity registered by name in a Uuidv5IdentityAnnotation on this
-    /// swimlane (e.g. "review-eligibility-{eligibility_id}" with an annotation
-    /// named "eligibility_id" carrying the UUIDv5 template). Conceptual like
-    /// ExternalSource.descriptor -- environment-specific prefixes stay out.
-    #[prost(string, tag="8")]
-    pub stream_id: ::prost::alloc::string::String,
-    /// The stream's lifecycle as data: after `after` lands on a stream
-    /// instance, exactly ONE of `next` follows. This is where a fork in the
-    /// road is DECIDED. Read models projected from the fork state carry the
-    /// condition data each road observes; observers (entries) are the
-    /// branches; but exclusivity -- what makes alternatives a fork instead of
-    /// a parallel fan-out -- comes from the consistency boundary: competing
-    /// commands append to this same stream and the aggregate accepts one
-    /// successor. `doc` on each Next is the guard ("registration completes
-    /// before expires_at"). Cycles are legal (expired -> reserved): the table
-    /// is a state machine, not a tree. Tools DERIVE everything else from it:
-    /// the storyboard fork graph (a storyboard whose outcome emits `after`
-    /// forks into the storyboards emitting each `next`), and scenario
-    /// checking (a GWT may only emit a legal successor of the last given
-    /// lifecycle event). Events listed here must belong to this swimlane.
-    #[prost(message, repeated, tag="9")]
-    pub transitions: ::prost::alloc::vec::Vec<swimlane::Transition>,
-    /// Aggregate state -- the fields the stream's aggregate carries
-    /// internally, beyond what commands pass in. These are values the
-    /// runtime sets (a generated UUID, a clock, a context token), values
-    /// an upstream actor picks at execution time (an LLM choosing a tool,
-    /// a router selecting a partition), or derived projections of the
-    /// aggregate's prior events that downstream events read off the
-    /// aggregate rather than off any single command.
-    ///
-    /// The validator counts a name in `state` as a valid source for the
-    /// EVENT_FIELD_UNSOURCED check, alongside the command's own fields
-    /// and the union of lane-command fields. Declaring a field here is a
-    /// load-bearing architectural claim: it says "the aggregate owns
-    /// this value." Use it instead of saga-decomposing every runtime
-    /// emission into its own command -- one command, many events, with
-    /// derived fields anchored to the aggregate they belong to.
-    #[prost(message, repeated, tag="10")]
-    pub state: ::prost::alloc::vec::Vec<FieldSpec>,
-}
-/// Nested message and enum types in `Swimlane`.
-pub mod swimlane {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Transition {
-        #[prost(message, optional, tag="1")]
-        pub after: ::core::option::Option<super::EventRef>,
-        #[prost(message, repeated, tag="2")]
-        pub next: ::prost::alloc::vec::Vec<transition::Next>,
-    }
-    /// Nested message and enum types in `Transition`.
-    pub mod transition {
-        /// A Next is a real connection (the fork's branch), so like every other
-        /// Edge it carries design data: the guard doc plus Any annotations.
-        #[derive(Clone, PartialEq, ::prost::Message)]
-        pub struct Next {
-            #[prost(message, optional, tag="1")]
-            pub event: ::core::option::Option<super::super::EventRef>,
-            #[prost(string, tag="2")]
-            pub doc: ::prost::alloc::string::String,
-            #[prost(message, repeated, tag="3")]
-            pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-            #[prost(message, optional, tag="4")]
-            pub connection_id: ::core::option::Option<super::super::super::super::r#type::v1alpha1::ConnectionId>,
-        }
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Event {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="4")]
-    pub swimlane: ::core::option::Option<SwimlaneRef>,
-    #[prost(message, repeated, tag="6")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="7")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// The payload shape (Decision #33). Holds a `Schema` message
-    /// (anonymous when its Id is unset, named when set) or a message
-    /// declared by a TypeLibrary in the same namespace. The server
-    /// refuses a type no live TypeLibrary declares and a value that does
-    /// not decode as that type. Same `type_url` + same bytes across two
-    /// events = same payload type by declaration, no structural
-    /// inference required.
-    #[prost(message, optional, tag="8")]
-    pub schema: ::core::option::Option<::prost_types::Any>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Command {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="4")]
-    pub swimlane: ::core::option::Option<SwimlaneRef>,
-    #[prost(message, repeated, tag="6")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="7")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// The argument shape (Decision #33), held the same way as
-    /// `Event.schema`.
-    #[prost(message, optional, tag="8")]
-    pub schema: ::core::option::Option<::prost_types::Any>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ReadModel {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    /// Source of the read model. Either internal events or an external source
-    /// descriptor for read models projected from outside the system.
-    #[prost(message, repeated, tag="5")]
-    pub source_events: ::prost::alloc::vec::Vec<EventRef>,
-    #[prost(message, optional, tag="6")]
-    pub external_source: ::core::option::Option<read_model::ExternalSource>,
-    #[prost(message, repeated, tag="7")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="8")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// The projection shape (Decision #33), held the same way as
-    /// `Event.schema`. Two read models pointing at the same `schema`
-    /// (same Any bytes OR same named Schema entity) are nominally
-    /// same-type -- the historical "twin" question dissolves into the
-    /// schema identity.
-    #[prost(message, optional, tag="9")]
-    pub schema: ::core::option::Option<::prost_types::Any>,
-    /// The field names that identify one row of this read model. Every
-    /// name here must appear in the `schema` fields; when this list is non-empty,
-    /// every ReadModelSlice that projects into this read model must
-    /// source ALL key fields from its source events
-    /// (validated: RM_SLICE_KEY_UNSOURCED). An empty list means the
-    /// row identity is undeclared, surfaced as Info (RM_KEY_MISSING)
-    /// during the migration window.
-    #[prost(string, repeated, tag="10")]
-    pub key: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-}
-/// Nested message and enum types in `ReadModel`.
-pub mod read_model {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-    pub struct ExternalSource {
-        /// the documented boundary this feed comes from
-        #[prost(message, optional, tag="1")]
-        pub system: ::core::option::Option<super::ExternalSystemRef>,
-        /// free-form, e.g. webhook name, table name
-        #[prost(string, tag="2")]
-        pub descriptor: ::prost::alloc::string::String,
-    }
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Processor {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    /// when does this processor fire?
-    #[prost(string, tag="4")]
-    pub doc_trigger: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="5")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="6")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// The OUTBOUND external seam, mirroring ReadModel.external_source
-    /// (the inbound seam): the external systems this processor calls as its
-    /// side effect. With both declared, an integration round trip is fully
-    /// structural -- processor --calls--> ExternalSystem --webhook--> the
-    /// ExternalSource views it feeds back into.
-    #[prost(message, repeated, tag="7")]
-    pub calls: ::prost::alloc::vec::Vec<ExternalSystemRef>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Ui {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    /// URL, Figma node id, asset id, etc.
-    #[prost(string, tag="4")]
-    pub design_ref: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="5")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="6")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// Declared navigation: surface-to-surface transitions that carry NO
-    /// command and NO event -- tab bars, back affordances, menu links, deep
-    /// links. This is the ONE place pure navigation lives; any hop a command
-    /// path already explains is DERIVED from the storyboards and must not be
-    /// declared here (validated: UI_TRANSITION_DERIVABLE). Cycles are legal
-    /// in the data (Home -> Settings -> Home is a navigation map, like the
-    /// Swimlane lifecycle state machine); renderers keep time forward by
-    /// unrolling occurrences per Decision #24.
-    #[prost(message, repeated, tag="7")]
-    pub transitions: ::prost::alloc::vec::Vec<ui::Transition>,
-    /// Composition metadata only: the UI remains the Event Modeling moment;
-    /// Screen declares the URL-addressable surface this UI contributes to.
-    #[prost(message, optional, tag="8")]
-    pub slot: ::core::option::Option<ScreenSlotRef>,
-}
-/// Nested message and enum types in `UI`.
-pub mod ui {
-    #[derive(Clone, PartialEq, ::prost::Message)]
-    pub struct Transition {
-        #[prost(message, optional, tag="1")]
-        pub to: ::core::option::Option<super::UiRef>,
-        /// "tab bar", "link in confirmation email"
-        #[prost(string, tag="2")]
-        pub doc: ::prost::alloc::string::String,
-        #[prost(message, repeated, tag="3")]
-        pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-        #[prost(message, optional, tag="4")]
-        pub connection_id: ::core::option::Option<super::super::super::r#type::v1alpha1::ConnectionId>,
-    }
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct ScreenSlotRef {
-    #[prost(message, optional, tag="1")]
-    pub screen: ::core::option::Option<ScreenRef>,
-    #[prost(string, tag="2")]
-    pub slot: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct Slot {
-    #[prost(string, tag="1")]
-    pub name: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(bool, tag="3")]
-    pub required: bool,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Screen {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    #[prost(string, tag="3")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(string, tag="4")]
-    pub route: ::prost::alloc::string::String,
-    #[prost(string, tag="5")]
-    pub audience: ::prost::alloc::string::String,
-    #[prost(string, tag="6")]
-    pub layout: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="7")]
-    pub slots: ::prost::alloc::vec::Vec<Slot>,
-    #[prost(message, repeated, tag="8")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="9")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
-/// A Persona is a named human profile that uses a UI to issue a Command.
-/// Personas are always human. There is no "system persona" -- internal
-/// automation is a Processor (AutomationSlice), and external systems are
-/// modeled as ReadModels (with ExternalSource).
-///
-/// Classic Event Modeling does not have a formal persona entity; the UI swim
-/// lane implicitly stands in for "the user." We give it a name (`Persona`)
-/// because the same human profile appears across many slices and storyboards
-/// and needs a stable reference. Examples: "Bob the manager", "Billy the
-/// customer", "Alice the support agent". The persona is the unit of reuse:
-/// every slice that needs a manager-issuing-a-command references the same
-/// `Persona{slug:"bob-the-manager"}`, so refinements propagate everywhere.
-///
-/// One role per Persona. The role is a descriptive label on the persona
-/// ("manager", "customer", "admin"), not a separate entity, and not a list.
-/// Rationale: a Persona represents an *intent in context*, not a real-world
-/// human's full identity. If the same real person acts as a manager in one
-/// flow and as a customer in another, model them as two distinct personas
-/// ("Bob the manager", "Bob the customer") because the behavior, permissions,
-/// and UI they touch are different. Multi-role personas would force every
-/// reference site to disambiguate which role is active, defeating the point
-/// of a stable PersonaRef. Finer-grained context (tenant tier, seniority,
-/// etc.) belongs in `doc`.
-///
-/// A Persona does NOT belong to a Swimlane. Swimlanes here are event-sourcing
-/// streams (a server-side concept). Personas are on the human/UI side of the
-/// model and are cross-cutting across streams.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Persona {
-    #[prost(message, optional, tag="1")]
-    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-    /// human-readable persona name, e.g. "Bob"
-    #[prost(string, tag="2")]
-    pub title: ::prost::alloc::string::String,
-    /// single role label, e.g. "manager"
-    #[prost(string, tag="3")]
-    pub role: ::prost::alloc::string::String,
-    #[prost(string, tag="4")]
-    pub doc: ::prost::alloc::string::String,
-    #[prost(message, repeated, tag="5")]
-    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
-    #[prost(message, optional, tag="6")]
-    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
-}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StoryboardRef {
     #[prost(message, optional, tag="1")]
@@ -1787,6 +1691,102 @@ pub struct EventModel {
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
     #[prost(message, optional, tag="6")]
     pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+/// Field paths are diagnostics only; references survive collection reordering.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ConnectionRef {
+    #[prost(message, optional, tag="1")]
+    pub owner: ::core::option::Option<EntityRef>,
+    #[prost(message, optional, tag="2")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(string, tag="3")]
+    pub owner_uid: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TypeLibraryRef {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+/// A tenant-owned set of protobuf definitions, stored as source text and
+/// compiled by the server on demand. `id.slug` is the package prefix the
+/// library owns: every file's `package` must equal it or start with it
+/// followed by a dot, and no two live libraries in the same namespace and
+/// branch may own overlapping prefixes.
+///
+/// The source is the only stored form. The compiled descriptors are derived
+/// state the server rebuilds whenever it needs them.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TypeLibrary {
+    #[prost(message, optional, tag="1")]
+    pub id: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+    #[prost(string, tag="2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub doc: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="4")]
+    pub files: ::prost::alloc::vec::Vec<ProtoSourceFile>,
+    /// Libraries whose files these files may import, in the same namespace.
+    #[prost(message, repeated, tag="5")]
+    pub dependencies: ::prost::alloc::vec::Vec<TypeLibraryRef>,
+    #[prost(message, optional, tag="6")]
+    pub provenance: ::core::option::Option<TypeLibraryProvenance>,
+    #[prost(message, repeated, tag="7")]
+    pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(message, optional, tag="8")]
+    pub supersedes: ::core::option::Option<super::super::r#type::v1alpha1::Id>,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProtoSourceFile {
+    /// Relative import path, e.g. "acme/orders/v1/orders.proto".
+    #[prost(string, tag="1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub content: ::prost::alloc::string::String,
+}
+/// Where the source text came from. A record only: the server never fetches
+/// anything it names. Remote origins are pulled client-side and arrive as
+/// `TypeLibrary.files`.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TypeLibraryProvenance {
+    #[prost(oneof="type_library_provenance::Source", tags="1, 2, 3")]
+    pub source: ::core::option::Option<type_library_provenance::Source>,
+}
+/// Nested message and enum types in `TypeLibraryProvenance`.
+pub mod type_library_provenance {
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct InlineSource {
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct BufModuleSnapshot {
+        #[prost(string, tag="1")]
+        pub remote: ::prost::alloc::string::String,
+        #[prost(string, tag="2")]
+        pub owner: ::prost::alloc::string::String,
+        #[prost(string, tag="3")]
+        pub module: ::prost::alloc::string::String,
+        #[prost(string, tag="4")]
+        pub commit: ::prost::alloc::string::String,
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+    pub struct GitSnapshot {
+        #[prost(string, tag="1")]
+        pub repository_url: ::prost::alloc::string::String,
+        #[prost(string, tag="2")]
+        pub r#ref: ::prost::alloc::string::String,
+        #[prost(string, tag="3")]
+        pub commit: ::prost::alloc::string::String,
+        #[prost(string, tag="4")]
+        pub subdirectory: ::prost::alloc::string::String,
+    }
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Source {
+        #[prost(message, tag="1")]
+        Inline(InlineSource),
+        #[prost(message, tag="2")]
+        BufModule(BufModuleSnapshot),
+        #[prost(message, tag="3")]
+        Git(GitSnapshot),
+    }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ComponentRef {

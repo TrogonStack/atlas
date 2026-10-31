@@ -20,6 +20,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/type_libraries.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/data_products.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/backing.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
 
 
@@ -1201,6 +1202,8 @@ service EventModelService {
   rpc GetDocumentDetail(GetDocumentDetailRequest) returns (GetDocumentDetailResponse);
   rpc ListIncomingDecisionDeclarations(ListIncomingDecisionDeclarationsRequest) returns (ListIncomingDecisionDeclarationsResponse);
   rpc ListIncomingDocumentDeclarations(ListIncomingDocumentDeclarationsRequest) returns (ListIncomingDocumentDeclarationsResponse);
+  // Evidence presence across the visible model, bound to its snapshot id.
+  rpc GetBackingReport(GetBackingReportRequest) returns (GetBackingReportResponse);
 
   rpc ListSubjectAssignments(ListSubjectAssignmentsRequest) returns (ListSubjectAssignmentsResponse);
   rpc ListAssigneeResponsibilities(ListAssigneeResponsibilitiesRequest) returns (ListAssigneeResponsibilitiesResponse);

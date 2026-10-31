@@ -171,6 +171,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/RegisterNamespace" => Role::Writer,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/MoveNamespace" => Role::Admin,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSnapshotId" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetBackingReport" => Role::Reader,
 
         // Direct lookup
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntity" => Role::Reader,
