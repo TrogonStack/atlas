@@ -77,6 +77,50 @@ message Changeset {
   // The operation_id the mutation carried, if any. Empty for unattributed
   // or non-idempotent writes.
   string operation_id = 8;
+  // What validation backed this changeset when it was written. Unset on
+  // changesets recorded before receipts existed: nothing is known about
+  // them, which is not the same as a clean result.
+  ChangesetValidation validation = 9;
+}
+
+// The validation receipt of one changeset. Exactly one outcome is set on
+// every changeset written since receipts existed.
+message ChangesetValidation {
+  oneof outcome {
+    ChangesetUnvalidated unvalidated = 1;
+    ChangesetValidated validated = 2;
+  }
+}
+
+// No validation coverage was declared for this write, so no issue counts
+// are recorded: counts without coverage would read as a clean result.
+message ChangesetUnvalidated {
+  // Stable reason token: `no_declared_coverage` for paths that report no
+  // coverage (delete, revert, retarget, delete by query, import, source
+  // reconciliation), `recovered` for a changeset reconstructed by crash
+  // recovery, which cannot know what ran. Treat an unknown token like
+  // either: nothing is claimed.
+  string reason = 1;
+}
+
+// The write path ran validation suites before the changeset landed.
+message ChangesetValidated {
+  // True when every suite that applied to this path completed over an
+  // untruncated snapshot. Suites skipped by design on this path do not
+  // make it incomplete.
+  bool coverage_complete = 1;
+  // Check ids that applied but did not complete, sorted. Empty exactly when
+  // `coverage_complete` is true.
+  repeated string incomplete_checks = 2;
+  // Findings the suites that ran reported, by severity. Only meaningful
+  // together with the coverage above: zero errors over incomplete coverage
+  // is not a clean result.
+  uint32 error_count = 3;
+  uint32 warning_count = 4;
+  uint32 info_count = 5;
+  // Lowercase hex SHA-256 identifying the rule catalogue the suites ran
+  // with. Counts from two different catalogues are not comparable.
+  string rule_catalog_digest = 6;
 }
 
 // ---------- Entity revision log (per-entity history and revert) -------------

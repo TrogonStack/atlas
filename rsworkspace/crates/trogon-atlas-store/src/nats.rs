@@ -70,9 +70,11 @@ use crate::{
     metrics::StoreMetrics,
     store::{
         BranchDeltaEntry, BranchInfo, BranchLandOp, ChangeKind, ChangeRecord, ChangesetOp,
-        ChangesetPage, ChangesetRecord, ChangesetRef, ClaimOutcome, EntityRevisionRecord,
-        ListFilter, MutationOp, MutationOutcome, NamespaceClaim, NamespaceRecord, NamespaceTenure,
-        OperationRecord, RevisionPage, Store, StoredEntity, WriteContext, WriterStatus, Written,
+        ChangesetPage, ChangesetRecord, ChangesetRef, ChangesetValidation, ClaimOutcome,
+        EntityRevisionRecord, IssueCounts, ListFilter, MutationOp, MutationOutcome, NamespaceClaim,
+        NamespaceRecord, NamespaceTenure, OperationRecord, ReceiptCoverage, RevisionPage,
+        RuleCatalogDigest, Store, StoredEntity, UnvalidatedReason, ValidationReceipt, WriteContext,
+        WriterStatus, Written,
     },
 };
 
@@ -5737,6 +5739,45 @@ fn changeset_proto(record: &ChangesetRecord) -> trogon_atlas_proto::Changeset {
                 entity: Some(op.entity_ref.clone()),
             })
             .collect(),
+        validation: record.validation.to_proto(),
+    }
+}
+
+fn decode_changeset_validation(
+    pb: Option<trogon_atlas_proto::ChangesetValidation>,
+) -> StoreResult<ChangesetValidation> {
+    use trogon_atlas_proto::changeset_validation::Outcome;
+    let Some(pb) = pb else {
+        return Ok(ChangesetValidation::NotRecorded);
+    };
+    match pb.outcome {
+        None => Err(StoreError::Backend(
+            "ChangesetValidation.outcome is required when validation is present".into(),
+        )),
+        Some(Outcome::Unvalidated(u)) => Ok(ChangesetValidation::Unvalidated(
+            UnvalidatedReason::parse(&u.reason),
+        )),
+        Some(Outcome::Validated(v)) => {
+            let coverage = match (v.coverage_complete, v.incomplete_checks.is_empty()) {
+                (true, true) => ReceiptCoverage::Complete,
+                (false, false) => ReceiptCoverage::Incomplete(v.incomplete_checks),
+                _ => {
+                    return Err(StoreError::Backend(
+                        "ChangesetValidated.coverage_complete disagrees with incomplete_checks"
+                            .into(),
+                    ));
+                }
+            };
+            Ok(ChangesetValidation::Validated(ValidationReceipt {
+                coverage,
+                issues: IssueCounts {
+                    errors: v.error_count,
+                    warnings: v.warning_count,
+                    infos: v.info_count,
+                },
+                rule_catalog: RuleCatalogDigest::new(v.rule_catalog_digest),
+            }))
+        }
     }
 }
 
@@ -5776,6 +5817,7 @@ fn decode_changeset(bytes: &[u8]) -> StoreResult<ChangesetRecord> {
         } else {
             Some(pb.operation_id)
         },
+        validation: decode_changeset_validation(pb.validation)?,
     })
 }
 

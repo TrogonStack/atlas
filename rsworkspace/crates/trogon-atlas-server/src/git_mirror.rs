@@ -528,6 +528,9 @@ pub async fn import_entities(
             branch: None,
             ops,
             operation_id: None,
+            validation: trogon_atlas_store::ChangesetValidation::Unvalidated(
+                trogon_atlas_store::UnvalidatedReason::NoDeclaredCoverage,
+            ),
         };
         match store.append_changeset(&record).await {
             Ok(()) => report.changesets.push(changeset_id),

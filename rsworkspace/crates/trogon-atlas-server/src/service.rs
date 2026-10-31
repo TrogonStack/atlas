@@ -32,7 +32,8 @@ use trogon_atlas_semconv::semconv::attribute;
 use trogon_atlas_store::{
     store::{ChangeRecord, ListFilter, MutationOp, MutationOutcome, OperationStatus, WriterStatus},
     ChangeKind, ChangesetOp, ChangesetPage, ChangesetRecord, ChangesetRef, ChangesetScope,
-    EntityRevisionRecord, NamespaceTenure, RevisionPage, Store, StoredEntity, WriteContext,
+    ChangesetValidation, EntityRevisionRecord, NamespaceTenure, RevisionPage, Store, StoredEntity,
+    UnvalidatedReason, WriteContext,
 };
 
 use crate::{
@@ -251,6 +252,7 @@ struct PendingChangeset {
     /// that interrupts this write still leaves `nats_journal`'s recovery
     /// pass a way to find and settle the claim it left pending.
     operation_key: Option<String>,
+    validation: ChangesetValidation,
 }
 
 impl PendingChangeset {
@@ -263,7 +265,18 @@ impl PendingChangeset {
             ops: Vec::new(),
             operation_id: None,
             operation_key: None,
+            validation: ChangesetValidation::Unvalidated(UnvalidatedReason::NoDeclaredCoverage),
         }
+    }
+
+    /// Record what validation the write declared. Only paths that report
+    /// coverage call this; every other changeset stays unvalidated.
+    fn validated_by<'a>(
+        &mut self,
+        coverage: &pb::ValidationCoverage,
+        issues: impl IntoIterator<Item = &'a pb::ValidationIssue>,
+    ) {
+        self.validation = crate::changeset_receipt::receipt(coverage, issues);
     }
 
     /// Attach the `operation_id` this mutation carried, so it ends up on
@@ -339,6 +352,7 @@ impl PendingChangeset {
             branch: self.branch,
             ops: self.ops,
             operation_id: self.operation_id,
+            validation: self.validation,
         }
     }
 }
@@ -5199,6 +5213,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // and the record's `branch` field keeps it distinguishable.
         if written.wrote {
             changeset.record_put(kind, &id);
+            changeset.validated_by(&put_coverage, &scenario_issues);
             self.record_changeset(
                 changeset,
                 git_mirror::commit_message(kind, &id.namespace, &id.slug, id.version, verb),
@@ -6273,6 +6288,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         .await;
                     }
                     changeset.record_batch(&metas, &outcomes);
+                    changeset.validated_by(&batch_coverage, per_op_validation.iter().flatten());
                     self.record_changeset(
                         changeset,
                         git_mirror::batch_commit_message(outcomes.len()),
@@ -8522,6 +8538,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             operation_receipts::settle_applied(&*self.store, key, &merge_changeset_id).await;
         }
         changeset.record_batch(&op_metas, &outcomes);
+        changeset.validated_by(
+            &merge_coverage(merge_snapshot_truncated, true),
+            &strategic_findings,
+        );
         self.record_changeset(
             changeset,
             format!(
@@ -9704,6 +9724,7 @@ fn changeset_to_proto(record: ChangesetRecord) -> pb::Changeset {
             })
             .collect(),
         operation_id: record.operation_id.unwrap_or_default(),
+        validation: record.validation.to_proto(),
     }
 }
 
