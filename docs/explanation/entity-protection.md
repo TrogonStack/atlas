@@ -45,7 +45,10 @@ the claim's digest proves it carries the same writes, and it protects the
 identities the first attempt never reached. A `PutEntity` whose protection
 landed but could not be confirmed finishes on retry from what landed instead
 of writing again, and replaying a settled write is not refused by the
-protection that write set. When a server stops after a protecting batch's
+protection that write set. The claim records the changeset that set the
+mark, so that proof holds even when the changeset itself was never stored. A
+retry that only finds its protections already in place records nothing new,
+and its receipt names the changeset that landed its content. When a server stops after a protecting batch's
 content is durable, batch recovery leaves its `operation_id` not applied so
 a retry completes the protections. Whenever content landed but a protection
 did not, the not-applied claim remembers the changeset that landed the
@@ -167,6 +170,9 @@ does not read a gap as "unprotected". See the
   operation is refused rather than answered from the stored result. `DeleteEntity` is the exception: it
   answers a replay from its receipt, because protection cannot apply to a
   delete that already happened.
+- Default chosen for review: a `DeleteEntity` refused by protection leaves
+  its `operation_id` free, as `PutEntity` and `BatchMutate` do, so the same
+  id deletes once the mark is lifted instead of replaying the refusal.
 
 - Default chosen for review: an identity whose protection cannot be read is
   refused like a protected one, with its own reason, rather than allowed.
