@@ -306,7 +306,10 @@ fn closed_ownership_enum_covers_every_native_writable_unit() {
             );
         for name in names {
             let enum_name = format!("SOURCE_OWNED_FIELD_{}", name.to_ascii_uppercase());
-            if (name == "links" && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Channel")
+            if (name == "ui_hostings"
+                && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Component")
+                || (name == "links"
+                    && owner.full_name() == "trogonatlas.eventmodel.v1alpha1.Channel")
                 || (name == "storage_claims"
                     && matches!(
                         owner.full_name(),
