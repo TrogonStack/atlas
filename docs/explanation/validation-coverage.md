@@ -151,7 +151,8 @@ snapshot identity vocabulary as coverage, so a truncated empty issue list
 cannot look complete. [Consequence deltas](consequence-delta.md) build on
 the same coverage: each side of the comparison carries its own coverage,
 and a finding missing from an after-scan whose suite did not complete is
-reported as unknown, never as resolved.
+reported as unknown, never as resolved, unless its subject or origin was
+removed, in which case it is reported as subject removed.
 
 ## Where the code lives
 
