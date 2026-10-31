@@ -91,7 +91,8 @@ message GetBackingReportResponse {
   // Sorted by kind; kinds with no subject in scope are omitted.
   repeated KindBackingTotals kinds = 7;
   // Entity selections on qualifying visible evidence whose exact target is
-  // not in the visible snapshot, limited to targets in the requested scope.
+  // not in the visible snapshot, limited to targets in the requested scope
+  // and in namespaces the caller may read.
   uint32 unresolved_declarations = 8;
   // Every reason that left a subject unknown. Empty means complete.
   repeated BackingIncompleteReason incomplete_reasons = 9;

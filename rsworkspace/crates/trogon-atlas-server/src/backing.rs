@@ -32,11 +32,31 @@ impl SubjectScope {
     }
 }
 
+/// Namespaces the caller may read.
+#[derive(Debug, Clone)]
+pub(crate) enum VisibleNamespaces {
+    All,
+    Only(BTreeSet<String>),
+}
+
+impl VisibleNamespaces {
+    fn is_restricted(&self) -> bool {
+        matches!(self, Self::Only(_))
+    }
+
+    fn admits(&self, namespace: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(namespaces) => namespaces.contains(namespace),
+        }
+    }
+}
+
 /// What the caller's view of the snapshot cannot rule out.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ViewLimits {
     pub(crate) snapshot_truncated: bool,
-    pub(crate) visibility_restricted: bool,
+    pub(crate) visibility: VisibleNamespaces,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +197,7 @@ fn declarations(
     rows: &[StoredEntity],
     visible: &HashSet<pb::EntityKey>,
     scope: &SubjectScope,
+    visibility: &VisibleNamespaces,
 ) -> Declared {
     #[derive(Clone, Copy)]
     enum Role {
@@ -215,7 +236,10 @@ fn declarations(
                 }
                 Role::Qualifying => {}
             }
-            if !visible.contains(&key) && scope.admits(&key.namespace) {
+            if !visible.contains(&key)
+                && scope.admits(&key.namespace)
+                && visibility.admits(&key.namespace)
+            {
                 declared.unresolved += 1;
             }
             if is_decision {
@@ -247,7 +271,7 @@ fn code_ref_evidence(entity: &pb::Entity) -> Evidence {
 pub(crate) fn report(
     rows: &[StoredEntity],
     scope: &SubjectScope,
-    limits: ViewLimits,
+    limits: &ViewLimits,
 ) -> BackingReport {
     let visible: HashSet<pb::EntityKey> = rows
         .iter()
@@ -258,8 +282,9 @@ pub(crate) fn report(
             ))
         })
         .collect();
-    let declared = declarations(rows, &visible, scope);
-    let hidden_possible = limits.snapshot_truncated || limits.visibility_restricted;
+    let declared = declarations(rows, &visible, scope, &limits.visibility);
+    let visibility_restricted = limits.visibility.is_restricted();
+    let hidden_possible = limits.snapshot_truncated || visibility_restricted;
     let mut reasons = BTreeSet::new();
     if limits.snapshot_truncated {
         reasons.insert(Reason::SnapshotTruncated as i32);
@@ -275,12 +300,10 @@ pub(crate) fn report(
             continue;
         }
         let key = pb::EntityKey::new(kind, id);
+        let unrecognized_decision = declared.unrecognized_decisions.contains(&key);
         let decision = if declared.accepted_decisions.contains(&key) {
             Evidence::Present
-        } else if declared.unrecognized_decisions.contains(&key) {
-            reasons.insert(Reason::UnrecognizedDecisionStatus as i32);
-            Evidence::Unknown
-        } else if hidden_possible {
+        } else if unrecognized_decision || hidden_possible {
             Evidence::Unknown
         } else {
             Evidence::Absent
@@ -293,19 +316,22 @@ pub(crate) fn report(
             Evidence::Absent
         };
         let code_ref = code_ref_evidence(&row.entity);
-        if code_ref == Evidence::Unknown {
-            reasons.insert(Reason::UnresolvedCodeRef as i32);
-        }
-        if limits.visibility_restricted
-            && (decision == Evidence::Unknown || document == Evidence::Unknown)
-        {
-            reasons.insert(Reason::VisibilityRestricted as i32);
-        }
         let evidence = SubjectEvidence {
             decision,
             document,
             code_ref,
         };
+        if evidence.backing() == Backing::Unknown {
+            if unrecognized_decision {
+                reasons.insert(Reason::UnrecognizedDecisionStatus as i32);
+            }
+            if code_ref == Evidence::Unknown {
+                reasons.insert(Reason::UnresolvedCodeRef as i32);
+            }
+            if visibility_restricted {
+                reasons.insert(Reason::VisibilityRestricted as i32);
+            }
+        }
         overall.add(evidence);
         kinds.entry(kind as i32).or_default().add(evidence);
         if evidence.backing() == Backing::Unbacked {
@@ -431,8 +457,20 @@ mod tests {
 
     const COMPLETE: ViewLimits = ViewLimits {
         snapshot_truncated: false,
-        visibility_restricted: false,
+        visibility: VisibleNamespaces::All,
     };
+
+    fn restricted_to(namespaces: &[&str]) -> ViewLimits {
+        ViewLimits {
+            snapshot_truncated: false,
+            visibility: VisibleNamespaces::Only(
+                namespaces
+                    .iter()
+                    .map(|&namespace| namespace.to_owned())
+                    .collect(),
+            ),
+        }
+    }
 
     #[test]
     fn overlapping_categories_count_each_subject_once() {
@@ -451,7 +489,7 @@ mod tests {
             ),
             document("doc", vec![event_ref("ns", "a")]),
         ];
-        let report = report(&rows, &SubjectScope::default(), COMPLETE);
+        let report = report(&rows, &SubjectScope::default(), &COMPLETE);
         let totals = report.totals;
         assert_eq!((totals.total, totals.backed, totals.unbacked), (2, 1, 1));
         assert_eq!(totals.decision.unwrap().present, 1);
@@ -481,7 +519,7 @@ mod tests {
                 vec![event_ref("ns", "a")],
             ),
         ];
-        let report = report(&rows, &SubjectScope::default(), COMPLETE);
+        let report = report(&rows, &SubjectScope::default(), &COMPLETE);
         assert_eq!(report.totals.unbacked, 1);
         assert_eq!(report.unbacked.len(), 1);
     }
@@ -493,7 +531,7 @@ mod tests {
             event("b", vec![code_ref("", "b.rs")]),
             decision("future", 99, vec![event_ref("ns", "a")]),
         ];
-        let report = report(&rows, &SubjectScope::default(), COMPLETE);
+        let report = report(&rows, &SubjectScope::default(), &COMPLETE);
         assert_eq!((report.totals.unknown, report.totals.unbacked), (2, 0));
         assert_eq!(report.totals.unbacked_rate, None);
         assert_eq!(
@@ -512,19 +550,13 @@ mod tests {
             (
                 ViewLimits {
                     snapshot_truncated: true,
-                    visibility_restricted: false,
+                    visibility: VisibleNamespaces::All,
                 },
                 Reason::SnapshotTruncated,
             ),
-            (
-                ViewLimits {
-                    snapshot_truncated: false,
-                    visibility_restricted: true,
-                },
-                Reason::VisibilityRestricted,
-            ),
+            (restricted_to(&["ns"]), Reason::VisibilityRestricted),
         ] {
-            let report = report(&rows, &SubjectScope::default(), limits);
+            let report = report(&rows, &SubjectScope::default(), &limits);
             let totals = report.totals;
             assert_eq!((totals.backed, totals.unbacked, totals.unknown), (1, 0, 1));
             assert_eq!(totals.unbacked_rate, None);
@@ -539,10 +571,35 @@ mod tests {
             "doc",
             vec![event_ref("ns", "gone"), event_ref("elsewhere", "gone")],
         )];
-        let report = report(&rows, &SubjectScope::new(["ns".to_owned()]), COMPLETE);
+        let report = report(&rows, &SubjectScope::new(["ns".to_owned()]), &COMPLETE);
         assert_eq!(report.totals.total, 0);
         assert_eq!(report.totals.unbacked_rate, None);
         assert_eq!(report.kinds, Vec::new());
+        assert_eq!(report.unresolved_declarations, 1);
+    }
+
+    #[test]
+    fn settled_subjects_leave_no_incomplete_reason() {
+        let rows = vec![
+            event("a", vec![code_ref("r", "p")]),
+            event("b", vec![code_ref("r", "p"), code_ref("", "broken")]),
+            decision("future", 99, vec![event_ref("ns", "a")]),
+        ];
+        for limits in [COMPLETE, restricted_to(&["ns"])] {
+            let report = report(&rows, &SubjectScope::default(), &limits);
+            assert_eq!((report.totals.backed, report.totals.unknown), (2, 0));
+            assert_eq!(report.totals.unbacked_rate, Some(0.0));
+            assert_eq!(report.incomplete_reasons, Vec::new());
+        }
+    }
+
+    #[test]
+    fn empty_scope_ignores_targets_in_hidden_namespaces() {
+        let rows = vec![document(
+            "doc",
+            vec![event_ref("ns", "gone"), event_ref("hidden", "elsewhere")],
+        )];
+        let report = report(&rows, &SubjectScope::default(), &restricted_to(&["ns"]));
         assert_eq!(report.unresolved_declarations, 1);
     }
 }

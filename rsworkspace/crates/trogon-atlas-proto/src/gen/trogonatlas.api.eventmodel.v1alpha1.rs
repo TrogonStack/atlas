@@ -652,7 +652,8 @@ pub struct GetBackingReportResponse {
     #[prost(message, repeated, tag="7")]
     pub kinds: ::prost::alloc::vec::Vec<KindBackingTotals>,
     /// Entity selections on qualifying visible evidence whose exact target is
-    /// not in the visible snapshot, limited to targets in the requested scope.
+    /// not in the visible snapshot, limited to targets in the requested scope
+    /// and in namespaces the caller may read.
     #[prost(uint32, tag="8")]
     pub unresolved_declarations: u32,
     /// Every reason that left a subject unknown. Empty means complete.
