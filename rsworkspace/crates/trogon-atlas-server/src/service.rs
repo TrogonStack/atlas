@@ -352,7 +352,31 @@ struct BaselineSnapshot {
     truncated: bool,
 }
 
-type OwnerSnapshotCache = tokio::sync::RwLock<HashMap<OwnerId, (Lens, Arc<Vec<StoredEntity>>)>>;
+/// One owner's filtered view, remembered together with the lens that
+/// filtered it and the baseline it was filtered from.
+///
+/// The baseline is part of the key because a caller holding one baseline
+/// must never be handed a view filtered from another: a reader comparing the
+/// two would treat entities that only exist in the newer load as hidden or
+/// missing ones as absent.
+#[derive(Clone)]
+struct OwnerView {
+    lens: Lens,
+    source: Arc<Vec<StoredEntity>>,
+    entities: Arc<Vec<StoredEntity>>,
+}
+
+impl OwnerView {
+    fn serves(
+        &self,
+        lens: &Lens,
+        source: &Arc<Vec<StoredEntity>>,
+    ) -> Option<Arc<Vec<StoredEntity>>> {
+        (&self.lens == lens && Arc::ptr_eq(&self.source, source)).then(|| self.entities.clone())
+    }
+}
+
+type OwnerSnapshotCache = tokio::sync::RwLock<HashMap<OwnerId, OwnerView>>;
 
 pub struct EventModelServiceImpl {
     pub store: Arc<dyn Store>,
@@ -705,16 +729,24 @@ impl EventModelServiceImpl {
             return Ok(all);
         };
         let lens = self.lens(vis).await?;
-        if let Some((cached, hit)) = self.owner_snapshot_cache.read().await.get(owner) {
-            if cached == &lens {
-                return Ok(hit.clone());
-            }
+        if let Some(hit) = self
+            .owner_snapshot_cache
+            .read()
+            .await
+            .get(owner)
+            .and_then(|view| view.serves(&lens, &all))
+        {
+            return Ok(hit);
         }
         let filtered = Self::apply_lens(&all, &lens);
-        self.owner_snapshot_cache
-            .write()
-            .await
-            .insert(owner.clone(), (lens, filtered.clone()));
+        self.owner_snapshot_cache.write().await.insert(
+            owner.clone(),
+            OwnerView {
+                lens,
+                source: all,
+                entities: filtered.clone(),
+            },
+        );
         Ok(filtered)
     }
 
@@ -1072,7 +1104,7 @@ impl EventModelServiceImpl {
             let snapshots = self.owner_snapshot_cache.read().await;
             if snapshots
                 .get(owner)
-                .is_some_and(|(cached, current)| cached == &lens && Arc::ptr_eq(current, &snap))
+                .is_some_and(|view| view.lens == lens && Arc::ptr_eq(&view.entities, &snap))
             {
                 indexes.insert(owner.clone(), (lens, idx.clone()));
             }
@@ -10535,5 +10567,24 @@ mod scope_filter_tests {
     fn empty_scopes_list_produces_empty_closure_keys() {
         let keys = resolve_scope_closure(&[], &[], &ServerMetrics::default()).unwrap();
         assert!(keys.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod owner_view_tests {
+    use super::*;
+
+    #[test]
+    fn a_view_filtered_from_another_baseline_is_not_served() {
+        let filtered_from = Arc::new(Vec::new());
+        let newer_load = Arc::new(Vec::new());
+        let view = OwnerView {
+            lens: Lens::Everything,
+            source: filtered_from.clone(),
+            entities: Arc::new(Vec::new()),
+        };
+
+        assert!(view.serves(&Lens::Everything, &filtered_from).is_some());
+        assert!(view.serves(&Lens::Everything, &newer_load).is_none());
     }
 }
