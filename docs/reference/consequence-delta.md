@@ -22,6 +22,9 @@ The MCP tools `put_entity`, `put_entity_json`, `batch_mutate`,
 `trogon-atlas apply --dry-run` and `trogon-atlas branch merge --dry-run`
 JSON output, add a `consequence_delta` object with the same fields.
 
+`apply_manifests` and `trogon-atlas apply --dry-run` send no batch when
+every manifest is unchanged, so they carry no delta in that case.
+
 ## `ConsequenceDelta`
 
 | Field | Meaning |
@@ -55,7 +58,7 @@ JSON output, add a `consequence_delta` object with the same fields.
 | `KIND_INTRODUCED` | absent | set | The change creates the finding; the before-scan's suite completed |
 | `KIND_RESOLVED` | set | absent | The change clears the finding; the after-scan's suite completed |
 | `KIND_SEVERITY_CHANGED` | set | set | Same finding, different severity |
-| `KIND_SUBJECT_REMOVED` | set | absent | The finding's subject or origin entity no longer exists after the change |
+| `KIND_SUBJECT_REMOVED` | set | absent | The finding's subject or origin entity no longer exists after the change; reported even when the after-scan's suite did not complete |
 | `KIND_CARRIED_TO_SUCCESSOR` | set | set | The finding moved to a newer version of its subject or origin, with no version going down |
 | `KIND_UNKNOWN` | either | either | A finding appeared or disappeared, but the scan on the other side did not complete its suite |
 
