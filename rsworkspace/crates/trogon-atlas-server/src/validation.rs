@@ -1007,7 +1007,7 @@ fn push_scenario_annotation_findings(
     }
 }
 
-fn is_derived_field(field: &pb::FieldSpec) -> bool {
+pub(crate) fn is_derived_field(field: &pb::FieldSpec) -> bool {
     // Doc is mandatory on DerivedFieldAnnotation (same contract as
     // PinnedRefAnnotation / SharedConsumersAnnotation). Presence-only
     // matching would let an empty-doc annotation silently suppress

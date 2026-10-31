@@ -726,6 +726,267 @@ pub struct ImpactNode {
     #[prost(message, repeated, tag="3")]
     pub path: ::prost::alloc::vec::Vec<Reference>,
 }
+/// One reference from a dependent to `current`. A dependent that points at
+/// the root from several sites, or several times from the same repeated
+/// field, yields one occurrence per site.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConsumedOccurrence {
+    /// `from` is the dependent, `from_field` the site (e.g.
+    /// "emitted_events\[1\]"), and `to` the exact pinned target.
+    #[prost(message, optional, tag="1")]
+    pub reference: ::core::option::Option<Reference>,
+    #[prost(enumeration="DependentClassification", tag="2")]
+    pub classification: i32,
+    /// Root diff paths this site consumes, in DiffEntities path vocabulary
+    /// (e.g. "schema.fields\[amount\]"). Empty for a site that consumes only the
+    /// root's identity.
+    #[prost(string, repeated, tag="3")]
+    pub consumed_paths: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// The diff ops that make this occurrence BREAKING or UNKNOWN.
+    #[prost(message, repeated, tag="4")]
+    pub causal_ops: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::DiffOp>,
+    #[prost(enumeration="ClassificationUnknownReason", repeated, tag="5")]
+    pub unknown_reasons: ::prost::alloc::vec::Vec<i32>,
+}
+/// One reference from a dependent to another dependent.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TransitiveLink {
+    #[prost(message, optional, tag="1")]
+    pub reference: ::core::option::Option<Reference>,
+    /// The classification of the referenced dependent (`reference.to`).
+    #[prost(enumeration="DependentClassification", tag="2")]
+    pub through_classification: i32,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DependentImpact {
+    #[prost(message, optional, tag="1")]
+    pub dependent: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// Shortest referrer-only distance to `current`.
+    #[prost(uint32, tag="2")]
+    pub depth: u32,
+    #[prost(enumeration="DependentClassification", tag="3")]
+    pub classification: i32,
+    /// References from this dependent straight to `current`.
+    #[prost(message, repeated, tag="4")]
+    pub occurrences: ::prost::alloc::vec::Vec<ConsumedOccurrence>,
+    /// References from this dependent to other dependents.
+    #[prost(message, repeated, tag="5")]
+    pub through: ::prost::alloc::vec::Vec<TransitiveLink>,
+    /// Every reason this dependent is UNKNOWN, deduplicated.
+    #[prost(enumeration="ClassificationUnknownReason", repeated, tag="6")]
+    pub unknown_reasons: ::prost::alloc::vec::Vec<i32>,
+}
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClassificationCounts {
+    #[prost(uint32, tag="1")]
+    pub breaking: u32,
+    #[prost(uint32, tag="2")]
+    pub bump_only: u32,
+    #[prost(uint32, tag="3")]
+    pub unknown: u32,
+}
+/// Honors the `x-trogon-atlas-branch` metadata header for both reads and the
+/// dependent traversal.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClassifyImpactRequest {
+    /// The exact version dependents pin today. Required.
+    #[prost(message, optional, tag="1")]
+    pub current: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// The exact version that would replace it. Must be the same EntityKind as
+    /// `current` (INVALID_ARGUMENT otherwise). Excluded from the dependents
+    /// even when it references `current` through `supersedes`.
+    #[prost(message, optional, tag="2")]
+    pub candidate: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// Maximum referrer hops from `current`. 0 = the server maximum.
+    #[prost(uint32, tag="3")]
+    pub max_depth: u32,
+    #[prost(int32, tag="4")]
+    pub page_size: i32,
+    #[prost(string, tag="5")]
+    pub page_token: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClassifyImpactResponse {
+    /// DiffEntities(current, candidate).
+    #[prost(message, repeated, tag="1")]
+    pub ops: ::prost::alloc::vec::Vec<super::super::super::catalog::v1alpha1::DiffOp>,
+    /// The worst classification over every dependent, raised to UNKNOWN when
+    /// `incompleteness` is non-empty. BUMP_ONLY when the result is complete and
+    /// nothing breaks, including when nothing depends on `current`.
+    #[prost(enumeration="DependentClassification", tag="2")]
+    pub verdict: i32,
+    #[prost(enumeration="ImpactIncompleteness", repeated, tag="3")]
+    pub incompleteness: ::prost::alloc::vec::Vec<i32>,
+    /// Paths that differ between the versions but that the typed diff does not
+    /// compare (e.g. "swimlane", "key"). Each one makes every field-consuming
+    /// occurrence UNKNOWN.
+    #[prost(string, repeated, tag="4")]
+    pub uncovered_changes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Counts over every dependent, not just this page.
+    #[prost(message, optional, tag="5")]
+    pub counts: ::core::option::Option<ClassificationCounts>,
+    /// Ordered by depth ascending, then kind and canonical Id.
+    #[prost(message, repeated, tag="6")]
+    pub dependents: ::prost::alloc::vec::Vec<DependentImpact>,
+    #[prost(string, tag="7")]
+    pub next_page_token: ::prost::alloc::string::String,
+    /// Content identity of the caller's view this answer was computed from,
+    /// using the GetSnapshotId algorithm without a namespace filter. Each page
+    /// is computed independently, so pages with different snapshot_id values
+    /// come from different states and must not be combined.
+    #[prost(string, tag="8")]
+    pub snapshot_id: ::prost::alloc::string::String,
+}
+// ---------- Dependent impact classification ----------------------------------
+//
+// "If Event{order.placed@1} becomes Event{order.placed@2}, which dependents
+// break and which only need their pinned reference bumped?" Diffs the two
+// exact versions with the same typed diff DiffEntities returns, walks only
+// the referrers of `current` (an outgoing reference is not a dependent), and
+// intersects each reference site's consumed fields with the diff.
+//
+// Classification fails closed. Anything the server cannot prove compatible
+// is UNKNOWN, never BUMP_ONLY: a reference site without a consumption model,
+// an opaque payload or schema, a change the typed diff does not compare, a
+// dependent reached through an affected one, or a response that is
+// incomplete for any reason in `incompleteness`.
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DependentClassification {
+    Unspecified = 0,
+    /// A consumed field changes, or the dependent must change to stay valid.
+    Breaking = 1,
+    /// Only the pinned reference needs rewriting to the candidate version.
+    BumpOnly = 2,
+    /// The server cannot prove BUMP_ONLY. `unknown_reasons` says why.
+    Unknown = 3,
+}
+impl DependentClassification {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "DEPENDENT_CLASSIFICATION_UNSPECIFIED",
+            Self::Breaking => "DEPENDENT_CLASSIFICATION_BREAKING",
+            Self::BumpOnly => "DEPENDENT_CLASSIFICATION_BUMP_ONLY",
+            Self::Unknown => "DEPENDENT_CLASSIFICATION_UNKNOWN",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DEPENDENT_CLASSIFICATION_UNSPECIFIED" => Some(Self::Unspecified),
+            "DEPENDENT_CLASSIFICATION_BREAKING" => Some(Self::Breaking),
+            "DEPENDENT_CLASSIFICATION_BUMP_ONLY" => Some(Self::BumpOnly),
+            "DEPENDENT_CLASSIFICATION_UNKNOWN" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ClassificationUnknownReason {
+    Unspecified = 0,
+    /// No rule maps this reference site to the fields it consumes.
+    NoConsumptionModel = 1,
+    /// A scenario example payload is not a google.protobuf.Struct, so its
+    /// consumed keys cannot be read.
+    OpaquePayload = 2,
+    /// The root names a schema type instead of an inline Schema, so its fields
+    /// cannot be compared.
+    OpaqueRootSchema = 3,
+    /// The entity whose fields define this site's consumption (for example the
+    /// command of a CommandSlice) is absent from the caller's view or has no
+    /// inline schema.
+    ConsumerContextMissing = 4,
+    /// The versions differ in a part the typed diff does not compare, or in
+    /// field metadata whose meaning the server cannot judge.
+    UncoveredChange = 5,
+    /// Field consumption is modeled only for Event, Command, ReadModel and
+    /// Schema roots.
+    UnsupportedRootKind = 6,
+    /// The dependent references another dependent that is BREAKING or UNKNOWN.
+    TransitiveThroughAffected = 7,
+    /// The response is incomplete; see ClassifyImpactResponse.incompleteness.
+    TraversalIncomplete = 8,
+}
+impl ClassificationUnknownReason {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CLASSIFICATION_UNKNOWN_REASON_UNSPECIFIED",
+            Self::NoConsumptionModel => "CLASSIFICATION_UNKNOWN_REASON_NO_CONSUMPTION_MODEL",
+            Self::OpaquePayload => "CLASSIFICATION_UNKNOWN_REASON_OPAQUE_PAYLOAD",
+            Self::OpaqueRootSchema => "CLASSIFICATION_UNKNOWN_REASON_OPAQUE_ROOT_SCHEMA",
+            Self::ConsumerContextMissing => "CLASSIFICATION_UNKNOWN_REASON_CONSUMER_CONTEXT_MISSING",
+            Self::UncoveredChange => "CLASSIFICATION_UNKNOWN_REASON_UNCOVERED_CHANGE",
+            Self::UnsupportedRootKind => "CLASSIFICATION_UNKNOWN_REASON_UNSUPPORTED_ROOT_KIND",
+            Self::TransitiveThroughAffected => "CLASSIFICATION_UNKNOWN_REASON_TRANSITIVE_THROUGH_AFFECTED",
+            Self::TraversalIncomplete => "CLASSIFICATION_UNKNOWN_REASON_TRAVERSAL_INCOMPLETE",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CLASSIFICATION_UNKNOWN_REASON_UNSPECIFIED" => Some(Self::Unspecified),
+            "CLASSIFICATION_UNKNOWN_REASON_NO_CONSUMPTION_MODEL" => Some(Self::NoConsumptionModel),
+            "CLASSIFICATION_UNKNOWN_REASON_OPAQUE_PAYLOAD" => Some(Self::OpaquePayload),
+            "CLASSIFICATION_UNKNOWN_REASON_OPAQUE_ROOT_SCHEMA" => Some(Self::OpaqueRootSchema),
+            "CLASSIFICATION_UNKNOWN_REASON_CONSUMER_CONTEXT_MISSING" => Some(Self::ConsumerContextMissing),
+            "CLASSIFICATION_UNKNOWN_REASON_UNCOVERED_CHANGE" => Some(Self::UncoveredChange),
+            "CLASSIFICATION_UNKNOWN_REASON_UNSUPPORTED_ROOT_KIND" => Some(Self::UnsupportedRootKind),
+            "CLASSIFICATION_UNKNOWN_REASON_TRANSITIVE_THROUGH_AFFECTED" => Some(Self::TransitiveThroughAffected),
+            "CLASSIFICATION_UNKNOWN_REASON_TRAVERSAL_INCOMPLETE" => Some(Self::TraversalIncomplete),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ImpactIncompleteness {
+    Unspecified = 0,
+    /// The server's entity snapshot hit its cap, so referrers may be missing.
+    SnapshotTruncated = 1,
+    /// Dependents exist beyond the effective max_depth.
+    DepthLimited = 2,
+    /// Dependents, or paths to them, lie outside what the caller can see.
+    HiddenDependents = 3,
+    /// A reference into the walk names a referrer the server cannot resolve to
+    /// an entity key, so that referrer and anything behind it is unaccounted.
+    UnresolvedReferrers = 4,
+}
+impl ImpactIncompleteness {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "IMPACT_INCOMPLETENESS_UNSPECIFIED",
+            Self::SnapshotTruncated => "IMPACT_INCOMPLETENESS_SNAPSHOT_TRUNCATED",
+            Self::DepthLimited => "IMPACT_INCOMPLETENESS_DEPTH_LIMITED",
+            Self::HiddenDependents => "IMPACT_INCOMPLETENESS_HIDDEN_DEPENDENTS",
+            Self::UnresolvedReferrers => "IMPACT_INCOMPLETENESS_UNRESOLVED_REFERRERS",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "IMPACT_INCOMPLETENESS_UNSPECIFIED" => Some(Self::Unspecified),
+            "IMPACT_INCOMPLETENESS_SNAPSHOT_TRUNCATED" => Some(Self::SnapshotTruncated),
+            "IMPACT_INCOMPLETENESS_DEPTH_LIMITED" => Some(Self::DepthLimited),
+            "IMPACT_INCOMPLETENESS_HIDDEN_DEPENDENTS" => Some(Self::HiddenDependents),
+            "IMPACT_INCOMPLETENESS_UNRESOLVED_REFERRERS" => Some(Self::UnresolvedReferrers),
+            _ => None,
+        }
+    }
+}
 // ---------- Denormalized projections (the "fast map" view) -------------------
 //
 // A projection returns a focal entity plus every entity reachable from it
@@ -4030,6 +4291,9 @@ pub mod get_server_info_response {
         /// CompileTypeLibrary, ResolveType, GetTypeLibraryDescriptorSet
         #[prost(bool, tag="18")]
         pub type_libraries: bool,
+        /// ClassifyImpact
+        #[prost(bool, tag="19")]
+        pub impact_classification: bool,
     }
     /// Numeric limits the server applies. Clients use these to size their
     /// requests appropriately and to know when a single call cannot return

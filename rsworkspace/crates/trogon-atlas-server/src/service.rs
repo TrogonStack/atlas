@@ -747,6 +747,36 @@ impl EventModelServiceImpl {
         self.narrow(Arc::new(result.entities), vis).await
     }
 
+    /// A `ClassifyImpact` input read from the snapshot the answer uses. Only a
+    /// truncated snapshot falls back to the store, and that answer already
+    /// reports the truncation.
+    async fn impact_input(
+        &self,
+        snapshot: &[StoredEntity],
+        truncated: bool,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        branch: Option<&str>,
+    ) -> Result<pb::Entity, Status> {
+        let found = snapshot.iter().find(|stored| {
+            entity_kind(&stored.entity).is_ok_and(|k| k == kind)
+                && entity_id(&stored.entity).is_ok_and(|i| i == id)
+        });
+        match found {
+            Some(stored) => Ok(stored.entity.clone()),
+            None if truncated => Ok(self
+                .store
+                .get(kind, id, branch)
+                .await
+                .map_err(store_err)?
+                .entity),
+            None => Err(Status::not_found(format!(
+                "{} not found",
+                trogon_atlas_store::key::entity_key(kind, id)
+            ))),
+        }
+    }
+
     /// Strategic findings deleting `kind`/`id` would leave on the entities
     /// that remain. Empty for kinds outside the problem space and context map.
     async fn delete_strategic_findings(
@@ -2941,6 +2971,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 owned_branches: true,
                 who_am_i: true,
                 type_libraries: true,
+                impact_classification: true,
             }),
             limits: Some(pb::get_server_info_response::Limits {
                 max_page_size: ADVERTISED_MAX_PAGE_SIZE,
@@ -3215,16 +3246,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 continue;
             }
             let kind = entity_kind(&se.entity)?;
-            let key = trogon_atlas_store::key::entity_key(kind, id);
-            let hash = trogon_atlas_core::entity_content_hash(&se.entity).map_err(|e| {
-                // An entity that cannot render as canonical JSON has no
-                // content identity, so the snapshot has none either. Failing
-                // is the honest answer: silently skipping it would produce an
-                // id for a model that is missing an entity.
-                Status::failed_precondition(format!(
-                    "entity {key} has no content identity, so no snapshot id can be computed: {e}"
-                ))
-            })?;
+            let (key, hash) = snapshot_entry(&se.entity, kind, id)?;
             if req.include_entries {
                 entries.push(pb::SnapshotEntry {
                     key: key.clone(),
@@ -3235,11 +3257,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     content_hash: hash.to_hex(),
                 });
             }
-            hasher.insert(key, hash).map_err(|e| {
-                // Two rows for one key means the store enumeration is
-                // broken; hashing on would name a state that never existed.
-                Status::internal(format!("snapshot enumeration produced {e}"))
-            })?;
+            insert_snapshot_entry(&mut hasher, key, hash)?;
         }
         // `SnapshotHasher` keeps its own sorted order; sort the response
         // entries to match, since the proto promises key order.
@@ -4197,6 +4215,138 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         Ok(Response::new(pb::GetImpactResponse {
             nodes,
             next_page_token,
+        }))
+    }
+
+    async fn classify_impact(
+        &self,
+        req: Request<pb::ClassifyImpactRequest>,
+    ) -> Result<Response<pb::ClassifyImpactResponse>, Status> {
+        use crate::impact_classification::{self as ic, Incompleteness};
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let req = req.into_inner();
+        let current = req
+            .current
+            .ok_or_else(|| Status::invalid_argument("current is required"))?;
+        let candidate = req
+            .candidate
+            .ok_or_else(|| Status::invalid_argument("candidate is required"))?;
+        let kind = kind_from_i32(current.kind, "current.kind")?;
+        if kind_from_i32(candidate.kind, "candidate.kind")? != kind {
+            return Err(Status::invalid_argument(
+                "candidate must be the same kind as current",
+            ));
+        }
+        let current_id = require_id(current.id.as_ref(), "current")?;
+        let candidate_id = require_id(candidate.id.as_ref(), "candidate")?;
+        if current_id == candidate_id {
+            return Err(Status::invalid_argument(
+                "candidate must be a different version from current",
+            ));
+        }
+        self.require_visible(&vis, &current_id.namespace).await?;
+        self.require_visible(&vis, &candidate_id.namespace).await?;
+        let max_depth = if req.max_depth == 0 {
+            ADVERTISED_MAX_IMPACT_DEPTH
+        } else {
+            req.max_depth.min(ADVERTISED_MAX_IMPACT_DEPTH)
+        };
+        let page_size = clamp_page_size(
+            req.page_size,
+            ADVERTISED_DEFAULT_PAGE_SIZE,
+            ADVERTISED_MAX_PAGE_SIZE,
+        );
+        let offset = parse_page_token(&req.page_token)?;
+
+        let (everything, truncated) = match branch.as_deref() {
+            None => {
+                let all = self.baseline_snapshot().await?;
+                (all, self.snapshot_truncated.load(Ordering::Acquire))
+            }
+            Some(name) => {
+                let loaded = graph::load_all(&self.store, Some(name)).await?;
+                (Arc::new(loaded.entities), loaded.truncated)
+            }
+        };
+        let all = match branch.as_deref() {
+            None => self.narrow_baseline(everything.clone(), &vis).await?,
+            Some(_) => self.narrow(everything.clone(), &vis).await?,
+        };
+        let snapshot_id = snapshot_id_of(&all)?;
+        let current_entity = self
+            .impact_input(&all, truncated, kind, current_id, branch.as_deref())
+            .await?;
+        let candidate_entity = self
+            .impact_input(&all, truncated, kind, candidate_id, branch.as_deref())
+            .await?;
+        let ops = diff::diff_entities(&current_entity, &candidate_entity);
+        graph::validate_responsibility_discovery_budget(&all)?;
+        let index = graph::ReverseIndex::build(&all);
+        let root = pb::EntityKey::new(kind, current_id);
+        let excluded = pb::EntityKey::new(kind, candidate_id);
+        let dependents = ic::Dependents::walk(&index, &root, &excluded, max_depth);
+
+        let mut incompleteness = std::collections::BTreeSet::new();
+        if truncated {
+            incompleteness.insert(Incompleteness::SnapshotTruncated);
+        }
+        if dependents.depth_limited() {
+            incompleteness.insert(Incompleteness::DepthLimited);
+        }
+        if dependents.has_unresolved_referrers() {
+            incompleteness.insert(Incompleteness::UnresolvedReferrers);
+        }
+        if !vis.is_unrestricted() {
+            let unseen = ic::Dependents::walk(
+                &graph::ReverseIndex::build(&everything),
+                &root,
+                &excluded,
+                max_depth,
+            );
+            if !unseen.is_subset_of(&dependents)
+                || (unseen.depth_limited() && !dependents.depth_limited())
+            {
+                incompleteness.insert(Incompleteness::HiddenDependents);
+            }
+        }
+
+        let report = ic::classify(&ic::Comparison {
+            current: &current_entity,
+            candidate: &candidate_entity,
+            ops: &ops,
+            snapshot: &all,
+            index: &index,
+            dependents: &dependents,
+            incompleteness,
+        });
+        let total = report.dependents.len();
+        let verdict = report.verdict_proto() as i32;
+        let page: Vec<pb::DependentImpact> = report
+            .dependents
+            .into_iter()
+            .skip(offset)
+            .take(page_size)
+            .collect();
+        let next_offset = offset + page.len();
+        let next_page_token = if next_offset >= total {
+            String::new()
+        } else {
+            encode_page_token(next_offset)
+        };
+        Ok(Response::new(pb::ClassifyImpactResponse {
+            ops,
+            verdict,
+            incompleteness: report
+                .incompleteness
+                .into_iter()
+                .map(|reason| reason as i32)
+                .collect(),
+            uncovered_changes: report.uncovered_changes,
+            counts: Some(report.counts),
+            dependents: page,
+            next_page_token,
+            snapshot_id,
         }))
     }
 
@@ -9224,6 +9374,48 @@ fn walk_json_diff(
             });
         }
     }
+}
+
+fn snapshot_entry(
+    entity: &pb::Entity,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Result<(String, trogon_atlas_core::ContentHash), Status> {
+    let key = trogon_atlas_store::key::entity_key(kind, id);
+    let hash = trogon_atlas_core::entity_content_hash(entity).map_err(|e| {
+        // An entity that cannot render as canonical JSON has no
+        // content identity, so the snapshot has none either. Failing
+        // is the honest answer: silently skipping it would produce an
+        // id for a model that is missing an entity.
+        Status::failed_precondition(format!(
+            "entity {key} has no content identity, so no snapshot id can be computed: {e}"
+        ))
+    })?;
+    Ok((key, hash))
+}
+
+fn insert_snapshot_entry(
+    hasher: &mut trogon_atlas_core::SnapshotHasher,
+    key: String,
+    hash: trogon_atlas_core::ContentHash,
+) -> Result<(), Status> {
+    hasher.insert(key, hash).map_err(|e| {
+        // Two rows for one key means the store enumeration is
+        // broken; hashing on would name a state that never existed.
+        Status::internal(format!("snapshot enumeration produced {e}"))
+    })
+}
+
+/// The `GetSnapshotId` identity of `entities` without a namespace filter.
+fn snapshot_id_of(entities: &[StoredEntity]) -> Result<String, Status> {
+    let mut hasher = trogon_atlas_core::SnapshotHasher::new();
+    for se in entities {
+        let kind = entity_kind(&se.entity)?;
+        let id = entity_id(&se.entity)?;
+        let (key, hash) = snapshot_entry(&se.entity, kind, id)?;
+        insert_snapshot_entry(&mut hasher, key, hash)?;
+    }
+    Ok(hasher.finish().to_hex())
 }
 
 #[cfg(test)]

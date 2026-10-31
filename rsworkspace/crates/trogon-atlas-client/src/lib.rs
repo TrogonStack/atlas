@@ -17,6 +17,7 @@ pub mod decision_document;
 pub mod export;
 pub mod failure;
 pub mod fmt;
+pub mod impact;
 pub mod manifest;
 pub mod manifest_schema;
 pub mod openslo;

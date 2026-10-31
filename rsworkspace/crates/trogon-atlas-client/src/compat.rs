@@ -16,6 +16,7 @@ pub enum Capability {
     StatePreconditions,
     WhoAmI,
     TypeLibraries,
+    ImpactClassification,
 }
 
 impl Capability {
@@ -27,6 +28,7 @@ impl Capability {
             Capability::StatePreconditions => features.state_preconditions,
             Capability::WhoAmI => features.who_am_i,
             Capability::TypeLibraries => features.type_libraries,
+            Capability::ImpactClassification => features.impact_classification,
         }
     }
 
@@ -39,6 +41,7 @@ impl Capability {
             Capability::StatePreconditions => "state_preconditions",
             Capability::WhoAmI => "who_am_i",
             Capability::TypeLibraries => "type_libraries",
+            Capability::ImpactClassification => "impact_classification",
         }
     }
 }
@@ -110,6 +113,11 @@ pub enum CompatibilityError {
         "server does not advertise the {0} capability (GetServerInfo.features.{0}); refusing to mutate"
     )]
     MissingCapability(Capability),
+
+    #[error(
+        "server does not advertise the {0} capability (GetServerInfo.features.{0}); upgrade the server to use it"
+    )]
+    UnsupportedQuery(Capability),
 }
 
 /// Pure decision over a discovery response, so every unsupported
@@ -242,6 +250,18 @@ mod tests {
         assert!(!Capability::TypeLibraries.advertised_by(&features));
         features.type_libraries = true;
         assert!(Capability::TypeLibraries.advertised_by(&features));
+    }
+
+    #[test]
+    fn impact_classification_capability_reflects_the_feature_flag() {
+        assert_eq!(
+            Capability::ImpactClassification.feature_flag(),
+            "impact_classification"
+        );
+        let mut features = pb::get_server_info_response::Features::default();
+        assert!(!Capability::ImpactClassification.advertised_by(&features));
+        features.impact_classification = true;
+        assert!(Capability::ImpactClassification.advertised_by(&features));
     }
 
     #[test]

@@ -141,6 +141,20 @@ pub struct ImpactParams {
     pub filter_kinds: Option<Vec<String>>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClassifyImpactParams {
+    #[schemars(description = "The exact version dependents pin today.")]
+    pub current: EntitySpec,
+    #[schemars(description = "The exact version of the same kind that would replace it.")]
+    pub candidate: EntitySpec,
+    #[schemars(
+        description = "Max referrer hops from current. 0 = server default (16). Values above 16 are capped at 16."
+    )]
+    #[serde(default)]
+    pub max_depth: u32,
+}
+
 impl<'de> Deserialize<'de> for ImpactParams {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = ImpactParamsDe::deserialize(deserializer)?;
