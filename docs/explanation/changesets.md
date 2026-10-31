@@ -77,11 +77,37 @@ wildcard.
 The author is `Principal.name` from the auth stack, resolved from the
 bearer token. The `x-trogon-atlas-author-name` header is accepted only when
 no principal is present, which is the un-authenticated development path. A
-write that reaches the store outside a mutation RPC (`trogon-atlas-server
-import`, a direct `Store` user, a test) mints no changeset at all, and its
+write that reaches the store outside a mutation RPC (a direct `Store` user,
+`migrate-legacy-fields`, a test) mints no changeset at all, and its
 change events carry an empty `changeset_id` and `author`. That is the
 documented unattributed case, not a bug: inventing an author would be
 worse than admitting there isn't one.
+
+## Imports
+
+`trogon-atlas-server import-git` is the one bulk route that writes entities
+outside an RPC, and it records changesets so a restore can be inspected and
+undone. Each run records baseline changesets with `rpc: "ImportGit"`, at
+most 1,024 entities each, and every imported entity gets a revision row.
+`seed` already goes through `BatchMutate`, and `trogon-atlas apply` through
+the ordinary write RPCs, so both were attributed before.
+
+- **Author.** `unauthenticated`. The command runs outside the auth stack,
+  so no principal vouched for it; the `rpc` says where the write came from.
+- **What is attributed.** Only entities the import created. An entity
+  already in the store is skipped and stays out of the changeset, so
+  reverting the import never removes something it did not write.
+- **Retries.** A rerun skips everything the first run landed, so it records
+  changesets only for what is still missing, and nothing when nothing is.
+- **Partial failure.** An entity that fails to import is skipped and named
+  in the log. What did land is still recorded, so the changeset describes
+  the writes that actually happened.
+- **Lost append.** If a changeset cannot be appended after its entities
+  landed, the command exits non-zero and names it. Those entities carry
+  revision rows that no changeset points to, so they behave as
+  unattributed writes until the run is investigated.
+- **Namespace registry.** `--restore-namespaces` writes registry rows, not
+  entities, and records no changeset.
 
 ## What is deliberately not recorded
 
@@ -190,7 +216,7 @@ the way `ListChangesets` does.
 **Why both images, rather than a chain.** Storing only `after` and
 reconstructing `before` from the previous row assumes the chain is
 complete. It is not: revisions exist only for attributed writes, so an
-`trogon-atlas-server import-git` in the middle of an entity's life breaks the
+unattributed write in the middle of an entity's life breaks the
 chain silently and every `before` after it would be a lie. Each row
 carries its own pre-image and is true on its own.
 
@@ -295,7 +321,7 @@ changesets in the caller's namespaces with `FAILED_PRECONDITION`, so an old targ
 of holding the request open.
 
 **Gap: unattributed writes.** A write that minted no changeset
-(`trogon-atlas-server import`, direct `Store` use) left no revision row and
+(direct `Store` use, `migrate-legacy-fields`) left no revision row and
 no place in the log. It cannot be rewound, so its effect shows through in
 every as-of view. A newer changeset with a missing revision row (for
 example one whose batch recovery reported the key as `superseded`) makes
