@@ -13,6 +13,7 @@ pub mod fixtures;
 pub mod git_mirror;
 pub mod graph;
 pub mod health;
+mod impact_classification;
 pub mod jev;
 pub mod llm;
 pub mod llm_analysis;
