@@ -10,6 +10,7 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<pb::ListTermDomainDeclarationsResponse, Status> {
+        let _guard = self.lock_mutations().await;
         let domain = req
             .domain
             .ok_or_else(|| Status::invalid_argument("domain is required"))?;
@@ -124,5 +125,53 @@ impl EventModelServiceImpl {
             declarations: declarations[offset..end].to_vec(),
             incomplete: false,
         })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use std::{future::Future, sync::Arc, task::Context};
+
+    use tonic::Request;
+    use trogon_atlas_proto::event_model_service_server::EventModelService;
+
+    use super::{pb, EventModelServiceImpl};
+    use crate::metrics::ServerMetrics;
+
+    #[tokio::test]
+    async fn term_query_joins_the_mutation_queue_before_reading_its_context() {
+        let store = trogon_atlas_testsupport::shared().await.store().await;
+        let service =
+            EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default()).unwrap();
+        let held = service.lock_mutations().await;
+        let mut query = Box::pin(service.list_term_domain_declarations(Request::new(
+            pb::ListTermDomainDeclarationsRequest {
+                domain: Some(pb::DomainRef {
+                    id: Some(pb::Id {
+                        namespace: "term-guard".into(),
+                        slug: "domain".into(),
+                        version: 1,
+                    }),
+                }),
+                ..Default::default()
+            },
+        )));
+        let mut later_mutation = Box::pin(service.lock_mutations());
+        let mut context = Context::from_waker(std::task::Waker::noop());
+        assert!(query.as_mut().poll(&mut context).is_pending());
+        assert!(later_mutation.as_mut().poll(&mut context).is_pending());
+        drop(held);
+        assert!(
+            later_mutation.as_mut().poll(&mut context).is_pending(),
+            "the catalog query must hold the first reservation before a later mutation"
+        );
+        let response = query.await.unwrap().into_inner();
+        assert_eq!(
+            response.declarations,
+            Vec::<pb::TermDomainDeclaration>::new()
+        );
+        assert!(!response.incomplete);
+        drop(later_mutation.await);
     }
 }

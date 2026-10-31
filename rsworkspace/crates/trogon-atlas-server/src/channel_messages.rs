@@ -114,7 +114,7 @@ impl EventModelServiceImpl {
                         delivery_mode: declaration.delivery_mode,
                         doc: declaration.doc.clone(),
                         authority: pb::ChannelMessageAuthority::SpecificationDeclaration as i32,
-                        state: state(resolved),
+                        state: local_member_state(resolved),
                         ..Default::default()
                     });
                 }
@@ -157,7 +157,7 @@ impl EventModelServiceImpl {
                             }),
                             operation_message: Some(occurrence.clone()),
                             authority: pb::ChannelMessageAuthority::OperationBinding as i32,
-                            state: state(resolved),
+                            state: local_member_state(resolved),
                             ..Default::default()
                         });
                     }
@@ -231,6 +231,14 @@ impl EventModelServiceImpl {
                 .try_into()
                 .unwrap_or(u32::MAX),
         })
+    }
+}
+
+fn local_member_state(resolved: bool) -> i32 {
+    if resolved {
+        pb::CatalogResolutionState::Resolved as i32
+    } else {
+        pb::CatalogResolutionState::Unresolved as i32
     }
 }
 

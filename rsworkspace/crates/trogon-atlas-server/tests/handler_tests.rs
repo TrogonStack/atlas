@@ -26,6 +26,231 @@ fn id(ns: &str, slug: &str, version: u64) -> pb::Id {
     }
 }
 
+async fn channel_authority_fixture() -> (EventModelServiceImpl, pb::Specification, pb::ChannelRef) {
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let channel = pb::ChannelRef {
+        id: Some(id("channel-authorities", "orders", 1)),
+    };
+    store
+        .create(
+            pb::EntityKind::Channel,
+            &pb::Entity {
+                kind: Some(pb::entity::Kind::Channel(pb::Channel {
+                    id: channel.id.clone(),
+                    title: "Orders".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let live = pb::ContractMemberId {
+        value: "11111111-1111-4111-8111-111111111111".into(),
+    };
+    let missing = pb::ContractMemberId {
+        value: "22222222-2222-4222-8222-222222222222".into(),
+    };
+    let proposal = pb::Specification {
+        id: Some(id("channel-authorities", "contract", 1)),
+        title: "Contract".into(),
+        messages: vec![pb::ContractMessage {
+            member_id: Some(live.clone()),
+            name: Some(pb::MemberName {
+                value: "Order".into(),
+            }),
+            ..Default::default()
+        }],
+        message_channels: [live.clone(), missing.clone()]
+            .into_iter()
+            .map(|member| pb::MessageChannelDeclaration {
+                member_id: Some(member),
+                channel: Some(channel.clone()),
+                ..Default::default()
+            })
+            .collect(),
+        operations: vec![pb::ContractOperation {
+            member_id: Some(pb::ContractMemberId {
+                value: "33333333-3333-4333-8333-333333333333".into(),
+            }),
+            name: Some(pb::MemberName {
+                value: "Send".into(),
+            }),
+            messages: [
+                (live.clone(), pb::operation_message::Role::Request),
+                (live, pb::operation_message::Role::Response),
+                (missing.clone(), pb::operation_message::Role::Notification),
+            ]
+            .into_iter()
+            .map(|(member, role)| pb::OperationMessage {
+                message_id: Some(member),
+                role: role as i32,
+                ..Default::default()
+            })
+            .collect(),
+            binding: Some(pb::OperationBinding {
+                kind: Some(pb::operation_binding::Kind::Channel(
+                    pb::ChannelOperationBinding {
+                        channel: Some(channel.clone()),
+                        ..Default::default()
+                    },
+                )),
+            }),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    // The Store fixture preserves legacy declarations whose local member has disappeared.
+    let written = store
+        .create(
+            pb::EntityKind::Specification,
+            &pb::Entity {
+                kind: Some(pb::entity::Kind::Specification(proposal)),
+                ..Default::default()
+            },
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    let Some(pb::entity::Kind::Specification(spec)) = written.entity.kind else {
+        panic!("Specification")
+    };
+    let claim_id = pb::ConnectionId {
+        value: "44444444-4444-4444-8444-444444444444".into(),
+    };
+    store
+        .create(
+            pb::EntityKind::Component,
+            &pb::Entity {
+                kind: Some(pb::entity::Kind::Component(pb::Component {
+                    id: Some(id("channel-authorities", "sender", 1)),
+                    title: "Sender".into(),
+                    message_claims: Some(pb::MessageClaims {
+                        claims: vec![pb::MessageClaim {
+                            connection_id: Some(claim_id.clone()),
+                            direction: pb::CommunicationDirection::Send as i32,
+                            message: Some(pb::ContractMemberRef {
+                                specification: Some(pb::SpecificationRef {
+                                    id: Some(id("channel-authorities", "absent", 1)),
+                                }),
+                                owner_uid: "55555555-5555-4555-8555-555555555555".into(),
+                                kind: pb::ContractMemberKind::Message as i32,
+                                member_id: Some(missing),
+                                ..Default::default()
+                            }),
+                            ..Default::default()
+                        }],
+                        routes: vec![pb::ClaimRoute {
+                            claim_id: Some(claim_id),
+                            channel: Some(channel.clone()),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    (
+        EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap(),
+        spec,
+        channel,
+    )
+}
+
+#[tokio::test]
+async fn channel_operation_authority_keeps_distinct_nested_occurrence_selectors() {
+    let (service, spec, channel) = channel_authority_fixture().await;
+    let mut page_token = String::new();
+    let mut records = Vec::new();
+    loop {
+        let page = service
+            .list_channel_messages(Request::new(pb::ListChannelMessagesRequest {
+                channel: Some(channel.clone()),
+                page_size: 1,
+                page_token,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        records.extend(page.records);
+        page_token = page.next_page_token;
+        if page_token.is_empty() {
+            assert!(page.complete);
+            break;
+        }
+        assert!(records.len() < 10);
+    }
+    let operation = &spec.operations[0];
+    let Some(pb::operation_binding::Kind::Channel(binding)) =
+        operation.binding.as_ref().and_then(|v| v.kind.as_ref())
+    else {
+        panic!("binding")
+    };
+    let operation_rows: Vec<_> = records
+        .iter()
+        .filter(|r| r.authority == pb::ChannelMessageAuthority::OperationBinding as i32)
+        .collect();
+    assert_eq!(operation_rows.len(), 3);
+    let mut occurrences = std::collections::HashSet::new();
+    for row in operation_rows {
+        assert_eq!(row.connection_id, binding.connection_id);
+        assert_eq!(
+            row.operation.as_ref().unwrap().member_id,
+            operation.member_id
+        );
+        assert_eq!(row.operation.as_ref().unwrap().owner_uid, row.owner_uid);
+        let selected = row.operation_message.as_ref().unwrap();
+        assert!(operation.messages.contains(selected));
+        assert!(occurrences.insert(selected.connection_id.as_ref().unwrap().value.clone()));
+    }
+    assert_eq!(occurrences.len(), operation.messages.len());
+}
+
+#[tokio::test]
+async fn channel_available_owner_missing_members_are_unresolved() {
+    let (service, _, channel) = channel_authority_fixture().await;
+    let result = service
+        .list_channel_messages(Request::new(pb::ListChannelMessagesRequest {
+            channel: Some(channel),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(result.records.len(), 6);
+    let mut resolved = 0;
+    let mut unresolved = 0;
+    let mut unavailable = 0;
+    for row in result.records {
+        if row.authority == pb::ChannelMessageAuthority::ClaimRoute as i32 {
+            assert_eq!(row.state, pb::CatalogResolutionState::Unavailable as i32);
+            unavailable += 1;
+        } else if row
+            .message
+            .as_ref()
+            .unwrap()
+            .member_id
+            .as_ref()
+            .unwrap()
+            .value
+            == "22222222-2222-4222-8222-222222222222"
+        {
+            assert_eq!(row.state, pb::CatalogResolutionState::Unresolved as i32);
+            unresolved += 1;
+        } else {
+            assert_eq!(row.state, pb::CatalogResolutionState::Resolved as i32);
+            resolved += 1;
+        }
+    }
+    assert_eq!((resolved, unresolved, unavailable), (3, 2, 1));
+}
+
 fn make_event(ns: &str, slug: &str, version: u64) -> pb::Entity {
     pb::Entity {
         system: None,

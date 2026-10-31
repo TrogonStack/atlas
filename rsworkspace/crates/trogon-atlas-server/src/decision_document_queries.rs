@@ -890,6 +890,13 @@ impl EventModelServiceImpl {
         let role_filter = req.related_content_role.map(|role| {
             pb::RelatedContentRole::try_from(role)
                 .map_err(|_| Status::invalid_argument("invalid related content role filter"))
+                .and_then(|role| {
+                    trogon_atlas_core::document_catalog_context::validate_related_role(role)
+                        .map_err(|_| {
+                            Status::invalid_argument("invalid related content role filter")
+                        })?;
+                    Ok(role)
+                })
         });
         let role_filter = match role_filter {
             Some(Ok(value)) => Some(value),
@@ -1281,4 +1288,73 @@ fn decode_catalog_page_token(
             .ok_or_else(|| Status::invalid_argument("invalid page token"))?,
     )
     .map_err(|_| Status::invalid_argument("invalid page token"))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use tonic::{Code, Request};
+    use trogon_atlas_proto::event_model_service_server::EventModelService;
+
+    use super::{pb, EventModelServiceImpl};
+    use crate::metrics::ServerMetrics;
+
+    #[tokio::test]
+    async fn incoming_document_filters_require_an_authored_related_content_role() {
+        let store = trogon_atlas_testsupport::shared().await.store().await;
+        let before = trogon_atlas_store::Store::current_change_seq(&store)
+            .await
+            .unwrap();
+        let service =
+            EventModelServiceImpl::try_new(Arc::new(store.clone()), ServerMetrics::default())
+                .unwrap();
+        let document = pb::DocumentSelection {
+            selection: Some(pb::document_selection::Selection::Document(
+                pb::DocumentRef {
+                    id: Some(pb::Id {
+                        namespace: "role-filter".into(),
+                        slug: "document".into(),
+                        version: 1,
+                    }),
+                },
+            )),
+        };
+        for role in [None, Some(pb::RelatedContentRole::Example as i32)] {
+            let response = service
+                .list_incoming_document_declarations(Request::new(
+                    pb::ListIncomingDocumentDeclarationsRequest {
+                        document: Some(document.clone()),
+                        related_content_role: role,
+                        ..Default::default()
+                    },
+                ))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(response.declarations, Vec::<pb::CatalogDeclaration>::new());
+            assert!(!response.incomplete);
+        }
+        for role in [pb::RelatedContentRole::Unspecified as i32, 999] {
+            let error = service
+                .list_incoming_document_declarations(Request::new(
+                    pb::ListIncomingDocumentDeclarationsRequest {
+                        document: Some(document.clone()),
+                        related_content_role: Some(role),
+                        ..Default::default()
+                    },
+                ))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), Code::InvalidArgument);
+            assert_eq!(error.message(), "invalid related content role filter");
+        }
+        assert_eq!(
+            trogon_atlas_store::Store::current_change_seq(&store)
+                .await
+                .unwrap(),
+            before
+        );
+    }
 }
