@@ -3227,6 +3227,15 @@ fn outside_visible_scope(
     }
 }
 
+/// Members from another context are validated by their own model, so the
+/// outbound-ref pass only walks members in the model's namespace.
+fn outbound_pass_walks(model: &pb::EventModel, member: &pb::Id) -> bool {
+    model
+        .id
+        .as_ref()
+        .is_none_or(|i| i.namespace == member.namespace)
+}
+
 #[must_use]
 pub fn validate_model_content_within(
     model: &pb::EventModel,
@@ -5735,6 +5744,16 @@ pub fn validate_model_content_within(
             };
             if !known.contains(&pb::EntityKey::new(pb::EntityKind::Ui, to_id)) {
                 if !lens.admits(&to_id.namespace) {
+                    if !outbound_pass_walks(model, ui_id) {
+                        issues.push(outside_visible_scope(
+                            pb::EntityRef {
+                                kind: pb::EntityKind::Ui as i32,
+                                id: Some(ui_id.clone()),
+                            },
+                            format!("transitions[{ti}].to"),
+                            &format!("ui:{}/{}@{}", to_id.namespace, to_id.slug, to_id.version),
+                        ));
+                    }
                     continue;
                 }
                 issues.push(pb::ValidationIssue {
@@ -6230,10 +6249,8 @@ pub fn validate_model_content_within(
         // subscription view names) is validated by ITS model; walking its
         // internals from here only produces noise about a boundary we
         // deliberately do not own.
-        if let Some(model_ns) = model.id.as_ref().map(|i| i.namespace.as_str()) {
-            if id.namespace != model_ns {
-                continue;
-            }
+        if !outbound_pass_walks(model, id) {
+            continue;
         }
         for o in outbound_refs(&se.entity) {
             // Bounded contexts touch at exactly ONE seam: an upstream EVENT
@@ -8337,6 +8354,44 @@ mod boundary_tests {
         let issues = validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream"]));
         assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
         assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn ui_member_from_another_visible_namespace_classifies_its_hidden_transition() {
+        let ui = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("shell", "home")),
+                title: "home".into(),
+                transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
+                    to: Some(pb::UiRef {
+                        id: Some(id("upstream", "checkout")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::Ui, "shell", "home")],
+            ..Default::default()
+        };
+        let issues =
+            validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream", "shell"]));
+        assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
+        let outside: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "REF_OUTSIDE_VISIBLE_SCOPE")
+            .collect();
+        assert_eq!(outside.len(), 1, "{issues:?}");
+        assert_eq!(outside[0].subject_field, "transitions[0].to");
+        assert_eq!(
+            outside[0].severity,
+            pb::validation_issue::Severity::Info as i32
+        );
     }
 
     #[test]
