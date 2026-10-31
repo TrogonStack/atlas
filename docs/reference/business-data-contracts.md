@@ -31,6 +31,10 @@ can follow that schema. That id is not a foreign business selection.
 
 ## Comparison inputs that this contract answers
 
+Historical comparison only: the following source description is research
+provenance, not an active integration requirement. EventCatalog-specific work
+is deferred to the final mile under the [native-first scope](eventcatalog-coverage.md#native-first-scope).
+
 Pinned EventCatalog collection schema at
 [`2736a2272207cf1b1ee09e6a440401d2215c6380`](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config.ts)
 describes an entity with optional `aggregateRoot` (boolean), optional

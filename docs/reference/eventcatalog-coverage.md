@@ -1,18 +1,22 @@
-# EventCatalog coverage and gaps
+# Native Atlas coverage
 
-This is the consolidated comparison of EventCatalog concepts with Atlas native
-contracts. It replaces historical missing-resource checklists for status
-tracking. The scope is missing Atlas objects, fields and relationships inspired
-by EventCatalog. Reading or migrating EventCatalog projects is outside this scope.
+This reference tracks native Atlas objects, fields, relationships and their
+acceptance evidence. Native contracts determine the implementation scope.
 
-## Comparison baseline
+## Native-first scope
 
-EventCatalog source inventory: commit
-[`2736a2272207cf1b1ee09e6a440401d2215c6380`](https://github.com/event-catalog/eventcatalog/tree/2736a2272207cf1b1ee09e6a440401d2215c6380),
-audited on 2026-10-16. The
-[collection definitions](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config.ts)
-anchor the resource and field inventory. This is a pinned comparison, not a
-claim about all features in the latest EventCatalog release.
+Build and verify Atlas independently before considering external catalog
+integration. EventCatalog-specific work is deferred to the final mile, after
+the native capabilities and workflows are complete and verified. It is not
+active backlog, a completion requirement or a prerequisite for native work.
+
+This deferral includes readers, importers, migration, synchronization, federation,
+source-format conversion, `.ecstudio` parsing and EventCatalog-specific selector
+rebinding. Any future integration needs a separately scoped task. Do not report
+these deferred items as missing native capabilities or next steps.
+
+The historical comparison at the end records research provenance only. It does
+not define an integration contract or require source-format parity.
 
 Atlas status was reconciled on 2026-10-29 against the native schemas and linked
 contracts. [Architecture resource coverage](architecture-resource-coverage.md)
@@ -21,7 +25,7 @@ remains authoritative for native implementation and acceptance boundaries.
 Status terms:
 
 - **Native analogue**: implemented Atlas representation, which may have different
-  semantics from the corresponding EventCatalog concept.
+  semantics from superficially similar external catalog concepts.
 - **Partial**: relevant native support exists, but the stated source relationship
   or field semantics remain uncovered.
 - **Gap**: a dedicated native contract is absent.
@@ -31,9 +35,9 @@ Status terms:
 None of these statuses promises full product parity or authorizes a new entity
 kind. Existing representations and proposed extensions remain distinct.
 
-## Resource and relationship inventory
+## Native resource and relationship inventory
 
-| EventCatalog concept | Atlas status and existing support | Remaining EventCatalog coverage |
+| Concept | Atlas status and existing support | Native boundary |
 | --- | --- | --- |
 | Events, commands and queries | **Native analogue.** Native behavioral primitives and selectable Specification messages exist. | Exact Specification MESSAGE selectors preserve catalog messages independently of behavioral primitives. A message kind does not establish a domain Event, local Command or ReadModel. Query messages remain requests, not implicit response schemas. |
 | Services | **Native analogue.** Component represents a deployable implementation unit, curated members, directed relationships, communication intent and storage-access claims. | Storage-access and authored domain/system membership pass integrated acceptance under the adopted native contracts. Namespace placement does not supply authored membership or flow behavior. |
@@ -50,16 +54,15 @@ kind. Existing representations and proposed extensions remain distinct.
 | Business entities and properties | **Native analogue.** Addressable Schema carries optional aggregate-root intent, identified property-path declarations and exact entity/property relationships. | The [business data contract](business-data-contracts.md) separates declarations from type reuse, payload schemas and stream behavior. The executable assertion map and integrated acceptance cover identifier, relationship and client boundaries. |
 | Ubiquitous language | **Native analogue.** Term and Ambiguity represent scoped vocabulary, definitions and interpretation; Term has optional exact domain ownership. | [Vocabulary ownership](catalog-context-contracts.md#vocabulary-ownership) remains independent of namespace and strategic realization. [Integrated native acceptance](catalog-context-acceptance.md#integrated-verification-receipt) passes for this ownership boundary. |
 | Flows | **Native analogue.** DesignGraph retains identified typed steps, labeled transitions, branching, cycles and exact subflow references. Storyboards retain their ordered slices and traces. | The [topology contract](design-topology-contracts.md) keeps authored graph traversal separate from execution. SystemGroup targets are composed. Target, lifecycle, traversal and connected-client acceptance passes in the integrated candidate. |
-| Designs and diagrams | **Native analogue.** DesignGraph provides authored topology and an optional Document layout reference; Document retains exact content. | Native topology and authenticated browser acceptance passes. Heterogeneous rendering, layout interpretation and reading `.ecstudio` files are excluded from this native coverage goal. |
+| Designs and diagrams | **Native analogue.** DesignGraph provides authored topology and an optional Document layout reference; Document retains exact content. | Native topology and authenticated browser acceptance passes. Heterogeneous rendering and layout interpretation remain separate native product decisions. External format support is deferred under the native-first scope. |
 | Pages and resource documentation | **Native analogue.** Document retains text, links or exact bytes, purpose, subjects, categories, anchors, ordered navigation and typed related content. | [Catalog context](catalog-context-contracts.md) preserves native associations without filesystem inference. Integrated acceptance covers authored changelog revision independence, exact retained bytes, collection limits and typed associations. Revision history does not replace prose. |
 | Examples | **Native analogue.** EXAMPLE Documents retain raw bytes, media type, digest, filename, usage prose and exact subjects. | The composed raw-JSON example, selected MESSAGE and containing-Document case passes authenticated native acceptance. Arbitrary text is not a validated Event/Command payload or an executed example. |
 
 ## Remaining model checklist
 
-These are concept-level gaps, not a prescribed Atlas schema. Each item needs
-an explicit native contract or exclusion. Adopted concepts also require the
-implementation and executable acceptance described by that contract before
-the item can be closed.
+These native requirements are complete under the linked contracts. Closure
+requires an explicit native contract or exclusion, implementation and executable
+acceptance for each adopted concept.
 
 - [x] Define higher-level system grouping, authored domain/system/service
   memberships and system-level actor relationships.
@@ -133,18 +136,17 @@ privacy and no-grant requirements.
 
 ## Atlas adaptations and separate roadmap
 
-The following are Atlas choices, not direct EventCatalog schema requirements:
+These native Atlas proposals are separate from the completed coverage scope:
 
-| Atlas choice | Relationship to the comparison |
+| Atlas choice | Native boundary |
 | --- | --- |
 | Exact numeric identities, owner incarnation UIDs and occurrence selectors | Native foundations for checked references and mutation safety. |
-| [Component UI hosting and InspectHumanInteraction](human-interaction-contracts.md) | Proposed Atlas representation of human interaction paths; not implemented and not a direct copy of EventCatalog actor arrows. |
+| [Component UI hosting and InspectHumanInteraction](human-interaction-contracts.md) | Proposed Atlas representation of human interaction paths; not implemented. |
 | Typed behavioral binding and executable communication predicates | Separate behavioral work. Source trigger declarations and condition prose do not prove runtime execution. |
-| Portable selector rebinding | A migration concern for incarnation-bound native selections; not a source collection or a prerequisite for preserving original bytes. |
-| WASM/WIT linter host | Atlas extension architecture, separate from EventCatalog resource coverage and EventCatalog's own lint tooling. |
+| WASM/WIT linter host | Atlas extension architecture, separate from native resource coverage. |
 
 The [architecture roadmap](../explanation/architecture-resource-roadmap.md)
-tracks these choices. Completing this comparison does not automatically adopt
+tracks these choices. Completing native coverage does not automatically adopt
 them.
 
 ## Updating the checklist
@@ -154,6 +156,14 @@ boundary: native schema, validation, reference discovery and query support.
 Excluded concepts must remain visible in this inventory. A passing resource
 fixture does not establish every proposed relationship.
 
-When updating the EventCatalog baseline, compare the pinned source inventory
-with the new revision before changing statuses. Keep source-derived gaps separate
-from newly proposed Atlas capabilities.
+Update native statuses from native contracts and executable evidence. External
+comparison research does not add integration work to this checklist.
+
+## Historical comparison baseline
+
+EventCatalog source inventory: commit
+[`2736a2272207cf1b1ee09e6a440401d2215c6380`](https://github.com/event-catalog/eventcatalog/tree/2736a2272207cf1b1ee09e6a440401d2215c6380),
+audited on 2026-10-16. The
+[collection definitions](https://github.com/event-catalog/eventcatalog/blob/2736a2272207cf1b1ee09e6a440401d2215c6380/packages/core/eventcatalog/src/content.config.ts)
+anchor the resource and field inventory. This is a pinned comparison, not a
+claim about all features in the latest EventCatalog release.

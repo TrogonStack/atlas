@@ -16,6 +16,10 @@ requirement to executed tests and name the boundaries that remain unproved.
 | [Specification](../../proto/trogonatlas/eventmodel/v1alpha1/specification.proto) | Artifacts and selectable message/operation members. A member is not a flow step occurrence. |
 | [CatalogSubject](../../proto/trogonatlas/eventmodel/v1alpha1/decision_document.proto) | Exact entity, connection, contract member or data port selection used by Decision, Document and responsibility surfaces. |
 
+Historical comparison only: the following source description is research
+provenance, not an active integration requirement. EventCatalog-specific work
+is deferred to the final mile under the [native-first scope](eventcatalog-coverage.md#native-first-scope).
+
 EventCatalog pinned inventory (commit
 [`2736a2272207cf1b1ee09e6a440401d2215c6380`](https://github.com/event-catalog/eventcatalog/tree/2736a2272207cf1b1ee09e6a440401d2215c6380))
 defines flow frontmatter as `steps[]` where each step has stable `id`, optional

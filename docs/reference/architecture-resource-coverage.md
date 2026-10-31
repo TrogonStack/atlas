@@ -5,8 +5,10 @@ acceptance evidence. A retained field or artifact does not establish a checked
 relationship, executable behavior, or a passing client workflow. See the
 [roadmap](../explanation/architecture-resource-roadmap.md) for design boundaries.
 
-The [EventCatalog comparison](eventcatalog-coverage.md) consolidates source-derived
-object, field and relationship gaps separately from Atlas-specific proposals.
+The [native coverage inventory](eventcatalog-coverage.md) consolidates object,
+field and relationship acceptance. Its [native-first scope](eventcatalog-coverage.md#native-first-scope)
+defers EventCatalog-specific integration to the final mile; it is not remaining
+native work.
 
 ## Native resource contracts
 

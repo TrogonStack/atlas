@@ -4,7 +4,7 @@ Status: implemented native contract. The
 [acceptance requirements](system-structure-acceptance.md) define verification
 obligations; final composed execution and checklist closure remain separate.
 It addresses the system structure item of the
-[EventCatalog checklist](eventcatalog-coverage.md#remaining-model-checklist):
+[native coverage checklist](eventcatalog-coverage.md#remaining-model-checklist):
 higher-level system grouping, authored domain, system and service memberships,
 and system-level actor relationships. It reads no external catalog and adds no
 migration, provider or federation behavior.
@@ -54,6 +54,10 @@ Incomplete or dangling groups stay inspectable, per
 [layered information](../explanation/principles/layered-information.md).
 
 ## Source evidence and disposition
+
+Historical comparison only: the following source description is research
+provenance, not an active integration requirement. EventCatalog-specific work
+is deferred to the final mile under the [native-first scope](eventcatalog-coverage.md#native-first-scope).
 
 The pinned source is EventCatalog commit
 [`2736a22`](https://github.com/event-catalog/eventcatalog/tree/2736a2272207cf1b1ee09e6a440401d2215c6380).

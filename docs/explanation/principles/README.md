@@ -14,6 +14,11 @@ Atlas is currently greenfield: breaking schema/API changes and recreating
 development data are acceptable. Prefer the intended model over legacy
 compatibility layers. See the [development policy](../wire-compatibility.md#current-development-policy).
 
+Native Atlas capabilities and workflows come first. EventCatalog-specific
+integration is deferred to the final mile and requires a separately scoped task;
+it must not become a prerequisite or an active native backlog item. See the
+[native-first scope](../../reference/eventcatalog-coverage.md#native-first-scope).
+
 ## Principles
 
 - [Backend authority](backend-authority.md): Keep authoritative state and rules in the backend.

@@ -10,6 +10,10 @@ claiming deployed-browser verification or completion of its other workstreams.
 
 ## Existing behavior and field dispositions
 
+Historical comparison only: the following source description is research
+provenance, not an active integration requirement. EventCatalog-specific work
+is deferred to the final mile under the [native-first scope](eventcatalog-coverage.md#native-first-scope).
+
 The comparison uses EventCatalog commit
 [`2736a2272207cf1b1ee09e6a440401d2215c6380`](https://github.com/event-catalog/eventcatalog/tree/2736a2272207cf1b1ee09e6a440401d2215c6380).
 Source anchors below describe field shapes, not a migration contract.

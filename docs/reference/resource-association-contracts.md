@@ -6,11 +6,11 @@ and connected authoring and inspection surfaces. The
 link the MessageClaims verification boundaries. Other resource-association
 extensions have independent implementation and acceptance ownership.
 
-The scope is Atlas native declarations only. No EventCatalog reader, importer,
-migration, provider synchronization or federation is introduced, and no
-proposal below depends on one. Source overlays stay unable to select, own or
-write the proposed fields. EventCatalog names appear only to show which authored
-concept each proposal represents.
+The scope is Atlas native declarations only. EventCatalog-specific integration
+is deferred to the final mile under the [native-first scope](eventcatalog-coverage.md#native-first-scope);
+it is not active work or a dependency of these declarations. Source overlays
+stay unable to select, own or write the proposed fields. Historical comparison
+names do not establish source-format compatibility requirements.
 
 Historical private checklists do not decide what exists. Every statement of
 shipped support below was checked against the current protobuf schema, reference
