@@ -10,10 +10,12 @@
 //! derived from the proto, never hand-maintained.
 pub mod apply;
 pub mod branch;
+pub mod channel_messages;
 pub mod client;
 pub mod compat;
 pub mod data_product;
 pub mod decision_document;
+pub mod design_topology;
 pub mod export;
 pub mod failure;
 pub mod fmt;
@@ -32,3 +34,5 @@ mod source_request;
 pub mod tenant_types;
 pub mod validate;
 pub mod view;
+
+pub mod term_domains;

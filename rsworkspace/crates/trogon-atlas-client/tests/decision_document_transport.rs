@@ -13,6 +13,7 @@ use trogon_atlas_proto as pb;
 #[tokio::test]
 async fn native_catalog_queries_preserve_branch_auth_and_operational_failure_codes() {
     for (rpc, code) in [
+        ("ListDecisionAmendments", Code::Unavailable),
         ("ListSubjectDecisions", Code::NotFound),
         ("ListSubjectDocuments", Code::PermissionDenied),
         ("GetDecisionDetail", Code::Unavailable),
@@ -39,6 +40,13 @@ async fn native_catalog_queries_preserve_branch_auth_and_operational_failure_cod
         )
         .unwrap();
         let result = match rpc {
+            "ListDecisionAmendments" => {
+                decision_document::list_decision_amendments(
+                    &mut client,
+                    pb::ListDecisionAmendmentsRequest::default(),
+                )
+                .await
+            }
             "ListSubjectDecisions" => {
                 decision_document::list_subject_decisions(
                     &mut client,

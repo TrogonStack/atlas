@@ -19,7 +19,7 @@ fn manifest(kind: &str, spec: &serde_json::Value) -> serde_json::Value {
 #[test]
 fn native_catalog_manifests_preserve_bytes_pins_local_ids_and_authored_order() {
     let anchor = json!({"anchor":{"document":"notes/delivery@7","ownerUid":"document-uid","anchorId":{"value":"anchor-id"},"expectedDigest":{"sha256":"b".repeat(64)}}});
-    let decision = json!({"title":{"value":"Choice"},"supersedes":"note@1","subjects":subjects(),"status":"DECISION_STATUS_ACCEPTED","context":{"value":"Question"},"rationale":{"value":"Rationale"},"options":[{"optionId":{"value":"option-b"},"title":{"value":"B"},"description":{"value":"Alternative"}},{"optionId":{"value":"option-a"},"title":{"value":"A"},"description":{"value":"Alternative A"}}],"selectedOption":{"value":"option-b"},"consequences":[{"kind":"KIND_RISK","text":{"value":"Delivery risk"}}],"documents":[{"connectionId":{"value":"support-id"},"document":anchor}]});
+    let decision = json!({"title":{"value":"Choice"},"supersedes":"note@1","subjects":subjects(),"status":"DECISION_STATUS_ACCEPTED","decisionMakers":[{"person":"maker@2"},{"team":"makers@3"}],"amends":[{"decision":"original@4","doc":{"value":"Clarifies original"}}],"authoredOn":{"value":"2024-02-29"},"decidedOn":{"value":"2024-03-01"},"context":{"value":"Question"},"rationale":{"value":"Rationale"},"options":[{"optionId":{"value":"option-b"},"title":{"value":"B"},"description":{"value":"Alternative"}},{"optionId":{"value":"option-a"},"title":{"value":"A"},"description":{"value":"Alternative A"}}],"selectedOption":{"value":"option-b"},"consequences":[{"kind":"KIND_RISK","text":{"value":"Delivery risk"}}],"documents":[{"connectionId":{"value":"support-id"},"document":anchor}]});
     let text = "# Delivery\r\n\nCafe\u{301} <script>blocked()</script>\n";
     let document = json!({"title":{"value":"Notes"},"subjects":subjects(),"retained":{"mediaType":{"value":"text/markdown"},"content":text,"digest":{"sha256":"c".repeat(64)}},"anchors":[{"anchorId":{"value":"anchor-b"},"fragment":{"value":"Delivery"},"label":{"value":"Delivery"}}],"navigation":[{"connectionId":{"value":"navigation-id"},"document":anchor}]});
     let schema = manifest_schema::generate().unwrap();
@@ -118,6 +118,95 @@ fn generic_description_preserves_catalog_association_provenance_and_nested_pins(
     let rendered = serde_json::to_value(description).unwrap();
     assert_eq!(rendered["outgoing"][0]["provenance"], reference_json);
     assert_eq!(rendered["title"], "Choice");
+}
+
+#[test]
+fn description_preserves_document_text_and_binary_content_metadata() {
+    let types = TranscodePool::builtin().unwrap();
+    let digest = "a".repeat(64);
+    for (body, content) in [
+        ("retained", json!("authored text")),
+        ("retainedContent", json!("AAEC")),
+    ] {
+        let entity: pb::Entity = types
+            .message_from_json_value(
+                "trogonatlas.eventmodel.v1alpha1.Entity",
+                &json!({"document":{
+                    "id":{"namespace":"catalog","slug":"note","version":"9007199254740993"},
+                    "filename":{"value":"note.txt"},
+                    body:{"mediaType":{"value":"text/plain"},"digest":{"sha256":digest},"content":content}
+                }}),
+            )
+            .unwrap();
+        let saved = entity.clone();
+        let description = trogon_atlas_client::view::describe(&entity, &types, &[], &[]).unwrap();
+        let structured = serde_json::to_value(&description).unwrap();
+        assert_eq!(
+            structured["document_content"],
+            json!({"media_type":"text/plain","sha256":digest,"filename":"note.txt"}),
+            "{body}"
+        );
+        let rendered = trogon_atlas_client::view::render_description(&description);
+        assert!(
+            rendered.contains("Media type: text/plain\n"),
+            "{body}: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("SHA256: {digest}\n")),
+            "{body}: {rendered}"
+        );
+        assert!(
+            rendered.contains("Filename: note.txt\n"),
+            "{body}: {rendered}"
+        );
+        assert_eq!(entity, saved);
+    }
+}
+
+#[test]
+fn description_preserves_document_filename_without_inventing_content_metadata() {
+    let types = TranscodePool::builtin().unwrap();
+    for body in [
+        json!({"link":{"value":"https://example.test/note"}}),
+        json!({}),
+    ] {
+        let mut document = body;
+        document["id"] = json!({"namespace":"catalog","slug":"note","version":"1"});
+        document["filename"] = json!({"value":"note.txt"});
+        let entity: pb::Entity = types
+            .message_from_json_value(
+                "trogonatlas.eventmodel.v1alpha1.Entity",
+                &json!({"document":document}),
+            )
+            .unwrap();
+        let description = trogon_atlas_client::view::describe(&entity, &types, &[], &[]).unwrap();
+        assert_eq!(
+            serde_json::to_value(&description).unwrap()["document_content"],
+            json!({"filename":"note.txt"})
+        );
+        let rendered = trogon_atlas_client::view::render_description(&description);
+        assert!(rendered.contains("Filename: note.txt\n"));
+        assert!(!rendered.contains("Media type:"));
+        assert!(!rendered.contains("SHA256:"));
+    }
+
+    for document in [
+        json!({}),
+        json!({"link":{"value":"https://example.test/note"}}),
+    ] {
+        let entity: pb::Entity = types
+            .message_from_json_value(
+                "trogonatlas.eventmodel.v1alpha1.Entity",
+                &json!({"document":document}),
+            )
+            .unwrap();
+        let description = trogon_atlas_client::view::describe(&entity, &types, &[], &[]).unwrap();
+        assert!(description.document_content.is_none());
+        assert!(serde_json::to_value(&description)
+            .unwrap()
+            .get("document_content")
+            .is_none());
+    }
 }
 
 #[test]

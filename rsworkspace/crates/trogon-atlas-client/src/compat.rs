@@ -130,12 +130,7 @@ pub fn check(
             minimum: pb::MIN_SERVER_CONTRACT_REVISION,
         });
     }
-    if pb::CONTRACT_REVISION < info.min_client_contract_revision {
-        return Err(CompatibilityError::ClientTooOld {
-            client: pb::CONTRACT_REVISION,
-            minimum: info.min_client_contract_revision,
-        });
-    }
+    writer_revision_decision(pb::CONTRACT_REVISION, info.min_client_contract_revision)?;
     let absent = pb::get_server_info_response::Features::default();
     let features = info.features.as_ref().unwrap_or(&absent);
     match intent
@@ -145,6 +140,25 @@ pub fn check(
     {
         Some(missing) => Err(CompatibilityError::MissingCapability(missing)),
         None => Ok(()),
+    }
+}
+
+/// Refuse a writer whose revision is below the server's advertised client floor.
+///
+/// `check` always evaluates the revision compiled into this client. Callers
+/// proving an older writer pass that writer's revision explicitly. The
+/// comparison is the same one `check` uses before a mutation is sent.
+pub fn writer_revision_decision(
+    writer_revision: u32,
+    minimum: u32,
+) -> Result<(), CompatibilityError> {
+    if writer_revision < minimum {
+        Err(CompatibilityError::ClientTooOld {
+            client: writer_revision,
+            minimum,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -280,6 +294,51 @@ mod tests {
     }
 
     #[test]
+    fn revision_19_refuses_an_older_writer_before_mutation() {
+        assert_eq!(pb::CONTRACT_REVISION, 19);
+        assert_eq!(pb::MIN_SERVER_CONTRACT_REVISION, 19);
+        assert_eq!(pb::MIN_CLIENT_CONTRACT_REVISION, 19);
+        let server_requires_newer_writer = pb::GetServerInfoResponse {
+            contract_revision: 19,
+            min_client_contract_revision: 20,
+            ..current_server()
+        };
+        let writer = check(&server_requires_newer_writer, MutationIntent::default()).unwrap_err();
+        assert!(matches!(
+            writer,
+            CompatibilityError::ClientTooOld {
+                client: 19,
+                minimum: 20
+            }
+        ));
+        assert!(
+            writer
+                .to_string()
+                .contains("upgrade this client before mutating"),
+            "{writer}"
+        );
+        let older_server = pb::GetServerInfoResponse {
+            contract_revision: 18,
+            min_client_contract_revision: 18,
+            ..current_server()
+        };
+        let server = check(&older_server, MutationIntent::default()).unwrap_err();
+        assert!(matches!(
+            server,
+            CompatibilityError::ServerTooOld {
+                server: 18,
+                minimum: 19
+            }
+        ));
+        assert!(
+            server
+                .to_string()
+                .contains("upgrade the server before mutating"),
+            "{server}"
+        );
+    }
+
+    #[test]
     fn server_requiring_newer_client_is_refused() {
         let info = pb::GetServerInfoResponse {
             contract_revision: pb::CONTRACT_REVISION + 1,
@@ -290,6 +349,88 @@ mod tests {
             check(&info, MutationIntent::default()),
             Err(CompatibilityError::ClientTooOld { .. })
         ));
+    }
+
+    const LAST_REVISION_WITHOUT_DESIGN_GRAPH: u32 = 18;
+
+    #[test]
+    fn server_from_before_design_graph_is_refused_for_every_intent() {
+        let info = pb::GetServerInfoResponse {
+            contract_revision: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
+            min_client_contract_revision: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
+            ..current_server()
+        };
+        for intent in every_intent() {
+            assert!(matches!(
+                check(&info, intent),
+                Err(CompatibilityError::ServerTooOld {
+                    server: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn writer_from_before_design_graph_falls_below_the_advertised_client_floor() {
+        let advertised = current_server().min_client_contract_revision;
+        let refused =
+            writer_revision_decision(LAST_REVISION_WITHOUT_DESIGN_GRAPH, advertised).unwrap_err();
+        assert!(matches!(
+            refused,
+            CompatibilityError::ClientTooOld {
+                client: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
+                minimum: 19
+            }
+        ));
+        assert!(
+            refused
+                .to_string()
+                .contains("upgrade this client before mutating"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn writer_below_revision_19_is_refused_before_any_mutation() {
+        let advertised = current_server();
+        assert_eq!(advertised.contract_revision, 19);
+        assert_eq!(advertised.min_client_contract_revision, 19);
+        for intent in every_intent() {
+            check(&advertised, intent).unwrap();
+        }
+        let refused =
+            writer_revision_decision(18, advertised.min_client_contract_revision).unwrap_err();
+        assert!(matches!(
+            refused,
+            CompatibilityError::ClientTooOld {
+                client: 18,
+                minimum: 19
+            }
+        ));
+        assert!(
+            refused
+                .to_string()
+                .contains("upgrade this client before mutating"),
+            "{refused}"
+        );
+        let raised = pb::GetServerInfoResponse {
+            min_client_contract_revision: advertised.min_client_contract_revision + 1,
+            ..advertised
+        };
+        let live = check(&raised, MutationIntent::default()).unwrap_err();
+        assert!(matches!(
+            live,
+            CompatibilityError::ClientTooOld {
+                client: 19,
+                minimum: 20
+            }
+        ));
+        assert!(
+            live.to_string()
+                .contains("upgrade this client before mutating"),
+            "{live}"
+        );
     }
 
     #[test]
