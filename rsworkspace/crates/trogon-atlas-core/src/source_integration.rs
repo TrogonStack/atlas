@@ -117,7 +117,12 @@ fn native_authoring_content(value: &DynamicMessage) -> bool {
 /// Collections that only native authoring may hold, so a source can neither supply nor clear them.
 fn native_collections(owner: &str) -> &'static [&'static str] {
     match owner {
-        "trogonatlas.eventmodel.v1alpha1.Component" => &["relationships", "communications", "storage_claims", "ui_hostings"],
+        "trogonatlas.eventmodel.v1alpha1.Component" => &[
+            "relationships",
+            "communications",
+            "storage_claims",
+            "ui_hostings",
+        ],
         "trogonatlas.eventmodel.v1alpha1.ExternalSystem" => {
             &["relationships", "communications", "storage_claims"]
         }
@@ -352,7 +357,8 @@ pub fn validate_create_ownership(
             return Err(SourceError::UnsupportedUnit);
         }
     }
-    if matches!(&entity.kind, Some(trogon_atlas_proto::entity::Kind::Component(value)) if !value.ui_hostings.is_empty()) {
+    if matches!(&entity.kind, Some(trogon_atlas_proto::entity::Kind::Component(value)) if !value.ui_hostings.is_empty())
+    {
         return Err(SourceError::UnsupportedUnit);
     }
     validate_ownership(entity, ownership)?;
