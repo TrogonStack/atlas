@@ -24,6 +24,7 @@ pub mod openslo_bindings;
 pub mod operation;
 pub mod outcome;
 pub mod precondition;
+pub mod protection;
 pub mod responsibility;
 mod source_codec;
 pub mod source_input;

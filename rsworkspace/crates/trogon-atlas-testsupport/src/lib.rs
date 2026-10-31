@@ -4,6 +4,7 @@
 //! that exercise the authorization path against the real thing.
 
 pub mod discovery;
+mod protection_registry;
 
 use std::{
     process::Command,
@@ -13,6 +14,7 @@ use std::{
     },
 };
 
+pub use protection_registry::ProtectionRegistry;
 use testcontainers::{
     core::{IntoContainerPort, WaitFor},
     ContainerAsync, GenericImage, ImageExt,
@@ -91,6 +93,15 @@ impl TestNats {
     ///
     /// Returns an error if the store fails to connect or configure.
     pub async fn try_store(&self) -> Result<NatsStore, String> {
+        NatsStore::connect_with(self.store_config())
+            .await
+            .map_err(|e| format!("NatsStore::connect_with failed in test: {e}"))
+    }
+
+    /// The configuration [`TestNats::try_store`] connects with: bucket and
+    /// stream names unique to this call.
+    #[must_use]
+    pub fn store_config(&self) -> NatsStoreConfig {
         let suffix = unique_suffix();
         let mut config = NatsStoreConfig::new(&self.url, StoreMetrics::default());
         config.bucket = format!("test-{suffix}");
@@ -104,9 +115,20 @@ impl TestNats {
         config.subject_root = format!("test.{suffix}");
         config.changes_max_msgs = Some(10_000);
         config.changes_max_age = None;
-        NatsStore::connect_with(config)
+        config
+    }
+
+    /// An isolated store plus direct access to its protection registry, for
+    /// tests that need rows the server cannot read or keys it cannot
+    /// enumerate.
+    pub async fn store_with_protection_registry(&self) -> (NatsStore, ProtectionRegistry) {
+        let config = self.store_config();
+        let bucket = format!("{}-protections", config.namespaces_bucket);
+        let store = Box::pin(NatsStore::connect_with(config))
             .await
-            .map_err(|e| format!("NatsStore::connect_with failed in test: {e}"))
+            .unwrap_or_else(|e| panic!("NatsStore::connect_with failed in test: {e}"));
+        let registry = ProtectionRegistry::open(&self.url, &bucket).await;
+        (store, registry)
     }
 
     /// Build a [`NatsStore`], panicking with a clear message on failure.

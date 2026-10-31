@@ -4537,6 +4537,8 @@ dependencies = [
 name = "trogon-atlas-testsupport"
 version = "0.1.0"
 dependencies = [
+ "async-nats",
+ "futures",
  "libc",
  "testcontainers",
  "testcontainers-modules",
