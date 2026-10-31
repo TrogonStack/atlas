@@ -684,22 +684,17 @@ fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
 /// never takes it for a clean attestation.
 fn attested_outcome(
     text: bool,
+    bundle: &pb::AttestedModelBundle,
     verified: &trogon_atlas_core::attested_bundle::VerifiedBundle,
     written: Option<&std::path::Path>,
 ) -> (ExitCode, Option<Value>) {
-    use trogon_atlas_core::attested_bundle::Completeness;
-    let reasons: Vec<&str> = match &verified.completeness {
-        Completeness::Complete => Vec::new(),
-        Completeness::Incomplete(reasons) => reasons
-            .iter()
-            .map(trogon_atlas_proto::attested_completeness::Reason::as_str_name)
-            .collect(),
-    };
+    let mut data = attested::outcome_json(bundle, verified);
     if text {
         if let Some(path) = written {
             println!("wrote {}", path.display());
         }
         println!("bundle_digest: {}", verified.digest);
+        let reasons = attested::incomplete_reason_names(verified);
         if reasons.is_empty() {
             println!("complete");
         }
@@ -714,17 +709,6 @@ fn attested_outcome(
             );
         }
     }
-    let unresolved: Vec<Value> = verified
-        .unresolved
-        .iter()
-        .map(|entity| json!({"key": entity.key, "cause": entity.cause.as_str_name()}))
-        .collect();
-    let mut data = json!({
-        "bundle_digest": verified.digest.to_hex(),
-        "complete": reasons.is_empty(),
-        "incomplete_reasons": reasons,
-        "unresolved": unresolved,
-    });
     if let Some(path) = written {
         data["output"] = json!(path.display().to_string());
     }
@@ -2085,11 +2069,11 @@ async fn run(
             let json = trogon_atlas_core::attested_bundle::bundle_to_json(&bundle)?;
             std::fs::write(&output, format!("{json}\n"))
                 .map_err(|e| anyhow::anyhow!("writing {}: {e}", output.display()))?;
-            Ok(attested_outcome(text, &verified, Some(&output)))
+            Ok(attested_outcome(text, &bundle, &verified, Some(&output)))
         }
         Cmd::Verify { bundle } => {
-            let verified = attested::verify_file(&bundle)?;
-            Ok(attested_outcome(text, &verified, None))
+            let (bundle, verified) = attested::verify_file(&bundle)?;
+            Ok(attested_outcome(text, &bundle, &verified, None))
         }
         Cmd::ValidateProject {
             namespace,
