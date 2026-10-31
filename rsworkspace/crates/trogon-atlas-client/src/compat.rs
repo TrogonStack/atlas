@@ -295,21 +295,21 @@ mod tests {
 
     #[test]
     fn revision_20_refuses_an_older_writer_before_mutation() {
-        assert_eq!(pb::CONTRACT_REVISION, 20);
-        assert_eq!(pb::MIN_SERVER_CONTRACT_REVISION, 20);
-        assert_eq!(pb::MIN_CLIENT_CONTRACT_REVISION, 20);
+        const {
+            assert!(pb::CONTRACT_REVISION >= 20);
+            assert!(pb::MIN_SERVER_CONTRACT_REVISION == 20);
+            assert!(pb::MIN_CLIENT_CONTRACT_REVISION == 20);
+        }
         let server_requires_newer_writer = pb::GetServerInfoResponse {
-            contract_revision: 20,
-            min_client_contract_revision: 21,
+            contract_revision: pb::CONTRACT_REVISION,
+            min_client_contract_revision: pb::CONTRACT_REVISION + 1,
             ..current_server()
         };
         let writer = check(&server_requires_newer_writer, MutationIntent::default()).unwrap_err();
         assert!(matches!(
             writer,
-            CompatibilityError::ClientTooOld {
-                client: 20,
-                minimum: 21
-            }
+            CompatibilityError::ClientTooOld { client, minimum }
+                if client == pb::CONTRACT_REVISION && minimum == pb::CONTRACT_REVISION + 1
         ));
         assert!(
             writer
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn writer_below_revision_20_is_refused_before_any_mutation() {
         let advertised = current_server();
-        assert_eq!(advertised.contract_revision, 20);
+        assert_eq!(advertised.contract_revision, pb::CONTRACT_REVISION);
         assert_eq!(advertised.min_client_contract_revision, 20);
         for intent in every_intent() {
             check(&advertised, intent).unwrap();
@@ -415,16 +415,14 @@ mod tests {
             "{refused}"
         );
         let raised = pb::GetServerInfoResponse {
-            min_client_contract_revision: advertised.min_client_contract_revision + 1,
+            min_client_contract_revision: pb::CONTRACT_REVISION + 1,
             ..advertised
         };
         let live = check(&raised, MutationIntent::default()).unwrap_err();
         assert!(matches!(
             live,
-            CompatibilityError::ClientTooOld {
-                client: 20,
-                minimum: 21
-            }
+            CompatibilityError::ClientTooOld { client, minimum }
+                if client == pb::CONTRACT_REVISION && minimum == pb::CONTRACT_REVISION + 1
         ));
         assert!(
             live.to_string()

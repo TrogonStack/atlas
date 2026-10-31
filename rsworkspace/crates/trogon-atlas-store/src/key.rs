@@ -57,6 +57,28 @@ pub fn namespace_prefix(kind: EntityKind, namespace: &str) -> String {
     )
 }
 
+/// Protection registry row for one identity:
+/// `"<kind_short>.<namespace>.<slug>"`, the entity key without its version.
+#[must_use]
+pub fn protection_key(identity: &crate::protection::EntityIdentity) -> String {
+    format!(
+        "{}.{}.{}",
+        trogon_atlas_proto::canonical::kind_short(identity.kind()),
+        encode_component(identity.namespace()),
+        encode_component(identity.slug())
+    )
+}
+
+/// Inverse of [`protection_key`]. `None` for a key no identity encodes to.
+#[must_use]
+pub fn parse_protection_key(key: &str) -> Option<crate::protection::EntityIdentity> {
+    let mut parts = key.splitn(3, '.');
+    let kind = kind_from_short(parts.next()?)?;
+    let namespace = decode_component(parts.next()?)?;
+    let slug = decode_component(parts.next()?)?;
+    crate::protection::EntityIdentity::new(kind, namespace, slug).ok()
+}
+
 #[must_use]
 pub fn kind_prefix(kind: EntityKind) -> String {
     format!("{}.", trogon_atlas_proto::canonical::kind_short(kind))

@@ -634,9 +634,11 @@ fn optional_aggregate_root_and_large_versions_round_trip_in_json() {
     };
     let json = transcode::message_json_value(schema::SCHEMA_MESSAGE, &unset).unwrap();
     assert!(json.get("aggregateRoot").is_none());
-    assert_eq!(pb::CONTRACT_REVISION, pb::MIN_SERVER_CONTRACT_REVISION);
-    assert_eq!(pb::CONTRACT_REVISION, pb::MIN_CLIENT_CONTRACT_REVISION);
-    assert_eq!(pb::CONTRACT_REVISION, 20);
+    const {
+        assert!(pb::CONTRACT_REVISION >= 20);
+        assert!(pb::MIN_SERVER_CONTRACT_REVISION == 20);
+        assert!(pb::MIN_CLIENT_CONTRACT_REVISION == 20);
+    }
 }
 
 #[test]
