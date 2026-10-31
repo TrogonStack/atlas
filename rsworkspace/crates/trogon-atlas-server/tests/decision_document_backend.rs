@@ -271,6 +271,150 @@ fn whole_selection(value: &pb::Entity) -> pb::DocumentSelection {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn incoming_documents_preserve_unpaged_omission_and_explicit_page_continuation() {
+    let mut client = client().await;
+    let subject_owner = put(&mut client, read_model("incoming-subject"), None)
+        .await
+        .entity
+        .unwrap();
+    let selected = subject(reference(&subject_owner));
+    let mut target = document("incoming-target", selected.clone());
+    let Some(pb::entity::Kind::Document(body)) = &mut target.kind else {
+        panic!("document");
+    };
+    body.purpose = Some(pb::DocumentPurpose::Example as i32);
+    let target = put(&mut client, target, None).await.entity.unwrap();
+    let selection = pb::DocumentSelection {
+        selection: Some(pb::document_selection::Selection::Document(
+            pb::DocumentRef {
+                id: reference(&target).id,
+            },
+        )),
+    };
+    let unrelated = put(
+        &mut client,
+        document("unrelated-incoming-owner", selected.clone()),
+        None,
+    )
+    .await
+    .entity
+    .unwrap();
+    let mut expected = std::collections::BTreeSet::new();
+    for index in 0..101 {
+        let mut owner = document(&format!("incoming-owner-{index:03}"), selected.clone());
+        let Some(pb::entity::Kind::Document(body)) = &mut owner.kind else {
+            panic!("document");
+        };
+        body.related_content.push(pb::RelatedContent {
+            document: Some(selection.clone()),
+            role: pb::RelatedContentRole::Example as i32,
+            ..Default::default()
+        });
+        let saved = put(&mut client, owner, None).await.entity.unwrap();
+        expected.insert(reference(&saved).id.unwrap().slug);
+    }
+    let legacy = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(selection.clone()),
+                ..Default::default()
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(legacy.declarations.len(), 101);
+    assert!(legacy.next_page_token.is_empty());
+    assert!(!legacy.incomplete);
+    let scope = legacy.scope.unwrap();
+    assert!(scope.page_receipt.is_none());
+    assert!(scope
+        .visited
+        .iter()
+        .any(|owner| owner.owner.as_ref() == Some(&reference(&unrelated))));
+    let actual: std::collections::BTreeSet<_> = legacy
+        .declarations
+        .iter()
+        .map(|declaration| {
+            declaration
+                .owner
+                .as_ref()
+                .unwrap()
+                .owner
+                .as_ref()
+                .unwrap()
+                .id
+                .as_ref()
+                .unwrap()
+                .slug
+                .clone()
+        })
+        .collect();
+    assert_eq!(actual, expected);
+
+    let types = trogon_atlas_core::transcode::TranscodePool::builtin().unwrap();
+    let explicit: pb::ListIncomingDocumentDeclarationsRequest = types
+        .message_from_json_value(
+            "trogonatlas.api.eventmodel.v1alpha1.ListIncomingDocumentDeclarationsRequest",
+            &serde_json::json!({"document":{"document":{"id":{
+            "namespace":"catalog","slug":"incoming-target","version":"1"
+        }}},"pageSize":0}),
+        )
+        .unwrap();
+    let first = client
+        .list_incoming_document_declarations(request(explicit, READER, None))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(first.declarations.len(), 100);
+    assert!(!first.next_page_token.is_empty());
+    let first_scope = first.scope.unwrap();
+    let receipt = first_scope.page_receipt.unwrap();
+    assert_eq!(
+        (
+            receipt.total_declarations,
+            receipt.start_offset,
+            receipt.end_offset
+        ),
+        (101, 0, 100)
+    );
+    assert!(!first_scope
+        .visited
+        .iter()
+        .any(|owner| owner.owner.as_ref() == Some(&reference(&unrelated))));
+    let second = client
+        .list_incoming_document_declarations(request(
+            pb::ListIncomingDocumentDeclarationsRequest {
+                document: Some(selection),
+                page_token: first.next_page_token,
+                ..Default::default()
+            },
+            READER,
+            None,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(second.declarations.len(), 1);
+    assert!(second.next_page_token.is_empty());
+    assert!(!second.incomplete);
+    let receipt = second.scope.unwrap().page_receipt.unwrap();
+    assert_eq!(
+        (
+            receipt.total_declarations,
+            receipt.start_offset,
+            receipt.end_offset
+        ),
+        (101, 100, 101)
+    );
+    let mut pages = first.declarations;
+    pages.extend(second.declarations);
+    assert_eq!(pages, legacy.declarations);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn catalog_public_exact_queries_preserve_bytes_pins_and_provenance_outside_display_cap() {
     let mut client = client().await;
     let target = put(&mut client, read_model("receipt"), None)
