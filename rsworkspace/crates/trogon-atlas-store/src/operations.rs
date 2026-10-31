@@ -246,6 +246,20 @@ impl NatsStore {
         .await
     }
 
+    /// Settle a claim as not-applied, naming the changeset whose content
+    /// landed. See [`crate::store::Store::settle_operation_unfinished`].
+    pub(crate) async fn settle_operation_unfinished(
+        &self,
+        key: &str,
+        changeset_id: &str,
+    ) -> StoreResult<()> {
+        self.settle_operation(key, |row| {
+            row.status = status_code(OperationStatus::NotApplied);
+            changeset_id.clone_into(&mut row.changeset_id);
+        })
+        .await
+    }
+
     /// Look up a claim by key. See [`crate::store::Store::get_operation`].
     pub(crate) async fn get_operation(&self, key: &str) -> StoreResult<Option<OperationRecord>> {
         let Some(entry) = live_entry(kv_entry_timeout(&self.operations_kv, key.to_owned()).await?)

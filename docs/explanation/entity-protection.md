@@ -47,9 +47,14 @@ landed but could not be confirmed finishes on retry from what landed instead
 of writing again, and replaying a settled write is not refused by the
 protection that write set. When a server stops after a protecting batch's
 content is durable, batch recovery leaves its `operation_id` not applied so
-a retry completes the protections. Anyone else's annotation,
-and every annotation that arrives through `import-git`, is dropped without
-effect.
+a retry completes the protections. Whenever content landed but a protection
+did not, the not-applied claim remembers the changeset that landed the
+content. A retry that finds the stored entities still exactly as that
+changeset left them skips the write and resumes at the protection step, so
+a `create_only` or `if_match` it already satisfied cannot refuse it. If
+anything moved since, the retry writes again and its preconditions judge the
+current state. Anyone else's annotation, and every annotation that arrives
+through `import-git`, is dropped without effect.
 
 Protection does not exempt admins. An admin's write to a protected identity
 is refused like anyone else's; lifting the mark first is the deliberate,
