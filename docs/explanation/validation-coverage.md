@@ -164,7 +164,7 @@ the snapshot cannot claim a finding was resolved.
 A caller whose lens covers only some namespaces validates against a snapshot
 that omits every other namespace. A reference into an omitted namespace looks
 exactly like a reference to something that does not exist, so calling it
-`DANGLING_REF` or `MEMBER_NOT_FOUND` would assert a defect the caller has no
+`DANGLING_REF`, `MEMBER_NOT_FOUND` or `UI_TRANSITION_DANGLING` would assert a defect the caller has no
 evidence for. `ValidateEventModel` and `ValidateProject` instead report such a
 reference as `REF_OUTSIDE_VISIBLE_SCOPE` at Info severity: the target was not
 resolved, not found missing.

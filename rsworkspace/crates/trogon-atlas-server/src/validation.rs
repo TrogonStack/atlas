@@ -5734,6 +5734,9 @@ pub fn validate_model_content_within(
                 continue;
             };
             if !known.contains(&pb::EntityKey::new(pb::EntityKind::Ui, to_id)) {
+                if !lens.admits(&to_id.namespace) {
+                    continue;
+                }
                 issues.push(pb::ValidationIssue {
                     severity: pb::validation_issue::Severity::Error as i32,
                     code: "UI_TRANSITION_DANGLING".into(),
@@ -8305,6 +8308,34 @@ mod boundary_tests {
         let all = vec![stored(view), stored(event("downstream", "order.fulfilled"))];
         let issues = validate_model_within(&model, &all, &lens_over(&["downstream"]));
         assert_eq!(count(&issues, "MEMBER_NOT_FOUND"), 0, "{issues:?}");
+        assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
+    }
+
+    #[test]
+    fn ui_transition_outside_the_visible_scope_is_not_called_dangling() {
+        let ui = pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Ui(pb::Ui {
+                id: Some(id("downstream", "home")),
+                title: "home".into(),
+                transitions: vec![pb::ui::Transition {
+                    connection_id: Some(trogon_atlas_core::connections::ConnectionId::new().into()),
+                    to: Some(pb::UiRef {
+                        id: Some(id("upstream", "checkout")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })),
+        };
+        let model = pb::EventModel {
+            id: Some(id("downstream", "m")),
+            title: "m".into(),
+            members: vec![member(pb::EntityKind::Ui, "downstream", "home")],
+            ..Default::default()
+        };
+        let issues = validate_model_within(&model, &[stored(ui)], &lens_over(&["downstream"]));
+        assert_eq!(count(&issues, "UI_TRANSITION_DANGLING"), 0, "{issues:?}");
         assert_eq!(count(&issues, "REF_OUTSIDE_VISIBLE_SCOPE"), 1, "{issues:?}");
     }
 
