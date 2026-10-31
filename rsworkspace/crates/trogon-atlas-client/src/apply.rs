@@ -275,17 +275,48 @@ impl std::error::Error for ApplyRejected {}
 /// to render issues without string-matching their text.
 #[must_use]
 pub fn issue_to_json(issue: &pb::ValidationIssue) -> Value {
-    let subject = issue.subject.as_ref().and_then(|s| {
-        let kind = pb::EntityKind::try_from(s.kind).ok()?;
-        let id = s.id.as_ref()?;
-        Some(pb::canonical::id_string(kind, id))
-    });
     json!({
         "severity": severity_name(issue),
         "code": issue.code,
         "message": issue.message,
-        "subject": subject,
+        "subject": ref_string(issue.subject.as_ref()),
+        "evidence": issue.evidence.iter().map(evidence_to_json).collect::<Vec<_>>(),
     })
+}
+
+/// JSON shape for one finding cause, in the order the server sent it:
+/// `{role, entity, field, target, occurrence: {storyboard, position}, detail}`
+/// with absent parts as `null`.
+#[must_use]
+pub fn evidence_to_json(evidence: &pb::ValidationEvidence) -> Value {
+    json!({
+        "role": evidence_role_name(evidence),
+        "entity": ref_string(evidence.entity.as_ref()),
+        "field": (!evidence.field.is_empty()).then_some(evidence.field.as_str()),
+        "target": ref_string(evidence.target.as_ref()),
+        "occurrence": evidence.occurrence.as_ref().map(|o| json!({
+            "storyboard": o
+                .storyboard
+                .as_ref()
+                .map(|id| pb::canonical::id_string(pb::EntityKind::Storyboard, id)),
+            "position": o.position,
+        })),
+        "detail": (!evidence.detail.is_empty()).then_some(evidence.detail.as_str()),
+    })
+}
+
+fn ref_string(r: Option<&pb::EntityRef>) -> Option<String> {
+    let r = r?;
+    let kind = pb::EntityKind::try_from(r.kind).ok()?;
+    Some(pb::canonical::id_string(kind, r.id.as_ref()?))
+}
+
+fn evidence_role_name(evidence: &pb::ValidationEvidence) -> String {
+    pb::validation_evidence::Role::try_from(evidence.role)
+        .unwrap_or_default()
+        .as_str_name()
+        .trim_start_matches("ROLE_")
+        .to_lowercase()
 }
 
 /// The validation findings one batch op produced, with the op's position in
@@ -531,16 +562,49 @@ fn severity_name(issue: &pb::ValidationIssue) -> &'static str {
 
 pub fn format_issue(issue: &pb::ValidationIssue) -> String {
     let severity = severity_name(issue);
-    let subject = issue
-        .subject
-        .as_ref()
-        .and_then(|s| {
-            let kind = pb::EntityKind::try_from(s.kind).ok()?;
-            let id = s.id.as_ref()?;
-            Some(format!(" [{}]", pb::canonical::id_string(kind, id)))
-        })
+    let subject = ref_string(issue.subject.as_ref())
+        .map(|s| format!(" [{s}]"))
         .unwrap_or_default();
-    format!("  {severity} {}{subject}: {}", issue.code, issue.message)
+    let mut out = format!("  {severity} {}{subject}: {}", issue.code, issue.message);
+    for evidence in &issue.evidence {
+        out.push_str("\n    ");
+        out.push_str(&format_evidence(evidence));
+    }
+    out
+}
+
+/// One cause on one line: `<role> <entity>[.<field>] -> <target> (<storyboard> #<position>)`.
+fn format_evidence(evidence: &pb::ValidationEvidence) -> String {
+    let mut out = evidence_role_name(evidence);
+    if let Some(entity) = ref_string(evidence.entity.as_ref()) {
+        out.push(' ');
+        out.push_str(&entity);
+    }
+    if !evidence.field.is_empty() {
+        out.push('.');
+        out.push_str(&evidence.field);
+    }
+    if let Some(target) = ref_string(evidence.target.as_ref()) {
+        out.push_str(" -> ");
+        out.push_str(&target);
+    }
+    if let Some(o) = evidence.occurrence.as_ref() {
+        let storyboard = o
+            .storyboard
+            .as_ref()
+            .map(|id| pb::canonical::id_string(pb::EntityKind::Storyboard, id))
+            .unwrap_or_default();
+        out.push_str(" (");
+        out.push_str(&storyboard);
+        out.push_str(" #");
+        out.push_str(&o.position.to_string());
+        out.push(')');
+    }
+    if !evidence.detail.is_empty() {
+        out.push_str(": ");
+        out.push_str(&evidence.detail);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -723,6 +787,89 @@ mod tests {
         .to_json()
         .get("coverage")
         .is_none());
+    }
+
+    fn stale_pin_finding() -> pb::ValidationIssue {
+        let id = |kind: pb::EntityKind, slug: &str, version| pb::EntityRef {
+            kind: kind as i32,
+            id: Some(pb::Id {
+                namespace: "shop".into(),
+                slug: slug.into(),
+                version,
+            }),
+        };
+        pb::ValidationIssue {
+            severity: pb::validation_issue::Severity::Warning as i32,
+            code: "SLICE_STALE_REF".into(),
+            message: "stale".into(),
+            evidence: vec![
+                pb::ValidationEvidence {
+                    role: pb::validation_evidence::Role::StalePin as i32,
+                    entity: Some(id(pb::EntityKind::CommandSlice, "place", 1)),
+                    field: "command".into(),
+                    target: Some(id(pb::EntityKind::Command, "place", 1)),
+                    ..Default::default()
+                },
+                pb::ValidationEvidence {
+                    role: pb::validation_evidence::Role::Consumer as i32,
+                    entity: Some(id(pb::EntityKind::ReadModelSlice, "view", 1)),
+                    occurrence: Some(pb::StoryboardOccurrence {
+                        storyboard: Some(pb::Id {
+                            namespace: "shop".into(),
+                            slug: "checkout".into(),
+                            version: 1,
+                        }),
+                        position: 3,
+                    }),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issue_json_carries_every_evidence_part_in_server_order() {
+        let json = issue_to_json(&stale_pin_finding());
+        assert_eq!(
+            json["evidence"],
+            json!([
+                {
+                    "role": "stale_pin",
+                    "entity": "command_slice:shop/place@1",
+                    "field": "command",
+                    "target": "command:shop/place@1",
+                    "occurrence": null,
+                    "detail": null,
+                },
+                {
+                    "role": "consumer",
+                    "entity": "read_model_slice:shop/view@1",
+                    "field": null,
+                    "target": null,
+                    "occurrence": {"storyboard": "storyboard:shop/checkout@1", "position": 3},
+                    "detail": null,
+                },
+            ])
+        );
+        assert_eq!(
+            issue_to_json(&finding("X"))["evidence"],
+            json!([]),
+            "a finding without evidence still names the key"
+        );
+    }
+
+    #[test]
+    fn format_issue_renders_one_line_per_cause() {
+        let rendered = format_issue(&stale_pin_finding());
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert_eq!(
+            lines[1..],
+            [
+                "    stale_pin command_slice:shop/place@1.command -> command:shop/place@1",
+                "    consumer read_model_slice:shop/view@1 (storyboard:shop/checkout@1 #3)",
+            ]
+        );
     }
 
     fn finding(code: &str) -> pb::ValidationIssue {

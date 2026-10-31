@@ -1097,7 +1097,7 @@ pub struct SearchResult {
 // edges + cardinality), supersession chains pointing at non-existent
 // versions, traces that violate data completeness, etc.
 
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidationIssue {
     #[prost(enumeration="validation_issue::Severity", tag="1")]
     pub severity: i32,
@@ -1125,6 +1125,12 @@ pub struct ValidationIssue {
     pub rule_category: ::prost::alloc::string::String,
     #[prost(enumeration="validation_issue::Severity", tag="8")]
     pub rule_default_severity: i32,
+    /// The causes behind this finding, in canonical order so the list is a
+    /// stable part of finding identity (code, subject, subject_field,
+    /// evidence). Empty for rules that still explain their causes only in
+    /// `message`; ValidationRule.evidence_roles says which rules carry it.
+    #[prost(message, repeated, tag="9")]
+    pub evidence: ::prost::alloc::vec::Vec<ValidationEvidence>,
 }
 /// Nested message and enum types in `ValidationIssue`.
 pub mod validation_issue {
@@ -1160,6 +1166,109 @@ pub mod validation_issue {
             }
         }
     }
+}
+/// One cause of a finding, typed so clients never parse `message`. Every
+/// reference names an exact version. Evidence only names entities the
+/// validator read from the caller's visible snapshot, or references those
+/// entities carry.
+///
+/// Canonical order: role, then entity, field, target and occurrence, each
+/// compared by kind, namespace, slug, version, then storyboard position.
+/// `detail` is presentation only and is not part of finding identity.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ValidationEvidence {
+    #[prost(enumeration="validation_evidence::Role", tag="1")]
+    pub role: i32,
+    /// Entity holding the cause.
+    #[prost(message, optional, tag="2")]
+    pub entity: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// Structural path inside `entity`, with list indexes (for example
+    /// `emitted_events\[2\]`). Empty when the entity itself is the cause.
+    #[prost(string, tag="3")]
+    pub field: ::prost::alloc::string::String,
+    /// What `entity.field` references, at the exact version it pins.
+    #[prost(message, optional, tag="4")]
+    pub target: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// Where the cause sits in a storyboard. Set for storyboard-order rules
+    /// so repeated occurrences of one slice stay distinguishable.
+    #[prost(message, optional, tag="5")]
+    pub occurrence: ::core::option::Option<StoryboardOccurrence>,
+    /// Human note for this cause. Presentation only.
+    #[prost(string, tag="6")]
+    pub detail: ::prost::alloc::string::String,
+}
+/// Nested message and enum types in `ValidationEvidence`.
+pub mod validation_evidence {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Role {
+        Unspecified = 0,
+        /// `entity.field` wires `target` (a UI or processor) as an issuer of the
+        /// subject command.
+        Issuer = 1,
+        /// `entity.field` names `target` as a command that emits the subject
+        /// event.
+        Emitter = 2,
+        /// `entity.field` pins `target`, an older version than the latest
+        /// loaded.
+        StalePin = 3,
+        /// `entity` is the latest loaded version of a stale pin's target.
+        LatestVersion = 4,
+        /// `entity.field` consumes `target` at `occurrence`.
+        Consumer = 5,
+        /// `entity.field` emits `target`, but only after the consuming
+        /// occurrence in the same storyboard.
+        LaterEmitter = 6,
+        /// `entity.field` emits `target` at the nearest occurrence before the
+        /// consumer.
+        EarlierEmitter = 7,
+        /// `entity` is an action slice placed between an emitter and its
+        /// projection.
+        InterveningAction = 8,
+    }
+    impl Role {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ROLE_UNSPECIFIED",
+                Self::Issuer => "ROLE_ISSUER",
+                Self::Emitter => "ROLE_EMITTER",
+                Self::StalePin => "ROLE_STALE_PIN",
+                Self::LatestVersion => "ROLE_LATEST_VERSION",
+                Self::Consumer => "ROLE_CONSUMER",
+                Self::LaterEmitter => "ROLE_LATER_EMITTER",
+                Self::EarlierEmitter => "ROLE_EARLIER_EMITTER",
+                Self::InterveningAction => "ROLE_INTERVENING_ACTION",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ROLE_UNSPECIFIED" => Some(Self::Unspecified),
+                "ROLE_ISSUER" => Some(Self::Issuer),
+                "ROLE_EMITTER" => Some(Self::Emitter),
+                "ROLE_STALE_PIN" => Some(Self::StalePin),
+                "ROLE_LATEST_VERSION" => Some(Self::LatestVersion),
+                "ROLE_CONSUMER" => Some(Self::Consumer),
+                "ROLE_LATER_EMITTER" => Some(Self::LaterEmitter),
+                "ROLE_EARLIER_EMITTER" => Some(Self::EarlierEmitter),
+                "ROLE_INTERVENING_ACTION" => Some(Self::InterveningAction),
+                _ => None,
+            }
+        }
+    }
+}
+/// One placement of a slice in a storyboard.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct StoryboardOccurrence {
+    #[prost(message, optional, tag="1")]
+    pub storyboard: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
+    /// Zero-based index into Storyboard.slices.
+    #[prost(uint32, tag="2")]
+    pub position: u32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ValidateEventModelRequest {
@@ -1209,6 +1318,10 @@ pub struct ValidationRule {
     /// grouping: "model" | "scenarios" | "strategic" | "schema" | "storyboard"
     #[prost(string, tag="7")]
     pub category: ::prost::alloc::string::String,
+    /// Evidence roles this rule's findings carry. Empty means the rule
+    /// explains its causes only in the finding message.
+    #[prost(enumeration="validation_evidence::Role", repeated, tag="8")]
+    pub evidence_roles: ::prost::alloc::vec::Vec<i32>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListValidationRulesRequest {

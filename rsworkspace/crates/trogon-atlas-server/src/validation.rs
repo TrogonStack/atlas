@@ -1,11 +1,14 @@
 #[path = "architecture_resources.rs"]
 pub mod architecture_resources;
+#[path = "finding_evidence.rs"]
+pub mod finding_evidence;
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     fmt,
 };
 
+use finding_evidence::{Evidence, Occurrence, Role};
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
     refs::{entity_id, entity_kind, outbound_refs},
@@ -226,8 +229,9 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         subject_kind: subject_kind as i32,
         subject_field: subject_field.into(),
         category: category.into(),
+        evidence_roles: Vec::new(),
     };
-    vec![
+    let mut rules = vec![
         r("CATALOG_REFERENCE_UNRESOLVED", Error, "Catalog declaration does not resolve",
           "Decision and Document declarations require valid native values and exact readable subject, relationship, ancestry and local selections. Repair the visible declaration using current returned identities and content pins.",
           Unspecified, "", "architecture"),
@@ -608,7 +612,31 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
         r("SCENARIO_TRANSITION_VIOLATION", Warning, "Scenario Then events break the swimlane lifecycle",
           "The events a scenario's Then claims will result do not match the swimlane's declared lifecycle transitions from the Given state.",
           Unspecified, "then", "scenarios"),
-    ]
+    ];
+    for rule in &mut rules {
+        rule.evidence_roles = evidence_roles(&rule.code)
+            .iter()
+            .map(|role| *role as i32)
+            .collect();
+    }
+    rules
+}
+
+/// Evidence roles each rule's findings carry. A rule absent here explains
+/// its causes only in the finding message.
+fn evidence_roles(code: &str) -> &'static [Role] {
+    match code {
+        "COMMAND_MULTIPLE_ISSUERS" => &[Role::Issuer],
+        "EVENT_MULTIPLE_EMITTERS" => &[Role::Emitter],
+        "SLICE_STALE_REF" => &[Role::StalePin, Role::LatestVersion],
+        "PROJECTION_BEFORE_EMITTER" => &[Role::Consumer, Role::LaterEmitter],
+        "PROJECTION_NOT_ADJACENT" => &[
+            Role::Consumer,
+            Role::EarlierEmitter,
+            Role::InterveningAction,
+        ],
+        _ => &[],
+    }
 }
 
 #[cfg(test)]
@@ -818,6 +846,27 @@ mod catalog_drift_tests {
             extra_in_catalog.is_empty(),
             "validation rule catalog contains codes not emitted anywhere: {extra_in_catalog:?}"
         );
+    }
+
+    #[test]
+    fn catalog_lists_the_evidence_roles_of_structured_rules() {
+        let roles = |code: &str| -> Vec<i32> {
+            rule_catalog()
+                .into_iter()
+                .find(|r| r.code == code)
+                .map(|r| r.evidence_roles)
+                .unwrap_or_default()
+        };
+        for code in [
+            "COMMAND_MULTIPLE_ISSUERS",
+            "EVENT_MULTIPLE_EMITTERS",
+            "SLICE_STALE_REF",
+            "PROJECTION_BEFORE_EMITTER",
+            "PROJECTION_NOT_ADJACENT",
+        ] {
+            assert!(!roles(code).is_empty(), "{code} carries evidence");
+        }
+        assert!(roles("DANGLING_REF").is_empty(), "prose-only rule");
     }
 }
 
@@ -2731,7 +2780,15 @@ fn latest_subdomains_of<'a>(
 /// merged.
 pub type StrategicChange = (pb::EntityKind, pb::Id);
 
-type IssueKey = (String, i32, String, String, u64, String);
+type IssueKey = (
+    String,
+    i32,
+    String,
+    String,
+    u64,
+    String,
+    Vec<finding_evidence::EvidenceKey>,
+);
 
 fn issue_key(issue: &pb::ValidationIssue) -> IssueKey {
     let (kind, ns, slug, version) = issue
@@ -2749,6 +2806,11 @@ fn issue_key(issue: &pb::ValidationIssue) -> IssueKey {
         slug,
         version,
         issue.subject_field.clone(),
+        issue
+            .evidence
+            .iter()
+            .map(finding_evidence::evidence_key)
+            .collect(),
     )
 }
 
@@ -3794,6 +3856,7 @@ pub fn validate_model_content(
     // Repeated references from the same issuer (e.g. the same UI used by two
     // CommandSlices on the same command) collapse to one entry, by design.
     let mut command_issuers: HashMap<pb::IdKey, BTreeSet<CommandIssuer>> = HashMap::new();
+    let mut issuer_evidence: HashMap<pb::IdKey, Vec<Evidence>> = HashMap::new();
     for se in all {
         match se.entity.kind.as_ref() {
             Some(pb::entity::Kind::CommandSlice(cs)) => {
@@ -3815,6 +3878,16 @@ pub fn validate_model_content(
                         .entry(pb::IdKey::new(cmd_id))
                         .or_default()
                         .insert(CommandIssuer::ui(ui_id));
+                    if let Some(slice_id) = cs.id.as_ref() {
+                        issuer_evidence
+                            .entry(pb::IdKey::new(cmd_id))
+                            .or_default()
+                            .push(
+                                Evidence::new(Role::Issuer, pb::EntityKind::CommandSlice, slice_id)
+                                    .at("ui")
+                                    .pointing_at(pb::EntityKind::Ui, ui_id),
+                            );
+                    }
                 }
             }
             Some(pb::entity::Kind::AutomationSlice(asl)) => {
@@ -3836,6 +3909,20 @@ pub fn validate_model_content(
                         .entry(pb::IdKey::new(cmd_id))
                         .or_default()
                         .insert(CommandIssuer::processor(proc_id));
+                    if let Some(slice_id) = asl.id.as_ref() {
+                        issuer_evidence
+                            .entry(pb::IdKey::new(cmd_id))
+                            .or_default()
+                            .push(
+                                Evidence::new(
+                                    Role::Issuer,
+                                    pb::EntityKind::AutomationSlice,
+                                    slice_id,
+                                )
+                                .at("processor")
+                                .pointing_at(pb::EntityKind::Processor, proc_id),
+                            );
+                    }
                 }
             }
             _ => {}
@@ -3872,6 +3959,11 @@ pub fn validate_model_content(
                 id: Some(cmd_id.clone()),
             }),
             subject_field: String::new(),
+            evidence: finding_evidence::canonical(
+                issuer_evidence
+                    .remove(&pb::IdKey::new(cmd_id))
+                    .unwrap_or_default(),
+            ),
             ..Default::default()
         });
     }
@@ -3886,6 +3978,7 @@ pub fn validate_model_content(
     // #24 migrations where command@1 and command@2 coexist. Version is not
     // part of the fingerprint: evolving one decision is not causal fan-in.
     let mut event_emitters: HashMap<pb::IdKey, BTreeSet<String>> = HashMap::new();
+    let mut emitter_evidence: HashMap<pb::IdKey, Vec<Evidence>> = HashMap::new();
     for se in all {
         let Some(pb::entity::Kind::CommandSlice(cs)) = se.entity.kind.as_ref() else {
             continue;
@@ -3906,6 +3999,16 @@ pub fn validate_model_content(
                 .entry(pb::IdKey::new(ev_id))
                 .or_default()
                 .insert(format!("command:{}/{}", cmd_id.namespace, cmd_id.slug));
+            if let Some(slice_id) = cs.id.as_ref() {
+                emitter_evidence
+                    .entry(pb::IdKey::new(ev_id))
+                    .or_default()
+                    .push(
+                        Evidence::new(Role::Emitter, pb::EntityKind::CommandSlice, slice_id)
+                            .at("command")
+                            .pointing_at(pb::EntityKind::Command, cmd_id),
+                    );
+            }
         }
     }
     for m in &model.members {
@@ -3938,6 +4041,9 @@ pub fn validate_model_content(
                 id: Some(ev_id.clone()),
             }),
             subject_field: String::new(),
+            evidence: finding_evidence::canonical(
+                emitter_evidence.remove(&key).unwrap_or_default(),
+            ),
             ..Default::default()
         });
     }
@@ -4115,6 +4221,19 @@ pub fn validate_model_content(
                 kind: slice_kind as i32,
                 id: Some(slice_id.clone()),
             }),
+            evidence: finding_evidence::canonical([
+                Evidence::new(Role::StalePin, slice_kind, slice_id)
+                    .at(field.clone())
+                    .pointing_at(ref_kind, ref_id),
+                Evidence::new(
+                    Role::LatestVersion,
+                    ref_kind,
+                    &pb::Id {
+                        version: latest,
+                        ..ref_id.clone()
+                    },
+                ),
+            ]),
             subject_field: field,
             ..Default::default()
         }
@@ -5468,8 +5587,9 @@ pub fn validate_model_content(
                 ..Default::default()
             });
         }
-        let mut ordered: Vec<(pb::EntityKind, &pb::Entity)> = Vec::new();
-        for sref in &sb.slices {
+        // (position in sb.slices, kind, slice) for every slice that resolves.
+        let mut ordered: Vec<(usize, pb::EntityKind, &pb::Entity)> = Vec::new();
+        for (position, sref) in sb.slices.iter().enumerate() {
             let Some(sid) = sref.id.as_ref() else {
                 continue;
             };
@@ -5493,7 +5613,7 @@ pub fn validate_model_content(
                 }
                 let i = entity_id(&se.entity)?;
                 (i.namespace == sid.namespace && i.slug == sid.slug && i.version == sid.version)
-                    .then_some((k, &se.entity))
+                    .then_some((position, k, &se.entity))
             });
             if let Some(f) = found {
                 ordered.push(f);
@@ -5511,7 +5631,7 @@ pub fn validate_model_content(
                 *last_ui = Some(ui_key);
                 *carrier = false;
             };
-            for (_, e) in &ordered {
+            for (_, _, e) in &ordered {
                 match e.kind.as_ref() {
                     Some(pb::entity::Kind::CommandSlice(cs)) => {
                         if let Some(uid) = cs
@@ -5547,23 +5667,30 @@ pub fn validate_model_content(
             }
         }
 
-        let mut emit_idx: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, (_, e)) in ordered.iter().enumerate() {
+        let occurrence = |i: usize| Occurrence::new(sb_ref_id, ordered[i].0);
+        // Emitting slices per event: (index into `ordered`, slice kind, slice
+        // id, field path of the emitted event).
+        let mut emit_idx: HashMap<String, Vec<(usize, pb::EntityKind, &pb::Id, String)>> =
+            HashMap::new();
+        for (i, (_, k, e)) in ordered.iter().enumerate() {
             if let Some(pb::entity::Kind::CommandSlice(cs)) = e.kind.as_ref() {
-                for ev in cs
-                    .emitted_events
-                    .iter()
-                    .filter_map(|x| x.event.as_ref())
-                    .filter_map(|r| r.id.as_ref())
-                {
+                let Some(cs_id) = cs.id.as_ref() else {
+                    continue;
+                };
+                for (m, ev) in cs.emitted_events.iter().enumerate().filter_map(|(m, x)| {
+                    x.event
+                        .as_ref()
+                        .and_then(|r| r.id.as_ref())
+                        .map(|ev| (m, ev))
+                }) {
                     emit_idx
                         .entry(format!("{}/{}@{}", ev.namespace, ev.slug, ev.version))
                         .or_default()
-                        .push(i);
+                        .push((i, *k, cs_id, format!("emitted_events[{m}]")));
                 }
             }
         }
-        for (i, (_, e)) in ordered.iter().enumerate() {
+        for (i, (_, _, e)) in ordered.iter().enumerate() {
             let Some(pb::entity::Kind::ReadModelSlice(rs)) = e.kind.as_ref() else {
                 continue;
             };
@@ -5574,18 +5701,33 @@ pub fn validate_model_content(
                 kind: pb::EntityKind::ReadModelSlice as i32,
                 id: Some(rs_id.clone()),
             });
-            for ev in rs
-                .source_events
-                .iter()
-                .filter_map(|x| x.event.as_ref())
-                .filter_map(|r| r.id.as_ref())
-            {
+            for (n, ev) in rs.source_events.iter().enumerate().filter_map(|(n, x)| {
+                x.event
+                    .as_ref()
+                    .and_then(|r| r.id.as_ref())
+                    .map(|ev| (n, ev))
+            }) {
                 let key = format!("{}/{}@{}", ev.namespace, ev.slug, ev.version);
+                let emitters = emit_idx.get(&key).map(Vec::as_slice).unwrap_or_default();
+                let consumer = || {
+                    Evidence::new(Role::Consumer, pb::EntityKind::ReadModelSlice, rs_id)
+                        .at(format!("source_events[{n}]"))
+                        .pointing_at(pb::EntityKind::Event, ev)
+                        .in_storyboard(occurrence(i))
+                };
+                let emitter = |role: Role, (j, kind, id, field): &(usize, pb::EntityKind, &pb::Id, String)| {
+                    Evidence::new(role, *kind, id)
+                        .at(field.clone())
+                        .pointing_at(pb::EntityKind::Event, ev)
+                        .in_storyboard(occurrence(*j))
+                };
                 // Nearest preceding emitter (max j where j < i), not last overall.
-                let j = emit_idx
-                    .get(&key)
-                    .and_then(|idxs| idxs.iter().copied().rev().find(|&j| j < i));
-                let Some(j) = j else {
+                let nearest = emitters.iter().rev().find(|(j, ..)| *j < i);
+                let Some(nearest) = nearest else {
+                    let later = emitters
+                        .iter()
+                        .filter(|(j, ..)| *j > i)
+                        .map(|em| emitter(Role::LaterEmitter, em));
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "PROJECTION_BEFORE_EMITTER".into(),
@@ -5596,21 +5738,34 @@ pub fn validate_model_content(
                         ),
                         subject: subject.clone(),
                         subject_field: "source_events".into(),
+                        evidence: finding_evidence::canonical(
+                            std::iter::once(consumer()).chain(later),
+                        ),
                         ..Default::default()
                     });
                     continue;
                 };
-                let blockers: Vec<String> = ordered[j + 1..i]
+                let j = nearest.0;
+                let blockers: Vec<(usize, pb::EntityKind, &pb::Id)> = ordered[j + 1..i]
                     .iter()
-                    .filter(|(k2, _)| {
+                    .enumerate()
+                    .filter(|(_, (_, k2, _))| {
                         matches!(
                             k2,
                             pb::EntityKind::CommandSlice | pb::EntityKind::AutomationSlice
                         )
                     })
-                    .filter_map(|(_, be)| entity_id(be).map(|bid| bid.slug.clone()))
+                    .filter_map(|(offset, (_, k2, be))| {
+                        entity_id(be).map(|bid| (j + 1 + offset, *k2, bid))
+                    })
                     .collect();
                 if !blockers.is_empty() {
+                    let names: Vec<&str> =
+                        blockers.iter().map(|(_, _, b)| b.slug.as_str()).collect();
+                    let intervening = blockers.iter().map(|(b, kind, bid)| {
+                        Evidence::new(Role::InterveningAction, *kind, bid)
+                            .in_storyboard(occurrence(*b))
+                    });
                     issues.push(pb::ValidationIssue {
                         severity: pb::validation_issue::Severity::Error as i32,
                         code: "PROJECTION_NOT_ADJACENT".into(),
@@ -5618,11 +5773,16 @@ pub fn validate_model_content(
                             "read model slice {}/{}@{} consumes event {key}, but {} action slice(s) ({}) run between the emitter and the projection in storyboard {}/{}@{}; project an event into its read models before the next command or automation acts",
                             rs_id.namespace, rs_id.slug, rs_id.version,
                             blockers.len(),
-                            blockers.join(", "),
+                            names.join(", "),
                             sb_ref_id.namespace, sb_ref_id.slug, sb_ref_id.version,
                         ),
                         subject: subject.clone(),
                         subject_field: "source_events".into(),
+                        evidence: finding_evidence::canonical(
+                            [consumer(), emitter(Role::EarlierEmitter, nearest)]
+                                .into_iter()
+                                .chain(intervening),
+                        ),
                         ..Default::default()
                     });
                 }
@@ -8874,6 +9034,32 @@ mod command_issuer_tests {
     }
 
     #[test]
+    fn multiple_issuers_evidence_names_every_wiring_slice_and_its_issuer() {
+        let all = vec![
+            stored(command("post")),
+            stored(ui("composer")),
+            stored(processor("auto-poster")),
+            stored(automation_slice("auto-slice", "auto-poster", "post")),
+            stored(command_slice_with_ui("post-slice-b", "composer", "post")),
+            stored(command_slice_with_ui("post-slice-a", "composer", "post")),
+        ];
+        let issues = validate_model(&model_with_command("post"), &all);
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "COMMAND_MULTIPLE_ISSUERS")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        let ns = &id("x").namespace;
+        assert_eq!(
+            finding_evidence::describe(&hit.evidence),
+            [
+                format!("issuer command_slice:{ns}/post-slice-a@1.ui -> ui:{ns}/composer@1"),
+                format!("issuer command_slice:{ns}/post-slice-b@1.ui -> ui:{ns}/composer@1"),
+                format!("issuer automation_slice:{ns}/auto-slice@1.processor -> processor:{ns}/auto-poster@1"),
+            ],
+        );
+    }
+
+    #[test]
     fn two_distinct_processors_error() {
         let all = vec![
             stored(command("retry")),
@@ -10239,6 +10425,37 @@ mod slice_stale_ref_tests {
         assert!(fields.contains("ui"), "{fields:?}");
         assert!(fields.contains("command"), "{fields:?}");
         assert!(fields.contains("emitted_events[0]"), "{fields:?}");
+    }
+
+    #[test]
+    fn stale_ref_evidence_names_the_exact_pin_and_latest_version() {
+        let all = vec![
+            stored(ui_v("composer", 1)),
+            stored(command_v("post", 1)),
+            stored(event_v("posted", 1)),
+            stored(event_v("posted", 2)),
+            stored(event_v("posted", 3)),
+            stored(command_slice_pinning(
+                "post-slice",
+                id_v("composer", 1),
+                id_v("post", 1),
+                vec![id_v("posted", 3), id_v("posted", 2)],
+            )),
+        ];
+        let issues = validate_model(&model_with_slice("post-slice"), &all);
+        let hits: Vec<_> = issues
+            .iter()
+            .filter(|i| i.code == "SLICE_STALE_REF")
+            .collect();
+        assert_eq!(hits.len(), 1, "{issues:?}");
+        assert_eq!(hits[0].subject_field, "emitted_events[1]");
+        assert_eq!(
+            finding_evidence::describe(&hits[0].evidence),
+            [
+                "stale_pin command_slice:t/post-slice@1.emitted_events[1] -> event:t/posted@2",
+                "latest_version event:t/posted@3",
+            ],
+        );
     }
 
     // Build a PinnedRefAnnotation Any payload for use in slice metadata.
@@ -13281,6 +13498,31 @@ mod event_emitter_tests {
     }
 
     #[test]
+    fn multiple_emitters_evidence_names_every_emitting_slice_and_command() {
+        let all = vec![
+            stored(event("paid", vec![])),
+            stored(command("pay")),
+            stored(command("refund")),
+            stored(command_slice("refund-slice", "refund", &["paid"])),
+            stored(command_slice("pay-slice", "pay", &["paid"])),
+            stored(command_slice("pay-slice-alt", "pay", &["paid"])),
+        ];
+        let issues = validate_model(&model_with_event("paid"), &all);
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "EVENT_MULTIPLE_EMITTERS")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert_eq!(
+            finding_evidence::describe(&hit.evidence),
+            [
+                "emitter command_slice:t/pay-slice@1.command -> command:t/pay@1",
+                "emitter command_slice:t/pay-slice-alt@1.command -> command:t/pay@1",
+                "emitter command_slice:t/refund-slice@1.command -> command:t/refund@1",
+            ],
+        );
+    }
+
+    #[test]
     fn two_slices_of_one_command_collapse_to_one_emitter() {
         let all = vec![
             stored(event("paid", vec![])),
@@ -13658,6 +13900,75 @@ mod projection_ordering_tests {
                 .iter()
                 .any(|i| i.code == "PROJECTION_BEFORE_EMITTER"),
             "catalog promises PROJECTION_BEFORE_EMITTER when the emitter is never in the storyboard; got {issues:?}"
+        );
+    }
+
+    #[test]
+    fn repeated_projection_occurrences_stay_distinguishable() {
+        let all = vec![
+            stored(command_slice("emit-slice", "place", &["order.placed"])),
+            stored(rm_slice("proj-slice", &["order.placed"])),
+            stored(storyboard(
+                "sb",
+                &["proj-slice", "missing-slice", "proj-slice", "emit-slice"],
+            )),
+        ];
+        let m = model(&[
+            (pb::EntityKind::CommandSlice, "emit-slice"),
+            (pb::EntityKind::ReadModelSlice, "proj-slice"),
+            (pb::EntityKind::Storyboard, "sb"),
+        ]);
+        let issues = validate_model(&m, &all);
+        let hits: Vec<Vec<String>> = issues
+            .iter()
+            .filter(|i| i.code == "PROJECTION_BEFORE_EMITTER")
+            .map(|i| finding_evidence::describe(&i.evidence))
+            .collect();
+        let later = "later_emitter command_slice:t/emit-slice@1.emitted_events[0] -> event:t/order.placed@1 @sb#3";
+        assert_eq!(
+            hits,
+            [
+                vec![
+                    "consumer read_model_slice:t/proj-slice@1.source_events[0] -> event:t/order.placed@1 @sb#0",
+                    later,
+                ],
+                vec![
+                    "consumer read_model_slice:t/proj-slice@1.source_events[0] -> event:t/order.placed@1 @sb#2",
+                    later,
+                ],
+            ],
+        );
+    }
+
+    #[test]
+    fn not_adjacent_evidence_names_emitter_and_intervening_actions() {
+        let all = vec![
+            stored(command_slice("emit-slice", "place", &["order.placed"])),
+            stored(command_slice("other-action", "cancel", &[])),
+            stored(rm_slice("proj-slice", &["order.placed"])),
+            stored(storyboard(
+                "sb",
+                &["emit-slice", "other-action", "proj-slice"],
+            )),
+        ];
+        let m = model(&[
+            (pb::EntityKind::CommandSlice, "emit-slice"),
+            (pb::EntityKind::CommandSlice, "other-action"),
+            (pb::EntityKind::ReadModelSlice, "proj-slice"),
+            (pb::EntityKind::Storyboard, "sb"),
+        ]);
+        let issues = validate_model(&m, &all);
+        let hit = issues
+            .iter()
+            .find(|i| i.code == "PROJECTION_NOT_ADJACENT")
+            .unwrap_or_else(|| panic!("expected finding; got {issues:?}"));
+        assert_eq!(
+            finding_evidence::describe(&hit.evidence),
+            [
+                "consumer read_model_slice:t/proj-slice@1.source_events[0] -> event:t/order.placed@1 @sb#2",
+                "earlier_emitter command_slice:t/emit-slice@1.emitted_events[0] -> event:t/order.placed@1 @sb#0",
+                "intervening_action command_slice:t/other-action@1 @sb#1",
+            ],
         );
     }
 
