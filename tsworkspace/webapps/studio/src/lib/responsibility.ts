@@ -140,6 +140,7 @@ const occurrencePaths: Partial<Record<Entity['kind'], string[]>> = {
   swimlane: ['transitions.*.next.*'],
   ui: ['transitions.*'],
   component: [
+    'uiHostings.*',
     'relationships.*',
     'communications.*',
     'storageClaims.*',

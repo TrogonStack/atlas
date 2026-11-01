@@ -136,12 +136,12 @@ privacy and no-grant requirements.
 
 ## Atlas adaptations and separate roadmap
 
-These native Atlas proposals are separate from the completed coverage scope:
+These native Atlas choices are separate from the completed coverage scope:
 
 | Atlas choice | Native boundary |
 | --- | --- |
 | Exact numeric identities, owner incarnation UIDs and occurrence selectors | Native foundations for checked references and mutation safety. |
-| [Component UI hosting and InspectHumanInteraction](human-interaction-contracts.md) | Proposed Atlas representation of human interaction paths; not implemented. |
+| [Component UI hosting and InspectHumanInteraction](human-interaction-contracts.md) | Implemented native hosting assertions and checked supplied paths, with [acceptance](human-interaction-acceptance.md) across backend, connected clients and authenticated Studio. |
 | Typed behavioral binding and executable communication predicates | Separate behavioral work. Source trigger declarations and condition prose do not prove runtime execution. |
 | WASM/WIT linter host | Atlas extension architecture, separate from native resource coverage. |
 
