@@ -11,13 +11,16 @@
 pub mod apply;
 pub mod attested;
 pub mod branch;
+pub mod channel_messages;
 pub mod client;
 pub mod compat;
 pub mod data_product;
 pub mod decision_document;
+pub mod design_topology;
 pub mod export;
 pub mod failure;
 pub mod fmt;
+pub mod human_interaction;
 pub mod manifest;
 pub mod manifest_schema;
 pub mod openslo;
@@ -33,3 +36,5 @@ mod source_request;
 pub mod tenant_types;
 pub mod validate;
 pub mod view;
+
+pub mod term_domains;

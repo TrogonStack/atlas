@@ -472,3 +472,186 @@ async fn get_changeset_rejects_an_empty_id_and_reports_a_missing_one() {
         .unwrap_err();
     assert_eq!(err.code(), tonic::Code::NotFound);
 }
+
+fn outcome(cs: &pb::Changeset) -> &pb::changeset_validation::Outcome {
+    cs.validation
+        .as_ref()
+        .and_then(|v| v.outcome.as_ref())
+        .expect("every new changeset carries a validation receipt")
+}
+
+/// A write that reports coverage records the same coverage and finding
+/// counts on its changeset, so history can say what was checked when the
+/// change landed. A write that reports none records that explicitly
+/// instead of zero findings.
+#[tokio::test(flavor = "multi_thread")]
+async fn changesets_carry_the_validation_their_write_declared() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    let ns = "cs-receipt";
+
+    let put = c
+        .put_entity(put_req(event(ns, "placed", "Placed")))
+        .await
+        .unwrap()
+        .into_inner();
+    let delete = pb::DeleteEntityRequest {
+        operation_id: String::new(),
+        kind: pb::EntityKind::Event as i32,
+        id: Some(pb::Id {
+            namespace: ns.into(),
+            slug: "placed".into(),
+            version: 1,
+        }),
+        if_match: String::new(),
+        mode: pb::delete_entity_request::Mode::Force as i32,
+    };
+    c.delete_entity(delete).await.unwrap();
+
+    let found = changesets_touching(&mut c, ns).await;
+    let (deleted, putted) = (&found[0], &found[1]);
+    assert_eq!(putted.rpc, "PutEntity");
+
+    let pb::changeset_validation::Outcome::Validated(receipt) = outcome(putted) else {
+        panic!("a put reports coverage, so its changeset is validated: {putted:?}");
+    };
+    assert_eq!(receipt.rule_catalog_digest.len(), 64);
+    assert_eq!(
+        receipt.coverage_complete,
+        receipt.incomplete_checks.is_empty()
+    );
+    let errors = put
+        .validation
+        .iter()
+        .filter(|i| i.severity == pb::validation_issue::Severity::Error as i32)
+        .count();
+    assert_eq!(receipt.error_count as usize, errors);
+    assert_eq!(
+        (receipt.error_count + receipt.warning_count + receipt.info_count) as usize,
+        put.validation.len()
+    );
+    assert!(put.coverage.is_some());
+
+    assert_eq!(deleted.rpc, "DeleteEntity");
+    assert_eq!(
+        outcome(deleted),
+        &pb::changeset_validation::Outcome::Unvalidated(pb::ChangesetUnvalidated {
+            reason: "no_declared_coverage".into(),
+        }),
+        "a delete reports no coverage, so it claims nothing"
+    );
+
+    let fetched = c
+        .get_changeset(pb::GetChangesetRequest {
+            id: putted.id.clone(),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .changeset
+        .unwrap();
+    assert_eq!(fetched.validation, putted.validation);
+}
+
+/// A batch receipt sums the findings of every op against the batch's one
+/// coverage report.
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_changeset_carries_the_batch_coverage() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    let ns = "cs-receipt-batch";
+    let op = |slug: &str| pb::BatchMutateOp {
+        op: Some(pb::batch_mutate_op::Op::Put(put_req(event(ns, slug, slug)))),
+    };
+    let resp = c
+        .batch_mutate(pb::BatchMutateRequest {
+            ops: vec![op("a"), op("b")],
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let found = changesets_touching(&mut c, ns).await;
+    assert_eq!(found.len(), 1);
+    let pb::changeset_validation::Outcome::Validated(receipt) = outcome(&found[0]) else {
+        panic!("a batch reports coverage: {:?}", found[0]);
+    };
+    let findings: usize = resp
+        .results
+        .iter()
+        .map(|r| match &r.result {
+            Some(pb::batch_mutate_op_result::Result::Put(p)) => p.validation.len(),
+            _ => 0,
+        })
+        .sum();
+    assert_eq!(
+        (receipt.error_count + receipt.warning_count + receipt.info_count) as usize,
+        findings
+    );
+}
+
+/// A merge records the hygiene warnings of the world it lands next to its
+/// strategic findings, so a landing with warnings never reads as clean.
+#[tokio::test(flavor = "multi_thread")]
+async fn merge_changeset_counts_its_hygiene_warnings() {
+    let endpoint = start_server().await;
+    let mut c = client(&endpoint).await;
+    let ns = "cs-receipt-merge";
+    let branch = "cs-receipt-merge";
+    c.create_branch(pb::CreateBranchRequest {
+        name: branch.into(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let mut write = tonic::Request::new(put_req(pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::Domain(pb::Domain {
+            id: Some(pb::Id {
+                namespace: ns.into(),
+                slug: "sales".into(),
+                version: 1,
+            }),
+            title: "Sales".into(),
+            ..Default::default()
+        })),
+    }));
+    write
+        .metadata_mut()
+        .insert("x-trogon-atlas-branch", MetadataValue::from_static(branch));
+    c.put_entity(write).await.unwrap();
+
+    let merged = c
+        .merge_branch(pb::MergeBranchRequest {
+            name: branch.into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        merged.validation.iter().any(|i| {
+            i.code == "DOMAIN_MISSING_PROJECT"
+                && i.subject
+                    .as_ref()
+                    .and_then(|s| s.id.as_ref())
+                    .is_some_and(|id| id.namespace == ns)
+        }),
+        "the merged domain declares no project: {:?}",
+        merged.validation
+    );
+
+    let found = changesets_touching(&mut c, ns).await;
+    let merge = found
+        .iter()
+        .find(|cs| cs.rpc == "MergeBranch")
+        .expect("the merge records a changeset");
+    let pb::changeset_validation::Outcome::Validated(receipt) = outcome(merge) else {
+        panic!("a merge reports coverage: {merge:?}");
+    };
+    assert!(receipt.warning_count >= 1);
+    assert_eq!(
+        (receipt.error_count + receipt.warning_count + receipt.info_count) as usize,
+        merged.validation.len()
+    );
+}

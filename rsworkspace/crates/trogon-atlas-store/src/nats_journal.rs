@@ -16,7 +16,10 @@ use crate::{
         BatchJournalId, BatchRecovery, BatchRecoveryReport, JournalPhase, RecoveryAction,
         RecoveryMode, RecoveryPolicy, RecoveryResult,
     },
-    store::{ChangeKind, ChangesetOp, ChangesetRecord, ChangesetRef, Store, WriteContext},
+    store::{
+        ChangeKind, ChangesetOp, ChangesetRecord, ChangesetRef, ChangesetValidation, Store,
+        UnvalidatedReason, WriteContext,
+    },
 };
 
 const JOURNAL_CHUNK_BYTES: usize = 256 * 1024;
@@ -828,6 +831,7 @@ impl NatsStore {
             rpc: changeset.rpc.to_owned(),
             branch: None,
             operation_id: None,
+            validation: ChangesetValidation::Unvalidated(UnvalidatedReason::Recovered),
             ops: header
                 .changes
                 .iter()

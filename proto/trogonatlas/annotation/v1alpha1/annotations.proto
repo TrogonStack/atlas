@@ -2,6 +2,10 @@ syntax = "proto3";
 
 package trogonatlas.annotation.v1alpha1;
 
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/type/v1alpha1/calendar_date.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+
 // Generic annotations: free-form notes, links, tags, lifecycle status, and
 // open questions / assumptions that apply to any entity regardless of
 // domain. Model-specific findings (orphan detection, derived-field marking,
@@ -57,6 +61,8 @@ message TagAnnotation {
 message LifecycleAnnotation {
   string status = 1;
   string doc = 2;
+  DraftNotice draft = 3;
+  trogonatlas.type.v1alpha1.CalendarDate deprecated_on = 4;
 }
 
 // An unanswered design question pinned to an entity: the model does not
@@ -81,3 +87,42 @@ message AssumptionAnnotation {
   string author = 3;
   string created_at = 4;
 }
+
+message MetadataTitle { string value = 1; }
+
+message BadgeText { string value = 1; }
+
+message MetadataText { string value = 1; }
+
+message IconToken { string value = 1; }
+
+message HexColor { string value = 1; }
+
+message MetadataUrl { string value = 1; }
+
+
+message DraftNotice {
+  MetadataTitle title = 1;
+  MetadataText message = 2;
+}
+message Badge {
+  BadgeText content = 1;
+  HexColor background_color = 2;
+  HexColor text_color = 3;
+  IconToken icon = 4;
+  MetadataUrl url = 5;
+}
+message BadgesAnnotation { repeated Badge badges = 1; }
+message PositiveDisplayLimit { uint32 value = 1; }
+message ResourceGroupItem {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  trogonatlas.eventmodel.v1alpha1.EntityRef target = 2;
+}
+message ResourceGroup {
+  trogonatlas.type.v1alpha1.ConnectionId group_id = 1;
+  MetadataTitle title = 2;
+  repeated ResourceGroupItem items = 3;
+  PositiveDisplayLimit display_limit = 4;
+  optional bool sidebar = 5;
+}
+message ResourceGroupsAnnotation { repeated ResourceGroup groups = 1; }

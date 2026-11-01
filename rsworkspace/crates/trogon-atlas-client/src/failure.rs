@@ -397,7 +397,11 @@ impl Failure {
                     Some(NextAction::UseNewOperationId),
                 ),
                 "NOT_WRITER" => (FailureCategory::Unavailable, "NOT_WRITER", None),
-                "EXPORT_INCOMPLETE" => (FailureCategory::Precondition, "EXPORT_INCOMPLETE", None),
+                "EXPORT_INCOMPLETE" => (
+                    FailureCategory::Precondition,
+                    "EXPORT_INCOMPLETE",
+                    Some(NextAction::None),
+                ),
                 "SIGNING_KEY_UNAVAILABLE" => (
                     FailureCategory::Precondition,
                     "SIGNING_KEY_UNAVAILABLE",
@@ -707,6 +711,21 @@ mod tests {
         );
         let status =
             Status::with_error_details(Code::FailedPrecondition, "signing unavailable", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::None);
+    }
+
+    #[test]
+    fn incomplete_export_does_not_suggest_replanning() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details =
+            ErrorDetails::with_error_info("EXPORT_INCOMPLETE", SERVER_ERROR_DOMAIN, HashMap::new());
+        let status =
+            Status::with_error_details(Code::FailedPrecondition, "export incomplete", details);
         let failure = Failure::from_status(&status);
         assert_eq!(failure.category, FailureCategory::Precondition);
         assert_eq!(failure.next_action, NextAction::None);

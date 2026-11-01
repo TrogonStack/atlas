@@ -58,8 +58,10 @@ export type EntityKind =
   | 'person'
   | 'decision'
   | 'document'
+  | 'designGraph'
   | 'dataProduct'
-  | 'specification';
+  | 'specification'
+  | 'systemGroup';
 
 export interface FieldTypeConfig {
   version?: number;
@@ -440,8 +442,10 @@ const KIND_SET: ReadonlySet<string> = new Set([
   'person',
   'decision',
   'document',
+  'designGraph',
   'dataProduct',
   'specification',
+  'systemGroup',
 ]);
 
 const WIRE_KIND: Record<string, EntityKind> = {
@@ -480,8 +484,10 @@ const WIRE_KIND: Record<string, EntityKind> = {
   ENTITY_KIND_PERSON: 'person',
   ENTITY_KIND_DECISION: 'decision',
   ENTITY_KIND_DOCUMENT: 'document',
+  ENTITY_KIND_DESIGN_GRAPH: 'designGraph',
   ENTITY_KIND_DATA_PRODUCT: 'dataProduct',
   ENTITY_KIND_SPECIFICATION: 'specification',
+  ENTITY_KIND_SYSTEM_GROUP: 'systemGroup',
 };
 
 export function wireKind(wire: unknown): EntityKind | undefined {
@@ -537,6 +543,19 @@ export function screenOfUi(model: Model, ui: Entity): Entity | undefined {
   return model.entities.find(
     (e) => e.kind === 'screen' && e.id.namespace === slot.screen.namespace && e.id.slug === slot.screen.slug,
   );
+}
+
+export function termOwningDomain(entity: Entity): EntityId | undefined {
+  if (entity.kind !== 'term' || !entity.raw.owningDomain) return undefined;
+  const reference = entity.raw.owningDomain as { id?: unknown };
+  if (!reference.id || typeof reference.id !== 'object') return undefined;
+  const version = (reference.id as { version?: unknown }).version;
+  if (typeof version === 'number' && (!Number.isSafeInteger(version) || version <= 0)) return undefined;
+  if (typeof version !== 'string' && typeof version !== 'number') return undefined;
+  const exactVersion = String(version);
+  if (!/^[1-9][0-9]*$/.test(exactVersion) || BigInt(exactVersion) > 18446744073709551615n) return undefined;
+  const id = asId(reference.id);
+  return id.namespace && id.slug ? id : undefined;
 }
 
 export function termEmbodiedBy(entity: Entity): { kind: EntityKind; id: EntityId }[] {
@@ -645,7 +664,7 @@ function normalizeEntity(wire: WireEntity): Entity | undefined {
     id,
     key: entityKey(kind, id),
     title: String(
-      (kind === 'team' || kind === 'person' || kind === 'decision' || kind === 'document'
+      (kind === 'team' || kind === 'person' || kind === 'decision' || kind === 'document' || kind === 'designGraph'
         ? (bodyObj.title as { value?: string } | undefined)?.value
         : bodyObj.title) ?? id.slug,
     ),

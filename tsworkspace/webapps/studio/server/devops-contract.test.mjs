@@ -161,7 +161,22 @@ describe('dev compose PROTO_PATH', () => {
 
 describe('helm chart contract', () => {
   beforeAll(() => {
-    execFileSync('helm', ['dependency', 'update', chartDir], { encoding: 'utf8', stdio: 'pipe' });
+    const repositoryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-helm-repositories-'));
+    const repositoryConfig = path.join(repositoryDir, 'repositories.yaml');
+    fs.writeFileSync(repositoryConfig, 'repositories: []\n');
+    try {
+      execFileSync('helm', ['dependency', 'update', chartDir], {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          HELM_REPOSITORY_CONFIG: repositoryConfig,
+          HELM_REPOSITORY_CACHE: path.join(repositoryDir, 'cache'),
+        },
+      });
+    } finally {
+      fs.rmSync(repositoryDir, { recursive: true, force: true });
+    }
   }, HELM_TIMEOUT_MS);
 
   describe('helm studio auth with tokensFile', { timeout: HELM_TIMEOUT_MS }, () => {

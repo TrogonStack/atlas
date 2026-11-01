@@ -131,6 +131,16 @@ fn walk(
             None => {}
         }
     }
+    for (i, declaration) in value.message_channels.iter_mut().enumerate() {
+        if let Some(channel) = declaration.channel.as_mut() {
+            visit(
+                EntityKind::Channel,
+                &mut channel.id,
+                format!("message_channels[{i}].channel"),
+                false,
+            );
+        }
+    }
 }
 
 pub(crate) fn outbound(value: &Specification, out: &mut Vec<OutboundRef>) {

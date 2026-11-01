@@ -296,6 +296,8 @@ fn kind_label(k: pb::EntityKind) -> &'static str {
         pb::EntityKind::Person => "person",
         pb::EntityKind::Decision => "decision",
         pb::EntityKind::Document => "document",
+        pb::EntityKind::DesignGraph => "design_graph",
+        pb::EntityKind::SystemGroup => "system_group",
         pb::EntityKind::Unspecified => "unspecified",
     }
 }

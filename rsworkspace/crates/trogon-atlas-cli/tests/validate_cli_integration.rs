@@ -135,6 +135,114 @@ async fn validate_reports_model_level_errors_and_exits_with_findings() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn validate_json_carries_structured_evidence() {
+    let endpoint = start_server().await;
+    let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)
+        .await
+        .unwrap();
+    let ns = "cli-validate-evidence";
+    put(
+        &mut client,
+        pb::entity::Kind::Event(pb::Event {
+            id: Some(id(ns, "order.placed")),
+            title: "Order placed".into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    for (command, slice) in [("place", "place-slice"), ("import", "import-slice")] {
+        put(
+            &mut client,
+            pb::entity::Kind::Command(pb::Command {
+                id: Some(id(ns, command)),
+                title: command.into(),
+                ..Default::default()
+            }),
+        )
+        .await;
+        put(
+            &mut client,
+            pb::entity::Kind::CommandSlice(pb::CommandSlice {
+                id: Some(id(ns, slice)),
+                title: slice.into(),
+                command: Some(pb::CommandEdge {
+                    command: Some(pb::CommandRef {
+                        id: Some(id(ns, command)),
+                    }),
+                    ..Default::default()
+                }),
+                emitted_events: vec![pb::EventEdge {
+                    event: Some(pb::EventRef {
+                        id: Some(id(ns, "order.placed")),
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        )
+        .await;
+    }
+    put(
+        &mut client,
+        pb::entity::Kind::EventModel(pb::EventModel {
+            id: Some(id(ns, "shop")),
+            title: "Shop".into(),
+            members: vec![pb::EntityRef {
+                kind: pb::EntityKind::Event as i32,
+                id: Some(id(ns, "order.placed")),
+            }],
+            ..Default::default()
+        }),
+    )
+    .await;
+
+    let json = trogon_atlas(
+        &endpoint,
+        &["--format", "json", "validate", &format!("{ns}/shop@1")],
+    );
+    let outcome: serde_json::Value = serde_json::from_str(&stdout(&json)).unwrap();
+    let finding = outcome["data"]["validation"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|issue| issue["code"] == "EVENT_MULTIPLE_EMITTERS")
+        .unwrap_or_else(|| panic!("{outcome}"));
+    assert_eq!(
+        finding["evidence"],
+        serde_json::json!([
+            {
+                "role": "emitter",
+                "entity": format!("command_slice:{ns}/import-slice@1"),
+                "field": "command",
+                "target": format!("command:{ns}/import@1"),
+                "occurrence": null,
+                "detail": null,
+            },
+            {
+                "role": "emitter",
+                "entity": format!("command_slice:{ns}/place-slice@1"),
+                "field": "command",
+                "target": format!("command:{ns}/place@1"),
+                "occurrence": null,
+                "detail": null,
+            },
+        ]),
+        "{outcome}"
+    );
+
+    let text = stdout(&trogon_atlas(
+        &endpoint,
+        &["validate", &format!("{ns}/shop@1")],
+    ));
+    assert!(
+        text.contains(&format!(
+            "emitter command_slice:{ns}/place-slice@1.command -> command:{ns}/place@1"
+        )),
+        "{text}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn validate_exits_zero_for_a_clean_model() {
     let endpoint = start_server().await;
     let mut client = trogon_atlas_client::client::connect(&endpoint, None, 30)

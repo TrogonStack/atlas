@@ -15,7 +15,7 @@ use prost::Message;
 use tonic::{Code, Status};
 use trogon_atlas_core::{
     operation_id::{operation_claim_key, operation_digest, validate_operation_id},
-    transcode::message_json_value,
+    transcode::TranscodePool,
 };
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
@@ -46,8 +46,33 @@ impl OperationAttempt {
         full_name: &str,
         request_without_operation_id: &M,
     ) -> Result<Self, Status> {
+        let pool = TranscodePool::builtin()
+            .map_err(|e| Status::internal(format!("failed to compute operation digest: {e}")))?;
+        Self::in_pool(
+            &pool,
+            principal_name,
+            operation_id,
+            rpc,
+            branch,
+            full_name,
+            request_without_operation_id,
+        )
+    }
+
+    /// [`Self::new`] for a request whose payloads name types `pool` resolves,
+    /// such as tenant annotations on an entity the request writes.
+    pub fn in_pool<M: Message>(
+        pool: &TranscodePool,
+        principal_name: &str,
+        operation_id: &str,
+        rpc: &str,
+        branch: Option<&str>,
+        full_name: &str,
+        request_without_operation_id: &M,
+    ) -> Result<Self, Status> {
         validate_operation_id(operation_id).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let json = message_json_value(full_name, request_without_operation_id)
+        let json = pool
+            .message_json_value(full_name, request_without_operation_id)
             .map_err(|e| Status::internal(format!("failed to compute operation digest: {e}")))?;
         let digest = operation_digest(rpc, branch, &json)
             .map_err(|e| Status::internal(format!("failed to compute operation digest: {e}")))?;

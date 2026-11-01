@@ -366,6 +366,11 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
+        tool: "list_decision_amendments",
+        rpcs: &["ListDecisionAmendments"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
         tool: "list_subject_decisions",
         rpcs: &["ListSubjectDecisions"],
         min_role: ToolRole::Reader,
@@ -391,8 +396,43 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
+        tool: "list_term_domain_declarations",
+        rpcs: &["ListTermDomainDeclarations"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
         tool: "list_incoming_document_declarations",
         rpcs: &["ListIncomingDocumentDeclarations"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "inspect_human_interaction",
+        rpcs: &["InspectHumanInteraction"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_channel_messages",
+        rpcs: &["ListChannelMessages"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "get_design_graph_detail",
+        rpcs: &["GetDesignGraphDetail"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_subject_design_graphs",
+        rpcs: &["ListSubjectDesignGraphs"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "traverse_design_graph_topology",
+        rpcs: &["TraverseDesignGraphTopology"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
+        tool: "list_incoming_design_graph_subflows",
+        rpcs: &["ListIncomingDesignGraphSubflows"],
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
@@ -2433,6 +2473,201 @@ impl McpServer {
     }
 
     #[tool(
+        description = "GetDesignGraphDetail: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_design_graph_detail(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "GetDesignGraphDetailRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::get_design_graph_detail(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSubjectDesignGraphs: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_subject_design_graphs(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "ListSubjectDesignGraphsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::list_subject_design_graphs(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "TraverseDesignGraphTopology: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn traverse_design_graph_topology(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "TraverseDesignGraphTopologyRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::traverse_design_graph_topology(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListIncomingDesignGraphSubflows: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_incoming_design_graph_subflows(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "ListIncomingDesignGraphSubflowsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::list_incoming_design_graph_subflows(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListDecisionAmendments: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_decision_amendments(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "ListDecisionAmendmentsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::decision_document::list_decision_amendments(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
         description = "ListSubjectDecisions: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
         annotations(
             read_only_hint = true,
@@ -2628,6 +2863,45 @@ impl McpServer {
     }
 
     #[tool(
+        description = "ListTermDomainDeclarations: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_term_domain_declarations(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "ListTermDomainDeclarationsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::term_domains::list_term_domain_declarations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
         description = "ListIncomingDocumentDeclarations: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
         annotations(
             read_only_hint = true,
@@ -2656,6 +2930,84 @@ impl McpServer {
         )
         .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
         let result = trogon_atlas_client::decision_document::list_incoming_document_declarations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "InspectHumanInteraction: check one exact hosting occurrence and a complete authored human issuance or display tuple. Return unchanged selectors, endpoint receipts, checked scope and per-owner read-set consistency. Owners may be read at different instants; refresh stale receipts. Unavailable selections do not prove absence or runtime permission.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn inspect_human_interaction(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::human_interaction::parse_request(
+            "InspectHumanInteractionRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::human_interaction::inspect_human_interaction(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListChannelMessages: list messages declared on an exact channel version. Preserve returned authority, owner UID, occurrence selectors, parameter values, delivery mode, and doc presence. A page token continues the same caller and scope. Incomplete, hidden, or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_channel_messages(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::channel_messages::parse_request(
+            "ListChannelMessagesRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::channel_messages::list_channel_messages(
             &mut self.client(),
             request,
         )
@@ -4904,6 +5256,60 @@ mod tests {
         let bare = issue_json(&pb::ValidationIssue::default());
         assert!(bare["field"].is_null(), "{bare}");
         assert!(bare["subject"].is_null(), "{bare}");
+    }
+
+    fn issue_with_evidence() -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            code: "SLICE_STALE_REF".into(),
+            evidence: vec![pb::ValidationEvidence {
+                role: pb::validation_evidence::Role::StalePin as i32,
+                entity: Some(pb::EntityRef {
+                    kind: pb::EntityKind::CommandSlice as i32,
+                    id: Some(id_from("shop", "place", 1)),
+                }),
+                field: "command".into(),
+                target: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Command as i32,
+                    id: Some(id_from("shop", "place", 1)),
+                }),
+                occurrence: Some(pb::StoryboardOccurrence {
+                    storyboard: Some(id_from("shop", "checkout", 1)),
+                    position: 2,
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issue_json_carries_evidence() {
+        let value = issue_json(&issue_with_evidence());
+        let evidence = &value["evidence"][0];
+        assert_eq!(evidence["role"], "stale_pin", "{value}");
+        assert_eq!(evidence["entity"], "command_slice:shop/place@1");
+        assert_eq!(evidence["field"], "command");
+        assert_eq!(evidence["target"], "command:shop/place@1");
+        assert_eq!(evidence["occurrence"]["position"], 2);
+    }
+
+    #[test]
+    fn validate_json_response_carries_evidence() {
+        let resp = pb::ValidateEventModelResponse {
+            issues: vec![issue_with_evidence()],
+            ..Default::default()
+        };
+        let json = message_to_json(
+            "trogonatlas.api.eventmodel.v1alpha1.ValidateEventModelResponse",
+            &resp,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let evidence = &value["issues"][0]["evidence"][0];
+        assert_eq!(evidence["role"], "ROLE_STALE_PIN", "{value}");
+        assert_eq!(evidence["field"], "command");
+        assert_eq!(evidence["occurrence"]["position"], 2);
+        assert_eq!(evidence["target"]["id"]["slug"], "place");
     }
 
     #[test]
