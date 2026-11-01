@@ -72,6 +72,27 @@ use crate::{
     validation,
 };
 
+/// Whether a write that clears authorization goes on to persist anything.
+///
+/// Authorization is identical either way. The distinction exists because
+/// clearing it can itself persist state: the first authorized write into an
+/// unregistered namespace claims it. A dry run must not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WriteEffect {
+    Persist,
+    DryRun,
+}
+
+impl WriteEffect {
+    fn of(dry_run: bool) -> Self {
+        if dry_run {
+            Self::DryRun
+        } else {
+            Self::Persist
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum ReferenceIndexPurpose {
     Discovery,
@@ -1630,8 +1651,29 @@ impl EventModelServiceImpl {
         branch: Option<&str>,
         targets: &WriteTargets,
     ) -> Result<(), Status> {
-        self.require_namespace_scope(principal, targets, &NamespaceTenure::for_branch(branch))
-            .await?;
+        self.authorize_write_as(principal, branch, targets, WriteEffect::Persist)
+            .await
+    }
+
+    /// [`Self::authorize_write`] for a request that may be a dry run.
+    ///
+    /// Every check is identical in both modes, so a dry run is refused exactly
+    /// when the real write would be. The only difference is that
+    /// [`WriteEffect::DryRun`] never claims an unregistered namespace.
+    async fn authorize_write_as(
+        &self,
+        principal: Option<&crate::auth::Principal>,
+        branch: Option<&str>,
+        targets: &WriteTargets,
+        effect: WriteEffect,
+    ) -> Result<(), Status> {
+        self.require_namespace_scope_as(
+            principal,
+            targets,
+            &NamespaceTenure::for_branch(branch),
+            effect,
+        )
+        .await?;
         if branch.is_some() || !self.baseline_protection.protects(targets) {
             return Ok(());
         }
@@ -1657,6 +1699,19 @@ impl EventModelServiceImpl {
         targets: &WriteTargets,
         tenure: &NamespaceTenure,
     ) -> Result<(), Status> {
+        self.require_namespace_scope_as(principal, targets, tenure, WriteEffect::Persist)
+            .await
+    }
+
+    /// [`Self::require_namespace_scope`] with the dry-run distinction made
+    /// explicit. See [`Self::authorize_write_as`].
+    async fn require_namespace_scope_as(
+        &self,
+        principal: Option<&crate::auth::Principal>,
+        targets: &WriteTargets,
+        tenure: &NamespaceTenure,
+        effect: WriteEffect,
+    ) -> Result<(), Status> {
         let Some(principal) = principal else {
             return Ok(());
         };
@@ -1676,7 +1731,7 @@ impl EventModelServiceImpl {
                 )));
             }
         }
-        self.require_namespace_ownership(principal, targets, tenure)
+        self.require_namespace_ownership(principal, targets, tenure, effect)
             .await
     }
 
@@ -1702,11 +1757,19 @@ impl EventModelServiceImpl {
     /// An unscoped principal is never denied. It still claims, so the
     /// registry stays complete and a later tenancy rollout has nothing to
     /// backfill.
+    ///
+    /// **Dry runs** run the deny half unchanged and skip the claim. A dry run
+    /// persists nothing, and a registry row is persistent state: claiming here
+    /// would list an empty namespace, tell the authorizer about it, and hand
+    /// the bare name to whoever validated against it first. An unclaimed
+    /// target is not a refusal for a real write either, so skipping the claim
+    /// cannot make a dry run succeed where the write would fail.
     async fn require_namespace_ownership(
         &self,
         principal: &crate::auth::Principal,
         targets: &WriteTargets,
         tenure: &NamespaceTenure,
+        effect: WriteEffect,
     ) -> Result<(), Status> {
         let owner = match principal.parent.clone() {
             Some(owner) => owner,
@@ -1767,6 +1830,9 @@ impl EventModelServiceImpl {
             let name = NamespaceName::parse(namespace).map_err(|e| {
                 Status::invalid_argument(format!("invalid namespace {namespace:?}: {e}"))
             })?;
+            if effect == WriteEffect::DryRun {
+                continue;
+            }
             let claim = self
                 .store
                 .adopt_namespace(&name, &owner, tenure)
@@ -5215,10 +5281,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
         let branch = branch?;
-        self.authorize_write(
+        self.authorize_write_as(
             principal.as_ref(),
             branch.as_deref(),
             &WriteTargets::of(&id.namespace),
+            WriteEffect::of(req.validate_only),
         )
         .await?;
         if let Some(name) = branch.as_deref() {
@@ -5604,10 +5671,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let req = req.into_inner();
         let kind = kind_from_i32(req.kind, "kind")?;
         let id = require_id(req.id.as_ref(), "")?.clone();
-        self.authorize_write(
+        self.authorize_write_as(
             principal.as_ref(),
             branch.as_deref(),
             &WriteTargets::of(&id.namespace),
+            WriteEffect::of(
+                pb::delete_entity_request::Mode::try_from(req.mode)
+                    == Ok(pb::delete_entity_request::Mode::DryRun),
+            ),
         )
         .await?;
         if let Some(name) = branch.as_deref() {
@@ -5921,21 +5992,35 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // a free validation pass over the whole batch. Ops that carry no
         // usable id contribute no namespace here; the validation loop below
         // rejects them on their own terms.
+        //
+        // Any dry-run op makes the whole batch a dry run (`dry_run` below
+        // folds the same flags), so the claim decision needs the same fold.
         let mut targets = WriteTargets::none();
+        let mut any_dry_run = req.validate_only;
         for op in &req.ops {
             let id = match &op.op {
                 Some(pb::batch_mutate_op::Op::Put(p)) => {
+                    any_dry_run |= p.validate_only;
                     p.entity.as_ref().and_then(|e| entity_id(e).ok())
                 }
-                Some(pb::batch_mutate_op::Op::Delete(d)) => d.id.as_ref(),
+                Some(pb::batch_mutate_op::Op::Delete(d)) => {
+                    any_dry_run |= pb::delete_entity_request::Mode::try_from(d.mode)
+                        == Ok(pb::delete_entity_request::Mode::DryRun);
+                    d.id.as_ref()
+                }
                 None => None,
             };
             if let Some(id) = id {
                 targets.insert(&id.namespace);
             }
         }
-        self.authorize_write(principal.as_ref(), branch.as_deref(), &targets)
-            .await?;
+        self.authorize_write_as(
+            principal.as_ref(),
+            branch.as_deref(),
+            &targets,
+            WriteEffect::of(any_dry_run),
+        )
+        .await?;
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
         }
@@ -7194,8 +7279,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         for (_, id, _) in &inverse {
             targets.insert(&id.namespace);
         }
-        self.authorize_write(principal.as_ref(), branch.as_deref(), &targets)
-            .await?;
+        self.authorize_write_as(
+            principal.as_ref(),
+            branch.as_deref(),
+            &targets,
+            WriteEffect::of(req.dry_run),
+        )
+        .await?;
 
         let ops: Vec<MutationOp> = inverse
             .iter()
@@ -7955,8 +8045,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         } else {
             WriteTargets::of(&req.namespace)
         };
-        self.authorize_write(principal.as_ref(), branch.as_deref(), &targets)
-            .await?;
+        self.authorize_write_as(
+            principal.as_ref(),
+            branch.as_deref(),
+            &targets,
+            WriteEffect::of(
+                pb::delete_entity_request::Mode::try_from(req.mode)
+                    == Ok(pb::delete_entity_request::Mode::DryRun),
+            ),
+        )
+        .await?;
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
         }
@@ -8626,8 +8724,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         for meta in &op_metas {
             targets.insert(&meta.id.namespace);
         }
-        self.require_namespace_scope(principal.as_ref(), &targets, &NamespaceTenure::Permanent)
-            .await?;
+        self.require_namespace_scope_as(
+            principal.as_ref(),
+            &targets,
+            &NamespaceTenure::Permanent,
+            WriteEffect::of(req.dry_run),
+        )
+        .await?;
 
         let mut type_library_changes = crate::type_libraries::TypeLibraryChanges::default();
         for meta in &op_metas {
