@@ -6,8 +6,13 @@ import { expect, test, type Locator } from '@playwright/test';
 import { createServer } from 'vite';
 
 const TOKEN = 'human-interaction-reader';
+interface ExactId {
+  namespace: string;
+  slug: string;
+  version: string;
+}
 interface Selection {
-  owner: { kind: string; id: { namespace: string; slug: string; version: string } };
+  owner: { kind: string; id: ExactId };
   ownerUid: string;
   id: { value: string };
 }
@@ -25,6 +30,15 @@ interface Receipt {
   issuance: { persona: Selection; ui: Selection; command: Selection };
   display: Display;
   unavailable: { hosting: Selection; display: Display };
+  citations: {
+    document: string;
+    decision: string;
+    stale: string;
+    ownerUid: string;
+    staleOwnerUid: string;
+    replacementOwnerUid: string;
+  };
+  incomplete: { display: ExactId; issuance: ExactId };
 }
 async function freePort() {
   const server = netServer();
@@ -40,7 +54,9 @@ test('authenticated native hosting and explicit human tuples preserve checked id
   request,
 }) => {
   page.setDefaultTimeout(30_000);
-  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+  const root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    encoding: 'utf8',
+  }).trim();
   const evidenceDirectory = process.env.ATLAS_NATIVE_EVIDENCE_DIR;
   if (!evidenceDirectory) throw new Error('Missing native evidence directory');
   const evidence = path.resolve(evidenceDirectory);
@@ -55,7 +71,12 @@ test('authenticated native hosting and explicit human tuples preserve checked id
   const assertions: string[] = [];
   let vite: Awaited<ReturnType<typeof createServer>> | undefined;
   const child = (command: string, args: string[], env: NodeJS.ProcessEnv) => {
-    const process = spawn(command, args, { cwd: root, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const process = spawn(command, args, {
+      cwd: root,
+      env,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     children.push(process);
     process.stdout?.on('data', (value) => logs.push(String(value)));
     process.stderr?.on('data', (value) => logs.push(String(value)));
@@ -107,7 +128,11 @@ test('authenticated native hosting and explicit human tuples preserve checked id
       NATS_WS_AUTH_TOKEN: 'native-fixture-sse',
     });
     vite = await createServer({
-      server: { host: '127.0.0.1', port: 0, proxy: { '/api': `http://127.0.0.1:${bridgePort}` } },
+      server: {
+        host: '127.0.0.1',
+        port: 0,
+        proxy: { '/api': `http://127.0.0.1:${bridgePort}` },
+      },
     });
     await vite.listen();
     const address = vite.httpServer?.address();
@@ -123,7 +148,10 @@ test('authenticated native hosting and explicit human tuples preserve checked id
       .toBe(401);
     assertions.push('Production bridge refuses unauthenticated model reads');
     await page.addInitScript((token) => sessionStorage.setItem('trogon-atlas.credential', token), TOKEN);
-    const heading = page.getByRole('heading', { name: 'UI hosting and human interaction', exact: true });
+    const heading = page.getByRole('heading', {
+      name: 'UI hosting and human interaction',
+      exact: true,
+    });
     const open = async (slug: string) => {
       await page.goto(
         `${origin}/em/${fixture.namespace}/${fixture.model}?focus=component:${fixture.namespace}/${slug}`,
@@ -138,16 +166,35 @@ test('authenticated native hosting and explicit human tuples preserve checked id
     }
     await expect(portal).toContainText(fixture.inert);
     expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).__hostingUnsafe)).toBeUndefined();
-    const check = portal.getByRole('button', { name: 'Check selected interaction' });
+    const check = portal.getByRole('button', {
+      name: 'Check selected interaction',
+    });
     await expect(check).toBeDisabled();
     assertions.push('Persisted equal hosting siblings retain distinct IDs; docs remain inert; no tuple inferred');
+    const sliceKey = (kind: string, id: ExactId) => `${kind}:${id.namespace}/${id.slug}@${id.version}`;
+    const sliceChoices = (section: Locator) =>
+      section
+        .getByLabel('Exact slice owner')
+        .locator('option')
+        .evaluateAll((options) =>
+          options
+            .map((option) => (option as HTMLOptionElement).value)
+            .filter(Boolean)
+            .sort(),
+        );
     const choose = async (section: Locator, hosting: Selection, display: Display) => {
       await section.getByLabel('Exact hosting occurrence').selectOption(hosting.id.value);
       await section.getByLabel('Human path type').selectOption('display');
       const owner = display.ui.owner.id;
-      await section
-        .getByLabel('Exact slice owner')
-        .selectOption(`uiSlice:${owner.namespace}/${owner.slug}@${owner.version}`);
+      // Slices lacking a UI occurrence (incomplete raw path) must never be offered, whatever the loaded model holds.
+      expect(await sliceChoices(section)).toEqual(
+        [
+          sliceKey('uiSlice', fixture.display.ui.owner.id),
+          sliceKey('uiSlice', fixture.unavailable.display.ui.owner.id),
+        ].sort(),
+      );
+      expect(await sliceChoices(section)).not.toContain(sliceKey('uiSlice', fixture.incomplete.display));
+      await section.getByLabel('Exact slice owner').selectOption(sliceKey('uiSlice', owner));
       await section.getByLabel('Persona occurrence').selectOption(display.persona.id.value);
       await section.getByLabel('UI occurrence').selectOption(display.ui.id.value);
       await section.getByLabel('ReadModel observation occurrence').selectOption(display.sourceReadModel.id.value);
@@ -158,7 +205,10 @@ test('authenticated native hosting and explicit human tuples preserve checked id
     const response = await observed;
     expect(response.status()).toBe(200);
     const result = await response.json();
-    expect(result.request).toEqual({ hosting: fixture.hosting[1], display: fixture.display });
+    expect(result.request).toEqual({
+      hosting: fixture.hosting[1],
+      display: fixture.display,
+    });
     expect(result.state).toBe('CATALOG_RESOLUTION_STATE_RESOLVED');
     expect(result.consistency).toBe('HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET');
     expect(result.scope.visited).toHaveLength(5);
@@ -174,7 +224,10 @@ test('authenticated native hosting and explicit human tuples preserve checked id
       path.join(evidence, 'human-display-response.internal.trogonai.md'),
       JSON.stringify(result, null, 2),
     );
-    await page.screenshot({ path: path.join(evidence, 'human-display.png'), fullPage: true });
+    await page.screenshot({
+      path: path.join(evidence, 'human-display.png'),
+      fullPage: true,
+    });
     assertions.push(
       'Authenticated Reader checks only the explicitly selected display observation and retains exact checked row receipts',
     );
@@ -182,23 +235,89 @@ test('authenticated native hosting and explicit human tuples preserve checked id
     await expect(portal.getByRole('heading', { name: 'Resolved checked path' })).toHaveCount(0);
     await expect(check).toBeDisabled();
     const issuanceOwner = fixture.issuance.ui.owner.id;
-    await portal
-      .getByLabel('Exact slice owner')
-      .selectOption(`commandSlice:${issuanceOwner.namespace}/${issuanceOwner.slug}@${issuanceOwner.version}`);
+    expect(await sliceChoices(portal)).toEqual([sliceKey('commandSlice', issuanceOwner)]);
+    await portal.getByLabel('Exact slice owner').selectOption(sliceKey('commandSlice', issuanceOwner));
     await portal.getByLabel('Persona occurrence').selectOption(fixture.issuance.persona.id.value);
     await portal.getByLabel('UI occurrence').selectOption(fixture.issuance.ui.id.value);
     await portal.getByLabel('Command occurrence').selectOption(fixture.issuance.command.id.value);
+    const issuanceObserved = page.waitForResponse((value) => value.url().includes('/api/catalog/human-interaction'));
     await check.click();
+    const issuanceResponse = await issuanceObserved;
+    expect(issuanceResponse.status()).toBe(200);
+    const issuanceResult = await issuanceResponse.json();
+    expect(issuanceResult.request).toEqual({
+      hosting: fixture.hosting[1],
+      issuance: fixture.issuance,
+    });
+    expect(issuanceResult.state).toBe('CATALOG_RESOLUTION_STATE_RESOLVED');
     await expect(portal.getByRole('heading', { name: 'Resolved checked path' })).toBeVisible();
+    await writeFile(
+      path.join(evidence, 'human-issuance-response.internal.trogonai.md'),
+      JSON.stringify(issuanceResult, null, 2),
+    );
     assertions.push('Changing path clears the prior receipt; explicit human issuance resolves separately');
+    assertions.push(
+      'Slice choices are exactly the complete slices; incomplete display and issuance slices are never offered; request retains exact large slice owner versions',
+    );
     const unavailable = await open('unavailable-portal');
     await choose(unavailable, fixture.unavailable.hosting, fixture.unavailable.display);
+    const unavailableObserved = page.waitForResponse((value) => value.url().includes('/api/catalog/human-interaction'));
     await unavailable.getByRole('button', { name: 'Check selected interaction' }).click();
+    const unavailableResult = await (await unavailableObserved).json();
+    expect(unavailableResult.request).toEqual({
+      hosting: fixture.unavailable.hosting,
+      display: fixture.unavailable.display,
+    });
+    expect(unavailableResult.state).toBe('CATALOG_RESOLUTION_STATE_UNAVAILABLE');
     await expect(unavailable.getByRole('heading', { name: 'Unavailable endpoint' })).toBeVisible();
     await expect(unavailable).not.toContainText('Gone UI');
-    await page.screenshot({ path: path.join(evidence, 'human-unavailable.png'), fullPage: true });
+    await page.screenshot({
+      path: path.join(evidence, 'human-unavailable.png'),
+      fullPage: true,
+    });
     assertions.push(
       'Force-deleted UI remains generic unavailable and never receives replacement facts from loaded model',
+    );
+    const openCitation = async (kind: 'document' | 'decision', slug: string, title: string) => {
+      await page.goto(`${origin}/em/${fixture.namespace}/${fixture.model}?focus=${kind}:${fixture.namespace}/${slug}`);
+      await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
+    };
+    const cited = fixture.hosting[1];
+    const sibling = fixture.hosting[0];
+    for (const [kind, slug, title] of [
+      ['document', fixture.citations.document, 'Hosting guide'],
+      ['decision', fixture.citations.decision, 'Hosting decision'],
+    ] as const) {
+      await openCitation(kind, slug, title);
+      await expect(heading).toBeVisible();
+      const section = page.locator('section').filter({ has: heading }).last();
+      await expect(section.getByText('Review portal 🦜', { exact: true })).toHaveCount(1);
+      await expect(section.getByText(cited.ownerUid, { exact: true })).toBeVisible();
+      await expect(section.getByText(cited.id.value, { exact: true })).toBeVisible();
+      await expect(section).not.toContainText(sibling.id.value);
+      await expect(section).toContainText(fixture.inert);
+      await expect(section).toContainText('Declaration owner');
+      await expect(section.getByRole('button', { name: 'Check selected interaction' })).toHaveCount(0);
+      expect(await page.evaluate(() => (window as unknown as Record<string, unknown>).__hostingUnsafe)).toBeUndefined();
+      await page.screenshot({
+        path: path.join(evidence, `human-cited-${kind}.png`),
+        fullPage: true,
+      });
+      assertions.push(
+        `A ${kind} citing the second equal hosting sibling shows only that exact occurrence with its containing owner UID, inert docs and no check control`,
+      );
+    }
+    expect(fixture.citations.staleOwnerUid).not.toBe(fixture.citations.replacementOwnerUid);
+    await openCitation('document', fixture.citations.stale, 'Stale hosting guide');
+    await expect(heading).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('Retired hosting');
+    await expect(page.locator('body')).toContainText('CATALOG_RESOLUTION_STATE_UNRESOLVED');
+    await page.screenshot({
+      path: path.join(evidence, 'human-cited-stale.png'),
+      fullPage: true,
+    });
+    assertions.push(
+      'A document citing a replaced Component incarnation (same id, new UID) shows no hosting, is reported UNRESOLVED by the backend and never substitutes the loaded replacement',
     );
     expect(errors).toEqual([]);
   } finally {
@@ -221,7 +340,14 @@ test('authenticated native hosting and explicit human tuples preserve checked id
     await writeFile(
       path.join(evidence, 'human-run.internal.trogonai.md'),
       JSON.stringify(
-        { sha: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), assertions, errors, logs },
+        {
+          sha: execFileSync('git', ['rev-parse', 'HEAD'], {
+            encoding: 'utf8',
+          }).trim(),
+          assertions,
+          errors,
+          logs,
+        },
         null,
         2,
       ),
