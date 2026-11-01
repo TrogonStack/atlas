@@ -257,12 +257,9 @@ async fn signed_bundle_authenticates_only_against_a_trusted_key() {
         "--trusted-key",
         path_str(&public),
     ]);
-    assert_eq!(trusted.status.code(), Some(0), "{trusted:?}");
+    assert_eq!(trusted.status.code(), Some(0));
     let trusted = outcome(&trusted);
-    assert_eq!(
-        trusted["data"]["authenticity"], "authenticated",
-        "{trusted}"
-    );
+    assert_eq!(trusted["data"]["authenticity"], "authenticated");
     assert_eq!(
         trusted["data"]["signing_key_id"],
         unchecked["data"]["signing_key_id"]

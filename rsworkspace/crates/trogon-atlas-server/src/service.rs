@@ -381,7 +381,7 @@ impl PendingChangeset {
 struct BaselineSnapshot {
     entities: Arc<Vec<StoredEntity>>,
     truncated: bool,
-    boundary_verified: bool,
+    boundary_writer: Option<WriterStatus>,
 }
 
 /// The caller's view of baseline as of an older changeset. `truncated` is
@@ -685,7 +685,7 @@ impl EventModelServiceImpl {
         let snap = BaselineSnapshot {
             entities: Arc::new(result.entities),
             truncated: result.truncated,
-            boundary_verified: snapshot_boundary_verified(
+            boundary_writer: snapshot_boundary_writer(
                 &writer_before,
                 &writer_after,
                 self.store.is_writer(),
@@ -943,19 +943,63 @@ impl EventModelServiceImpl {
         // fetches are bounded; keys left unfetched make the view incomplete,
         // which the caller reports as truncated.
         let (root_kind, root_id) = root;
+        let mut fetched = 0usize;
+        let mut incomplete = false;
+        if root_id.version == 0 {
+            let kinds = [root_kind];
+            let namespaces = [root_id.namespace.clone()];
+            let mut candidates = self
+                .store
+                .list(
+                    ListFilter {
+                        kinds: &kinds,
+                        namespaces: &namespaces,
+                        latest_versions_only: false,
+                    },
+                    Some(MAX_PROJECTION_ENTITIES + 1),
+                    None,
+                )
+                .await
+                .map_err(store_err)?;
+            if candidates.len() > MAX_PROJECTION_ENTITIES {
+                candidates.truncate(MAX_PROJECTION_ENTITIES);
+                incomplete = true;
+            }
+            let mut held: std::collections::HashSet<pb::EntityKey> = current
+                .iter()
+                .filter_map(|se| {
+                    trogon_atlas_store::refs::entity_kind(&se.entity)
+                        .zip(trogon_atlas_store::refs::entity_id(&se.entity))
+                        .map(|(kind, id)| pb::EntityKey::new(kind, id))
+                })
+                .collect();
+            let mut with_versions = current.as_ref().clone();
+            for candidate in candidates {
+                let Some(candidate_id) = trogon_atlas_store::refs::entity_id(&candidate.entity)
+                else {
+                    continue;
+                };
+                if candidate_id.slug != root_id.slug {
+                    continue;
+                }
+                if held.insert(pb::EntityKey::new(root_kind, candidate_id)) {
+                    fetched += 1;
+                    with_versions.push(candidate);
+                }
+            }
+            current = Arc::new(with_versions);
+        }
         let touched: std::collections::HashSet<pb::EntityKey> =
             pre_images.iter().map(|(key, _)| key.clone()).collect();
         let mut absent: std::collections::HashSet<pb::EntityKey> = std::collections::HashSet::new();
-        let mut fetched = 0usize;
-        let mut incomplete = false;
         let rewound = loop {
             let rewound = as_of::rewind(&current, pre_images.clone());
             let mut wanted: Vec<(pb::EntityKind, pb::Id)> = vec![(root_kind, root_id.clone())];
-            let root_members = rewound.iter().find_map(|se| match se.entity.kind.as_ref() {
-                Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(root_id) => {
-                    Some(em.members.clone())
-                }
-                _ => None,
+            let root_members = event_model_in(&rewound, root_id).and_then(|entity| {
+                let Some(pb::entity::Kind::EventModel(model)) = entity.kind else {
+                    return None;
+                };
+                Some(model.members)
             });
             if let Some(members) = root_members {
                 wanted.extend(
@@ -1102,7 +1146,13 @@ impl EventModelServiceImpl {
         let Some(branch) = branch else {
             let snap = self.baseline_snapshot_with_truncation().await?;
             let all = self.narrow_baseline(snap.entities, vis).await?;
-            return Ok((all, snap.truncated, snap.boundary_verified));
+            let writer = self.store.writer_status();
+            let boundary_verified = cached_boundary_verified(
+                snap.boundary_writer.as_ref(),
+                &writer,
+                self.store.is_writer(),
+            );
+            return Ok((all, snap.truncated, boundary_verified));
         };
         use tracing::Instrument as _;
         let result = graph::load_all(&self.store, Some(branch))
@@ -10131,12 +10181,20 @@ fn event_model_in(all: &[StoredEntity], id: &pb::Id) -> Option<pb::Entity> {
         .map(|(_, entity)| entity)
 }
 
-fn snapshot_boundary_verified(
+fn snapshot_boundary_writer(
     writer_before: &WriterStatus,
     writer_after: &WriterStatus,
     is_writer: bool,
+) -> Option<WriterStatus> {
+    (is_writer && writer_before == writer_after).then(|| writer_after.clone())
+}
+
+fn cached_boundary_verified(
+    cached_writer: Option<&WriterStatus>,
+    current_writer: &WriterStatus,
+    is_writer: bool,
 ) -> bool {
-    is_writer && writer_before == writer_after
+    is_writer && cached_writer == Some(current_writer)
 }
 
 #[cfg(test)]
@@ -10144,7 +10202,7 @@ mod attested_snapshot_tests {
     use trogon_atlas_core::{Epoch, WriterRole};
     use trogon_atlas_store::store::WriterStatus;
 
-    use super::snapshot_boundary_verified;
+    use super::{cached_boundary_verified, snapshot_boundary_writer};
 
     fn status(epoch: u64, holder: &str) -> WriterStatus {
         WriterStatus {
@@ -10156,17 +10214,28 @@ mod attested_snapshot_tests {
 
     #[test]
     fn promotion_during_snapshot_load_does_not_verify_its_boundary() {
-        assert!(!snapshot_boundary_verified(
+        assert!(snapshot_boundary_writer(
             &status(1, "old-writer"),
             &status(2, "promoted-writer"),
             true,
-        ));
+        )
+        .is_none());
     }
 
     #[test]
     fn stable_writer_snapshot_verifies_its_boundary() {
         let writer = status(2, "writer");
-        assert!(snapshot_boundary_verified(&writer, &writer, true));
+        assert_eq!(
+            snapshot_boundary_writer(&writer, &writer, true),
+            Some(writer)
+        );
+    }
+
+    #[test]
+    fn cached_snapshot_is_unverified_after_writer_demotion() {
+        let cached = status(2, "writer");
+        let current = status(3, "new-writer");
+        assert!(!cached_boundary_verified(Some(&cached), &current, false));
     }
 }
 

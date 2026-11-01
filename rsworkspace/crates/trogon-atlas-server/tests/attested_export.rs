@@ -371,7 +371,7 @@ async fn historical_export_describes_the_state_right_after_the_changeset() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn versionless_historical_export_resolves_within_the_requested_snapshot() {
-    let endpoint = start_server(None).await;
+    let endpoint = start_server(Some(0)).await;
     let mut c = client(&endpoint).await;
     let ns = "attested-history-versionless";
     put(&mut c, event(ns, "placed")).await;
@@ -390,12 +390,14 @@ async fn versionless_historical_export_resolves_within_the_requested_snapshot() 
     let mut req = export_req(ns, "checkout");
     req.id.as_mut().unwrap().version = 0;
     req.as_of_changeset = then;
+    req.allow_incomplete = true;
     let historical = export(&mut c, req).await;
 
     let scope = historical.scope.as_ref().unwrap();
     assert_eq!(scope.event_model_id.as_ref().unwrap().version, 1);
     assert!(historical.manifests.contains("Before"));
     assert!(!historical.manifests.contains("After"));
+    assert!(entry_slugs(&historical).contains(&"placed".to_string()));
 }
 
 fn model_entry(bundle: &pb::AttestedModelBundle) -> &pb::SnapshotEntry {
