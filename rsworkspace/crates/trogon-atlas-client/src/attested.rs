@@ -12,10 +12,7 @@ use trogon_atlas_core::{
 };
 use trogon_atlas_proto as pb;
 
-use crate::{
-    client::Client,
-    view::{self, EntityAddress},
-};
+use crate::{client::Client, view::EntityAddress};
 
 /// What to export: the model, and optionally the baseline changeset whose
 /// state the bundle should describe instead of the current one.
@@ -33,17 +30,11 @@ pub async fn export_attested_model(
     request: &ExportRequest,
 ) -> Result<(pb::AttestedModelBundle, VerifiedBundle)> {
     let address = &request.address;
-    let id = if let Some(version) = address.version {
-        pb::Id {
-            namespace: address.namespace.clone(),
-            slug: address.slug.clone(),
-            version,
-        }
-    } else {
-        let entity = view::fetch_entity(client, address).await?;
-        trogon_atlas_core::entity_id(&entity)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("stored event model has no id"))?
+    let id = pb::Id {
+        namespace: address.namespace.clone(),
+        slug: address.slug.clone(),
+        // ExportAttestedModel resolves zero against the snapshot it exports.
+        version: address.version.unwrap_or_default(),
     };
     let bundle = client
         .export_attested_model(pb::ExportAttestedModelRequest {

@@ -35,7 +35,7 @@ partial answer says so in a field, not in silence.
 - **One read, one state.** The manifests, the findings and the snapshot id
   all come from the same cached snapshot. The bundle names that snapshot by
   its id and by the newest changeset recorded before it was read.
-- **Every exported entity is confirmed against the store.** After reading
+- **Every entity in a current export is confirmed against the store.** After reading
   the snapshot, the export fetches each entity it carries and compares its
   etag. An entity that changed or was deleted since is listed in
   `unresolved` as changed or deleted, and the bundle still carries the
@@ -53,13 +53,14 @@ partial answer says so in a field, not in silence.
   marks the bundle with `REASON_CONCURRENT_WRITE`. A baseline write to a
   key the branch holds its own copy of does not change the branch's view,
   so it does not mark a branch export. Default chosen for
-  review: a concurrent write marks the bundle instead of failing the export
-  with a retry, so an export never loses to a busy writer.
+  review: a concurrent write makes the export incomplete. The server refuses
+  it by default; `allow_incomplete` returns the marked bundle.
 - **A replica says what it cannot confirm.** A reader or standby replica's
   snapshot cache is not refreshed by the writer's commits, so its snapshot
   may be older than the boundary it names. Default chosen for review: a
-  replica exports, and marks the bundle with
-  `REASON_BOUNDARY_UNVERIFIED`, rather than refusing with `NOT_WRITER`.
+  replica export is incomplete with `REASON_BOUNDARY_UNVERIFIED`. The server
+  refuses it by default; `allow_incomplete` returns the marked bundle instead
+  of refusing with `NOT_WRITER`.
 
 A concurrent write therefore yields either a bundle bound to the snapshot
 read before the write, or a bundle that says which entities moved. It never
@@ -102,7 +103,8 @@ closure and lists no skipped or unresolved entities, so relabelling a
 truncated, partially validated or unresolved bundle as complete fails even
 when the digest is recomputed. A reason with no other trace in the bundle,
 such as a concurrent write that touched only the changeset log, is carried
-by `completeness` alone, so only a signature could stop it being dropped. The CLI exits 11 for an intact
+by `completeness` alone. An independently recorded digest or a trusted
+signature detects its removal. The CLI exits 11 for an intact
 incomplete bundle, the same code an incomplete `validate` run gets, and
 prints its reasons and unresolved entities.
 

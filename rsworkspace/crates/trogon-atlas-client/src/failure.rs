@@ -401,7 +401,7 @@ impl Failure {
                 "SIGNING_KEY_UNAVAILABLE" => (
                     FailureCategory::Precondition,
                     "SIGNING_KEY_UNAVAILABLE",
-                    None,
+                    Some(NextAction::None),
                 ),
                 "CURSOR_REJECTED" => (
                     FailureCategory::Validation,
@@ -692,6 +692,24 @@ mod tests {
         assert_eq!(failure.next_action, NextAction::Retry);
         assert_eq!(failure.code.unwrap().as_str(), "PARTIAL_APPLY");
         assert_eq!(failure.details.0["journal"], json!("journal-123"));
+    }
+
+    #[test]
+    fn signing_key_unavailable_does_not_suggest_replanning() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "SIGNING_KEY_UNAVAILABLE",
+            SERVER_ERROR_DOMAIN,
+            HashMap::new(),
+        );
+        let status =
+            Status::with_error_details(Code::FailedPrecondition, "signing unavailable", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::None);
     }
 
     #[test]

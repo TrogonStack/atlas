@@ -351,6 +351,7 @@ impl PendingChangeset {
 struct BaselineSnapshot {
     entities: Arc<Vec<StoredEntity>>,
     truncated: bool,
+    boundary_verified: bool,
 }
 
 /// The caller's view of baseline as of an older changeset. `truncated` is
@@ -655,15 +656,22 @@ impl EventModelServiceImpl {
         // Instrument the async load with a span. Using `.instrument()` keeps
         // the span active across the await without holding an `EnteredSpan`
         // guard (which is `!Send`) across the suspension point.
+        let writer_before = self.store.writer_status();
         let result = {
             use tracing::Instrument as _;
             graph::load_all_with_cap(&self.store, self.snapshot_cap, None)
                 .instrument(tracing::info_span!("snapshot_rebuild"))
                 .await?
         };
+        let writer_after = self.store.writer_status();
         let snap = BaselineSnapshot {
             entities: Arc::new(result.entities),
             truncated: result.truncated,
+            boundary_verified: snapshot_boundary_verified(
+                &writer_before,
+                &writer_after,
+                self.store.is_writer(),
+            ),
         };
         *self.snapshot_cache.write().await = Some(snap.clone());
         Ok(snap)
@@ -829,6 +837,7 @@ impl EventModelServiceImpl {
         let BaselineSnapshot {
             entities: mut current,
             truncated,
+            ..
         } = self.baseline_snapshot_with_truncation().await?;
         let lens = self.lens(vis).await?;
         let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
@@ -1014,6 +1023,24 @@ impl EventModelServiceImpl {
             .await?;
         let entities = self.narrow(Arc::new(result.entities), vis).await?;
         Ok((entities, result.truncated))
+    }
+
+    async fn snapshot_for_attestation(
+        &self,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<(Arc<Vec<StoredEntity>>, bool, bool), Status> {
+        let Some(branch) = branch else {
+            let snap = self.baseline_snapshot_with_truncation().await?;
+            let all = self.narrow_baseline(snap.entities, vis).await?;
+            return Ok((all, snap.truncated, snap.boundary_verified));
+        };
+        use tracing::Instrument as _;
+        let result = graph::load_all(&self.store, Some(branch))
+            .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
+            .await?;
+        let entities = self.narrow(Arc::new(result.entities), vis).await?;
+        Ok((entities, result.truncated, self.store.is_writer()))
     }
 
     /// Id of the newest changeset in `scope`, or empty when it holds none.
@@ -4981,7 +5008,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let principal = Self::principal_from_metadata(&req);
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
-        let id = require_id(req.id.as_ref(), "id")?;
+        let requested_id = require_id(req.id.as_ref(), "id")?.clone();
         let historical = !req.as_of_changeset.is_empty();
         if historical && branch.is_some() {
             return Err(Status::invalid_argument(
@@ -4994,7 +5021,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         {
             return Err(Status::not_found("branch not found"));
         }
-        self.require_visible(&vis, &id.namespace).await?;
+        self.require_visible(&vis, &requested_id.namespace).await?;
         let signer = self.attested_signer()?;
 
         // Nothing holds writes off: the export reads one snapshot, binds the
@@ -5002,7 +5029,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let lens = self.lens(&vis).await?;
         let mut reasons = BTreeSet::new();
         let mut unresolved = Unresolved::default();
-        let root_key = pb::EntityKey::new(pb::EntityKind::EventModel, id);
         let branch_before = match branch.as_deref() {
             Some(name) => Some(self.branch_boundary(name).await?),
             None => None,
@@ -5020,10 +5046,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         &req.as_of_changeset,
                         &vis,
                         principal.as_ref(),
-                        (pb::EntityKind::EventModel, id),
+                        (pb::EntityKind::EventModel, &requested_id),
                     )
                     .await?;
-                let root = event_model_in(&all, id)
+                let root = event_model_in(&all, &requested_id)
                     .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
                 (
                     root,
@@ -5033,26 +5059,48 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     req.as_of_changeset.clone(),
                 )
             } else {
-                let (all, truncated) = self
-                    .snapshot_with_truncation(branch.as_deref(), &vis)
+                let (all, truncated, boundary_verified) = self
+                    .snapshot_for_attestation(branch.as_deref(), &vis)
                     .await?;
-                let root = if let Some(root) = event_model_in(&all, id) {
+                let root = if let Some(root) = event_model_in(&all, &requested_id) {
                     root
                 } else {
                     // Not in the snapshot it was read from: carry the live
                     // copy, marked, rather than attest it as part of it.
-                    let stored = self
-                        .store
-                        .get(pb::EntityKind::EventModel, id, branch.as_deref())
-                        .await
-                        .map_err(store_err)?;
-                    unresolved.mark(&root_key, UnresolvedCause::OutsideSnapshot);
+                    let stored = if requested_id.version == 0 {
+                        let lens = self.lens(&vis).await?;
+                        get_latest_version_with_cap(
+                            &self.store,
+                            &lens,
+                            pb::EntityKind::EventModel,
+                            &requested_id.namespace,
+                            &requested_id.slug,
+                            MAX_PROJECTION_ENTITIES,
+                            branch.as_deref(),
+                        )
+                        .await?
+                        .map(|entity| StoredEntity {
+                            entity,
+                            etag: String::new(),
+                        })
+                        .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?
+                    } else {
+                        self.store
+                            .get(pb::EntityKind::EventModel, &requested_id, branch.as_deref())
+                            .await
+                            .map_err(store_err)?
+                    };
+                    let outside_id = entity_id(&stored.entity)?.clone();
+                    unresolved.mark(
+                        &pb::EntityKey::new(pb::EntityKind::EventModel, &outside_id),
+                        UnresolvedCause::OutsideSnapshot,
+                    );
                     if !truncated {
                         reasons.insert(Reason::ConcurrentWrite);
                     }
                     stored.entity
                 };
-                if !self.store.is_writer() {
+                if !boundary_verified {
                     reasons.insert(Reason::BoundaryUnverified);
                 }
                 // The newest baseline changeset dates every owner's writes,
@@ -5064,6 +5112,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 };
                 (root, all, truncated, false, boundary)
             };
+        let id = entity_id(&root)?.clone();
+        let root_key = pb::EntityKey::new(pb::EntityKind::EventModel, &id);
         let Some(pb::entity::Kind::EventModel(model)) = root.kind.as_ref() else {
             return Err(Status::internal("stored entity is not an EventModel"));
         };
@@ -5121,6 +5171,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 Some((pb::EntityKey::new(kind, id), se.etag.as_str()))
             })
             .collect();
+        let mut checked = Vec::new();
         for entity in board.own.iter().chain(&board.external) {
             let key = pb::EntityKey::new(entity_kind(entity)?, entity_id(entity)?);
             read.insert(key.clone());
@@ -5132,17 +5183,27 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let Some(&etag) = snapshot_etags.get(&key) else {
                 continue;
             };
-            match self.store.get(key.kind, &key.id(), branch.as_deref()).await {
-                Ok(live) if live.etag == etag => {}
-                Ok(_) => {
-                    unresolved.mark(&key, UnresolvedCause::Changed);
-                    reasons.insert(Reason::ConcurrentWrite);
+            checked.push((key, etag.to_string()));
+        }
+        for chunk in checked.chunks(ADVERTISED_MAX_BATCH_GET_KEYS) {
+            let keys: Vec<_> = chunk.iter().map(|(key, _)| (key.kind, key.id())).collect();
+            let live = self
+                .store
+                .batch_get(&keys, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+            for ((key, etag), live) in chunk.iter().zip(live) {
+                match live {
+                    Some(live) if live.etag == *etag => {}
+                    Some(_) => {
+                        unresolved.mark(key, UnresolvedCause::Changed);
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    None => {
+                        unresolved.mark(key, UnresolvedCause::Deleted);
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
                 }
-                Err(trogon_atlas_store::error::StoreError::NotFound) => {
-                    unresolved.mark(&key, UnresolvedCause::Deleted);
-                    reasons.insert(Reason::ConcurrentWrite);
-                }
-                Err(other) => return Err(store_err(other)),
             }
         }
 
@@ -9544,13 +9605,57 @@ fn snapshot_identity<'a>(
 
 fn event_model_in(all: &[StoredEntity], id: &pb::Id) -> Option<pb::Entity> {
     all.iter()
-        .find(|se| {
-            matches!(
-                se.entity.kind.as_ref(),
-                Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(id)
-            )
+        .filter_map(|se| {
+            let Some(pb::entity::Kind::EventModel(em)) = se.entity.kind.as_ref() else {
+                return None;
+            };
+            let candidate = em.id.as_ref()?;
+            (candidate.namespace == id.namespace
+                && candidate.slug == id.slug
+                && (id.version == 0 || candidate.version == id.version))
+                .then_some((candidate.version, se.entity.clone()))
         })
-        .map(|se| se.entity.clone())
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, entity)| entity)
+}
+
+fn snapshot_boundary_verified(
+    writer_before: &WriterStatus,
+    writer_after: &WriterStatus,
+    is_writer: bool,
+) -> bool {
+    is_writer && writer_before == writer_after
+}
+
+#[cfg(test)]
+mod attested_snapshot_tests {
+    use trogon_atlas_core::{Epoch, WriterRole};
+    use trogon_atlas_store::store::WriterStatus;
+
+    use super::snapshot_boundary_verified;
+
+    fn status(epoch: u64, holder: &str) -> WriterStatus {
+        WriterStatus {
+            role: WriterRole::Standby,
+            epoch: Epoch::new(epoch),
+            lease_holder: holder.to_string(),
+        }
+    }
+
+    #[test]
+    fn promotion_during_snapshot_load_does_not_verify_its_boundary() {
+        assert!(!snapshot_boundary_verified(
+            &status(1, "old-writer"),
+            &status(2, "promoted-writer"),
+            true,
+        ));
+    }
+
+    #[test]
+    fn stable_writer_snapshot_verifies_its_boundary() {
+        let writer = status(2, "writer");
+        assert!(snapshot_boundary_verified(&writer, &writer, true));
+    }
 }
 
 /// Entities an attested export names but could not attest from its

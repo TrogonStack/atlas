@@ -6,8 +6,7 @@ check later that nothing in it changed. For what a bundle proves, see
 
 ## Export the current state
 
-Point the CLI at the writer. A reader or standby replica still exports,
-but marks the bundle incomplete with `REASON_BOUNDARY_UNVERIFIED`.
+Point the CLI at the writer:
 
 ```sh
 trogon-atlas export-attested shop/checkout -o checkout.bundle.json
@@ -16,6 +15,9 @@ trogon-atlas export-attested shop/checkout -o checkout.bundle.json
 The command prints the bundle digest. Record it somewhere the bundle's
 holder cannot rewrite, such as the release notes or the CI log, so a later
 check proves the bundle is the one you recorded.
+
+A reader or standby replica requires `--allow-incomplete` and marks the
+bundle with `REASON_BOUNDARY_UNVERIFIED`.
 
 Add `--branch <name>` to export a branch's view of the model.
 
@@ -27,6 +29,7 @@ example one listed by `ListChangesets`:
 ```sh
 trogon-atlas export-attested shop/checkout \
   --as-of-changeset "$CHANGESET_ID" \
+  --allow-incomplete \
   -o checkout-then.bundle.json
 ```
 
@@ -40,10 +43,9 @@ manifests render through the newer types.
 `EXPORT_INCOMPLETE` (exit 4) means the server could not cover the whole
 scope, for example because the store holds more entities than one read
 loads, or a write changed the model while it was being exported. The error
-lists the reasons. When the only reasons are `REASON_CONCURRENT_WRITE` and
-`REASON_UNRESOLVED_ENTITIES`, exporting again once writes settle usually
-gives a complete bundle. If you still want a record, ask for one
-marked incomplete:
+lists the reasons. `REASON_UNRESOLVED_ENTITIES` does not identify whether
+the cause is temporary. Ask for an incomplete bundle to inspect its
+unresolved causes before deciding whether to retry:
 
 ```sh
 trogon-atlas export-attested shop/checkout --allow-incomplete -o partial.bundle.json

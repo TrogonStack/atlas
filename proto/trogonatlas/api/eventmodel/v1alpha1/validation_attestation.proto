@@ -211,6 +211,8 @@ message AttestedCompleteness {
 }
 
 message ExportAttestedModelRequest {
+  // EventModel to export. Version zero resolves the latest version within
+  // the snapshot selected by as_of_changeset.
   trogonatlas.type.v1alpha1.Id id = 1;
   // Export the baseline as it stood right after this changeset, with the
   // same rules as `GetEventModelProjectionRequest.as_of_changeset`. Empty

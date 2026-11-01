@@ -3351,6 +3351,8 @@ pub mod attested_completeness {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExportAttestedModelRequest {
+    /// EventModel to export. Version zero resolves the latest version within
+    /// the snapshot selected by as_of_changeset.
     #[prost(message, optional, tag="1")]
     pub id: ::core::option::Option<super::super::super::r#type::v1alpha1::Id>,
     /// Export the baseline as it stood right after this changeset, with the

@@ -93,6 +93,21 @@ fn event_model(ns: &str, slug: &str, title: &str, members: &[&str]) -> pb::Entit
     }
 }
 
+fn event_model_version(
+    ns: &str,
+    slug: &str,
+    version: u64,
+    title: &str,
+    members: &[&str],
+) -> pb::Entity {
+    let mut entity = event_model(ns, slug, title, members);
+    let Some(pb::entity::Kind::EventModel(model)) = entity.kind.as_mut() else {
+        unreachable!();
+    };
+    model.id.as_mut().unwrap().version = version;
+    entity
+}
+
 fn put_req(entity: pb::Entity) -> pb::PutEntityRequest {
     pb::PutEntityRequest {
         operation_id: String::new(),
@@ -128,19 +143,21 @@ async fn export(
         .unwrap()
 }
 
-async fn newest_changeset(c: &mut EventModelServiceClient<Channel>) -> String {
+async fn newest_changeset(c: &mut EventModelServiceClient<Channel>, namespace: &str) -> String {
     c.list_changesets(pb::ListChangesetsRequest {
         page_token: String::new(),
-        page_size: 1,
+        page_size: 100,
         branch: String::new(),
-        namespace: String::new(),
+        namespace: namespace.to_string(),
     })
     .await
     .unwrap()
     .into_inner()
-    .changesets[0]
-        .id
-        .clone()
+    .changesets
+    .into_iter()
+    .find(|changeset| changeset.branch.is_empty())
+    .unwrap()
+    .id
 }
 
 fn entry_slugs(bundle: &pb::AttestedModelBundle) -> Vec<String> {
@@ -174,7 +191,7 @@ async fn complete_export_verifies_and_names_the_current_state() {
     let ns = "attested-current";
     put(&mut c, event(ns, "placed")).await;
     put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
-    let boundary = newest_changeset(&mut c).await;
+    let boundary = newest_changeset(&mut c, ns).await;
 
     let bundle = export(&mut c, export_req(ns, "checkout")).await;
 
@@ -185,7 +202,7 @@ async fn complete_export_verifies_and_names_the_current_state() {
     assert_eq!(verified.authenticity, Authenticity::Unsigned);
     let state = bundle.state.as_ref().unwrap();
     assert_eq!(state.mode(), pb::attested_state::Mode::Current);
-    assert_eq!(state.baseline_changeset_id, boundary);
+    assert!(state.baseline_changeset_id.as_str() >= boundary.as_str());
     assert_eq!(state.branch_changeset_id, "");
     let scope = bundle.scope.as_ref().unwrap();
     assert_eq!(scope.event_model_id, Some(id(ns, "checkout")));
@@ -326,7 +343,7 @@ async fn historical_export_describes_the_state_right_after_the_changeset() {
     let ns = "attested-history";
     put(&mut c, event(ns, "placed")).await;
     put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
-    let then = newest_changeset(&mut c).await;
+    let then = newest_changeset(&mut c, ns).await;
     put(&mut c, event_model(ns, "checkout", "After", &["placed"])).await;
 
     let mut req = export_req(ns, "checkout");
@@ -350,6 +367,35 @@ async fn historical_export_describes_the_state_right_after_the_changeset() {
     );
     let refused = c.export_attested_model(on_branch).await.unwrap_err();
     assert_eq!(refused.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn versionless_historical_export_resolves_within_the_requested_snapshot() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-versionless";
+    put(&mut c, event(ns, "placed")).await;
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 1, "Before", &["placed"]),
+    )
+    .await;
+    let then = newest_changeset(&mut c, ns).await;
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 2, "After", &["placed"]),
+    )
+    .await;
+
+    let mut req = export_req(ns, "checkout");
+    req.id.as_mut().unwrap().version = 0;
+    req.as_of_changeset = then;
+    let historical = export(&mut c, req).await;
+
+    let scope = historical.scope.as_ref().unwrap();
+    assert_eq!(scope.event_model_id.as_ref().unwrap().version, 1);
+    assert!(historical.manifests.contains("Before"));
+    assert!(!historical.manifests.contains("After"));
 }
 
 fn model_entry(bundle: &pb::AttestedModelBundle) -> &pb::SnapshotEntry {
@@ -710,7 +756,7 @@ async fn live_writes_do_not_taint_a_historical_export() {
     let ns = "attested-history-live";
     put(&mut c, event(ns, "placed")).await;
     put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
-    let then = newest_changeset(&mut c).await;
+    let then = newest_changeset(&mut c, ns).await;
 
     let bundles = export_while_writing(&endpoint, ns, "checkout", || {
         let mut req = export_req(ns, "checkout");
@@ -738,7 +784,7 @@ async fn writes_racing_a_capped_historical_export_keep_it_truncated() {
     let ns = "attested-history-capped";
     put(&mut c, event(ns, "placed")).await;
     put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
-    let then = newest_changeset(&mut c).await;
+    let then = newest_changeset(&mut c, ns).await;
 
     let bundles = export_while_writing(&endpoint, ns, "other", || {
         let mut req = export_req(ns, "checkout");

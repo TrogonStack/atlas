@@ -88,10 +88,11 @@ refused with `FAILED_PRECONDITION` and violations of type
 
 `EXPORT_INCOMPLETE` is `ExportAttestedModel` refusing a bundle that would
 not cover its whole scope. Retrying returns the same refusal while the
-cause holds. A refusal whose only reasons are `REASON_CONCURRENT_WRITE`
-and `REASON_UNRESOLVED_ENTITIES` came from writes landing during the
-export, and retrying once they settle can succeed. Narrow the scope, raise the server's limits, or pass
-`allow_incomplete` to receive the bundle marked incomplete, as
+cause holds. A refusal does not expose the causes behind
+`REASON_UNRESOLVED_ENTITIES`, which may be missing, hidden,
+outside-snapshot, changed or deleted entities. Pass `allow_incomplete` to
+inspect those causes before deciding whether a retry can succeed. Narrow the
+scope, raise the server's limits, or pass `allow_incomplete` to receive the bundle marked incomplete, as
 `docs/how-to/export-and-verify-an-attested-model.md` describes.
 
 `SIGNING_KEY_UNAVAILABLE` is `ExportAttestedModel` on a server configured to
