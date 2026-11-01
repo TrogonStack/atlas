@@ -1,0 +1,724 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::{process::Command, sync::Arc};
+
+use serde_json::{json, Value};
+use tokio::net::TcpListener;
+use trogon_atlas_client::client::{connect, connect_with_options, ConnectOptions};
+use trogon_atlas_core::transcode::TranscodePool;
+use trogon_atlas_proto::{self as pb, event_model_service_server::EventModelServiceServer};
+use trogon_atlas_server::{
+    auth::{BearerAuth, TokenRegistry},
+    mcp::data_plane,
+    metrics::ServerMetrics,
+    service::EventModelServiceImpl,
+};
+
+const ADMIN: &str = "channel-cli-admin";
+const READER_A: &str = "channel-cli-reader-a";
+const READER_B: &str = "channel-cli-reader-b";
+const HIDDEN: &str = "channel-cli-hidden";
+const OWNER: &str = "channel-owner";
+const BRANCH: &str = "@channel-owner:inspect";
+const MESSAGE: &str = "11111111-1111-4111-8111-111111111111";
+const CHANNEL_VERSION: u64 = u64::MAX;
+const CHANNEL_TITLE: &str = "Orders Desk";
+
+async fn server() -> (String, String) {
+    let registry = TokenRegistry::from_file_contents(
+        serde_json::from_value(json!({"principals": {
+            "admin": {"role": "admin", "tokens": [ADMIN]},
+            "reader-a": {"role": "reader", "kind": "agent", "tokens": [READER_A], "parent": OWNER},
+            "reader-b": {"role": "reader", "kind": "agent", "tokens": [READER_B], "parent": OWNER},
+            "hidden": {"role": "reader", "kind": "agent", "tokens": [HIDDEN], "parent": "other-owner"}
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    let service = EventModelServiceImpl::try_new(
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await),
+        ServerMetrics::default(),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let secured = data_plane(
+        EventModelServiceServer::new(service)
+            .max_decoding_message_size(36 * 1024 * 1024)
+            .max_encoding_message_size(36 * 1024 * 1024),
+        BearerAuth::new(registry),
+    );
+    tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(secured)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let endpoint = format!("http://{address}");
+    let mut admin = connect(&endpoint, Some(ADMIN), 30).await.unwrap();
+    let namespace = admin
+        .register_namespace(pb::RegisterNamespaceRequest {
+            name: "channel-messages".into(),
+            parent: OWNER.into(),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    admin
+        .create_branch(pb::CreateBranchRequest {
+            name: BRANCH.into(),
+            doc: "inspect".into(),
+        })
+        .await
+        .unwrap();
+    (endpoint, namespace)
+}
+
+fn id(namespace: &str, slug: &str, version: u64) -> pb::Id {
+    pb::Id {
+        namespace: namespace.into(),
+        slug: slug.into(),
+        version,
+    }
+}
+
+fn member(value: &str) -> pb::ContractMemberId {
+    pb::ContractMemberId {
+        value: value.into(),
+    }
+}
+
+fn name(value: &str) -> pb::MemberName {
+    pb::MemberName {
+        value: value.into(),
+    }
+}
+
+async fn put(
+    client: &mut trogon_atlas_client::client::Client,
+    kind: pb::entity::Kind,
+) -> pb::Entity {
+    client
+        .put_entity(pb::PutEntityRequest {
+            entity: Some(pb::Entity {
+                kind: Some(kind),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await
+        .unwrap_or_else(|status| panic!("put failed: {status}"))
+        .into_inner()
+        .entity
+        .unwrap()
+}
+
+async fn seed(endpoint: &str, namespace: &str) -> (String, Vec<Value>) {
+    let mut client = connect_with_options(
+        endpoint,
+        Some(ADMIN),
+        30,
+        ConnectOptions {
+            branch: Some(BRANCH.into()),
+            ..ConnectOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    let read_model = id(namespace, "receipt", 1);
+    let processor = id(namespace, "worker", 1);
+    let slice = id(namespace, "observe", 1);
+    let channel = id(namespace, "orders", CHANNEL_VERSION);
+    put(
+        &mut client,
+        pb::entity::Kind::ReadModel(pb::ReadModel {
+            id: Some(read_model.clone()),
+            title: "Receipt".into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    put(
+        &mut client,
+        pb::entity::Kind::Processor(pb::Processor {
+            id: Some(processor.clone()),
+            title: "Worker".into(),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let automation = put(
+        &mut client,
+        pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+            id: Some(slice.clone()),
+            title: "Observe".into(),
+            source_read_models: vec![pb::ReadModelEdge {
+                read_model: Some(pb::ReadModelRef {
+                    id: Some(read_model),
+                }),
+                ..Default::default()
+            }],
+            processor: Some(pb::ProcessorEdge {
+                processor: Some(pb::ProcessorRef {
+                    id: Some(processor),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let pb::entity::Kind::AutomationSlice(slice_value) = automation.kind.as_ref().unwrap() else {
+        panic!("automation");
+    };
+    let observation = pb::ConnectionRef {
+        owner: Some(pb::EntityRef {
+            kind: pb::EntityKind::AutomationSlice as i32,
+            id: Some(slice),
+        }),
+        owner_uid: automation.system.as_ref().unwrap().uid.clone(),
+        id: slice_value.source_read_models[0].connection_id.clone(),
+    };
+    put(
+        &mut client,
+        pb::entity::Kind::Channel(pb::Channel {
+            id: Some(channel.clone()),
+            title: CHANNEL_TITLE.into(),
+            address: Some(pb::ChannelAddress {
+                template: "orders.{topic}".into(),
+                parameters: vec![pb::AddressParameter {
+                    name: Some(pb::ParameterName {
+                        value: "topic".into(),
+                    }),
+                    ..Default::default()
+                }],
+            }),
+            bindings: vec![pb::ChannelBinding {
+                observation: Some(observation),
+                parameter_values: [("topic".into(), "orders".into())].into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await;
+    let specification = put(
+        &mut client,
+        pb::entity::Kind::Specification(pb::Specification {
+            id: Some(id(namespace, "contract", 1)),
+            title: "Contract".into(),
+            messages: vec![pb::ContractMessage {
+                member_id: Some(member(MESSAGE)),
+                name: Some(name("Order")),
+                ..Default::default()
+            }],
+            message_channels: vec![
+                pb::MessageChannelDeclaration {
+                    member_id: Some(member(MESSAGE)),
+                    channel: Some(pb::ChannelRef {
+                        id: Some(channel.clone()),
+                    }),
+                    parameter_values: [("topic".into(), "orders".into())].into(),
+                    doc: Some("carried".into()),
+                    ..Default::default()
+                },
+                pb::MessageChannelDeclaration {
+                    member_id: Some(member(MESSAGE)),
+                    channel: Some(pb::ChannelRef { id: Some(channel) }),
+                    parameter_values: [("topic".into(), "orders".into())].into(),
+                    delivery_mode: Some(pb::ClaimDeliveryMode::Push as i32),
+                    ..Default::default()
+                },
+            ],
+            operations: vec![pb::ContractOperation {
+                member_id: Some(member("55555555-5555-4555-8555-555555555555")),
+                name: Some(name("Send")),
+                messages: vec![pb::OperationMessage {
+                    message_id: Some(member(MESSAGE)),
+                    role: pb::operation_message::Role::Request as i32,
+                    ..Default::default()
+                }],
+                binding: Some(pb::OperationBinding {
+                    kind: Some(pb::operation_binding::Kind::Channel(
+                        pb::ChannelOperationBinding {
+                            channel: Some(pb::ChannelRef {
+                                id: Some(id(namespace, "orders", CHANNEL_VERSION)),
+                            }),
+                            ..Default::default()
+                        },
+                    )),
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+    )
+    .await;
+    let owner_uid = specification.system.as_ref().unwrap().uid.clone();
+    let Some(pb::entity::Kind::Specification(spec)) = specification.kind else {
+        panic!("specification")
+    };
+    let message = pb::ContractMemberRef {
+        specification: Some(pb::SpecificationRef { id: spec.id }),
+        owner_uid: owner_uid.clone(),
+        kind: pb::ContractMemberKind::Message as i32,
+        member_id: spec.messages[0].member_id.clone(),
+        expected_digest: None,
+    };
+    let component = put(
+        &mut client,
+        pb::entity::Kind::Component(pb::Component {
+            id: Some(id(namespace, "claim-owner", 1)),
+            title: "Claim owner".into(),
+            message_claims: Some(pb::MessageClaims {
+                claims: [
+                    pb::CommunicationDirection::Receive,
+                    pb::CommunicationDirection::Send,
+                ]
+                .into_iter()
+                .map(|direction| pb::MessageClaim {
+                    direction: direction as i32,
+                    message: Some(message.clone()),
+                    ..Default::default()
+                })
+                .collect(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+    )
+    .await;
+    let uid = component.system.as_ref().unwrap().uid.clone();
+    let Some(pb::entity::Kind::Component(mut value)) = component.kind else {
+        panic!("component")
+    };
+    let claims = value.message_claims.as_mut().unwrap();
+    claims.routes = claims
+        .claims
+        .iter()
+        .enumerate()
+        .map(|(index, claim)| pb::ClaimRoute {
+            claim_id: claim.connection_id.clone(),
+            channel: Some(pb::ChannelRef {
+                id: Some(id(namespace, "orders", CHANNEL_VERSION)),
+            }),
+            parameter_values: [("topic".into(), String::new())].into(),
+            delivery_mode: (index == 1).then_some(pb::ClaimDeliveryMode::Push as i32),
+            ..Default::default()
+        })
+        .collect();
+    let stored = put(&mut client, pb::entity::Kind::Component(value)).await;
+    assert_eq!(stored.system.as_ref().unwrap().uid, uid);
+    let Some(pb::entity::Kind::Component(value)) = stored.kind else {
+        panic!("component")
+    };
+    let claims = value.message_claims.unwrap();
+    let expected = claims
+        .routes
+        .iter()
+        .map(|route| {
+            let claim = claims
+                .claims
+                .iter()
+                .find(|claim| claim.connection_id == route.claim_id)
+                .unwrap();
+            pb::ChannelMessageRecord {
+                owner: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Component as i32,
+                    id: value.id.clone(),
+                }),
+                owner_uid: uid.clone(),
+                connection_id: route.connection_id.clone(),
+                message: Some(message.clone()),
+                channel: route.channel.clone(),
+                parameter_values: route.parameter_values.clone(),
+                delivery_mode: route.delivery_mode,
+                authority: pb::ChannelMessageAuthority::ClaimRoute as i32,
+                claim: Some(claim.clone()),
+                route: Some(route.clone()),
+                state: pb::CatalogResolutionState::Resolved as i32,
+                ..Default::default()
+            }
+        })
+        .collect();
+    let expected = TranscodePool::builtin()
+        .unwrap()
+        .message_json_value(
+            "trogonatlas.api.eventmodel.v1alpha1.ListChannelMessagesResponse",
+            &pb::ListChannelMessagesResponse {
+                records: expected,
+                ..Default::default()
+            },
+        )
+        .unwrap()["records"]
+        .as_array()
+        .unwrap()
+        .clone();
+    (owner_uid, expected)
+}
+
+fn command(endpoint: &str, token: &str, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_trogon-atlas"))
+        .args([
+            "--endpoint",
+            endpoint,
+            "--auth-token",
+            token,
+            "--branch",
+            BRANCH,
+            "--format",
+            "json",
+        ])
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn outcome(output: &std::process::Output) -> Value {
+    serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
+        panic!(
+            "stdout is not JSON ({error}): stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )
+    })
+}
+
+fn listed(endpoint: &str, token: &str, request: &Value) -> Value {
+    let output = command(
+        endpoint,
+        token,
+        &["list-channel-messages", "--request", &request.to_string()],
+    );
+    assert!(
+        output.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let body = outcome(&output);
+    assert!(body["ok"].as_bool().unwrap_or(false), "{body}");
+    body["data"].clone()
+}
+
+fn channel_request(
+    namespace: &str,
+    slug: &str,
+    page_size: Option<u32>,
+    page_token: Option<&str>,
+) -> Value {
+    let mut request = json!({
+        "channel": {
+            "id": {
+                "namespace": namespace,
+                "slug": slug,
+                "version": CHANNEL_VERSION.to_string()
+            }
+        }
+    });
+    if let Some(page_size) = page_size {
+        request["pageSize"] = json!(page_size);
+    }
+    if let Some(page_token) = page_token {
+        request["pageToken"] = json!(page_token);
+    }
+    request
+}
+
+fn assert_scope(page: &Value) {
+    let digest = page["scopeDigest"].as_str().unwrap_or("");
+    assert_eq!(digest.len(), 64, "{page}");
+    assert!(digest.chars().all(|ch| ch.is_ascii_hexdigit()), "{digest}");
+    assert_eq!(page["authorizedNamespaceCount"], 1, "{page}");
+    assert_eq!(page["branch"], BRANCH, "{page}");
+}
+
+fn assert_channel_id(record: &Value, namespace: &str) {
+    let id = &record["channel"]["id"];
+    assert_eq!(id["namespace"], namespace, "{record}");
+    assert_eq!(id["slug"], "orders", "{record}");
+    assert_eq!(id["version"], CHANNEL_VERSION.to_string(), "{record}");
+}
+
+fn assert_operation_record(record: &Value, independent: &Value, namespace: &str, owner_uid: &str) {
+    assert_eq!(
+        record["authority"],
+        "CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING"
+    );
+    assert_channel_id(record, namespace);
+    assert_eq!(record["owner"], independent["owner"]);
+    assert_eq!(record["ownerUid"], owner_uid);
+    assert_eq!(record["message"], independent["message"]);
+    assert_eq!(
+        record["operation"]["kind"],
+        "CONTRACT_MEMBER_KIND_OPERATION"
+    );
+    assert_eq!(
+        record["operation"]["specification"],
+        record["message"]["specification"]
+    );
+    assert_eq!(record["operation"]["ownerUid"], owner_uid);
+    assert_eq!(
+        record["operation"]["memberId"]["value"],
+        "55555555-5555-4555-8555-555555555555"
+    );
+    assert_eq!(
+        record["operationMessage"]["messageId"],
+        record["message"]["memberId"]
+    );
+    assert_eq!(record["operationMessage"]["role"], "ROLE_REQUEST");
+    let binding_id = record["connectionId"]["value"].as_str().unwrap();
+    let message_id = record["operationMessage"]["connectionId"]["value"]
+        .as_str()
+        .unwrap();
+    assert_ne!(binding_id, "");
+    assert_ne!(message_id, "");
+    assert_ne!(binding_id, message_id);
+    assert_eq!(record["state"], "CATALOG_RESOLUTION_STATE_RESOLVED");
+    assert!(record.get("deliveryMode").is_none());
+}
+
+fn assert_preserved_records(records: &[&Value], namespace: &str, owner_uid: &str) {
+    assert_eq!(records.len(), 2, "{records:?}");
+    for record in records {
+        assert_eq!(
+            record["authority"], "CHANNEL_MESSAGE_AUTHORITY_SPECIFICATION_DECLARATION",
+            "{record}"
+        );
+        assert_eq!(record["ownerUid"], owner_uid, "{record}");
+        assert_eq!(
+            record["owner"]["kind"], "ENTITY_KIND_SPECIFICATION",
+            "{record}"
+        );
+        assert_eq!(record["owner"]["id"]["namespace"], namespace);
+        assert_eq!(record["owner"]["id"]["slug"], "contract");
+        assert_eq!(record["state"], "CATALOG_RESOLUTION_STATE_RESOLVED");
+        assert!(record.get("claim").is_none());
+        assert!(record.get("route").is_none());
+        assert!(record.get("operation").is_none());
+        assert_eq!(record["owner"]["id"]["version"], "1");
+        assert_eq!(record["message"]["kind"], "CONTRACT_MEMBER_KIND_MESSAGE");
+        assert_eq!(record["message"]["memberId"]["value"], MESSAGE);
+        assert_eq!(record["message"]["ownerUid"], owner_uid);
+        assert_eq!(record["parameterValues"], json!({"topic": "orders"}));
+        assert!(record["connectionId"]["value"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
+        assert_channel_id(record, namespace);
+    }
+    let connection_ids = records
+        .iter()
+        .map(|record| record["connectionId"]["value"].as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(connection_ids.len(), 2);
+    let documented = records
+        .iter()
+        .filter(|record| record.get("doc").is_some())
+        .collect::<Vec<_>>();
+    let delivered = records
+        .iter()
+        .filter(|record| record.get("deliveryMode").is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(documented.len(), 1, "{records:?}");
+    assert_eq!(documented[0]["doc"], "carried");
+    assert!(
+        documented[0].get("deliveryMode").is_none(),
+        "{documented:?}"
+    );
+    assert_eq!(delivered.len(), 1, "{records:?}");
+    assert_eq!(delivered[0]["deliveryMode"], "CLAIM_DELIVERY_MODE_PUSH");
+    assert!(delivered[0].get("doc").is_none(), "{delivered:?}");
+}
+
+#[test]
+fn channel_message_json_keeps_forward_compatible_authorities() {
+    let response = pb::ListChannelMessagesResponse {
+        records: vec![
+            pb::ChannelMessageRecord {
+                authority: pb::ChannelMessageAuthority::ClaimRoute as i32,
+                owner_uid: "owner".into(),
+                ..Default::default()
+            },
+            pb::ChannelMessageRecord {
+                authority: pb::ChannelMessageAuthority::OperationBinding as i32,
+                ..Default::default()
+            },
+            pb::ChannelMessageRecord {
+                authority: 17,
+                ..Default::default()
+            },
+        ],
+        complete: true,
+        scope_digest: "ab".into(),
+        authorized_namespace_count: 2,
+        ..Default::default()
+    };
+    let json = TranscodePool::builtin()
+        .unwrap()
+        .message_json_value(
+            "trogonatlas.api.eventmodel.v1alpha1.ListChannelMessagesResponse",
+            &response,
+        )
+        .unwrap();
+    assert_eq!(
+        json["records"][0]["authority"],
+        "CHANNEL_MESSAGE_AUTHORITY_CLAIM_ROUTE"
+    );
+    assert_eq!(
+        json["records"][1]["authority"],
+        "CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING"
+    );
+    assert_eq!(json["records"][2]["authority"], 17);
+    assert_eq!(json["complete"], true);
+    assert!(json.get("incomplete").is_none(), "{json}");
+    assert_eq!(json["authorizedNamespaceCount"], 2);
+    assert!(json.get("nextPageToken").is_none(), "{json}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reader_lists_channel_messages_with_page_caller_and_hidden_parity() {
+    let (endpoint, namespace) = server().await;
+    let (owner_uid, expected_routes) = seed(&endpoint, &namespace).await;
+    let full = listed(
+        &endpoint,
+        READER_A,
+        &channel_request(&namespace, "orders", None, None),
+    );
+    assert_scope(&full);
+    assert_eq!(full["complete"], true, "{full}");
+    assert!(full.get("incomplete").is_none(), "{full}");
+    assert!(full.get("nextPageToken").is_none(), "{full}");
+    let records = full["records"].as_array().unwrap();
+    assert_eq!(records.len(), 5, "{full}");
+    let independent: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record["authority"] == "CHANNEL_MESSAGE_AUTHORITY_SPECIFICATION_DECLARATION"
+        })
+        .collect();
+    assert_preserved_records(&independent, &namespace, &owner_uid);
+    let operation = records
+        .iter()
+        .find(|record| record["authority"] == "CHANNEL_MESSAGE_AUTHORITY_OPERATION_BINDING")
+        .unwrap();
+    assert_operation_record(operation, independent[0], &namespace, &owner_uid);
+    let routes: Vec<_> = records
+        .iter()
+        .filter(|row| row["authority"] == "CHANNEL_MESSAGE_AUTHORITY_CLAIM_ROUTE")
+        .collect();
+    assert_eq!(routes.len(), expected_routes.len());
+    for expected in &expected_routes {
+        assert_eq!(routes.iter().filter(|row| *row == &expected).count(), 1);
+        assert_channel_id(expected, &namespace);
+        assert_eq!(expected["message"], independent[0]["message"]);
+        assert_ne!(expected["ownerUid"], owner_uid);
+        assert_eq!(expected["parameterValues"], json!({"topic": ""}));
+    }
+    let ids: std::collections::HashSet<_> =
+        records.iter().map(|row| &row["connectionId"]).collect();
+    assert_eq!(ids.len(), records.len());
+
+    let first = listed(
+        &endpoint,
+        READER_A,
+        &channel_request(&namespace, "orders", Some(1), None),
+    );
+    assert_scope(&first);
+    assert_eq!(first["scopeDigest"], full["scopeDigest"]);
+    assert_eq!(first["records"].as_array().unwrap().len(), 1, "{first}");
+    assert_ne!(first["complete"].as_bool(), Some(true), "{first}");
+    assert_ne!(first["incomplete"].as_bool(), Some(true), "{first}");
+    let token = first["nextPageToken"].as_str().unwrap();
+    assert!(!token.is_empty(), "{first}");
+    assert!(!token.contains(READER_A), "{token}");
+    assert!(!token.contains("reader-a"), "{token}");
+
+    let mut seen = first["records"].as_array().unwrap().clone();
+    let mut next = token.to_owned();
+    while !next.is_empty() {
+        assert!(seen.len() < records.len());
+        let page = listed(
+            &endpoint,
+            READER_A,
+            &channel_request(&namespace, "orders", Some(1), Some(&next)),
+        );
+        assert_scope(&page);
+        assert_eq!(page["scopeDigest"], full["scopeDigest"]);
+        assert!(page.get("incomplete").is_none(), "{page}");
+        assert_eq!(page["records"].as_array().unwrap().len(), 1);
+        seen.extend(page["records"].as_array().unwrap().iter().cloned());
+        next = page["nextPageToken"].as_str().unwrap_or("").to_owned();
+        assert_eq!(page["complete"].as_bool().unwrap_or(false), next.is_empty());
+    }
+    assert_eq!(&seen, records);
+
+    let replay = command(
+        &endpoint,
+        READER_B,
+        &[
+            "list-channel-messages",
+            "--request",
+            &channel_request(&namespace, "orders", Some(1), Some(token)).to_string(),
+        ],
+    );
+    assert_eq!(
+        replay.status.code(),
+        Some(5),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    let replay = outcome(&replay);
+    assert_eq!(replay["failure"]["category"], "validation", "{replay}");
+    assert_eq!(
+        replay["failure"]["message"],
+        "page token does not match this query"
+    );
+    assert!(replay["failure"].get("code").is_none(), "{replay}");
+    assert!(!replay.to_string().contains(CHANNEL_TITLE));
+
+    let missing = command(
+        &endpoint,
+        READER_A,
+        &[
+            "list-channel-messages",
+            "--request",
+            &channel_request(&namespace, "absent", None, None).to_string(),
+        ],
+    );
+    let hidden = command(
+        &endpoint,
+        HIDDEN,
+        &[
+            "list-channel-messages",
+            "--request",
+            &channel_request(&namespace, "orders", None, None).to_string(),
+        ],
+    );
+    assert_eq!(
+        missing.status.code(),
+        Some(6),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+    assert_eq!(
+        hidden.status.code(),
+        Some(6),
+        "{}",
+        String::from_utf8_lossy(&hidden.stderr)
+    );
+    let missing = outcome(&missing);
+    let hidden = outcome(&hidden);
+    assert_eq!(missing["failure"]["category"], "not_found");
+    assert_eq!(
+        hidden["failure"]["category"],
+        missing["failure"]["category"]
+    );
+    assert_eq!(missing["failure"]["message"], "resource unavailable");
+    assert_eq!(hidden["failure"]["message"], missing["failure"]["message"]);
+    assert!(!missing.to_string().contains(CHANNEL_TITLE));
+    assert!(!hidden.to_string().contains(CHANNEL_TITLE));
+}
