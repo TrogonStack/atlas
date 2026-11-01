@@ -178,3 +178,13 @@ it('keeps unavailable receipts generic and does not replace them with loaded end
   expect(await screen.findByText('Unavailable endpoint')).toBeTruthy();
   expect(screen.queryByText(/checked-target-uid/)).toBeNull();
 });
+
+it('cannot submit a checked tuple when the selected slice has an incomplete raw owner identity', () => {
+  const model = fixture();
+  model.entities[2].raw.id = { namespace: 'shop', slug: 'display' };
+  render(<UiHostingDetails entity={model.entities[0]} model={model} onSelect={vi.fn()} />);
+  chooseDisplay();
+  expect((screen.getByRole('button', { name: 'Check selected interaction' }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected interaction' }));
+  expect(inspect).not.toHaveBeenCalled();
+});

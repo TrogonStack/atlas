@@ -77,3 +77,48 @@ it('does not infer a hosting from a raw Component member', () => {
   expect(screen.getByText('No UI hosting assertions in this loaded owner.')).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Check selected interaction' })).toBeNull();
 });
+
+for (const kind of ['decision', 'document'] as const) {
+  it(`shows an exact loaded hosting cited by a ${kind} with its containing owner's provenance`, () => {
+    const model = fixture();
+    const citation = buildModel([{
+      [kind]: {
+        id: id('citation'), title: 'Cited hosting',
+        subjects: [{ subject: { connection: {
+          owner: { kind: 'ENTITY_KIND_COMPONENT', id: id('portal') },
+          ownerUid: 'component-uid', id: { value: 'hosting-b' },
+        } } }],
+      },
+      system: { uid: 'citation-uid' },
+    }]).entities[0];
+    render(<Inspector model={model} entity={citation} onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByRole('heading', { name: 'UI hosting and human interaction' })).toBeTruthy();
+    expect(screen.getByText('Review portal 🦜')).toBeTruthy();
+    expect(screen.getByText('component-uid')).toBeTruthy();
+    expect(screen.getByText('hosting-b')).toBeTruthy();
+    expect(screen.queryByText('hosting-a')).toBeNull();
+    expect(screen.getByText('<script>inert()</script> why')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Check selected interaction' })).toBeNull();
+  });
+}
+
+it('does not substitute a loaded hosting for a stale or incomplete cited selector', () => {
+  const model = fixture();
+  const connection = {
+    owner: { kind: 'ENTITY_KIND_COMPONENT', id: id('portal') },
+    ownerUid: 'component-uid', id: { value: 'hosting-a' },
+  };
+  for (const broken of [
+    { ...connection, ownerUid: 'old-component-uid' },
+    { ...connection, owner: { ...connection.owner, id: { ...id('portal'), version: '1' } } },
+    { ...connection, id: { value: 'missing-hosting' } },
+  ]) {
+    const citation = buildModel([{
+      document: { id: id('citation'), title: 'Cited hosting', subjects: [{ subject: { connection: broken } }] },
+      system: { uid: 'citation-uid' },
+    }]).entities[0];
+    const rendered = render(<Inspector model={model} entity={citation} onClose={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.queryByRole('heading', { name: 'UI hosting and human interaction' })).toBeNull();
+    rendered.unmount();
+  }
+});

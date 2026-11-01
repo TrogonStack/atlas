@@ -1,5 +1,6 @@
 import { expect, it } from 'vitest';
 import { buildModel } from './model';
+import { sliceOccurrences } from './human-interaction';
 import { hostingConnection, resolveUiHostingSubject, uiHostings } from './ui-hosting';
 
 const id = { namespace: 'shop', slug: 'portal', version: '1' };
@@ -49,4 +50,37 @@ it('does not construct a hosting connection from an incomplete containing owner'
   const owner = fixture().entities[0];
   owner.raw.id = { namespace: 'shop', slug: 'portal' };
   expect(hostingConnection(uiHostings(owner)[0])).toBeUndefined();
+});
+
+it('constructs slice occurrences only from complete exact raw owner identities', () => {
+  const sliceId = { namespace: 'shop', slug: 'issue', version: '18446744073709551615' };
+  const model = buildModel([{
+    commandSlice: {
+      id: sliceId, title: 'Approve',
+      persona: { connectionId: { value: 'persona-a' }, persona: { id } },
+      ui: { connectionId: { value: 'ui-a' }, ui: { id } },
+      command: { connectionId: { value: 'command-a' }, command: { id } },
+    },
+    system: { uid: 'slice-uid' },
+  }]);
+  const owner = model.entities[0];
+  expect(sliceOccurrences(owner, 'command')[0]?.connection).toEqual({
+    owner: { kind: 'ENTITY_KIND_COMMAND_SLICE', id: sliceId },
+    ownerUid: 'slice-uid', id: { value: 'command-a' },
+  });
+  for (const invalidId of [
+    { namespace: 'shop', slug: 'issue' },
+    { ...sliceId, version: '0' },
+    { ...sliceId, version: '-1' },
+    { ...sliceId, version: 9007199254740992 },
+    { ...sliceId, version: '18446744073709551616' },
+    { ...sliceId, namespace: '' },
+    { ...sliceId, slug: '' },
+    { ...sliceId, slug: 'different-key' },
+  ]) {
+    owner.raw.id = invalidId;
+    expect(sliceOccurrences(owner, 'persona'), JSON.stringify(invalidId)).toEqual([]);
+    expect(sliceOccurrences(owner, 'ui'), JSON.stringify(invalidId)).toEqual([]);
+    expect(sliceOccurrences(owner, 'command'), JSON.stringify(invalidId)).toEqual([]);
+  }
 });
