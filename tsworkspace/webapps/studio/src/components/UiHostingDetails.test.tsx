@@ -81,16 +81,26 @@ it('does not infer a hosting from a raw Component member', () => {
 for (const kind of ['decision', 'document'] as const) {
   it(`shows an exact loaded hosting cited by a ${kind} with its containing owner's provenance`, () => {
     const model = fixture();
-    const citation = buildModel([{
-      [kind]: {
-        id: id('citation'), title: 'Cited hosting',
-        subjects: [{ subject: { connection: {
-          owner: { kind: 'ENTITY_KIND_COMPONENT', id: id('portal') },
-          ownerUid: 'component-uid', id: { value: 'hosting-b' },
-        } } }],
+    const citation = buildModel([
+      {
+        [kind]: {
+          id: id('citation'),
+          title: 'Cited hosting',
+          subjects: [
+            {
+              subject: {
+                connection: {
+                  owner: { kind: 'ENTITY_KIND_COMPONENT', id: id('portal') },
+                  ownerUid: 'component-uid',
+                  id: { value: 'hosting-b' },
+                },
+              },
+            },
+          ],
+        },
+        system: { uid: 'citation-uid' },
       },
-      system: { uid: 'citation-uid' },
-    }]).entities[0];
+    ]).entities[0];
     render(<Inspector model={model} entity={citation} onClose={vi.fn()} onSelect={vi.fn()} />);
     expect(screen.getByRole('heading', { name: 'UI hosting and human interaction' })).toBeTruthy();
     expect(screen.getByText('Review portal 🦜')).toBeTruthy();
@@ -106,17 +116,20 @@ it('does not substitute a loaded hosting for a stale or incomplete cited selecto
   const model = fixture();
   const connection = {
     owner: { kind: 'ENTITY_KIND_COMPONENT', id: id('portal') },
-    ownerUid: 'component-uid', id: { value: 'hosting-a' },
+    ownerUid: 'component-uid',
+    id: { value: 'hosting-a' },
   };
   for (const broken of [
     { ...connection, ownerUid: 'old-component-uid' },
     { ...connection, owner: { ...connection.owner, id: { ...id('portal'), version: '1' } } },
     { ...connection, id: { value: 'missing-hosting' } },
   ]) {
-    const citation = buildModel([{
-      document: { id: id('citation'), title: 'Cited hosting', subjects: [{ subject: { connection: broken } }] },
-      system: { uid: 'citation-uid' },
-    }]).entities[0];
+    const citation = buildModel([
+      {
+        document: { id: id('citation'), title: 'Cited hosting', subjects: [{ subject: { connection: broken } }] },
+        system: { uid: 'citation-uid' },
+      },
+    ]).entities[0];
     const rendered = render(<Inspector model={model} entity={citation} onClose={vi.fn()} onSelect={vi.fn()} />);
     expect(screen.queryByRole('heading', { name: 'UI hosting and human interaction' })).toBeNull();
     rendered.unmount();

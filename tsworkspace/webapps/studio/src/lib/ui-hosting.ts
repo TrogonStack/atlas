@@ -20,7 +20,7 @@ const text = (value: unknown): string | undefined => {
   const item = record(value).value;
   return typeof item === 'string' ? item : undefined;
 };
-function exactId(value: unknown): EntityId | undefined {
+export function exactId(value: unknown): EntityId | undefined {
   const body = record(value);
   if (typeof body.namespace !== 'string' || !body.namespace || typeof body.slug !== 'string' || !body.slug)
     return undefined;

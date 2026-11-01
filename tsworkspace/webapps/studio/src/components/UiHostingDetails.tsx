@@ -8,10 +8,11 @@ import {
   type HumanPathType,
   type SliceOccurrence,
 } from '@/lib/human-interaction';
-import { hasUnambiguousOwnerIdentities } from '@/lib/responsibility';
+import { hasUnambiguousOwnerIdentities, responsibilitySubjects } from '@/lib/responsibility';
+import { contractRecord as record } from '@/lib/specification';
 import { Exact } from './DecisionDocumentInspector';
 import { ExactReference } from './ArchitectureResourceDetails';
-import { hostingConnection, uiHostings, type UiHostingView } from '@/lib/ui-hosting';
+import { hostingConnection, resolveUiHostingSubject, uiHostings, type UiHostingView } from '@/lib/ui-hosting';
 import type { Entity, Model } from '@/lib/model';
 
 export function UiHostingDetails({
@@ -25,8 +26,22 @@ export function UiHostingDetails({
   onSelect: (key: string) => void;
   asOf?: string;
 }) {
-  if (entity.kind !== 'component') return null;
-  const hostings = uiHostings(entity);
+  const own = entity.kind === 'component';
+  const subjects: unknown[] =
+    entity.kind === 'decision' || entity.kind === 'document'
+      ? Array.isArray(entity.raw.subjects)
+        ? entity.raw.subjects.map((value) => record(value).subject)
+        : []
+      : responsibilitySubjects(entity)
+          .slice(1)
+          .map((item) => item.subject);
+  const hostings = own
+    ? uiHostings(entity)
+    : subjects.flatMap((subject) => {
+        const found = resolveUiHostingSubject(model, subject);
+        return found ? [found] : [];
+      });
+  if (!own && !hostings.length) return null;
   const asOf = historicalAsOf ?? readAsOfFromUrl();
   const branch = asOf ? undefined : readBranchFromUrl();
   const context = JSON.stringify({
@@ -44,12 +59,21 @@ export function UiHostingDetails({
       {hostings.map((item) => (
         <section
           className="flex flex-col gap-2 rounded border p-2"
-          key={JSON.stringify([entity.uid, item.path, item.connectionId])}
+          key={JSON.stringify([item.owner.key, item.owner.uid, item.path, item.connectionId])}
         >
           <h4 className="font-semibold">{item.label ?? 'Unavailable label'}</h4>
           <dl className="flex flex-col gap-1">
+            <dt>Declaration owner</dt>
+            <dd>
+              <ExactReference
+                kind={item.owner.kind}
+                reference={{ id: item.owner.id }}
+                model={model}
+                onSelect={onSelect}
+              />
+            </dd>
             <dt>Owner UID</dt>
-            <dd>{entity.uid || 'Unavailable'}</dd>
+            <dd>{item.owner.uid || 'Unavailable'}</dd>
             <dt>Connection ID</dt>
             <dd>{item.connectionId || 'Unassigned'}</dd>
             <dt>Diagnostic path</dt>
@@ -66,7 +90,7 @@ export function UiHostingDetails({
           {item.doc !== undefined && <p className="whitespace-pre-wrap">{item.doc}</p>}
         </section>
       ))}
-      {!!hostings.length && (
+      {own && !!hostings.length && (
         <>
           <p>
             Select an exact hosting and a complete slice tuple before checking an interaction. Loaded memberships do not
@@ -125,7 +149,8 @@ function InteractionCheck({ hostings, model, branch }: { hostings: UiHostingView
     (owner) =>
       owner.kind === (pathType === 'issuance' ? 'commandSlice' : 'uiSlice') &&
       !!owner.uid &&
-      hasUnambiguousOwnerIdentities(owner),
+      hasUnambiguousOwnerIdentities(owner) &&
+      sliceOccurrences(owner, 'ui').length > 0,
   );
   const slice = slices.find((owner) => owner.key === sliceKey);
   const personas = slice ? sliceOccurrences(slice, 'persona') : [];

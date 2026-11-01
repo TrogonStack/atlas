@@ -1,8 +1,8 @@
 import type { CatalogCheckedOwner, CatalogInspection } from './decision-document';
-import type { Entity } from './model';
+import { entityKey, type Entity } from './model';
 import { hasUnambiguousOwnerIdentities, nativeEntityRef } from './responsibility';
 import { contractRecord as record } from './specification';
-import type { HostingConnection } from './ui-hosting';
+import { exactId, type HostingConnection } from './ui-hosting';
 
 export type HumanPathType = 'issuance' | 'display';
 export type HumanInteractionRequest = { hosting: HostingConnection } & (
@@ -34,6 +34,8 @@ export function sliceOccurrences(
   const ownerUid = owner.uid;
   if (!ownerUid || !hasUnambiguousOwnerIdentities(owner)) return [];
   if (owner.kind !== 'commandSlice' && owner.kind !== 'uiSlice') return [];
+  const ownerId = exactId(owner.raw.id);
+  if (!ownerId || entityKey(owner.kind, ownerId) !== owner.key) return [];
   if (
     (field === 'command' && owner.kind !== 'commandSlice') ||
     (field === 'sourceReadModels' && owner.kind !== 'uiSlice')
@@ -48,7 +50,7 @@ export function sliceOccurrences(
   return values.flatMap(({ value, path }) => {
     const id = record(record(value).connectionId).value;
     return typeof id === 'string' && id
-      ? [{ path, connection: { owner: nativeEntityRef(owner), ownerUid, id: { value: id } } }]
+      ? [{ path, connection: { owner: { ...nativeEntityRef(owner), id: ownerId }, ownerUid, id: { value: id } } }]
       : [];
   });
 }

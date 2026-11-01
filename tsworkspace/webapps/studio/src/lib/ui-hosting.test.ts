@@ -54,19 +54,23 @@ it('does not construct a hosting connection from an incomplete containing owner'
 
 it('constructs slice occurrences only from complete exact raw owner identities', () => {
   const sliceId = { namespace: 'shop', slug: 'issue', version: '18446744073709551615' };
-  const model = buildModel([{
-    commandSlice: {
-      id: sliceId, title: 'Approve',
-      persona: { connectionId: { value: 'persona-a' }, persona: { id } },
-      ui: { connectionId: { value: 'ui-a' }, ui: { id } },
-      command: { connectionId: { value: 'command-a' }, command: { id } },
+  const model = buildModel([
+    {
+      commandSlice: {
+        id: sliceId,
+        title: 'Approve',
+        persona: { connectionId: { value: 'persona-a' }, persona: { id } },
+        ui: { connectionId: { value: 'ui-a' }, ui: { id } },
+        command: { connectionId: { value: 'command-a' }, command: { id } },
+      },
+      system: { uid: 'slice-uid' },
     },
-    system: { uid: 'slice-uid' },
-  }]);
+  ]);
   const owner = model.entities[0];
   expect(sliceOccurrences(owner, 'command')[0]?.connection).toEqual({
     owner: { kind: 'ENTITY_KIND_COMMAND_SLICE', id: sliceId },
-    ownerUid: 'slice-uid', id: { value: 'command-a' },
+    ownerUid: 'slice-uid',
+    id: { value: 'command-a' },
   });
   for (const invalidId of [
     { namespace: 'shop', slug: 'issue' },
@@ -79,8 +83,8 @@ it('constructs slice occurrences only from complete exact raw owner identities',
     { ...sliceId, slug: 'different-key' },
   ]) {
     owner.raw.id = invalidId;
-    expect(sliceOccurrences(owner, 'persona'), JSON.stringify(invalidId)).toEqual([]);
-    expect(sliceOccurrences(owner, 'ui'), JSON.stringify(invalidId)).toEqual([]);
-    expect(sliceOccurrences(owner, 'command'), JSON.stringify(invalidId)).toEqual([]);
+    expect(sliceOccurrences(owner, 'persona')).toEqual([]);
+    expect(sliceOccurrences(owner, 'ui')).toEqual([]);
+    expect(sliceOccurrences(owner, 'command')).toEqual([]);
   }
 });

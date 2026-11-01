@@ -188,3 +188,27 @@ it('cannot submit a checked tuple when the selected slice has an incomplete raw 
   fireEvent.click(screen.getByRole('button', { name: 'Check selected interaction' }));
   expect(inspect).not.toHaveBeenCalled();
 });
+
+it('aborts old checks after same-reference model content changes without reusing stale receipts', async () => {
+  const model = fixture();
+  let finish: ((value: unknown) => void) | undefined;
+  inspect.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const entity = model.entities[0];
+  const rendered = render(<UiHostingDetails entity={entity} model={model} onSelect={vi.fn()} />);
+  chooseDisplay();
+  fireEvent.click(screen.getByRole('button', { name: 'Check selected interaction' }));
+  expect(inspect).toHaveBeenCalledTimes(1);
+  const signal = inspect.mock.calls[0][1].signal as AbortSignal;
+  model.entities[2].raw.title = 'Changed in the same loaded model';
+  rendered.rerender(<UiHostingDetails entity={entity} model={model} onSelect={vi.fn()} />);
+  expect(signal.aborted).toBe(true);
+  await act(async () => finish?.(response(displayRequest)));
+  expect(screen.queryByText('Per-owner checked read set')).toBeNull();
+  expect(screen.queryByText(/checked-owner-etag/)).toBeNull();
+  expect((screen.getByRole('button', { name: 'Check selected interaction' }) as HTMLButtonElement).disabled).toBe(true);
+});
