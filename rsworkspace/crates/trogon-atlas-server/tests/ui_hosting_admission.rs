@@ -57,12 +57,12 @@ fn mutation_boundary_rejects_invalid_hosting_values() {
                     .id
                     .as_mut()
                     .unwrap()
-                    .version = 0
+                    .version = 0;
             }
             3 => {
                 value.ui_hostings[0].doc = Some(pb::CatalogText {
                     value: "x".repeat(16_385),
-                })
+                });
             }
             4 => value
                 .ui_hostings
@@ -70,7 +70,7 @@ fn mutation_boundary_rejects_invalid_hosting_values() {
             _ => {
                 value.ui_hostings[0].connection_id = Some(pb::ConnectionId {
                     value: String::new(),
-                })
+                });
             }
         }
         match validate_entity_content(&entity) {

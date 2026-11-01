@@ -5,7 +5,7 @@ use trogon_atlas_client::{export, manifest, manifest_schema};
 use trogon_atlas_core::transcode::TranscodePool;
 use trogon_atlas_proto as pb;
 
-fn component(hosting: Value) -> Value {
+fn component(hosting: &Value) -> Value {
     json!({
         "apiVersion": manifest::API_VERSION,
         "kind": "Component",
@@ -18,13 +18,13 @@ fn component(hosting: Value) -> Value {
 fn schema_rejects_bare_hosting_that_omits_authored_occurrence_fields() {
     let schema = manifest_schema::generate().unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
-    assert!(!validator.is_valid(&component(json!("shop/review@1"))));
+    assert!(!validator.is_valid(&component(&json!("shop/review@1"))));
 }
 
 #[test]
 fn parser_rejects_bare_hosting_that_omits_authored_occurrence_fields() {
     let parsed = manifest::parse_str(
-        &component(json!("shop/review@1")).to_string(),
+        &component(&json!("shop/review@1")).to_string(),
         "hosting.yaml",
     );
     assert!(parsed.is_err(), "bare hosting was accepted: {parsed:?}");
@@ -32,7 +32,7 @@ fn parser_rejects_bare_hosting_that_omits_authored_occurrence_fields() {
 
 #[test]
 fn object_hosting_preserves_ui_pin_label_and_occurrence_identity() {
-    let document = component(json!({
+    let document = component(&json!({
         "ui": "shop/review@2",
         "label": {"value": "Customer review"},
         "connectionId": {"value": "review-hosting"}

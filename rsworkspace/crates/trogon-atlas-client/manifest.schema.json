@@ -8720,29 +8720,22 @@
       ]
     },
     "trogonatlas.eventmodel.v1alpha1.UiHosting": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/_ShorthandRef"
+      "additionalProperties": false,
+      "properties": {
+        "connectionId": {
+          "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
         },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "connectionId": {
-              "$ref": "#/$defs/trogonatlas.type.v1alpha1.ConnectionId"
-            },
-            "doc": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
-            },
-            "label": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
-            },
-            "ui": {
-              "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.UIRef"
-            }
-          },
-          "type": "object"
+        "doc": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogText"
+        },
+        "label": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CatalogTitle"
+        },
+        "ui": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.UIRef"
         }
-      ]
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.UiSlice": {
       "additionalProperties": false,
