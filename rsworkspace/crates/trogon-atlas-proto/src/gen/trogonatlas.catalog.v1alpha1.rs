@@ -119,6 +119,66 @@ pub struct Changeset {
     /// or non-idempotent writes.
     #[prost(string, tag="8")]
     pub operation_id: ::prost::alloc::string::String,
+    /// What validation backed this changeset when it was written. Unset on
+    /// changesets recorded before receipts existed: nothing is known about
+    /// them, which is not the same as a clean result.
+    #[prost(message, optional, tag="9")]
+    pub validation: ::core::option::Option<ChangesetValidation>,
+}
+/// The validation receipt of one changeset. Exactly one outcome is set on
+/// every changeset written since receipts existed.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChangesetValidation {
+    #[prost(oneof="changeset_validation::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<changeset_validation::Outcome>,
+}
+/// Nested message and enum types in `ChangesetValidation`.
+pub mod changeset_validation {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Unvalidated(super::ChangesetUnvalidated),
+        #[prost(message, tag="2")]
+        Validated(super::ChangesetValidated),
+    }
+}
+/// No validation coverage was declared for this write, so no issue counts
+/// are recorded: counts without coverage would read as a clean result.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChangesetUnvalidated {
+    /// Stable reason token: `no_declared_coverage` for paths that report no
+    /// coverage (delete, revert, retarget, delete by query, import, source
+    /// reconciliation), `recovered` for a changeset reconstructed by crash
+    /// recovery, which cannot know what ran. Treat an unknown token like
+    /// either: nothing is claimed.
+    #[prost(string, tag="1")]
+    pub reason: ::prost::alloc::string::String,
+}
+/// The write path ran validation suites before the changeset landed.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChangesetValidated {
+    /// True when every suite that applied to this path completed over an
+    /// untruncated snapshot. Suites skipped by design on this path do not
+    /// make it incomplete.
+    #[prost(bool, tag="1")]
+    pub coverage_complete: bool,
+    /// Check ids that applied but did not complete, sorted. Empty exactly when
+    /// `coverage_complete` is true.
+    #[prost(string, repeated, tag="2")]
+    pub incomplete_checks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Findings the suites that ran reported, by severity. Only meaningful
+    /// together with the coverage above: zero errors over incomplete coverage
+    /// is not a clean result.
+    #[prost(uint32, tag="3")]
+    pub error_count: u32,
+    #[prost(uint32, tag="4")]
+    pub warning_count: u32,
+    #[prost(uint32, tag="5")]
+    pub info_count: u32,
+    /// Lowercase hex SHA-256 identifying the rule catalogue the suites ran
+    /// with. Counts from two different catalogues are not comparable.
+    #[prost(string, tag="6")]
+    pub rule_catalog_digest: ::prost::alloc::string::String,
 }
 /// ---------- Entity revision log (per-entity history and revert) -------------
 ///
