@@ -1323,31 +1323,7 @@ async fn run_import(path: PathBuf, restore_namespaces: bool, store: Arc<dyn Stor
             ),
         }
     }
-    let mut imported = 0usize;
-    let mut skipped = 0usize;
-    for entity in &entities {
-        let Some(kind) = entity_kind(entity) else {
-            continue;
-        };
-        let Some(_id) = entity_id(entity) else {
-            continue;
-        };
-        // Import runs outside any RPC, so there is no authenticated principal
-        // to attribute the write to and no changeset is minted. The resulting
-        // change events carry an empty author, which is the documented
-        // "unattributed write" case.
-        match store
-            .create(kind, entity, trogon_atlas_store::WriteContext::baseline())
-            .await
-        {
-            Ok(_) => imported += 1,
-            Err(trogon_atlas_store::error::StoreError::AlreadyExists) => skipped += 1,
-            Err(err) => {
-                tracing::warn!(error = %err, "skipping entity that failed to import");
-                skipped += 1;
-            }
-        }
-    }
+    let report = trogon_atlas_server::git_mirror::import_entities(store.as_ref(), &entities).await;
     let total = store
         .list(
             trogon_atlas_store::store::ListFilter::default(),
@@ -1390,11 +1366,18 @@ async fn run_import(path: PathBuf, restore_namespaces: bool, store: Arc<dyn Stor
     }
 
     tracing::info!(
-        imported,
-        skipped,
+        imported = report.imported,
+        skipped = report.skipped,
+        changesets = %report.changesets.join(", "),
         unregistered = unregistered.len(),
         store_total = total.len(),
         "import-git complete"
+    );
+    anyhow::ensure!(
+        report.unrecorded.is_empty(),
+        "import-git wrote entities whose changesets could not be recorded ({}); \
+         those writes cannot be reverted or rewound",
+        report.unrecorded.join(", ")
     );
     Ok(())
 }
