@@ -8,24 +8,61 @@
 //!
 //! Verification needs nothing but the bundle: manifests are carried as text
 //! and no field holds a `google.protobuf.Any`, so the built-in pool can
-//! render every bundle. A digest that matches proves the bundle is the one
-//! the server sealed under this format. It does not prove which server
-//! sealed it; that needs a signature this format does not carry yet.
+//! render every bundle. A digest that matches proves the bundle is
+//! unchanged since it was sealed under its format. It does not prove who
+//! sealed it. The signed format adds a detached signature over the digest
+//! (see [`attested_signing`](crate::attested_signing)), which proves the
+//! sealer held a key only to a verifier that trusts that key.
 
 use std::{collections::BTreeSet, str::FromStr};
 
 use trogon_atlas_proto as pb;
 
 use crate::{
+    attested_signing::{KeyId, SigningKey, TrustedKeys, SIGNATURE_LEN},
     content_hash::{domain_digest, ContentHash, ContentHashError},
     transcode::{self, TranscodeError},
     SnapshotHasher,
 };
 
-/// The value of `AttestedModelBundle.format` this module seals and verifies.
+/// The value of `AttestedModelBundle.format` for a bundle that carries no
+/// signature.
 pub const BUNDLE_FORMAT: &str = "trogonatlas.attested-model.v1";
+/// The value of `AttestedModelBundle.format` for a bundle that carries a
+/// signature.
+pub const SIGNED_BUNDLE_FORMAT: &str = "trogonatlas.attested-model.v2";
 
-const BUNDLE_DOMAIN: &[u8] = b"trogonatlas.attested-model.bundle.v1\0";
+/// The formats this build seals and verifies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleFormat {
+    Unsigned,
+    Signed,
+}
+
+impl BundleFormat {
+    fn parse(format: &str) -> Result<Self, BundleError> {
+        match format {
+            BUNDLE_FORMAT => Ok(Self::Unsigned),
+            SIGNED_BUNDLE_FORMAT => Ok(Self::Signed),
+            other => Err(BundleError::UnknownFormat(other.to_string())),
+        }
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unsigned => BUNDLE_FORMAT,
+            Self::Signed => SIGNED_BUNDLE_FORMAT,
+        }
+    }
+
+    const fn digest_domain(self) -> &'static [u8] {
+        match self {
+            Self::Unsigned => b"trogonatlas.attested-model.bundle.v1\0",
+            Self::Signed => b"trogonatlas.attested-model.bundle.v2\0",
+        }
+    }
+}
 const RULE_CATALOG_DOMAIN: &[u8] = b"trogonatlas.validation.rule-catalog.v1\0";
 const BUNDLE_MESSAGE: &str = "trogonatlas.api.eventmodel.v1alpha1.AttestedModelBundle";
 const RULE_CATALOG_MESSAGE: &str =
@@ -40,8 +77,21 @@ pub enum BundleError {
     Parse(#[source] TranscodeError),
     #[error("computing digest: {0}")]
     Digest(#[from] ContentHashError),
-    #[error("unknown bundle format {0:?}; this build verifies {BUNDLE_FORMAT:?}")]
+    #[error(
+        "unknown bundle format {0:?}; this build verifies {BUNDLE_FORMAT:?} and \
+         {SIGNED_BUNDLE_FORMAT:?}"
+    )]
     UnknownFormat(String),
+    #[error("format {BUNDLE_FORMAT:?} carries no signature, but this bundle has one")]
+    SignatureNotAllowed,
+    #[error("signature is malformed: {0}")]
+    MalformedSignature(&'static str),
+    #[error("bundle is unsigned, but trusted keys were given, so a signature is required")]
+    SignatureRequired,
+    #[error("bundle is signed by key {0}, which is not a trusted key")]
+    UntrustedKey(KeyId),
+    #[error("signature by key {0} does not verify against the bundle digest")]
+    BadSignature(KeyId),
     #[error("bundle_digest is not a lowercase hex SHA-256: {0:?}")]
     MalformedDigest(String),
     #[error("bundle_digest {claimed} does not match the content, which digests to {computed}")]
@@ -109,12 +159,58 @@ impl Completeness {
     }
 }
 
+/// What a verified bundle proves about who sealed it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Authenticity {
+    /// No signature: integrity only, issuer unauthenticated.
+    Unsigned,
+    /// A well-formed signature whose key was not checked, because no
+    /// trusted keys were given. Not authenticated.
+    SignatureUnchecked(KeyId),
+    /// Signed by a trusted key, and the signature verifies.
+    Authenticated(KeyId),
+}
+
+impl Authenticity {
+    /// Stable machine-readable name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unsigned => "unsigned",
+            Self::SignatureUnchecked(_) => "signature_unchecked",
+            Self::Authenticated(_) => "authenticated",
+        }
+    }
+
+    /// The signing key, when the bundle names one.
+    #[must_use]
+    pub const fn key_id(self) -> Option<KeyId> {
+        match self {
+            Self::Unsigned => None,
+            Self::SignatureUnchecked(id) | Self::Authenticated(id) => Some(id),
+        }
+    }
+}
+
+impl std::fmt::Display for Authenticity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unsigned => f.write_str("integrity only, issuer unauthenticated"),
+            Self::SignatureUnchecked(id) => {
+                write!(f, "signature present, not checked (key {id})")
+            }
+            Self::Authenticated(id) => write!(f, "signed by trusted key {id}"),
+        }
+    }
+}
+
 /// A bundle whose digest and internal consistency checked out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedBundle {
     pub digest: ContentHash,
     pub completeness: Completeness,
     pub unresolved: Vec<Unresolved>,
+    pub authenticity: Authenticity,
 }
 
 /// An entity the export could not attest from its snapshot, and why.
@@ -147,21 +243,92 @@ fn unresolved_rows(rows: &[pb::AttestedUnresolved]) -> Result<Vec<Unresolved>, B
     Ok(out)
 }
 
-/// The digest of `bundle`, ignoring whatever `bundle_digest` currently holds.
+/// The digest of `bundle` under its format, ignoring whatever
+/// `bundle_digest` and `signature` currently hold.
 pub fn bundle_digest(bundle: &pb::AttestedModelBundle) -> Result<ContentHash, BundleError> {
+    let format = BundleFormat::parse(&bundle.format)?;
     let mut unsealed = bundle.clone();
     unsealed.bundle_digest.clear();
+    unsealed.signature = None;
     let value =
         transcode::message_json_value(BUNDLE_MESSAGE, &unsealed).map_err(BundleError::Parse)?;
-    Ok(domain_digest(BUNDLE_DOMAIN, &value)?)
+    Ok(domain_digest(format.digest_domain(), &value)?)
 }
 
-/// Stamp `bundle_digest`. The last step of producing a bundle: any field
+/// Seal `bundle` unsigned: set the unsigned format, drop any signature and
+/// stamp `bundle_digest`. The last step of producing a bundle: any field
 /// changed afterwards fails verification.
 pub fn seal(bundle: &mut pb::AttestedModelBundle) -> Result<ContentHash, BundleError> {
+    bundle.format = BundleFormat::Unsigned.as_str().to_string();
+    bundle.signature = None;
     let digest = bundle_digest(bundle)?;
     bundle.bundle_digest = digest.to_hex();
     Ok(digest)
+}
+
+/// Seal `bundle` under the signed format and sign its digest with `key`.
+/// The signature covers the digest, and the digest covers completeness,
+/// so signing never changes what an incomplete bundle says about itself.
+pub fn seal_signed(
+    bundle: &mut pb::AttestedModelBundle,
+    key: &SigningKey,
+) -> Result<ContentHash, BundleError> {
+    bundle.format = BundleFormat::Signed.as_str().to_string();
+    bundle.signature = None;
+    let digest = bundle_digest(bundle)?;
+    bundle.bundle_digest = digest.to_hex();
+    bundle.signature = Some(key.sign(&digest));
+    Ok(digest)
+}
+
+/// A signature whose shape checked out, not yet checked against a key.
+struct ParsedSignature {
+    key_id: KeyId,
+    value: [u8; SIGNATURE_LEN],
+}
+
+fn parse_signature(
+    format: BundleFormat,
+    signature: Option<&pb::BundleSignature>,
+) -> Result<Option<ParsedSignature>, BundleError> {
+    let signature = match (format, signature) {
+        (BundleFormat::Unsigned, None) => return Ok(None),
+        (BundleFormat::Unsigned, Some(_)) => return Err(BundleError::SignatureNotAllowed),
+        (BundleFormat::Signed, None) => return Err(BundleError::Missing("signature")),
+        (BundleFormat::Signed, Some(signature)) => signature,
+    };
+    if signature.algorithm() != pb::bundle_signature::Algorithm::Ed25519 {
+        return Err(BundleError::MalformedSignature(
+            "algorithm is not ALGORITHM_ED25519",
+        ));
+    }
+    let key_id = KeyId::from_str(&signature.key_id)
+        .map_err(|_| BundleError::MalformedSignature("key_id is not a lowercase hex SHA-256"))?;
+    let value = <[u8; SIGNATURE_LEN]>::try_from(signature.value.as_slice())
+        .map_err(|_| BundleError::MalformedSignature("value is not 64 bytes"))?;
+    Ok(Some(ParsedSignature { key_id, value }))
+}
+
+fn authenticity(
+    digest: &ContentHash,
+    signature: Option<ParsedSignature>,
+    trusted: Option<&TrustedKeys>,
+) -> Result<Authenticity, BundleError> {
+    match (signature, trusted) {
+        (None, None) => Ok(Authenticity::Unsigned),
+        (None, Some(_)) => Err(BundleError::SignatureRequired),
+        (Some(signature), None) => Ok(Authenticity::SignatureUnchecked(signature.key_id)),
+        (Some(signature), Some(trusted)) => {
+            let key = trusted
+                .get(&signature.key_id)
+                .ok_or(BundleError::UntrustedKey(signature.key_id))?;
+            if key.verifies(digest, &signature.value) {
+                Ok(Authenticity::Authenticated(signature.key_id))
+            } else {
+                Err(BundleError::BadSignature(signature.key_id))
+            }
+        }
+    }
 }
 
 /// Identity of a rule catalogue, as `ListValidationRules` returns it.
@@ -208,17 +375,36 @@ pub fn bundle_to_json(bundle: &pb::AttestedModelBundle) -> Result<String, Bundle
 
 /// Check the digest, then that the bundle is consistent with what it says
 /// about itself. A bundle that passes and is [`Completeness::Complete`] is
-/// a clean attestation; an incomplete one passes only as what it is.
+/// a clean attestation of integrity; an incomplete one passes only as what
+/// it is. A signature is checked for shape but not against any key, so a
+/// signed bundle reports [`Authenticity::SignatureUnchecked`].
 pub fn verify(bundle: &pb::AttestedModelBundle) -> Result<VerifiedBundle, BundleError> {
-    if bundle.format != BUNDLE_FORMAT {
-        return Err(BundleError::UnknownFormat(bundle.format.clone()));
-    }
+    verify_with(bundle, None)
+}
+
+/// [`verify`], and also require a signature by one of `trusted`. An
+/// unsigned bundle, a key outside `trusted` or a signature that does not
+/// verify fails.
+pub fn verify_trusted(
+    bundle: &pb::AttestedModelBundle,
+    trusted: &TrustedKeys,
+) -> Result<VerifiedBundle, BundleError> {
+    verify_with(bundle, Some(trusted))
+}
+
+fn verify_with(
+    bundle: &pb::AttestedModelBundle,
+    trusted: Option<&TrustedKeys>,
+) -> Result<VerifiedBundle, BundleError> {
+    let format = BundleFormat::parse(&bundle.format)?;
+    let signature = parse_signature(format, bundle.signature.as_ref())?;
     let claimed = ContentHash::from_str(&bundle.bundle_digest)
         .map_err(|_| BundleError::MalformedDigest(bundle.bundle_digest.clone()))?;
     let computed = bundle_digest(bundle)?;
     if claimed != computed {
         return Err(BundleError::DigestMismatch { claimed, computed });
     }
+    let authenticity = authenticity(&computed, signature, trusted)?;
 
     let scope = bundle.scope.as_ref().ok_or(BundleError::Missing("scope"))?;
     if scope.event_model_id.is_none() {
@@ -327,6 +513,7 @@ pub fn verify(bundle: &pb::AttestedModelBundle) -> Result<VerifiedBundle, Bundle
         digest: computed,
         completeness,
         unresolved,
+        authenticity,
     })
 }
 
@@ -393,6 +580,7 @@ mod tests {
             completeness: Some(Completeness::Complete.to_proto()),
             bundle_digest: String::new(),
             unresolved: Vec::new(),
+            signature: None,
         };
         seal(&mut bundle).unwrap();
         bundle
@@ -518,7 +706,10 @@ mod tests {
 
     #[test]
     fn digest_is_domain_separated_from_the_catalog_digest() {
-        let empty = pb::AttestedModelBundle::default();
+        let empty = pb::AttestedModelBundle {
+            format: BUNDLE_FORMAT.into(),
+            ..Default::default()
+        };
         let empty_catalog = rule_catalog_digest(&[]).unwrap();
         assert_ne!(bundle_digest(&empty).unwrap(), empty_catalog);
     }
@@ -644,8 +835,7 @@ mod tests {
     #[test]
     fn unknown_format_is_refused() {
         let mut bundle = sealed();
-        bundle.format = "trogonatlas.attested-model.v2".into();
-        seal(&mut bundle).unwrap();
+        bundle.format = "trogonatlas.attested-model.v3".into();
         assert!(matches!(
             verify(&bundle),
             Err(BundleError::UnknownFormat(_))
@@ -660,6 +850,227 @@ mod tests {
             bundle_from_json(&tampered),
             Err(BundleError::Parse(_))
         ));
+    }
+
+    fn key(seed: u8) -> SigningKey {
+        use ed25519_dalek::pkcs8::{spki::der::pem::LineEnding, EncodePrivateKey};
+        let pem = ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .to_pkcs8_pem(LineEnding::LF)
+            .unwrap();
+        SigningKey::from_pkcs8_pem(&pem).unwrap()
+    }
+
+    fn trusting(keys: &[&SigningKey]) -> TrustedKeys {
+        TrustedKeys::new(keys.iter().map(|k| k.trusted_key())).unwrap()
+    }
+
+    fn signed(key: &SigningKey) -> pb::AttestedModelBundle {
+        let mut bundle = sealed();
+        seal_signed(&mut bundle, key).unwrap();
+        bundle
+    }
+
+    #[test]
+    fn unsigned_bundle_verifies_as_integrity_only() {
+        let verified = verify(&sealed()).unwrap();
+        assert_eq!(verified.authenticity, Authenticity::Unsigned);
+        assert_eq!(
+            verified.authenticity.to_string(),
+            "integrity only, issuer unauthenticated"
+        );
+    }
+
+    #[test]
+    fn unsigned_bundle_digest_is_unchanged_by_the_signed_format() {
+        let bundle = sealed();
+        let mut resealed = bundle.clone();
+        seal(&mut resealed).unwrap();
+        assert_eq!(resealed, bundle);
+        let mut signed = bundle.clone();
+        seal_signed(&mut signed, &key(1)).unwrap();
+        assert_ne!(signed.bundle_digest, bundle.bundle_digest);
+    }
+
+    #[test]
+    fn unsigned_bundle_is_refused_when_trusted_keys_are_given() {
+        assert!(matches!(
+            verify_trusted(&sealed(), &trusting(&[&key(1)])),
+            Err(BundleError::SignatureRequired)
+        ));
+    }
+
+    #[test]
+    fn signed_bundle_authenticates_against_its_trusted_key() {
+        let signer = key(1);
+        let bundle = signed(&signer);
+        assert_eq!(bundle.format, SIGNED_BUNDLE_FORMAT);
+        let verified = verify_trusted(&bundle, &trusting(&[&key(2), &signer])).unwrap();
+        assert_eq!(
+            verified.authenticity,
+            Authenticity::Authenticated(signer.key_id())
+        );
+        assert!(verified.completeness.is_complete());
+        let back = bundle_from_json(&bundle_to_json(&bundle).unwrap()).unwrap();
+        assert_eq!(
+            verify_trusted(&back, &trusting(&[&signer])).unwrap(),
+            verified
+        );
+    }
+
+    #[test]
+    fn signed_bundle_without_trusted_keys_is_not_authenticated() {
+        let signer = key(1);
+        let verified = verify(&signed(&signer)).unwrap();
+        assert_eq!(
+            verified.authenticity,
+            Authenticity::SignatureUnchecked(signer.key_id())
+        );
+        assert!(verified
+            .authenticity
+            .to_string()
+            .starts_with("signature present, not checked"));
+    }
+
+    #[test]
+    fn signature_by_an_untrusted_key_is_refused() {
+        let signer = key(1);
+        assert!(matches!(
+            verify_trusted(&signed(&signer), &trusting(&[&key(2)])),
+            Err(BundleError::UntrustedKey(id)) if id == signer.key_id()
+        ));
+    }
+
+    #[test]
+    fn signature_relabelled_with_a_trusted_key_id_is_refused() {
+        let trusted = key(2);
+        let mut bundle = signed(&key(1));
+        bundle.signature.as_mut().unwrap().key_id = trusted.key_id().to_hex();
+        assert!(matches!(
+            verify_trusted(&bundle, &trusting(&[&trusted])),
+            Err(BundleError::BadSignature(_))
+        ));
+    }
+
+    #[test]
+    fn tampered_signature_is_refused() {
+        let signer = key(1);
+        let mut bundle = signed(&signer);
+        bundle.signature.as_mut().unwrap().value[0] ^= 1;
+        assert!(matches!(
+            verify_trusted(&bundle, &trusting(&[&signer])),
+            Err(BundleError::BadSignature(_))
+        ));
+    }
+
+    #[test]
+    fn resealed_content_breaks_the_signature() {
+        let signer = key(1);
+        let mut bundle = signed(&signer);
+        let signature = bundle.signature.clone();
+        bundle.manifests.push_str("title: edited\n");
+        seal_signed(&mut bundle, &key(2)).unwrap();
+        bundle.signature = signature;
+        assert!(matches!(
+            verify_trusted(&bundle, &trusting(&[&signer])),
+            Err(BundleError::BadSignature(_))
+        ));
+    }
+
+    #[test]
+    fn signature_under_the_unsigned_format_is_refused() {
+        let mut bundle = sealed();
+        bundle.signature = signed(&key(1)).signature;
+        assert!(matches!(
+            verify(&bundle),
+            Err(BundleError::SignatureNotAllowed)
+        ));
+    }
+
+    #[test]
+    fn signed_format_without_a_signature_is_refused() {
+        let mut bundle = signed(&key(1));
+        bundle.signature = None;
+        assert!(matches!(
+            verify(&bundle),
+            Err(BundleError::Missing("signature"))
+        ));
+    }
+
+    #[test]
+    fn stripping_a_signature_and_downgrading_does_not_authenticate() {
+        let signer = key(1);
+        let mut bundle = signed(&signer);
+        seal(&mut bundle).unwrap();
+        assert_eq!(
+            verify(&bundle).unwrap().authenticity,
+            Authenticity::Unsigned
+        );
+        assert!(matches!(
+            verify_trusted(&bundle, &trusting(&[&signer])),
+            Err(BundleError::SignatureRequired)
+        ));
+    }
+
+    #[test]
+    fn malformed_signatures_are_refused() {
+        let mut wrong_algorithm = signed(&key(1));
+        wrong_algorithm.signature.as_mut().unwrap().algorithm =
+            pb::bundle_signature::Algorithm::Unspecified as i32;
+        let mut short_value = signed(&key(1));
+        short_value.signature.as_mut().unwrap().value.pop();
+        let mut bad_key_id = signed(&key(1));
+        bad_key_id.signature.as_mut().unwrap().key_id = "ABC".into();
+        for bundle in [wrong_algorithm, short_value, bad_key_id] {
+            assert!(matches!(
+                verify(&bundle),
+                Err(BundleError::MalformedSignature(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn signed_incomplete_bundle_stays_incomplete() {
+        let signer = key(1);
+        let mut bundle = sealed();
+        bundle.completeness = Some(incomplete(&[IncompleteReason::SnapshotTruncated]));
+        seal_signed(&mut bundle, &signer).unwrap();
+        let verified = verify_trusted(&bundle, &trusting(&[&signer])).unwrap();
+        assert_eq!(
+            verified.completeness,
+            Completeness::Incomplete(vec![IncompleteReason::SnapshotTruncated])
+        );
+        assert_eq!(
+            verified.authenticity,
+            Authenticity::Authenticated(signer.key_id())
+        );
+
+        let mut relabelled = bundle.clone();
+        relabelled.completeness = Some(Completeness::Complete.to_proto());
+        assert!(matches!(
+            verify_trusted(&relabelled, &trusting(&[&signer])),
+            Err(BundleError::DigestMismatch { .. })
+        ));
+        let signature = relabelled.signature.clone();
+        seal_signed(&mut relabelled, &key(2)).unwrap();
+        relabelled.signature = signature;
+        assert!(matches!(
+            verify_trusted(&relabelled, &trusting(&[&signer])),
+            Err(BundleError::BadSignature(_))
+        ));
+    }
+
+    #[test]
+    fn trusted_key_reads_the_public_pem_with_the_signers_key_id() {
+        use ed25519_dalek::pkcs8::{spki::der::pem::LineEnding, EncodePublicKey};
+        let pem = ed25519_dalek::SigningKey::from_bytes(&[1; 32])
+            .verifying_key()
+            .to_public_key_pem(LineEnding::LF)
+            .unwrap();
+        let trusted = crate::attested_signing::TrustedKey::from_public_key_pem(&pem).unwrap();
+        assert_eq!(trusted.key_id(), key(1).key_id());
+        assert!(crate::attested_signing::TrustedKey::from_public_key_pem("nope").is_err());
+        assert!(SigningKey::from_pkcs8_pem(&pem).is_err());
+        assert!(TrustedKeys::new([]).is_err());
     }
 
     #[test]

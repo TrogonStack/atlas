@@ -2970,8 +2970,9 @@ impl SourceCancellationDisposition {
 // changed while the export ran, is listed in `unresolved` and marks the
 // bundle incomplete instead of being read from a second state.
 //
-// `bundle_digest` proves the bundle was not changed after the server
-// produced it. It does not prove who produced it. See
+// `bundle_digest` proves the bundle was not changed after it was sealed.
+// It does not prove who sealed it. Under the signed format, `signature`
+// adds that proof for a verifier who trusts the signing key. See
 // docs/explanation/attested-export.md and
 // docs/reference/attested-bundle-format.md.
 
@@ -2979,6 +2980,8 @@ impl SourceCancellationDisposition {
 pub struct AttestedModelBundle {
     /// Format identifier. A verifier refuses any value it does not know,
     /// since the digest rules belong to the format.
+    /// `trogonatlas.attested-model.v1` carries no signature;
+    /// `trogonatlas.attested-model.v2` carries exactly one.
     #[prost(string, tag="1")]
     pub format: ::prost::alloc::string::String,
     #[prost(message, optional, tag="2")]
@@ -3003,8 +3006,9 @@ pub struct AttestedModelBundle {
     pub validation: ::core::option::Option<AttestedValidation>,
     #[prost(message, optional, tag="9")]
     pub completeness: ::core::option::Option<AttestedCompleteness>,
-    /// Lowercase hex SHA-256 over the domain tag and the canonical JSON of
-    /// this message with `bundle_digest` cleared. Covers every other field.
+    /// Lowercase hex SHA-256 over the format's domain tag and the canonical
+    /// JSON of this message with `bundle_digest` and `signature` cleared.
+    /// Covers every other field.
     #[prost(string, tag="10")]
     pub bundle_digest: ::prost::alloc::string::String,
     /// Entities the bundle needed but could not attest from its snapshot,
@@ -3012,6 +3016,54 @@ pub struct AttestedModelBundle {
     /// carries `REASON_UNRESOLVED_ENTITIES`.
     #[prost(message, repeated, tag="11")]
     pub unresolved: ::prost::alloc::vec::Vec<AttestedUnresolved>,
+    /// Detached signature over `bundle_digest`. Required by the signed
+    /// format and refused by the unsigned one.
+    #[prost(message, optional, tag="12")]
+    pub signature: ::core::option::Option<BundleSignature>,
+}
+/// Who sealed a bundle, checkable by a verifier that trusts the key.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BundleSignature {
+    #[prost(enumeration="bundle_signature::Algorithm", tag="1")]
+    pub algorithm: i32,
+    /// Lowercase hex SHA-256 of the raw 32-byte public key, so a verifier
+    /// can pick the trusted key without trying each one.
+    #[prost(string, tag="2")]
+    pub key_id: ::prost::alloc::string::String,
+    /// The 64-byte signature.
+    #[prost(bytes="vec", tag="3")]
+    pub value: ::prost::alloc::vec::Vec<u8>,
+}
+/// Nested message and enum types in `BundleSignature`.
+pub mod bundle_signature {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Algorithm {
+        Unspecified = 0,
+        /// Ed25519 over the signature domain tag followed by the 32 raw bytes
+        /// of `bundle_digest`.
+        Ed25519 = 1,
+    }
+    impl Algorithm {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "ALGORITHM_UNSPECIFIED",
+                Self::Ed25519 => "ALGORITHM_ED25519",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "ALGORITHM_UNSPECIFIED" => Some(Self::Unspecified),
+                "ALGORITHM_ED25519" => Some(Self::Ed25519),
+                _ => None,
+            }
+        }
+    }
 }
 /// One entity the snapshot could not vouch for.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
