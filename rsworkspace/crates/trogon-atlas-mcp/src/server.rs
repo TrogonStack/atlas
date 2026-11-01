@@ -406,6 +406,11 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         min_role: ToolRole::Reader,
     },
     ToolPolicy {
+        tool: "inspect_human_interaction",
+        rpcs: &["InspectHumanInteraction"],
+        min_role: ToolRole::Reader,
+    },
+    ToolPolicy {
         tool: "list_channel_messages",
         rpcs: &["ListChannelMessages"],
         min_role: ToolRole::Reader,
@@ -2925,6 +2930,45 @@ impl McpServer {
         )
         .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
         let result = trogon_atlas_client::decision_document::list_incoming_document_declarations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "InspectHumanInteraction: check one exact hosting occurrence and a complete authored human issuance or display tuple. Return unchanged selectors, endpoint receipts, checked scope and per-owner read-set consistency. Owners may be read at different instants; refresh stale receipts. Unavailable selections do not prove absence or runtime permission.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn inspect_human_interaction(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::human_interaction::parse_request(
+            "InspectHumanInteractionRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::human_interaction::inspect_human_interaction(
             &mut self.client(),
             request,
         )
