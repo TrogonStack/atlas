@@ -20,6 +20,8 @@ mod data_product_inspection;
 mod decision_document_queries;
 #[path = "design_topology_queries.rs"]
 mod design_topology_queries;
+#[path = "human_interaction_queries.rs"]
+mod human_interaction_queries;
 #[path = "responsibility_queries.rs"]
 mod responsibility_queries;
 #[cfg(test)]
@@ -3444,6 +3446,24 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             return Err(Status::not_found("branch not found"));
         }
         self.incoming_decisions(req.into_inner(), branch.as_deref(), &vis)
+            .await
+            .map(Response::new)
+    }
+
+    async fn inspect_human_interaction(
+        &self,
+        req: Request<pb::InspectHumanInteractionRequest>,
+    ) -> Result<Response<pb::InspectHumanInteractionResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.human_interaction(req.into_inner(), branch.as_deref(), &vis)
             .await
             .map(Response::new)
     }
