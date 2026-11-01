@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use serde_json::{json, Value};
-use trogon_atlas_client::client::Client;
+use trogon_atlas_client::{client::Client, human_interaction};
 use trogon_atlas_core::{connections::connection_occurrences, transcode::TranscodePool};
 use trogon_atlas_proto as pb;
 
@@ -185,4 +185,62 @@ pub fn assert_checked(response: &Value, request: &Value) {
         assert_ne!(edge["field"].as_str().unwrap(), "");
     }
     assert_eq!(scope["visited"].as_array().unwrap().len(), 5);
+}
+
+async fn stored_identity(client: &mut Client, owner: &Value) -> (String, String) {
+    let version = owner["id"]["version"].as_str().unwrap();
+    assert_eq!(version, VERSION.to_string());
+    assert_eq!(version.parse::<u64>().unwrap(), VERSION);
+    let kind = pb::EntityKind::from_str_name(owner["kind"].as_str().unwrap()).unwrap();
+    let stored = get(
+        client,
+        owner["id"]["namespace"].as_str().unwrap(),
+        kind,
+        owner["id"]["slug"].as_str().unwrap(),
+    )
+    .await;
+    assert_ne!(stored.etag, "");
+    (stored.entity.unwrap().system.unwrap().uid, stored.etag)
+}
+
+/// `client` must carry the same credentials and branch as the surface under
+/// test, because the receipt revision is scoped to the calling principal.
+///
+/// Proves a connected surface returned the server's own receipt, not a lossy
+/// copy: the surface response must equal a direct `InspectHumanInteraction`
+/// call, and every checked uid and etag must equal the stored entity's current
+/// identity at the exact uint64 version above 2^53.
+pub async fn assert_checked_identity(client: &mut Client, response: &Value, request: &Value) {
+    let parsed =
+        human_interaction::parse_request("InspectHumanInteractionRequest", request).unwrap();
+    let server = human_interaction::inspect_human_interaction(client, parsed)
+        .await
+        .unwrap();
+    assert_eq!(response, &server);
+    let visited = response["scope"]["visited"].as_array().unwrap();
+    let mut owners = std::collections::HashSet::new();
+    for row in visited {
+        let (uid, etag) = stored_identity(client, &row["owner"]).await;
+        assert_eq!(row["uid"], uid);
+        assert_eq!(row["etag"], etag);
+        owners.insert(row["owner"].to_string());
+    }
+    for edge in response["edges"].as_array().unwrap() {
+        let checked = &edge["checkedTarget"];
+        let (uid, etag) = stored_identity(client, &checked["owner"]).await;
+        assert_eq!(checked["uid"], uid);
+        assert_eq!(checked["etag"], etag);
+        assert_eq!(checked["owner"], edge["target"]);
+        assert!(visited.contains(checked), "{checked} missing from visited");
+        let selected = &edge["selection"];
+        let (owner_uid, owner_etag) = stored_identity(client, &selected["owner"]).await;
+        assert_eq!(selected["ownerUid"], owner_uid);
+        let row = visited
+            .iter()
+            .find(|row| row["owner"] == selected["owner"])
+            .unwrap();
+        assert_eq!(row["uid"], owner_uid);
+        assert_eq!(row["etag"], owner_etag);
+    }
+    assert_eq!(owners.len(), 5, "{owners:?}");
 }
