@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
+import "trogonatlas/eventmodel/v1alpha1/decision_document.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
+import "trogonatlas/eventmodel/v1alpha1/design_topology.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
+
+message TopologyTargetState {
+  trogonatlas.eventmodel.v1alpha1.LocalValueId step_id = 1;
+  string field = 2;
+  CatalogResolutionState state = 3;
+  trogonatlas.eventmodel.v1alpha1.TopologyStepTarget target = 4;
+  CatalogCheckedOwner owner = 5;
+}
+message GetDesignGraphDetailRequest {
+  trogonatlas.eventmodel.v1alpha1.DesignGraphRef graph = 1;
+}
+message GetDesignGraphDetailResponse {
+  trogonatlas.eventmodel.v1alpha1.Entity entity = 1;
+  string etag = 2;
+  repeated TopologyTargetState targets = 3;
+  repeated CatalogDeclaration declarations = 4;
+  CatalogResolutionState layout_state = 5;
+  CatalogCheckedScope scope = 6;
+  bool incomplete = 7;
+  repeated CatalogQueryFailure failures = 8;
+}
+message ListSubjectDesignGraphsRequest {
+  trogonatlas.eventmodel.v1alpha1.CatalogSubject subject = 1;
+}
+message ListSubjectDesignGraphsResponse {
+  repeated CatalogDeclaration declarations = 1;
+  CatalogCheckedScope scope = 2;
+  bool incomplete = 3;
+  repeated CatalogQueryFailure failures = 4;
+  CatalogResolutionState subject_state = 5;
+}
+enum TopologySubflowState {
+  TOPOLOGY_SUBFLOW_STATE_UNSPECIFIED = 0;
+  TOPOLOGY_SUBFLOW_STATE_EXPANDED = 1;
+  TOPOLOGY_SUBFLOW_STATE_UNFOLLOWED = 2;
+  TOPOLOGY_SUBFLOW_STATE_DEPTH_LIMIT = 3;
+  TOPOLOGY_SUBFLOW_STATE_CYCLE = 4;
+  TOPOLOGY_SUBFLOW_STATE_UNAVAILABLE = 5;
+}
+message TraverseDesignGraphTopologyRequest {
+  trogonatlas.eventmodel.v1alpha1.DesignGraphRef root = 1;
+  bool follow_subflows = 2;
+  uint32 max_depth = 3;
+}
+message TopologyTraversalNode {
+  CatalogCheckedOwner graph = 1;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId step_id = 2;
+  uint32 depth = 3;
+  trogonatlas.eventmodel.v1alpha1.CatalogTitle title = 4;
+  trogonatlas.eventmodel.v1alpha1.CatalogText summary = 5;
+  trogonatlas.eventmodel.v1alpha1.TopologyStepTarget target = 6;
+  CatalogResolutionState target_state = 7;
+  bool authored_entry = 8;
+}
+message TopologyTraversalEdge {
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    KIND_TRANSITION = 1;
+    KIND_SUBFLOW = 2;
+  }
+  Kind kind = 1;
+  CatalogCheckedOwner graph = 2;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId from_step_id = 3;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 4;
+  trogonatlas.eventmodel.v1alpha1.CatalogTitle label = 5;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId to_step_id = 6;
+  trogonatlas.eventmodel.v1alpha1.DesignGraphRef to_graph = 7;
+}
+message TopologySubflowMarker {
+  CatalogCheckedOwner graph = 1;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId step_id = 2;
+  trogonatlas.eventmodel.v1alpha1.DesignGraphRef subflow = 3;
+  TopologySubflowState state = 4;
+  uint32 depth = 5;
+}
+message TopologyCycle {
+  enum Scope {
+    SCOPE_UNSPECIFIED = 0;
+    SCOPE_TRANSITION = 1;
+    SCOPE_SUBFLOW = 2;
+  }
+  Scope scope = 1;
+  CatalogCheckedOwner graph = 2;
+  repeated trogonatlas.eventmodel.v1alpha1.LocalValueId step_path = 3;
+  repeated trogonatlas.eventmodel.v1alpha1.DesignGraphRef graph_path = 4;
+  trogonatlas.type.v1alpha1.ConnectionId closing_connection_id = 5;
+}
+message TraverseDesignGraphTopologyResponse {
+  repeated TopologyTraversalNode nodes = 1;
+  repeated TopologyTraversalEdge edges = 2;
+  repeated TopologySubflowMarker subflows = 3;
+  repeated TopologyCycle cycles = 4;
+  CatalogCheckedScope scope = 5;
+  bool incomplete = 6;
+  repeated CatalogQueryFailure failures = 7;
+  uint32 applied_max_depth = 8;
+  bool follow_subflows = 9;
+}
+message DesignGraphSubflowReference {
+  CatalogCheckedOwner owner = 1;
+  string field = 2;
+  CatalogResolutionState state = 3;
+  trogonatlas.eventmodel.v1alpha1.LocalValueId step_id = 4;
+  trogonatlas.eventmodel.v1alpha1.DesignGraphRef subflow = 5;
+  repeated TopologyTraversalEdge transitions = 6;
+}
+message ListIncomingDesignGraphSubflowsRequest {
+  trogonatlas.eventmodel.v1alpha1.DesignGraphRef graph = 1;
+}
+message ListIncomingDesignGraphSubflowsResponse {
+  repeated DesignGraphSubflowReference references = 1;
+  CatalogCheckedScope scope = 2;
+  bool incomplete = 3;
+  repeated CatalogQueryFailure failures = 4;
+  CatalogResolutionState graph_state = 5;
+}

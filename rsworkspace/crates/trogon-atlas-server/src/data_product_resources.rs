@@ -6,6 +6,14 @@ pub(crate) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
 ) -> Vec<pb::ValidationIssue> {
+    validate_in_context_with_previous(entity, context, None)
+}
+
+pub(crate) fn validate_in_context_with_previous(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+    previous: Option<&pb::Entity>,
+) -> Vec<pb::ValidationIssue> {
     let Some(pb::entity::Kind::DataProduct(product)) = &entity.kind else {
         return Vec::new();
     };
@@ -29,11 +37,46 @@ pub(crate) fn validate_in_context(
             issue("DATA_PRODUCT_VALUE_INVALID", "supersedes");
         }
     }
-    for reference in trogon_atlas_core::refs::outbound_refs(entity) {
+    let references = trogon_atlas_core::refs::try_outbound_refs(entity).unwrap_or_else(|_| {
+        issue("DATA_PRODUCT_VALUE_INVALID", "metadata");
+        Vec::new()
+    });
+    for reference in references {
         if !reference.to_kind.is_some_and(|kind| {
             reference.to_id.version > 0 && context.find(kind, &reference.to_id).is_some()
-        }) {
+        }) && !stable_occurrence(previous, entity, &reference.from_field)
+        {
             issue("DATA_PRODUCT_REFERENCE_UNRESOLVED", &reference.from_field);
+        }
+    }
+    for (index, association) in product.resource_associations.iter().enumerate() {
+        if let Some(contract) = &association.contract {
+            if !resource_contract_resolves(contract, context)
+                && !stable_occurrence(previous, entity, &format!("resource_associations[{index}]"))
+            {
+                issue(
+                    "DATA_PRODUCT_REFERENCE_UNRESOLVED",
+                    &format!("resource_associations[{index}].contract"),
+                );
+            }
+        }
+        if let Some(pb::product_resource_association::Target::Message(message)) =
+            &association.target
+        {
+            let field = format!("resource_associations[{index}].message");
+            if !message_member_resolves(message, context)
+                && !stable_occurrence(previous, entity, &field)
+            {
+                issue("DATA_PRODUCT_REFERENCE_UNRESOLVED", &field);
+            }
+        }
+    }
+    for (index, claim) in product.storage_claims.iter().enumerate() {
+        if !storage_claim_attachment_resolves(claim, context) {
+            issue(
+                "DATA_PRODUCT_REFERENCE_UNRESOLVED",
+                &format!("storage_claims[{index}].attachment"),
+            );
         }
     }
     for (index, output) in product.outputs.iter().enumerate() {
@@ -99,6 +142,26 @@ fn connection_owner<'a>(
     let entity = context.find(kind, owner.id.as_ref()?)?;
     trogon_atlas_core::connections::resolve_connection(entity, reference).ok()?;
     Some(entity)
+}
+
+pub(crate) fn storage_claim_attachment_resolves(
+    claim: &pb::StorageAccessClaim,
+    context: &ArchitectureContext<'_>,
+) -> bool {
+    let Some(reference) = &claim.attachment else {
+        return true;
+    };
+    let Some(owner) = connection_owner(reference, context) else {
+        return false;
+    };
+    let Some(pb::entity::Kind::DataStore(store)) = &owner.kind else {
+        return false;
+    };
+    claim.store.as_ref().and_then(|r| r.id.as_ref()) == store.id.as_ref()
+        && store
+            .attachments
+            .iter()
+            .any(|edge| edge.connection_id == reference.id)
 }
 
 pub(crate) fn access_resolves(
@@ -233,15 +296,114 @@ fn provider_exists(
     }
 }
 
+fn stable_occurrence(previous: Option<&pb::Entity>, current: &pb::Entity, field: &str) -> bool {
+    let Some(previous) = previous else {
+        return false;
+    };
+    if let Some(rest) = field.strip_prefix("storage_claims[") {
+        let Some(index) = rest
+            .split(']')
+            .next()
+            .and_then(|index| index.parse::<usize>().ok())
+        else {
+            return false;
+        };
+        let (Some(pb::entity::Kind::DataProduct(before)), Some(pb::entity::Kind::DataProduct(now))) =
+            (&previous.kind, &current.kind)
+        else {
+            return false;
+        };
+        return now.storage_claims.get(index).is_some_and(|claim| {
+            claim.connection_id.is_some() && before.storage_claims.iter().any(|old| old == claim)
+        });
+    }
+    let Ok(prior) = trogon_atlas_core::connections::connection_occurrences(previous) else {
+        return false;
+    };
+    let Ok(now) = trogon_atlas_core::connections::connection_occurrences(current) else {
+        return false;
+    };
+    now.iter().any(|occurrence| {
+        let path = body_path(&occurrence.path);
+        (field == path || field.starts_with(&format!("{path}.")))
+            && prior.iter().any(|old| old == occurrence)
+    })
+}
+
+/// Occurrence paths are entity-rooted. Outbound fields are body-relative.
+fn body_path(occurrence_path: &str) -> &str {
+    occurrence_path
+        .split_once('.')
+        .map_or(occurrence_path, |(_, rest)| rest)
+}
+
+fn message_member_resolves(
+    message: &pb::ContractMemberRef,
+    context: &ArchitectureContext<'_>,
+) -> bool {
+    message
+        .specification
+        .as_ref()
+        .and_then(|specification| specification.id.as_ref())
+        .and_then(|id| context.find(pb::EntityKind::Specification, id))
+        .is_some_and(|owner| {
+            matches!(
+                trogon_atlas_core::specification::resolve_member(owner, message),
+                Ok(trogon_atlas_core::specification::ContractMember::Message(_))
+            )
+        })
+}
+
+fn resource_contract_resolves(
+    contract: &pb::ProductResourceContract,
+    context: &ArchitectureContext<'_>,
+) -> bool {
+    match contract.r#type.as_ref() {
+        Some(pb::product_resource_contract::Type::Schema(reference)) => reference
+            .id
+            .as_ref()
+            .is_some_and(|id| context.find(pb::EntityKind::Schema, id).is_some()),
+        Some(pb::product_resource_contract::Type::LibraryType(reference)) => reference
+            .library
+            .as_ref()
+            .and_then(|r| r.id.as_ref())
+            .is_some_and(|id| context.find(pb::EntityKind::TypeLibrary, id).is_some()),
+        Some(pb::product_resource_contract::Type::ContractType(reference)) => reference
+            .schema
+            .as_ref()
+            .and_then(|r| r.specification.as_ref())
+            .and_then(|r| r.id.as_ref())
+            .and_then(|id| context.find(pb::EntityKind::Specification, id))
+            .is_some_and(|owner| {
+                trogon_atlas_core::specification::resolve_type(owner, reference).is_ok()
+            }),
+        None => false,
+    }
+}
+
 pub(crate) fn library_types(
     product: &pb::DataProduct,
 ) -> impl Iterator<Item = &pb::TypeLibraryTypeRef> {
-    product.outputs.iter().filter_map(|output| {
+    let outputs = product.outputs.iter().filter_map(|output| {
         match output.contract.as_ref().and_then(|c| c.r#type.as_ref()) {
             Some(pb::output_contract::Type::LibraryType(value)) => Some(value),
             _ => None,
         }
-    })
+    });
+    let associations = product
+        .resource_associations
+        .iter()
+        .filter_map(|association| {
+            match association
+                .contract
+                .as_ref()
+                .and_then(|contract| contract.r#type.as_ref())
+            {
+                Some(pb::product_resource_contract::Type::LibraryType(value)) => Some(value),
+                _ => None,
+            }
+        });
+    outputs.chain(associations)
 }
 
 pub(crate) fn selected_endpoints(

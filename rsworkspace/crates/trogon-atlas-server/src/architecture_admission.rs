@@ -13,37 +13,263 @@ pub(super) struct ArchitectureProposal<'a> {
     pub(super) landing: Option<&'a [BranchLandOp]>,
 }
 
+struct CatalogGraphTraversal<'a> {
+    loaded: &'a mut HashSet<pb::EntityKey>,
+    world: &'a mut HashMap<pb::EntityKey, StoredEntity>,
+    budget: &'a mut crate::decision_document_resources::CatalogBudget,
+}
+
 #[derive(Clone, Copy)]
 enum ArchitectureTargetAccess<'a> {
     Required(&'a Visibility),
+    Curation(&'a Visibility),
     Diagnostic(&'a Lens),
     ExactRequired(&'a Visibility),
     ExactDiagnostic(&'a Lens),
 }
 
-fn admission_references(entity: &pb::Entity) -> Vec<trogon_atlas_core::refs::OutboundRef> {
+#[derive(Default)]
+struct ResponsibilityEndpoints {
+    required: Vec<(pb::EntityKind, pb::Id)>,
+    claims: Vec<(pb::EntityKind, pb::Id)>,
+}
+
+fn admission_references(
+    entity: &pb::Entity,
+) -> Result<Vec<trogon_atlas_core::refs::OutboundRef>, Status> {
     let architectural = matches!(
         entity.kind,
         Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
     );
-    trogon_atlas_core::refs::outbound_refs(entity)
+    Ok(crate::graph::checked_refs(entity)?
         .into_iter()
         .filter(|reference| {
-            !architectural
-                || reference.from_field.starts_with("relationships[")
-                || reference.from_field.starts_with("communications[")
+            if matches!(entity.kind, Some(pb::entity::Kind::Domain(_))) {
+                return reference.from_field.starts_with("members[");
+            }
+            if matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
+                return reference.from_field == "owning_domain";
+            }
+            !reference.from_field.starts_with("message_claims.")
+                && (!architectural
+                    || reference.from_field.starts_with("relationships[")
+                    || reference.from_field.starts_with("communications[")
+                    || reference.from_field.starts_with("storage_claims["))
+        })
+        .collect())
+}
+
+fn catalog_reference_targets(
+    resources: &[&pb::Entity],
+) -> Result<Vec<(pb::EntityKind, pb::Id)>, Status> {
+    let mut targets = Vec::new();
+    for entity in resources.iter().filter(|entity| is_catalog(entity)) {
+        targets.extend(
+            crate::graph::checked_refs(entity)?
+                .into_iter()
+                .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+        );
+    }
+    Ok(targets)
+}
+
+fn overlay_of(metas: &[OpMetaLike]) -> HashMap<pb::EntityKey, Option<&pb::Entity>> {
+    metas
+        .iter()
+        .map(|meta| {
+            (
+                pb::EntityKey::new(meta.kind, &meta.id),
+                meta.entity.as_ref().filter(|_| meta.is_put),
+            )
         })
         .collect()
+}
+
+fn claim_access_error(status: Status) -> Status {
+    if matches!(status.code(), Code::PermissionDenied | Code::NotFound) {
+        crate::message_claims_resources::unavailable()
+    } else {
+        status
+    }
+}
+fn charge_claim_selections(
+    owner: &pb::Entity,
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+    budget: &mut crate::decision_document_resources::CatalogBudget,
+) -> Result<(), Status> {
+    let Some(v) = trogon_atlas_core::message_claims::declarations(owner) else {
+        return Ok(());
+    };
+    for m in v
+        .claims
+        .iter()
+        .filter_map(|v| v.message.as_ref())
+        .chain(v.triggers.iter().filter_map(|v| v.message.as_ref()))
+    {
+        if let Some(spec) = m
+            .specification
+            .as_ref()
+            .and_then(|s| s.id.as_ref())
+            .and_then(|id| world.get(&pb::EntityKey::new(pb::EntityKind::Specification, id)))
+        {
+            budget.selection(
+                &pb::CatalogSubject {
+                    selection: Some(pb::catalog_subject::Selection::Member(m.clone())),
+                },
+                &spec.entity,
+            )?;
+        }
+    }
+    for s in &v.field_selections {
+        if let Some(b) = &s.binding {
+            if let Some(spec) =
+                b.owner.as_ref().and_then(|o| o.id.as_ref()).and_then(|id| {
+                    world.get(&pb::EntityKey::new(pb::EntityKind::Specification, id))
+                })
+            {
+                budget.selection(
+                    &pb::CatalogSubject {
+                        selection: Some(pb::catalog_subject::Selection::Connection(b.clone())),
+                    },
+                    &spec.entity,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(PartialEq)]
+enum Occurrence {
+    Link(pb::ChannelLink),
+    Claim(pb::StorageAccessClaim),
+}
+
+fn occurrences(entity: &pb::Entity) -> Vec<(String, Option<String>, Occurrence)> {
+    let id =
+        |id: Option<&pb::ConnectionId>| id.map(|id| id.value.clone()).filter(|id| !id.is_empty());
+    let claims = |claims: &[pb::StorageAccessClaim]| {
+        claims
+            .iter()
+            .enumerate()
+            .map(|(index, claim)| {
+                (
+                    format!("storage_claims[{index}]"),
+                    id(claim.connection_id.as_ref()),
+                    Occurrence::Claim(claim.clone()),
+                )
+            })
+            .collect()
+    };
+    match entity.kind.as_ref() {
+        Some(pb::entity::Kind::Channel(value)) => value
+            .links
+            .iter()
+            .enumerate()
+            .map(|(index, link)| {
+                (
+                    format!("links[{index}]"),
+                    id(link.connection_id.as_ref()),
+                    Occurrence::Link(link.clone()),
+                )
+            })
+            .collect(),
+        Some(pb::entity::Kind::Component(value)) => claims(&value.storage_claims),
+        Some(pb::entity::Kind::ExternalSystem(value)) => claims(&value.storage_claims),
+        Some(pb::entity::Kind::DataProduct(value)) => claims(&value.storage_claims),
+        _ => Vec::new(),
+    }
+}
+
+fn unchanged_occurrences(entity: &pb::Entity, baselines: &[&pb::Entity]) -> Vec<String> {
+    let before: Vec<_> = baselines
+        .iter()
+        .flat_map(|baseline| occurrences(baseline))
+        .filter_map(|(_, id, value)| id.map(|id| (id, value)))
+        .collect();
+    occurrences(entity)
+        .into_iter()
+        .filter(|(_, id, value)| {
+            id.as_ref()
+                .is_some_and(|id| before.iter().any(|(b, v)| b == id && v == value))
+        })
+        .map(|(path, _, _)| path)
+        .collect()
+}
+
+fn is_unchanged_field(unchanged: &[String], field: &str) -> bool {
+    unchanged.iter().any(|path| {
+        field
+            .strip_prefix(path.as_str())
+            .is_some_and(|rest| rest.starts_with('.'))
+    })
 }
 
 fn is_catalog(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
-        Some(pb::entity::Kind::Decision(_) | pb::entity::Kind::Document(_))
+        Some(
+            pb::entity::Kind::Decision(_)
+                | pb::entity::Kind::Document(_)
+                | pb::entity::Kind::DesignGraph(_)
+        )
     )
 }
 
 impl EventModelServiceImpl {
+    pub(super) async fn validate_claim_resolution(
+        &self,
+        branch: &str,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        take_theirs: bool,
+        vis: &Visibility,
+    ) -> Result<(), Status> {
+        if !matches!(
+            kind,
+            pb::EntityKind::Component | pb::EntityKind::ExternalSystem | pb::EntityKind::Domain
+        ) {
+            return Ok(());
+        }
+        let delta = self
+            .store
+            .list_branch_deltas(branch)
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .find(|d| d.kind == kind && &d.id == id)
+            .ok_or_else(|| Status::not_found("branch entry not found"))?;
+        let baseline = match self.store.get(kind, id, None).await {
+            Ok(row) => Some(row.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(error) => return Err(store_err(error)),
+        };
+        let (selected, discarded) = if take_theirs {
+            (baseline.as_ref(), delta.ours.as_ref())
+        } else {
+            (delta.ours.as_ref(), baseline.as_ref())
+        };
+        let Some(selected) = selected else {
+            return Ok(());
+        };
+        if trogon_atlas_core::message_claims::declarations(selected).is_none() {
+            return Ok(());
+        }
+        let restored = trogon_atlas_core::connection_persistence::prepare_resolution(
+            delta.base.as_ref(),
+            discarded,
+            selected,
+        )
+        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        self.validate_architecture_selection(
+            &restored,
+            delta.ours.as_ref().unwrap_or(selected),
+            branch,
+            vis,
+        )
+        .await
+    }
+
     pub(super) async fn validate_architecture_selection(
         &self,
         entity: &pb::Entity,
@@ -93,6 +319,58 @@ impl EventModelServiceImpl {
             .await
     }
 
+    async fn validate_native_group_targets(
+        &self,
+        metas: &[OpMetaLike],
+        branch: Option<&str>,
+        vis: &Visibility,
+        landing: Option<&[BranchLandOp]>,
+    ) -> Result<(), Status> {
+        let mut targets = Vec::new();
+        for entity in metas
+            .iter()
+            .filter(|meta| meta.is_put)
+            .filter_map(|meta| meta.entity.as_ref())
+        {
+            let refs = trogon_atlas_core::agent_metadata::group_refs(entity)
+                .map_err(|_| Status::invalid_argument("native metadata is invalid"))?;
+            targets.extend(
+                refs.into_iter()
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
+        if targets.is_empty() {
+            return Ok(());
+        }
+        for (_, id) in &targets {
+            self.require_visible(vis, &id.namespace).await?;
+        }
+        let proposal = ArchitectureProposal {
+            overlay: overlay_of(metas),
+            landing,
+        };
+        let mut loaded = HashSet::new();
+        let mut world = HashMap::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            targets.clone(),
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        if targets
+            .iter()
+            .any(|(kind, id)| !world.contains_key(&pb::EntityKey::new(*kind, id)))
+        {
+            return Err(Status::invalid_argument(
+                "resource group target is absent or unavailable",
+            ));
+        }
+        Ok(())
+    }
+
     async fn validate_architecture_proposal(
         &self,
         metas: &[OpMetaLike],
@@ -100,6 +378,8 @@ impl EventModelServiceImpl {
         vis: &Visibility,
         landing: Option<&[BranchLandOp]>,
     ) -> Result<(), Status> {
+        self.validate_native_group_targets(metas, branch, vis, landing)
+            .await?;
         let resources: Vec<_> = metas
             .iter()
             .filter(|meta| meta.is_put && is_architecture_kind(meta.kind))
@@ -109,34 +389,85 @@ impl EventModelServiceImpl {
             return Ok(());
         }
         let mut catalog_budget = crate::decision_document_resources::CatalogBudget::default();
-        if resources.iter().any(|entity| is_catalog(entity)) {
+        if resources.iter().any(|entity| {
+            is_catalog(entity) || trogon_atlas_core::message_claims::has_content(entity)
+        }) {
             for entity in &resources {
                 catalog_budget.owner(entity)?;
             }
         }
-        let overlay: HashMap<_, _> = metas
-            .iter()
-            .map(|meta| {
-                (
-                    pb::EntityKey::new(meta.kind, &meta.id),
-                    meta.entity.as_ref().filter(|_| meta.is_put),
-                )
-            })
-            .collect();
-        let proposal = ArchitectureProposal { overlay, landing };
+        let proposal = ArchitectureProposal {
+            overlay: overlay_of(metas),
+            landing,
+        };
         let mut world = HashMap::new();
         let mut required = Vec::new();
+        let mut anchors = Vec::new();
+        let mut curation = Vec::new();
         for entity in &resources {
-            if is_catalog(entity) {
+            if is_catalog(entity) || matches!(entity.kind, Some(pb::entity::Kind::Term(_))) {
                 continue;
             }
-            required.extend(
-                admission_references(entity)
-                    .into_iter()
-                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
-            );
+            let unchanged = self
+                .unchanged_occurrences_of(&proposal, branch, entity)
+                .await?;
+            for reference in admission_references(entity)?
+                .into_iter()
+                .filter(|reference| !is_unchanged_field(&unchanged, &reference.from_field))
+            {
+                let Some(kind) = reference.to_kind else {
+                    continue;
+                };
+                let is_anchor = match entity.kind.as_ref() {
+                    Some(pb::entity::Kind::Channel(_)) => {
+                        reference.from_field.starts_with("bindings[")
+                    }
+                    Some(pb::entity::Kind::DataStore(_)) => {
+                        reference.from_field.starts_with("attachments[")
+                    }
+                    Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_)) => {
+                        reference.from_field.starts_with("relationships[")
+                            || reference.from_field.starts_with("communications[")
+                    }
+                    _ => false,
+                };
+                if matches!(entity.kind, Some(pb::entity::Kind::Specification(_))) {
+                    self.require_visible(vis, &reference.to_id.namespace)
+                        .await?;
+                }
+                let target = (kind, reference.to_id);
+                if is_anchor {
+                    anchors.push(target.clone());
+                }
+                if matches!(
+                    entity.kind,
+                    Some(pb::entity::Kind::SystemGroup(_) | pb::entity::Kind::Domain(_))
+                ) {
+                    curation.push(target);
+                } else {
+                    required.push(target);
+                }
+            }
         }
         let mut loaded = HashSet::new();
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::Curation(vis),
+            curation,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            anchors,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -146,12 +477,28 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let catalog_targets = resources
+        let mut term_targets = Vec::new();
+        for entity in resources
             .iter()
-            .filter(|entity| is_catalog(entity))
-            .flat_map(|entity| trogon_atlas_core::refs::outbound_refs(entity))
-            .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
-            .collect();
+            .filter(|entity| matches!(entity.kind, Some(pb::entity::Kind::Term(_))))
+        {
+            term_targets.extend(
+                admission_references(entity)?
+                    .into_iter()
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
+        let term_lens = self.lens(vis).await?;
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactDiagnostic(&term_lens),
+            term_targets,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let catalog_targets = catalog_reference_targets(&resources)?;
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -161,11 +508,28 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let mut endpoints = observation_endpoints(&resources, &world);
-        endpoints.extend(crate::data_product_resources::selected_endpoints(
-            &resources, &world,
-        ));
-        endpoints.extend(responsibility_endpoints(&resources, &world));
+        let observations = observation_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            observations,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        let mut endpoints = crate::data_product_resources::selected_endpoints(&resources, &world);
+        let responsibility = responsibility_endpoints(&resources, &world);
+        self.load_architecture_targets(
+            &proposal,
+            branch,
+            ArchitectureTargetAccess::ExactRequired(vis),
+            responsibility.required,
+            &mut loaded,
+            &mut world,
+        )
+        .await?;
+        endpoints.extend(responsibility.claims);
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -185,6 +549,44 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
+        let selected_subjects = selected_claim_subjects(&resources, &world);
+        if !selected_subjects.is_empty() {
+            for resource in &resources {
+                catalog_budget.owner(resource)?;
+            }
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+        }
+        for (key, subject) in selected_subjects {
+            let Some(selected) = world.get(&key).and_then(|owner| {
+                crate::message_claims_resources::selected(&subject, &owner.entity)
+            }) else {
+                continue;
+            };
+            let targets = crate::message_claims_resources::native_targets(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+            charge_claim_selections(&selected, &world, &mut catalog_budget)?;
+            crate::message_claims_resources::validate(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+        }
         self.validate_catalog_replacements(
             &proposal,
             branch,
@@ -194,6 +596,61 @@ impl EventModelServiceImpl {
             &mut catalog_budget,
         )
         .await?;
+        let mut claim_prepared = HashMap::new();
+        for resource in &resources {
+            if trogon_atlas_core::message_claims::declarations(resource).is_none() {
+                continue;
+            }
+            let kind = entity_kind(resource)?;
+            let id = entity_id(resource)?;
+            let previous = match self.store.get(kind, id, branch).await {
+                Ok(row) => Some(row.entity),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let prepared =
+                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
+            catalog_budget.owner(&prepared)?;
+            let changed = crate::message_claims_resources::changed(previous.as_ref(), &prepared);
+            let targets = trogon_atlas_core::outbound_refs(&changed)
+                .into_iter()
+                .filter(|r| r.from_field.starts_with("message_claims."))
+                .filter_map(|r| Some((r.to_kind?, r.to_id)))
+                .collect();
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            let targets = crate::message_claims_resources::native_targets(
+                &changed,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                targets,
+                &mut loaded,
+                &mut world,
+            )
+            .await
+            .map_err(claim_access_error)?;
+            for row in world.values() {
+                catalog_budget.owner(&row.entity)?;
+            }
+            charge_claim_selections(&changed, &world, &mut catalog_budget)?;
+            crate::message_claims_resources::validate(
+                &changed,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            )?;
+            claim_prepared.insert(pb::EntityKey::new(kind, id), prepared);
+        }
         let context: Vec<_> = world.into_values().collect();
         let event_products: Vec<_> = resources
             .iter()
@@ -231,9 +688,28 @@ impl EventModelServiceImpl {
                 Err(error) => return Err(store_err(error)),
             };
             let prepared =
-                prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?;
+                if let Some(prepared) = claim_prepared.remove(&pb::EntityKey::new(kind, id)) {
+                    prepared
+                } else {
+                    prepare_proposal_entity(&proposal, kind, id, previous.as_ref(), resource)?
+                };
             super::validate_entity_content(&prepared)?;
-            let issues = validation::architecture_resources::validate(&prepared, &context);
+            let unchanged = unchanged_occurrences(
+                &prepared,
+                &baselines(&proposal, kind, id, previous.as_ref()),
+            );
+            let issues: Vec<_> =
+                validation::architecture_resources::validate_admission_with_previous(
+                    &prepared,
+                    &context,
+                    previous.as_ref(),
+                )
+                .into_iter()
+                .filter(|issue| {
+                    !(issue.code.ends_with("_REFERENCE_UNRESOLVED")
+                        && is_unchanged_field(&unchanged, &issue.subject_field))
+                })
+                .collect();
             if !issues.is_empty() {
                 return Err(Status::invalid_argument(super::format_scenario_issues(
                     &issues,
@@ -264,6 +740,29 @@ impl EventModelServiceImpl {
         Ok(())
     }
 
+    async fn unchanged_occurrences_of(
+        &self,
+        proposal: &ArchitectureProposal<'_>,
+        branch: Option<&str>,
+        resource: &pb::Entity,
+    ) -> Result<Vec<String>, Status> {
+        if occurrences(resource).is_empty() {
+            return Ok(Vec::new());
+        }
+        let kind = entity_kind(resource)?;
+        let id = entity_id(resource)?;
+        let previous = match self.store.get(kind, id, branch).await {
+            Ok(stored) => Some(stored.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(error) => return Err(store_err(error)),
+        };
+        let prepared = prepare_proposal_entity(proposal, kind, id, previous.as_ref(), resource)?;
+        Ok(unchanged_occurrences(
+            &prepared,
+            &baselines(proposal, kind, id, previous.as_ref()),
+        ))
+    }
+
     pub(super) async fn architecture_validation_context(
         &self,
         snapshot: &[StoredEntity],
@@ -277,7 +776,9 @@ impl EventModelServiceImpl {
                 matches!(
                     entity.kind,
                     Some(
-                        pb::entity::Kind::Component(_)
+                        pb::entity::Kind::SystemGroup(_)
+                            | pb::entity::Kind::Component(_)
+                            | pb::entity::Kind::Domain(_)
                             | pb::entity::Kind::ExternalSystem(_)
                             | pb::entity::Kind::Channel(_)
                             | pb::entity::Kind::DataStore(_)
@@ -286,7 +787,9 @@ impl EventModelServiceImpl {
                             | pb::entity::Kind::Team(_)
                             | pb::entity::Kind::Person(_)
                             | pb::entity::Kind::Decision(_)
+                            | pb::entity::Kind::Term(_)
                             | pb::entity::Kind::Document(_)
+                            | pb::entity::Kind::DesignGraph(_)
                     )
                 )
             })
@@ -300,15 +803,14 @@ impl EventModelServiceImpl {
         };
         let lens = self.lens(vis).await?;
         let access = ArchitectureTargetAccess::Diagnostic(&lens);
-        let required = resources
-            .iter()
-            .filter(|entity| !is_catalog(entity))
-            .flat_map(|entity| {
-                admission_references(entity)
+        let mut required = Vec::new();
+        for entity in resources.iter().filter(|entity| !is_catalog(entity)) {
+            required.extend(
+                admission_references(entity)?
                     .into_iter()
-                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
-            })
-            .collect();
+                    .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id))),
+            );
+        }
         let mut loaded = HashSet::new();
         let mut world = HashMap::new();
         self.load_architecture_targets(
@@ -320,12 +822,7 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
-        let catalog_targets = resources
-            .iter()
-            .filter(|entity| is_catalog(entity))
-            .flat_map(|entity| trogon_atlas_core::refs::outbound_refs(entity))
-            .filter_map(|reference| reference.to_kind.map(|kind| (kind, reference.to_id)))
-            .collect();
+        let catalog_targets = catalog_reference_targets(&resources)?;
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -339,7 +836,9 @@ impl EventModelServiceImpl {
         endpoints.extend(crate::data_product_resources::selected_endpoints(
             &resources, &world,
         ));
-        endpoints.extend(responsibility_endpoints(&resources, &world));
+        let responsibility = responsibility_endpoints(&resources, &world);
+        endpoints.extend(responsibility.required);
+        endpoints.extend(responsibility.claims);
         self.load_architecture_targets(
             &proposal,
             branch,
@@ -359,6 +858,38 @@ impl EventModelServiceImpl {
             &mut world,
         )
         .await?;
+        let mut claim_budget = crate::decision_document_resources::CatalogBudget::default();
+        let selected_subjects = selected_claim_subjects(&resources, &world);
+        if !selected_subjects.is_empty() {
+            for resource in &resources {
+                claim_budget.owner(resource)?;
+            }
+        }
+        for (key, subject) in selected_subjects {
+            let Some(owner) = world.get(&key) else {
+                continue;
+            };
+            claim_budget.owner(&owner.entity)?;
+            let Some(selected) = crate::message_claims_resources::selected(&subject, &owner.entity)
+            else {
+                continue;
+            };
+            if let Ok(targets) = crate::message_claims_resources::native_targets(
+                &selected,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            ) {
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    ArchitectureTargetAccess::ExactDiagnostic(&lens),
+                    targets,
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+            }
+            charge_claim_selections(&selected, &world, &mut claim_budget)?;
+        }
         let mut budget = crate::decision_document_resources::CatalogBudget::default();
         for entity in &resources {
             let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
@@ -402,6 +933,44 @@ impl EventModelServiceImpl {
                     .and_then(|replacement| replacement.decision.as_ref())
                     .and_then(|reference| reference.id.clone());
             }
+        }
+        for resource in &resources {
+            if !trogon_atlas_core::message_claims::has_content(resource) {
+                continue;
+            }
+            claim_budget.owner(resource)?;
+            let references = trogon_atlas_core::outbound_refs(resource)
+                .into_iter()
+                .filter(|r| r.from_field.starts_with("message_claims."))
+                .filter_map(|r| Some((r.to_kind?, r.to_id)))
+                .collect();
+            self.load_architecture_targets(
+                &proposal,
+                branch,
+                access,
+                references,
+                &mut loaded,
+                &mut world,
+            )
+            .await?;
+            if let Ok(targets) = crate::message_claims_resources::native_targets(
+                resource,
+                &validation::architecture_resources::ArchitectureContext::new(world.values()),
+            ) {
+                self.load_architecture_targets(
+                    &proposal,
+                    branch,
+                    access,
+                    targets,
+                    &mut loaded,
+                    &mut world,
+                )
+                .await?;
+            }
+            charge_claim_selections(resource, &world, &mut claim_budget)?;
+        }
+        for row in world.values() {
+            claim_budget.row(&row.entity)?;
         }
         Ok(world.into_values().collect())
     }
@@ -471,7 +1040,9 @@ impl EventModelServiceImpl {
             .list(
                 super::ListFilter {
                     kinds: &[
+                        pb::EntityKind::SystemGroup,
                         pb::EntityKind::Component,
+                        pb::EntityKind::Domain,
                         pb::EntityKind::ExternalSystem,
                         pb::EntityKind::Channel,
                         pb::EntityKind::DataStore,
@@ -481,6 +1052,8 @@ impl EventModelServiceImpl {
                         pb::EntityKind::Person,
                         pb::EntityKind::Decision,
                         pb::EntityKind::Document,
+                        pb::EntityKind::Term,
+                        pb::EntityKind::DesignGraph,
                     ],
                     namespaces: &namespaces,
                     ..Default::default()
@@ -513,7 +1086,16 @@ impl EventModelServiceImpl {
                 complete.insert(pb::EntityKey::new(entity_kind(&stored.entity)?, id), stored);
             }
         }
-        Ok(complete.into_values().collect())
+        let mut complete: Vec<_> = complete.into_iter().collect();
+        complete.sort_by(|(a, _), (b, _)| {
+            (a.kind as i32, &a.namespace, &a.slug, a.version).cmp(&(
+                b.kind as i32,
+                &b.namespace,
+                &b.slug,
+                b.version,
+            ))
+        });
+        Ok(complete.into_iter().map(|(_, stored)| stored).collect())
     }
 
     async fn load_architecture_targets(
@@ -528,9 +1110,16 @@ impl EventModelServiceImpl {
         let mut pending = targets;
         while let Some((kind, id)) = pending.pop() {
             match access {
-                ArchitectureTargetAccess::Required(vis)
-                | ArchitectureTargetAccess::ExactRequired(vis) => {
+                ArchitectureTargetAccess::ExactRequired(vis) => {
                     self.require_visible(vis, &id.namespace).await?;
+                }
+                ArchitectureTargetAccess::Required(vis)
+                | ArchitectureTargetAccess::Curation(vis) => {
+                    match self.require_visible(vis, &id.namespace).await {
+                        Ok(()) => {}
+                        Err(status) if status.code() == Code::NotFound => continue,
+                        Err(status) => return Err(status),
+                    }
                 }
                 ArchitectureTargetAccess::Diagnostic(lens)
                 | ArchitectureTargetAccess::ExactDiagnostic(lens) => {
@@ -545,6 +1134,11 @@ impl EventModelServiceImpl {
             let key = pb::EntityKey::new(kind, &id);
             if !loaded.insert(key.clone()) {
                 continue;
+            }
+            if loaded.len() > 5_000 {
+                return Err(Status::resource_exhausted(
+                    "architecture row budget exceeded",
+                ));
             }
             let stored = match self.store.get(kind, &id, branch).await {
                 Ok(stored) => Some(stored),
@@ -612,18 +1206,15 @@ impl EventModelServiceImpl {
             budget.owner(&row.entity)?;
         }
         for entity in &resources {
-            for association in crate::decision_document_resources::subjects(entity) {
-                if let Some(subject) = &association.subject {
-                    if let Ok(reference) =
-                        trogon_atlas_core::decision_document::subject_owner(subject)
-                    {
-                        if let (Ok(kind), Some(id)) = (
-                            pb::EntityKind::try_from(reference.kind),
-                            reference.id.as_ref(),
-                        ) {
-                            if let Some(owner) = world.get(&pb::EntityKey::new(kind, id)) {
-                                budget.selection(subject, &owner.entity)?;
-                            }
+            for subject in crate::decision_document_resources::catalog_subjects(entity) {
+                if let Ok(reference) = trogon_atlas_core::decision_document::subject_owner(subject)
+                {
+                    if let (Ok(kind), Some(id)) = (
+                        pb::EntityKind::try_from(reference.kind),
+                        reference.id.as_ref(),
+                    ) {
+                        if let Some(owner) = world.get(&pb::EntityKey::new(kind, id)) {
+                            budget.selection(subject, &owner.entity)?;
                         }
                     }
                 }
@@ -631,6 +1222,18 @@ impl EventModelServiceImpl {
             let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
                 continue;
             };
+            self.validate_decision_amendments(
+                proposal,
+                branch,
+                vis,
+                entity,
+                CatalogGraphTraversal {
+                    loaded: &mut *loaded,
+                    world: &mut *world,
+                    budget: &mut *budget,
+                },
+            )
+            .await?;
             let Some(replacement) = &decision.replaced_by else {
                 continue;
             };
@@ -672,6 +1275,16 @@ impl EventModelServiceImpl {
                         "Replacement target must be a Decision",
                     ));
                 };
+                if visited.len() == 2
+                    && target.amends.iter().any(|amendment| {
+                        amendment.decision.as_ref().and_then(|r| r.id.as_ref())
+                            == decision.id.as_ref()
+                    })
+                {
+                    return Err(Status::invalid_argument(
+                        "Decision cannot amend and replace the same target",
+                    ));
+                }
                 match pb::DecisionStatus::try_from(target.status) {
                     Ok(pb::DecisionStatus::Accepted) => break,
                     Ok(pb::DecisionStatus::Superseded) => {
@@ -684,10 +1297,108 @@ impl EventModelServiceImpl {
                     _ => {
                         return Err(Status::invalid_argument(
                             "Replacement chain must terminate at an ACCEPTED decision",
-                        ))
+                        ));
                     }
                 }
             }
+        }
+        Ok(())
+    }
+
+    async fn validate_decision_amendments(
+        &self,
+        proposal: &ArchitectureProposal<'_>,
+        branch: Option<&str>,
+        vis: &Visibility,
+        entity: &pb::Entity,
+        traversal: CatalogGraphTraversal<'_>,
+    ) -> Result<(), Status> {
+        let CatalogGraphTraversal {
+            loaded,
+            world,
+            budget,
+        } = traversal;
+        let root = entity_id(entity)?.clone();
+        let Some(pb::entity::Kind::Decision(decision)) = &entity.kind else {
+            return Ok(());
+        };
+        let lens = self.lens(vis).await?;
+        let mut active = HashSet::new();
+        let mut done = HashSet::new();
+        active.insert(pb::EntityKey::new(pb::EntityKind::Decision, &root));
+        let mut stack = vec![(root.clone(), decision.amends.clone(), 0usize)];
+        while let Some((owner, edges, index)) = stack.last_mut() {
+            if *index == edges.len() {
+                let key = pb::EntityKey::new(pb::EntityKind::Decision, owner);
+                active.remove(&key);
+                done.insert(key);
+                stack.pop();
+                continue;
+            }
+            let target = edges[*index]
+                .decision
+                .as_ref()
+                .and_then(|r| r.id.clone())
+                .ok_or_else(|| Status::invalid_argument("amended decision required"))?;
+            *index += 1;
+            budget.examine(1)?;
+            super::require_id(Some(&target), "amends.decision")?;
+            if target.version == 0 {
+                return Err(Status::invalid_argument(
+                    "amended decision requires an exact positive version",
+                ));
+            }
+            let strict = owner == &root
+                || proposal
+                    .overlay
+                    .get(&pb::EntityKey::new(pb::EntityKind::Decision, owner))
+                    .is_some_and(Option::is_some);
+            if !strict && !lens.admits(&target.namespace) {
+                continue;
+            }
+            let key = pb::EntityKey::new(pb::EntityKind::Decision, &target);
+            if active.contains(&key) {
+                return Err(Status::invalid_argument("Decision amendment cycle"));
+            }
+            self.load_architecture_targets(
+                proposal,
+                branch,
+                ArchitectureTargetAccess::ExactRequired(vis),
+                vec![(pb::EntityKind::Decision, target.clone())],
+                loaded,
+                world,
+            )
+            .await?;
+            let Some(row) = world.get(&key) else {
+                if strict {
+                    return Err(Status::invalid_argument(
+                        "Amended decision is absent, stale or unavailable",
+                    ));
+                }
+                continue;
+            };
+            budget.owner(&row.entity)?;
+            let Some(pb::entity::Kind::Decision(value)) = &row.entity.kind else {
+                return Err(Status::invalid_argument(
+                    "amended target must be a Decision",
+                ));
+            };
+            if value
+                .replaced_by
+                .as_ref()
+                .and_then(|r| r.decision.as_ref())
+                .and_then(|r| r.id.as_ref())
+                == Some(owner)
+            {
+                return Err(Status::invalid_argument(
+                    "Decision cannot amend and replace the same target",
+                ));
+            }
+            if done.contains(&key) {
+                continue;
+            }
+            active.insert(key);
+            stack.push((target, value.amends.clone(), 0));
         }
         Ok(())
     }
@@ -802,7 +1513,15 @@ impl EventModelServiceImpl {
     ) -> Result<(), Status> {
         let kind = entity_kind(entity)?;
         if !is_architecture_kind(kind) {
-            return Ok(());
+            let meta = OpMetaLike {
+                kind: entity_kind(entity)?,
+                id: entity_id(entity)?.clone(),
+                is_put: true,
+                entity: Some(entity.clone()),
+            };
+            return self
+                .validate_native_group_targets(&[meta], branch, vis, None)
+                .await;
         }
         self.validate_architecture_writes(
             &[OpMetaLike {
@@ -818,10 +1537,54 @@ impl EventModelServiceImpl {
     }
 }
 
+fn landing_put<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Option<&'a BranchLandOp> {
+    proposal.landing.and_then(|ops| {
+        ops.iter().find(|op| match op {
+            BranchLandOp::Put {
+                kind: op_kind,
+                ours,
+                ..
+            } => *op_kind == kind && entity_id(ours).ok() == Some(id),
+            BranchLandOp::Delete { .. } => false,
+        })
+    })
+}
+
+fn landing_base<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+) -> Option<&'a pb::Entity> {
+    match landing_put(proposal, kind, id)? {
+        BranchLandOp::Put { base, .. } => base.as_deref(),
+        BranchLandOp::Delete { .. } => None,
+    }
+}
+
+fn baselines<'a>(
+    proposal: &ArchitectureProposal<'a>,
+    kind: pb::EntityKind,
+    id: &pb::Id,
+    previous: Option<&'a pb::Entity>,
+) -> Vec<&'a pb::Entity> {
+    previous
+        .into_iter()
+        .chain(landing_base(proposal, kind, id))
+        .collect()
+}
+
 pub(super) fn is_architecture_kind(kind: pb::EntityKind) -> bool {
     matches!(
         kind,
-        pb::EntityKind::Component
+        pb::EntityKind::SystemGroup
+            | pb::EntityKind::Domain
+            | pb::EntityKind::Term
+            | pb::EntityKind::DesignGraph
+            | pb::EntityKind::Component
             | pb::EntityKind::ExternalSystem
             | pb::EntityKind::Channel
             | pb::EntityKind::DataStore
@@ -841,20 +1604,12 @@ fn prepare_proposal_entity(
     previous: Option<&pb::Entity>,
     entity: &pb::Entity,
 ) -> Result<pb::Entity, Status> {
-    match proposal.landing.and_then(|ops| {
-        ops.iter().find_map(|op| match op {
-            BranchLandOp::Put {
-                kind: op_kind,
-                ours,
-                base,
-                ..
-            } if *op_kind == kind && entity_id(ours).ok() == Some(id) => Some(base.as_deref()),
-            _ => None,
-        })
-    }) {
-        Some(base) => {
-            trogon_atlas_core::connection_persistence::prepare_landing(base, previous, entity)
-        }
+    match landing_put(proposal, kind, id) {
+        Some(_) => trogon_atlas_core::connection_persistence::prepare_landing(
+            landing_base(proposal, kind, id),
+            previous,
+            entity,
+        ),
         None => trogon_atlas_core::connection_persistence::prepare_entity(previous, entity),
     }
     .map_err(|error| Status::invalid_argument(error.to_string()))
@@ -911,29 +1666,80 @@ fn observation_endpoints(
     endpoints
 }
 
+fn selected_claim_subjects(
+    resources: &[&pb::Entity],
+    world: &HashMap<pb::EntityKey, StoredEntity>,
+) -> Vec<(pb::EntityKey, pb::ResponsibilitySubject)> {
+    let mut seen = HashSet::new();
+    resources
+        .iter()
+        .flat_map(|entity| {
+            crate::responsibility_resources::assignments(entity)
+                .iter()
+                .filter_map(|assignment| assignment.subject.clone())
+                .chain(
+                    crate::decision_document_resources::subjects(entity)
+                        .iter()
+                        .filter_map(|association| association.subject.as_ref())
+                        .map(crate::decision_document_resources::responsibility_subject),
+                )
+        })
+        .filter_map(|subject| {
+            let Some(pb::responsibility_subject::Selection::Connection(reference)) =
+                &subject.selection
+            else {
+                return None;
+            };
+            let owner = reference.owner.as_ref()?;
+            let key = pb::EntityKey::new(
+                pb::EntityKind::try_from(owner.kind).ok()?,
+                owner.id.as_ref()?,
+            );
+            let row = world.get(&key)?;
+            if trogon_atlas_core::message_claims::declarations(&row.entity).is_none()
+                || !seen.insert((
+                    key.clone(),
+                    reference.owner_uid.clone(),
+                    reference.id.clone(),
+                ))
+            {
+                return None;
+            }
+            Some((key, subject))
+        })
+        .collect()
+}
+
 fn responsibility_endpoints(
     resources: &[&pb::Entity],
     world: &HashMap<pb::EntityKey, StoredEntity>,
-) -> Vec<(pb::EntityKind, pb::Id)> {
-    resources
+) -> ResponsibilityEndpoints {
+    let mut targets = ResponsibilityEndpoints::default();
+    for subject in resources
         .iter()
         .flat_map(|entity| crate::responsibility_resources::assignments(entity))
         .filter_map(|assignment| assignment.subject.as_ref())
-        .flat_map(|subject| {
-            crate::responsibility_resources::subject_owner(subject)
-                .and_then(|reference| {
-                    Some(pb::EntityKey::new(
-                        pb::EntityKind::try_from(reference.kind).ok()?,
-                        reference.id.as_ref()?,
-                    ))
-                })
-                .and_then(|key| world.get(&key))
-                .map(|stored| {
-                    crate::responsibility_resources::selected_endpoints(subject, &stored.entity)
-                })
-                .unwrap_or_default()
-        })
-        .collect()
+    {
+        let Some(stored) = crate::responsibility_resources::subject_owner(subject)
+            .and_then(|reference| {
+                Some(pb::EntityKey::new(
+                    pb::EntityKind::try_from(reference.kind).ok()?,
+                    reference.id.as_ref()?,
+                ))
+            })
+            .and_then(|key| world.get(&key))
+        else {
+            continue;
+        };
+        let endpoints =
+            crate::responsibility_resources::selected_endpoints(subject, &stored.entity);
+        if crate::message_claims_resources::selected(subject, &stored.entity).is_some() {
+            targets.claims.extend(endpoints);
+        } else {
+            targets.required.extend(endpoints);
+        }
+    }
+    targets
 }
 
 fn catalog_endpoints(
@@ -942,8 +1748,7 @@ fn catalog_endpoints(
 ) -> Vec<(pb::EntityKind, pb::Id)> {
     resources
         .iter()
-        .flat_map(|entity| crate::decision_document_resources::subjects(entity))
-        .filter_map(|association| association.subject.as_ref())
+        .flat_map(|entity| crate::decision_document_resources::catalog_subjects(entity))
         .flat_map(|subject| {
             let converted = crate::decision_document_resources::responsibility_subject(subject);
             crate::responsibility_resources::subject_owner(&converted)

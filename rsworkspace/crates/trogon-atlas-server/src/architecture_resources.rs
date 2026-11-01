@@ -53,6 +53,28 @@ impl Checks {
         }
     }
 
+    fn member(
+        &mut self,
+        member: Option<pb::EntityRef>,
+        context: &ArchitectureContext<'_>,
+        field: &str,
+    ) {
+        match member.and_then(|target| Some((pb::EntityKind::try_from(target.kind).ok()?, target)))
+        {
+            Some((kind, target)) => self.target(kind, target.id.as_ref(), context, field),
+            None => self.target_missing(field),
+        }
+    }
+
+    fn target_missing(&mut self, field: &str) {
+        self.require(
+            false,
+            "ARCHITECTURE_REFERENCE_UNRESOLVED",
+            field,
+            "architecture resource target is absent or invalid",
+        );
+    }
+
     fn target(
         &mut self,
         kind: pb::EntityKind,
@@ -123,7 +145,9 @@ pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
     matches!(
         entity.kind,
         Some(
-            pb::entity::Kind::Component(_)
+            pb::entity::Kind::SystemGroup(_)
+                | pb::entity::Kind::Component(_)
+                | pb::entity::Kind::Domain(_)
                 | pb::entity::Kind::ExternalSystem(_)
                 | pb::entity::Kind::Channel(_)
                 | pb::entity::Kind::DataStore(_)
@@ -132,7 +156,9 @@ pub(crate) fn is_resource(entity: &pb::Entity) -> bool {
                 | pb::entity::Kind::Team(_)
                 | pb::entity::Kind::Person(_)
                 | pb::entity::Kind::Decision(_)
+                | pb::entity::Kind::Term(_)
                 | pb::entity::Kind::Document(_)
+                | pb::entity::Kind::DesignGraph(_)
         )
     )
 }
@@ -249,6 +275,31 @@ fn address(channel: &pb::Channel, checks: &mut Checks) {
     }
 }
 
+fn link_parameters_valid(values: &HashMap<String, String>, target: &pb::Channel) -> bool {
+    let Some(address) = target.address.as_ref() else {
+        return values.is_empty();
+    };
+    let declared: HashMap<&str, &pb::AddressParameter> = address
+        .parameters
+        .iter()
+        .filter_map(|parameter| Some((parameter.name.as_ref()?.value.as_str(), parameter)))
+        .collect();
+    values
+        .keys()
+        .all(|name| declared.contains_key(name.as_str()))
+        && declared.iter().all(|(name, parameter)| {
+            values
+                .get(*name)
+                .or(parameter.default.as_ref())
+                .is_some_and(|value| {
+                    parameter
+                        .allowed_values
+                        .as_ref()
+                        .is_none_or(|allowed| allowed.values.contains(value))
+                })
+        })
+}
+
 fn observation(reference: Option<&pb::ConnectionRef>, context: &ArchitectureContext<'_>) -> bool {
     let Some(reference) = reference else {
         return false;
@@ -304,15 +355,151 @@ fn observation(reference: Option<&pb::ConnectionRef>, context: &ArchitectureCont
 
 #[must_use]
 pub fn validate(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::ValidationIssue> {
+    validate_with_previous(entity, all, None)
+}
+
+pub fn validate_with_previous(
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+    previous: Option<&pb::Entity>,
+) -> Vec<pb::ValidationIssue> {
     if !is_resource(entity) {
         return Vec::new();
     }
-    validate_in_context(entity, &ArchitectureContext::new(all))
+    validate_in_context_with_previous(entity, &ArchitectureContext::new(all), previous)
+}
+
+pub(crate) fn validate_admission_with_previous(
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+    previous: Option<&pb::Entity>,
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate_shipped_in_context(entity, &ArchitectureContext::new(all), previous);
+    if let Some(previous) = previous {
+        let retained = retained_links(previous, entity);
+        issues.retain(|issue| {
+            issue.code != "ARCHITECTURE_REFERENCE_UNRESOLVED"
+                || !retained.contains(&issue.subject_field)
+        });
+    }
+    issues
+}
+
+/// Curation the author already holds and did not touch stays readable after
+/// its target is removed. Only a new or edited link must resolve.
+#[must_use]
+pub fn validate_retaining(
+    previous: Option<&pb::Entity>,
+    entity: &pb::Entity,
+    all: &[StoredEntity],
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate(entity, all);
+    if let Some(previous) = previous {
+        let retained = retained_links(previous, entity);
+        issues.retain(|issue| {
+            issue.code != "ARCHITECTURE_REFERENCE_UNRESOLVED"
+                || !retained.contains(&issue.subject_field)
+        });
+    }
+    issues
+}
+
+fn retained_links(previous: &pb::Entity, entity: &pb::Entity) -> HashSet<String> {
+    let mut retained = HashSet::new();
+    match (previous.kind.as_ref(), entity.kind.as_ref()) {
+        (
+            Some(pb::entity::Kind::SystemGroup(before)),
+            Some(pb::entity::Kind::SystemGroup(after)),
+        ) => {
+            retain_unchanged(
+                &mut retained,
+                "members",
+                "member",
+                (&before.members, &after.members),
+                |link| (link.connection_id.as_ref(), link.member.as_ref()),
+            );
+            retain_unchanged(
+                &mut retained,
+                "relationships",
+                "target",
+                (&before.relationships, &after.relationships),
+                |link| (link.connection_id.as_ref(), link.target.as_ref()),
+            );
+            retain_unchanged(
+                &mut retained,
+                "actors",
+                "target",
+                (&before.actors, &after.actors),
+                |link| (link.connection_id.as_ref(), link.target.as_ref()),
+            );
+        }
+        (Some(pb::entity::Kind::Domain(before)), Some(pb::entity::Kind::Domain(after))) => {
+            retain_unchanged(
+                &mut retained,
+                "members",
+                "member",
+                (&before.members, &after.members),
+                |link| (link.connection_id.as_ref(), link.member.as_ref()),
+            );
+        }
+        _ => {}
+    }
+    retained
+}
+
+fn retain_unchanged<L, E: PartialEq>(
+    retained: &mut HashSet<String>,
+    collection: &str,
+    endpoint: &str,
+    (before, after): (&[L], &[L]),
+    parts: impl Fn(&L) -> (Option<&pb::ConnectionId>, Option<&E>),
+) {
+    let held: HashMap<_, _> = before
+        .iter()
+        .filter_map(|link| {
+            let (id, target) = parts(link);
+            Some((id?, target?))
+        })
+        .collect();
+    for (index, link) in after.iter().enumerate() {
+        if let (Some(id), Some(target)) = parts(link) {
+            if held.get(id).is_some_and(|prior| *prior == target) {
+                retained.insert(format!("{collection}[{index}].{endpoint}"));
+            }
+        }
+    }
 }
 
 pub(super) fn validate_in_context(
     entity: &pb::Entity,
     context: &ArchitectureContext<'_>,
+) -> Vec<pb::ValidationIssue> {
+    validate_in_context_with_previous(entity, context, None)
+}
+
+fn validate_in_context_with_previous(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+    previous: Option<&pb::Entity>,
+) -> Vec<pb::ValidationIssue> {
+    let mut issues = validate_shipped_in_context(entity, context, previous);
+    if trogon_atlas_core::message_claims::has_content(entity)
+        && crate::message_claims_resources::validate(entity, context).is_err()
+    {
+        issues.push(super::issue_error(
+            "MESSAGE_CLAIMS_REFERENCE_UNRESOLVED",
+            "Message claim selection is absent, invalid or unavailable".into(),
+            super::slice_ref(entity),
+            "message_claims",
+        ));
+    }
+    issues
+}
+
+fn validate_shipped_in_context(
+    entity: &pb::Entity,
+    context: &ArchitectureContext<'_>,
+    previous: Option<&pb::Entity>,
 ) -> Vec<pb::ValidationIssue> {
     if matches!(
         entity.kind,
@@ -320,11 +507,18 @@ pub(super) fn validate_in_context(
     ) {
         return crate::decision_document_resources::validate_in_context(entity, context);
     }
+    if matches!(entity.kind, Some(pb::entity::Kind::DesignGraph(_))) {
+        return crate::design_topology_resources::validate_in_context(entity, context);
+    }
     if matches!(entity.kind, Some(pb::entity::Kind::DataProduct(_))) {
-        return crate::data_product_resources::validate_in_context(entity, context);
+        return crate::data_product_resources::validate_in_context_with_previous(
+            entity, context, previous,
+        );
     }
     if matches!(entity.kind, Some(pb::entity::Kind::Specification(_))) {
-        return crate::specification_resources::validate_in_context(entity, context);
+        return crate::specification_resources::validate_in_context_with_previous(
+            entity, context, previous,
+        );
     }
     if matches!(
         entity.kind,
@@ -346,6 +540,29 @@ pub(super) fn validate_in_context(
                 trogon_atlas_core::communication_intent::validate_values(entity).is_ok(),
                 "communications",
             );
+            checks.value(
+                trogon_atlas_core::storage_claims::validate_values(entity).is_ok(),
+                "storage_claims",
+            );
+            for (index, claim) in trogon_atlas_core::storage_claims::claims(entity)
+                .iter()
+                .enumerate()
+            {
+                checks.target(
+                    pb::EntityKind::DataStore,
+                    claim.store.as_ref().and_then(|store| store.id.as_ref()),
+                    context,
+                    &format!("storage_claims[{index}].store"),
+                );
+                checks.require(
+                    crate::data_product_resources::storage_claim_attachment_resolves(
+                        claim, context,
+                    ),
+                    "ARCHITECTURE_REFERENCE_UNRESOLVED",
+                    &format!("storage_claims[{index}].attachment"),
+                    "architecture resource target is absent or invalid",
+                );
+            }
             for (index, declaration) in
                 trogon_atlas_core::communication_intent::declarations(entity)
                     .iter()
@@ -406,6 +623,62 @@ pub(super) fn validate_in_context(
                 }
             }
         }
+        Some(pb::entity::Kind::SystemGroup(group)) => {
+            checks.value(
+                trogon_atlas_core::system_group::validate_values(entity).is_ok(),
+                "system_group",
+            );
+            checks.supersedes(
+                pb::EntityKind::SystemGroup,
+                group.id.as_ref(),
+                group.supersedes.as_ref(),
+                context,
+            );
+            for (index, value) in group.members.iter().enumerate() {
+                checks.member(
+                    value
+                        .member
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::group_member_ref),
+                    context,
+                    &format!("members[{index}].member"),
+                );
+            }
+            for (index, value) in group.relationships.iter().enumerate() {
+                checks.target(
+                    pb::EntityKind::SystemGroup,
+                    value.target.as_ref().and_then(|target| target.id.as_ref()),
+                    context,
+                    &format!("relationships[{index}].target"),
+                );
+            }
+            for (index, value) in group.actors.iter().enumerate() {
+                checks.member(
+                    value
+                        .target
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::actor_ref),
+                    context,
+                    &format!("actors[{index}].target"),
+                );
+            }
+        }
+        Some(pb::entity::Kind::Domain(domain)) => {
+            checks.value(
+                trogon_atlas_core::system_group::validate_values(entity).is_ok(),
+                "members",
+            );
+            for (index, value) in domain.members.iter().enumerate() {
+                checks.member(
+                    value
+                        .member
+                        .as_ref()
+                        .and_then(trogon_atlas_core::system_group::domain_member_ref),
+                    context,
+                    &format!("members[{index}].member"),
+                );
+            }
+        }
         Some(pb::entity::Kind::Channel(channel)) => {
             checks.supersedes(
                 pb::EntityKind::Channel,
@@ -434,6 +707,28 @@ pub(super) fn validate_in_context(
                 "delivery_guarantee",
             );
             address(channel, &mut checks);
+            checks.value(
+                trogon_atlas_core::channel_links::validate_values(entity).is_ok(),
+                "links",
+            );
+            for (index, link) in channel.links.iter().enumerate() {
+                let target = link.target.as_ref().and_then(|target| target.id.as_ref());
+                checks.target(
+                    pb::EntityKind::Channel,
+                    target,
+                    context,
+                    &format!("links[{index}].target"),
+                );
+                if let Some(Some(pb::entity::Kind::Channel(target))) = target
+                    .and_then(|id| context.find(pb::EntityKind::Channel, id))
+                    .map(|entity| entity.kind.as_ref())
+                {
+                    checks.value(
+                        link_parameters_valid(&link.parameter_values, target),
+                        &format!("links[{index}].parameter_values"),
+                    );
+                }
+            }
             checks.value(!channel.bindings.is_empty(), "bindings");
             let mut seen = HashSet::new();
             for binding in &channel.bindings {
@@ -575,6 +870,16 @@ pub(super) fn validate_in_context(
                     id,
                     context,
                     "attachments.read_model",
+                );
+            }
+        }
+        Some(pb::entity::Kind::Term(term)) => {
+            if let Some(reference) = &term.owning_domain {
+                checks.target(
+                    pb::EntityKind::Domain,
+                    reference.id.as_ref(),
+                    context,
+                    "owning_domain",
                 );
             }
         }

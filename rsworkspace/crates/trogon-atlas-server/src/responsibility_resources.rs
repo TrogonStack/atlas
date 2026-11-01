@@ -5,18 +5,36 @@ use crate::validation::architecture_resources::ArchitectureContext;
 pub(crate) const MAX_RESPONSIBILITY_OCCURRENCES: usize = 10_000;
 
 pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
+    let claims = trogon_atlas_core::message_claims::declarations(entity).map_or(0, |v| {
+        v.claims.len() + v.routes.len() + v.triggers.len() + v.field_selections.len()
+    });
     assignments(entity)
         .len()
+        .saturating_add(claims)
         .saturating_add(match &entity.kind {
             Some(pb::entity::Kind::Team(value)) => value.members.len(),
             Some(pb::entity::Kind::Component(value)) => value
                 .relationships
                 .len()
-                .saturating_add(value.communications.len()),
+                .saturating_add(value.communications.len())
+                .saturating_add(value.storage_claims.len()),
             Some(pb::entity::Kind::ExternalSystem(value)) => value
                 .relationships
                 .len()
-                .saturating_add(value.communications.len()),
+                .saturating_add(value.communications.len())
+                .saturating_add(value.storage_claims.len()),
+            Some(pb::entity::Kind::Specification(value)) => value.message_channels.len(),
+            Some(pb::entity::Kind::DataProduct(value)) => value
+                .resource_associations
+                .len()
+                .saturating_add(value.storage_claims.len()),
+            Some(pb::entity::Kind::SystemGroup(value)) => value
+                .members
+                .len()
+                .saturating_add(value.relationships.len())
+                .saturating_add(value.actors.len()),
+            Some(pb::entity::Kind::Domain(value)) => value.members.len(),
+            Some(pb::entity::Kind::Channel(value)) => value.links.len(),
             _ => 0,
         })
 }
@@ -57,6 +75,9 @@ pub(crate) fn subject_resolves(
             )
         })
         .is_some_and(|owner| {
+            if let Some(selected) = crate::message_claims_resources::selected(subject, owner) {
+                return crate::message_claims_resources::validate(&selected, context).is_ok();
+            }
             trogon_atlas_core::responsibility::resolve_subject(subject, owner).is_ok()
                 && selected_message(subject, owner).is_none_or(|selection| {
                     selection
@@ -113,7 +134,11 @@ pub(crate) fn validate_in_context(
             issue("RESPONSIBILITY_VALUE_INVALID", "supersedes");
         }
     }
-    for reference in trogon_atlas_core::refs::outbound_refs(entity) {
+    let references = trogon_atlas_core::refs::try_outbound_refs(entity).unwrap_or_else(|_| {
+        issue("RESPONSIBILITY_VALUE_INVALID", "metadata");
+        Vec::new()
+    });
+    for reference in references {
         if !reference.to_kind.is_some_and(|kind| {
             reference.to_id.version > 0 && context.find(kind, &reference.to_id).is_some()
         }) {
@@ -151,6 +176,13 @@ pub(crate) fn selected_endpoints(
         .path
         .split_once('.')
         .map_or(occurrence.path.as_str(), |(_, path)| path);
+    if let Some(selected) = crate::message_claims_resources::selected(subject, owner) {
+        return trogon_atlas_core::outbound_refs(&selected)
+            .into_iter()
+            .filter(|r| r.from_field.starts_with("message_claims."))
+            .filter_map(|r| Some((r.to_kind?, r.to_id)))
+            .collect();
+    }
     let mut prefixes = vec![path.to_owned()];
     match &owner.kind {
         Some(pb::entity::Kind::CommandSlice(_)) => {
@@ -198,7 +230,10 @@ pub(crate) fn selected_endpoints(
         }
         _ => {}
     }
-    let mut targets: Vec<_> = trogon_atlas_core::refs::outbound_refs(owner)
+    let Ok(references) = trogon_atlas_core::refs::try_outbound_refs(owner) else {
+        return Vec::new();
+    };
+    let mut targets: Vec<_> = references
         .into_iter()
         .filter(|reference| {
             prefixes.iter().any(|prefix| {

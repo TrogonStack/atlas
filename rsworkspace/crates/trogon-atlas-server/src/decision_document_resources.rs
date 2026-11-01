@@ -9,8 +9,29 @@ pub(crate) fn subjects(entity: &pb::Entity) -> &[pb::SubjectAssociation] {
     match &entity.kind {
         Some(pb::entity::Kind::Decision(value)) => &value.subjects,
         Some(pb::entity::Kind::Document(value)) => &value.subjects,
+        Some(pb::entity::Kind::DesignGraph(value)) => &value.subjects,
         _ => &[],
     }
+}
+
+pub(crate) fn catalog_subjects(entity: &pb::Entity) -> Vec<&pb::CatalogSubject> {
+    let mut out: Vec<_> = subjects(entity)
+        .iter()
+        .filter_map(|association| association.subject.as_ref())
+        .collect();
+    if let Some(pb::entity::Kind::DesignGraph(graph)) = &entity.kind {
+        out.extend(graph.steps.iter().filter_map(|step| {
+            match step
+                .target
+                .as_ref()
+                .and_then(|target| target.selection.as_ref())
+            {
+                Some(pb::topology_step_target::Selection::CatalogMessage(subject)) => Some(subject),
+                _ => None,
+            }
+        }));
+    }
+    out
 }
 
 pub(crate) fn documents(entity: &pb::Entity) -> Vec<&pb::DocumentSelection> {
@@ -24,6 +45,12 @@ pub(crate) fn documents(entity: &pb::Entity) -> Vec<&pb::DocumentSelection> {
             .navigation
             .iter()
             .filter_map(|v| v.document.as_ref())
+            .chain(
+                value
+                    .related_content
+                    .iter()
+                    .filter_map(|v| v.document.as_ref()),
+            )
             .collect(),
         _ => Vec::new(),
     }
@@ -34,24 +61,72 @@ pub(crate) fn responsibility_subject(subject: &pb::CatalogSubject) -> pb::Respon
 }
 
 pub(crate) fn occurrence_count(entity: &pb::Entity) -> usize {
+    kind_occurrence_count(entity).saturating_add(group_occurrence_count(entity))
+}
+
+fn group_occurrence_count(entity: &pb::Entity) -> usize {
+    const MARKER: &[u8] = b"ResourceGroupsAnnotation";
+    let bytes = prost::Message::encode_to_vec(entity);
+    if !bytes.windows(MARKER.len()).any(|window| window == MARKER) {
+        return 0;
+    }
+    trogon_atlas_core::agent_metadata::group_refs(entity).map_or(0, |refs| refs.len())
+}
+
+fn kind_occurrence_count(entity: &pb::Entity) -> usize {
     match &entity.kind {
         Some(pb::entity::Kind::Decision(value)) => {
             value.subjects.len()
                 + value.related_decisions.len()
+                + value.decision_makers.len()
+                + value.amends.len()
                 + value.documents.len()
                 + usize::from(value.replaced_by.is_some())
         }
         Some(pb::entity::Kind::Document(value)) => {
-            value.subjects.len() + value.navigation.len() + value.anchors.len()
+            value.subjects.len()
+                + value.navigation.len()
+                + value.related_content.len()
+                + value.anchors.len()
+        }
+        Some(pb::entity::Kind::DesignGraph(value)) => {
+            value.subjects.len()
+                + value.steps.len()
+                + value
+                    .steps
+                    .iter()
+                    .map(|step| step.transitions.len())
+                    .sum::<usize>()
+                + usize::from(value.layout_document.is_some())
         }
         _ => crate::responsibility_resources::occurrence_count(entity),
     }
+}
+
+pub(crate) fn checked_occurrence_count(entity: &pb::Entity) -> Result<usize, Status> {
+    if trogon_atlas_core::message_claims::declarations(entity).is_some() {
+        return trogon_atlas_core::connections::connection_occurrences(entity)
+            .map(|inventory| inventory.len())
+            .map_err(|_| Status::internal("stored occurrence inventory is invalid"));
+    }
+    Ok(occurrence_count(entity))
+}
+
+fn shipped_occurrence_count(entity: &pb::Entity) -> usize {
+    let native = trogon_atlas_core::message_claims::declarations(entity).map_or(0, |value| {
+        value.claims.len()
+            + value.routes.len()
+            + value.triggers.len()
+            + value.field_selections.len()
+    });
+    occurrence_count(entity).saturating_sub(native)
 }
 
 #[derive(Default)]
 pub(crate) struct CatalogBudget {
     rows: HashSet<pb::EntityKey>,
     inventoried: HashSet<pb::EntityKey>,
+    directory_inventoried: HashSet<pb::EntityKey>,
     selections: HashSet<(pb::EntityKey, u8)>,
     examined: usize,
     output: usize,
@@ -66,12 +141,13 @@ impl CatalogBudget {
         Ok(())
     }
 
-    pub(crate) fn owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+    pub(crate) fn row(&mut self, entity: &pb::Entity) -> Result<(), Status> {
         let key = pb::EntityKey::new(
             crate::conv::entity_kind(entity)?,
             crate::conv::entity_id(entity)?,
         );
-        if crate::validation::architecture_resources::is_resource(entity)
+        if (crate::validation::architecture_resources::is_resource(entity)
+            || matches!(entity.kind, Some(pb::entity::Kind::Schema(_))))
             && self.rows.insert(key.clone())
             && self.rows.len() > 5_000
         {
@@ -79,10 +155,68 @@ impl CatalogBudget {
                 "catalog resource budget exceeded",
             ));
         }
-        if self.inventoried.insert(key) {
-            self.examine(occurrence_count(entity))?;
+        Ok(())
+    }
+
+    pub(crate) fn directory_owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+        if trogon_atlas_core::message_claims::declarations(entity).is_none() {
+            return self.owner(entity);
+        }
+        self.row(entity)?;
+        let key = pb::EntityKey::new(
+            crate::conv::entity_kind(entity)?,
+            crate::conv::entity_id(entity)?,
+        );
+        if !self.inventoried.contains(&key) && self.directory_inventoried.insert(key) {
+            self.examine(shipped_occurrence_count(entity))?;
         }
         Ok(())
+    }
+
+    pub(crate) fn owner(&mut self, entity: &pb::Entity) -> Result<(), Status> {
+        self.row(entity)?;
+        let key = pb::EntityKey::new(
+            crate::conv::entity_kind(entity)?,
+            crate::conv::entity_id(entity)?,
+        );
+        if self.inventoried.insert(key.clone()) {
+            let mut count = checked_occurrence_count(entity)?;
+            if self.directory_inventoried.contains(&key) {
+                count = count.saturating_sub(shipped_occurrence_count(entity));
+            }
+            self.examine(count)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn channel_specification(&mut self, owner: &pb::Entity) -> Result<(), Status> {
+        let Some(pb::entity::Kind::Specification(spec)) = &owner.kind else {
+            return Ok(());
+        };
+        let key = pb::EntityKey::new(
+            pb::EntityKind::Specification,
+            spec.id
+                .as_ref()
+                .ok_or_else(|| Status::data_loss("specification identity missing"))?,
+        );
+        if self.selections.insert((key, 4)) {
+            self.examine(
+                spec.artifacts.len()
+                    + spec.schemas.len()
+                    + spec.messages.len()
+                    + spec.operations.len()
+                    + spec
+                        .operations
+                        .iter()
+                        .map(|op| op.messages.len() + usize::from(op.binding.is_some()))
+                        .sum::<usize>(),
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn examined(&self) -> usize {
+        self.examined
     }
 
     pub(crate) fn output(&mut self) -> Result<(), Status> {
@@ -114,7 +248,12 @@ impl CatalogBudget {
         let count = match kind {
             1 if matches!(
                 owner.kind,
-                Some(pb::entity::Kind::Component(_) | pb::entity::Kind::ExternalSystem(_))
+                Some(
+                    pb::entity::Kind::Component(_)
+                        | pb::entity::Kind::ExternalSystem(_)
+                        | pb::entity::Kind::SystemGroup(_)
+                        | pb::entity::Kind::Domain(_)
+                )
             ) =>
             {
                 0
@@ -184,7 +323,7 @@ fn replacement_resolves(decision: &pb::Decision, context: &ArchitectureContext<'
 
 fn has_dedicated_check(field: &str) -> bool {
     matches!(field, "replaced_by.decision" | "supersedes")
-        || ["subjects[", "documents[", "navigation["]
+        || ["subjects[", "documents[", "navigation[", "related_content["]
             .iter()
             .any(|prefix| field.starts_with(prefix))
 }
@@ -213,7 +352,11 @@ pub(crate) fn validate_in_context(
             );
         }
     }
-    for reference in trogon_atlas_core::refs::outbound_refs(entity) {
+    let references = trogon_atlas_core::refs::try_outbound_refs(entity).unwrap_or_else(|_| {
+        issue("metadata", "Native metadata is malformed");
+        Vec::new()
+    });
+    for reference in references {
         if has_dedicated_check(&reference.from_field) {
             continue;
         }
@@ -260,14 +403,42 @@ pub(crate) fn validate_in_context(
                 .map(|association| &association.document)
                 .collect(),
         ),
-        Some(pb::entity::Kind::Document(value)) => (
-            "navigation",
-            value
-                .navigation
-                .iter()
-                .map(|association| &association.document)
-                .collect(),
-        ),
+        Some(pb::entity::Kind::Document(value)) => {
+            for (index, association) in value.related_content.iter().enumerate() {
+                let Some(selection) = &association.document else {
+                    continue;
+                };
+                let role = pb::RelatedContentRole::try_from(association.role).ok();
+                let resolves = trogon_atlas_core::decision_document::document_owner(selection)
+                    .ok()
+                    .and_then(|reference| {
+                        context.find(pb::EntityKind::Document, reference.id.as_ref()?)
+                    })
+                    .is_some_and(|owner| {
+                        trogon_atlas_core::decision_document::resolve_document_selection(
+                            selection, owner,
+                        )
+                        .is_ok()
+                            && role.is_some_and(|role| {
+                                trogon_atlas_core::document_catalog_context::resolve_related_purpose_agreement(role, owner).is_ok()
+                            })
+                    });
+                if !resolves {
+                    issue(
+                        &format!("related_content[{index}].document"),
+                        "Related content selection is absent, stale, unavailable or conflicts with declared purpose",
+                    );
+                }
+            }
+            (
+                "navigation",
+                value
+                    .navigation
+                    .iter()
+                    .map(|association| &association.document)
+                    .collect(),
+            )
+        }
         _ => ("", Vec::new()),
     };
     for (index, selection) in selections.into_iter().enumerate() {

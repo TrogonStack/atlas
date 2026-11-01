@@ -17,6 +17,8 @@ pub enum SourceError {
     MissingOwnership,
     #[error("source ownership unit is unsupported for this native kind")]
     UnsupportedUnit,
+    #[error("schema variants support native authoring only")]
+    NativeSchemaVariants,
     #[error("source ownership units overlap")]
     OverlappingUnits,
     #[error("source native identity differs")]
@@ -65,21 +67,164 @@ fn native(
     };
     Ok((wrapper, kind, value))
 }
+fn list_nonempty(value: &DynamicMessage, name: &str) -> bool {
+    value
+        .get_field_by_name(name)
+        .as_deref()
+        .and_then(Value::as_list)
+        .is_some_and(|values| !values.is_empty())
+}
+
+fn native_authoring_content(value: &DynamicMessage) -> bool {
+    match value.descriptor().full_name() {
+        "trogonatlas.eventmodel.v1alpha1.DataProduct" => {
+            list_nonempty(value, "resource_associations")
+        }
+        "trogonatlas.eventmodel.v1alpha1.Specification" => {
+            list_nonempty(value, "message_channels")
+                || value
+                    .get_field_by_name("messages")
+                    .as_deref()
+                    .and_then(Value::as_list)
+                    .is_some_and(|messages| {
+                        messages.iter().any(|message| {
+                            let Value::Message(message) = message else {
+                                return false;
+                            };
+                            message
+                                .get_field_by_name("schemas")
+                                .as_deref()
+                                .and_then(Value::as_list)
+                                .is_some_and(|bindings| {
+                                    bindings.iter().any(|binding| {
+                                        let Value::Message(binding) = binding else {
+                                            return false;
+                                        };
+                                        list_nonempty(binding, "environments")
+                                            || binding
+                                                .descriptor()
+                                                .get_field_by_name("is_default")
+                                                .is_some_and(|field| binding.has_field(&field))
+                                    })
+                                })
+                        })
+                    })
+        }
+        _ => false,
+    }
+}
+
+/// Collections that only native authoring may hold, so a source can neither supply nor clear them.
+fn native_collections(owner: &str) -> &'static [&'static str] {
+    match owner {
+        "trogonatlas.eventmodel.v1alpha1.Component"
+        | "trogonatlas.eventmodel.v1alpha1.ExternalSystem" => {
+            &["relationships", "communications", "storage_claims"]
+        }
+        "trogonatlas.eventmodel.v1alpha1.Channel" => &["links"],
+        "trogonatlas.eventmodel.v1alpha1.DataProduct" => &["storage_claims"],
+        _ => &[],
+    }
+}
 fn unit_fields(
     value: &DynamicMessage,
     unit: OwnershipUnit,
 ) -> Result<Vec<FieldDescriptor>, SourceError> {
     let descriptor = value.descriptor();
+    if unit == OwnershipUnit::WholeOwner
+        && descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Decision"
+        && ["authored_on", "decided_on", "decision_makers", "amends"]
+            .iter()
+            .any(|name| value.has_field_by_name(name))
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
+    if unit == OwnershipUnit::WholeOwner
+        && value
+            .get_field_by_name("message_claims")
+            .as_deref()
+            .and_then(Value::as_message)
+            .is_some_and(|v| {
+                ["claims", "routes", "triggers", "field_selections"]
+                    .iter()
+                    .any(|name| {
+                        v.get_field_by_name(name)
+                            .as_deref()
+                            .and_then(Value::as_list)
+                            .is_some_and(|v| !v.is_empty())
+                    })
+            })
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
+    if unit == OwnershipUnit::Field(SourceOwnedField::Metadata)
+        && crate::agent_metadata::metadata_has_additions(value)
+            .map_err(|_| SourceError::NativeValue)?
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
+    if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Document"
+        && match unit {
+            OwnershipUnit::WholeOwner => {
+                crate::document_catalog_context::dynamic_has_native_extensions(value)
+                    .map_err(|_| SourceError::NativeValue)?
+            }
+            OwnershipUnit::Field(SourceOwnedField::Purpose) => true,
+            OwnershipUnit::Field(SourceOwnedField::Body) => {
+                value.has_field_by_name("retained_content")
+            }
+            OwnershipUnit::Field(SourceOwnedField::Metadata) => {
+                crate::document_catalog_context::metadata_has_collection(value)
+                    .map_err(|_| SourceError::NativeValue)?
+            }
+            OwnershipUnit::Field(_) => false,
+        }
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
     if matches!(
         descriptor.full_name(),
         "trogonatlas.eventmodel.v1alpha1.Component"
             | "trogonatlas.eventmodel.v1alpha1.ExternalSystem"
-    ) {
-        if unit == OwnershipUnit::Field(SourceOwnedField::Relationships) {
+    ) && unit == OwnershipUnit::Field(SourceOwnedField::Relationships)
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
+    if unit == OwnershipUnit::WholeOwner
+        && native_collections(descriptor.full_name())
+            .iter()
+            .any(|name| {
+                value
+                    .get_field_by_name(name)
+                    .as_deref()
+                    .and_then(Value::as_list)
+                    .is_some_and(|values| !values.is_empty())
+            })
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
+    if unit == OwnershipUnit::WholeOwner
+        && descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Term"
+        && value.get_field_by_name("owning_domain").is_some_and(|_| {
+            descriptor
+                .get_field_by_name("owning_domain")
+                .is_some_and(|field| value.has_field(&field))
+        })
+    {
+        return Err(SourceError::UnsupportedUnit);
+    }
+    if unit == OwnershipUnit::WholeOwner && native_authoring_content(value) {
+        return Err(SourceError::UnsupportedUnit);
+    }
+    if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.DesignGraph" {
+        if matches!(
+            unit,
+            OwnershipUnit::Field(SourceOwnedField::Steps | SourceOwnedField::EntrySteps)
+        ) {
             return Err(SourceError::UnsupportedUnit);
         }
         if unit == OwnershipUnit::WholeOwner
-            && ["relationships", "communications"].iter().any(|name| {
+            && ["steps", "entry_steps"].iter().any(|name| {
                 value
                     .get_field_by_name(name)
                     .as_deref()
@@ -89,6 +234,45 @@ fn unit_fields(
         {
             return Err(SourceError::UnsupportedUnit);
         }
+    }
+    if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.Schema"
+        && unit == OwnershipUnit::WholeOwner
+    {
+        let aggregate = descriptor
+            .get_field_by_name("aggregate_root")
+            .is_some_and(|field| value.has_field(&field));
+        let listed = |name: &str| {
+            value
+                .get_field_by_name(name)
+                .as_deref()
+                .and_then(Value::as_list)
+                .is_some_and(|values| !values.is_empty())
+        };
+        if aggregate || listed("identifiers") || listed("property_relationships") {
+            return Err(SourceError::UnsupportedUnit);
+        }
+    }
+    let (native_units, native_collections): (&[SourceOwnedField], &[&str]) = match descriptor
+        .full_name()
+    {
+        "trogonatlas.eventmodel.v1alpha1.SystemGroup" => (
+            &[SourceOwnedField::Members, SourceOwnedField::Relationships],
+            &["members", "relationships", "actors"],
+        ),
+        "trogonatlas.eventmodel.v1alpha1.Domain" => (&[SourceOwnedField::Members], &["members"]),
+        _ => (&[], &[]),
+    };
+    if matches!(unit, OwnershipUnit::Field(field) if native_units.contains(&field))
+        || (unit == OwnershipUnit::WholeOwner
+            && native_collections.iter().any(|name| {
+                value
+                    .get_field_by_name(name)
+                    .as_deref()
+                    .and_then(Value::as_list)
+                    .is_some_and(|values| !values.is_empty())
+            }))
+    {
+        return Err(SourceError::UnsupportedUnit);
     }
     match unit {
         OwnershipUnit::WholeOwner => Ok(descriptor.fields().filter(|f| f.name() != "id").collect()),
@@ -154,6 +338,23 @@ pub fn validate_ownership(
     }
     Ok(units)
 }
+
+pub fn validate_create_ownership(
+    entity: &Entity,
+    ownership: &SourceFieldOwnership,
+) -> Result<(), SourceError> {
+    if let Some(trogon_atlas_proto::entity::Kind::Decision(value)) = &entity.kind {
+        if value.authored_on.is_some()
+            || value.decided_on.is_some()
+            || !value.decision_makers.is_empty()
+            || !value.amends.is_empty()
+        {
+            return Err(SourceError::UnsupportedUnit);
+        }
+    }
+    validate_ownership(entity, ownership)?;
+    Ok(())
+}
 pub fn validate_selection_ownership(
     selection: &SourceSelection,
     ownership: &SourceFieldOwnership,
@@ -163,7 +364,11 @@ pub fn validate_selection_ownership(
             matches!(
                 trogon_atlas_proto::EntityKind::try_from(owner.kind),
                 Ok(trogon_atlas_proto::EntityKind::Component
-                    | trogon_atlas_proto::EntityKind::ExternalSystem)
+                    | trogon_atlas_proto::EntityKind::ExternalSystem
+                    | trogon_atlas_proto::EntityKind::SystemGroup
+                    | trogon_atlas_proto::EntityKind::DesignGraph
+                    | trogon_atlas_proto::EntityKind::Domain
+                    | trogon_atlas_proto::EntityKind::Schema)
             )
         }) {
             return Err(SourceError::UnsupportedUnit);
@@ -201,6 +406,7 @@ pub fn replace_unit(
     if selected.unit != unit || value.descriptor() != selected.value.descriptor() {
         return Err(SourceError::UnsupportedUnit);
     }
+    unit_fields(&selected.value, unit)?;
     let fields = unit_fields(&value, unit)?;
     for field in &fields {
         value.clear_field(field);
@@ -271,6 +477,64 @@ fn charge_value(value: &Value, budget: &mut RunBudget) -> Result<(), SourceError
     Ok(())
 }
 
+#[derive(PartialEq)]
+struct NativeSchemaVariant<'a> {
+    message: Option<&'a trogon_atlas_proto::ContractMemberId>,
+    binding: Option<&'a trogon_atlas_proto::ConnectionId>,
+    role: i32,
+    target: Option<&'a trogon_atlas_proto::schema_binding::Type>,
+    environments: &'a [trogon_atlas_proto::EnvironmentName],
+    is_default: Option<bool>,
+}
+
+fn native_schema_variants(entity: Option<&Entity>) -> Vec<NativeSchemaVariant<'_>> {
+    let Some(trogon_atlas_proto::entity::Kind::Specification(specification)) =
+        entity.and_then(|entity| entity.kind.as_ref())
+    else {
+        return Vec::new();
+    };
+    let mut variants: Vec<_> = specification
+        .messages
+        .iter()
+        .flat_map(|message| {
+            message
+                .schemas
+                .iter()
+                .filter(|binding| !binding.environments.is_empty() || binding.is_default.is_some())
+                .map(|binding| NativeSchemaVariant {
+                    message: message.member_id.as_ref(),
+                    binding: binding.connection_id.as_ref(),
+                    role: binding.role,
+                    target: binding.r#type.as_ref(),
+                    environments: &binding.environments,
+                    is_default: binding.is_default,
+                })
+        })
+        .collect();
+    variants.sort_by(|left, right| {
+        (
+            left.message.map(|id| &id.value),
+            left.binding.map(|id| &id.value),
+        )
+            .cmp(&(
+                right.message.map(|id| &id.value),
+                right.binding.map(|id| &id.value),
+            ))
+    });
+    variants
+}
+
+/// Enclosing Source field authority excludes native variant occurrences.
+pub fn validate_native_schema_variants(
+    current: Option<&Entity>,
+    proposed: &Entity,
+) -> Result<(), SourceError> {
+    if native_schema_variants(current) != native_schema_variants(Some(proposed)) {
+        return Err(SourceError::NativeSchemaVariants);
+    }
+    Ok(())
+}
+
 pub fn plan_merge(
     base_source: &Entity,
     base_native: &Entity,
@@ -337,6 +601,7 @@ pub fn plan_merge_with_comparator<E: From<SourceError>>(
         budget.charge(BudgetWork::ResultRecords, 1)?;
         plan.decisions.push(UnitDecision { unit, disposition });
     }
+    validate_native_schema_variants(Some(current), &plan.proposed)?;
     Ok(plan)
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

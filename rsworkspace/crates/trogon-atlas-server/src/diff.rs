@@ -60,6 +60,8 @@ fn kind_name(e: &pb::Entity) -> &'static str {
         Some(K::Person(_)) => "Person",
         Some(K::Decision(_)) => "Decision",
         Some(K::Document(_)) => "Document",
+        Some(K::DesignGraph(_)) => "DesignGraph",
+        Some(K::SystemGroup(_)) => "SystemGroup",
         None => "<empty>",
     }
 }
@@ -430,6 +432,16 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
             scalar(ops, "doc", &x.doc, &y.doc);
             diff_id_ref(
                 ops,
+                "owning_domain",
+                x.owning_domain
+                    .as_ref()
+                    .and_then(|reference| reference.id.as_ref()),
+                y.owning_domain
+                    .as_ref()
+                    .and_then(|reference| reference.id.as_ref()),
+            );
+            diff_id_ref(
+                ops,
                 "supersedes",
                 x.supersedes.as_ref(),
                 y.supersedes.as_ref(),
@@ -677,8 +689,31 @@ fn diff_common(a: &pb::Entity, b: &pb::Entity, ops: &mut Vec<pb::DiffOp>) {
                     ("subjects", "subjects"),
                     ("retained", "retained"),
                     ("link", "link"),
+                    ("retained_content", "retainedContent"),
                     ("anchors", "anchors"),
                     ("navigation", "navigation"),
+                    ("purpose", "purpose"),
+                    ("filename", "filename"),
+                    ("related_content", "relatedContent"),
+                ],
+            );
+            resource_metadata(ops, &x.metadata, &y.metadata);
+        }
+        (Some(K::DesignGraph(x)), Some(K::DesignGraph(y))) => {
+            resource_fields(
+                ops,
+                "DesignGraph",
+                x,
+                y,
+                &[
+                    ("title", "title"),
+                    ("doc", "doc"),
+                    ("profile", "profile"),
+                    ("steps", "steps"),
+                    ("entry_steps", "entrySteps"),
+                    ("subjects", "subjects"),
+                    ("layout_document", "layoutDocument"),
+                    ("supersedes", "supersedes"),
                 ],
             );
             resource_metadata(ops, &x.metadata, &y.metadata);

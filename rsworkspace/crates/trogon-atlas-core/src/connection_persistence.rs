@@ -2,7 +2,8 @@
 
 use std::collections::HashSet;
 
-use trogon_atlas_proto::Entity;
+use prost::Message;
+use trogon_atlas_proto::{entity, Entity};
 
 use crate::{
     connections::{
@@ -10,26 +11,50 @@ use crate::{
         reconcile_branch_connection_ids, reconcile_connection_ids, renew_connection_ids,
         validate_stored_connection_ids, ConnectionError, ConnectionId,
     },
-    data_product, decision_document, specification, stamp_system,
+    data_product, decision_document, design_topology, specification, stamp_system,
 };
+
+fn checked_prepared_owner(entity: Entity) -> Result<Entity, ConnectionError> {
+    if matches!(
+        entity.kind,
+        Some(
+            entity::Kind::Document(_)
+                | entity::Kind::Decision(_)
+                | entity::Kind::DesignGraph(_)
+                | entity::Kind::SystemGroup(_)
+        )
+    ) && entity.encoded_len() > decision_document::MAX_ENCODED_BYTES
+    {
+        return Err(ConnectionError::Catalog(
+            "catalog entity byte limit exceeded".into(),
+        ));
+    }
+    crate::system_group::validate_values(&entity)
+        .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
+    Ok(entity)
+}
 
 /// Prepare an untrusted write against the value guarded by the store's CAS.
 pub fn prepare_entity(
     previous: Option<&Entity>,
     proposed: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    crate::business_data::reject_unassigned(proposed)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
     let mut prepared = proposed.clone();
     if let Some(previous) = previous {
         if decision_document::equivalent_manifest(previous, proposed)?
             || specification::equivalent_manifest(previous, proposed)?
             || data_product::equivalent_manifest(previous, proposed)?
+            || design_topology::equivalent_manifest(previous, proposed)?
         {
-            return Ok(previous.clone());
+            return checked_prepared_owner(previous.clone());
         }
     }
     decision_document::prepare_values(previous, &mut prepared, false)?;
     specification::prepare_members(previous, &mut prepared, false)?;
     data_product::prepare_ports(previous, &mut prepared, false)?;
+    design_topology::prepare_steps(previous, &mut prepared, false)?;
     match previous {
         Some(previous) => {
             if equivalent_with_unassigned_ids(previous, &prepared)? {
@@ -42,7 +67,12 @@ pub fn prepare_entity(
             assign_connection_ids(&mut prepared)?;
         }
     }
-    Ok(stamp_system(previous, &prepared))
+    prepared = stamp_system(previous, &prepared);
+    crate::message_claims::validate_local_selections(previous, &prepared)
+        .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
+    crate::business_data::reject_encoded_size(&prepared)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
+    checked_prepared_owner(prepared)
 }
 
 /// Land a trusted branch value after checking its baseline concurrency guard.
@@ -51,12 +81,16 @@ pub fn prepare_landing(
     previous: Option<&Entity>,
     branch: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    crate::business_data::reject_unassigned(branch)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
     let removed_values = decision_document::removed_values(base, previous, branch)?;
     decision_document::reject_removed(branch, &removed_values)?;
     let removed_ports = data_product::removed_ports(base, previous, branch)?;
     data_product::reject_removed(branch, &removed_ports)?;
     let removed_members = specification::removed_members(base, previous, branch)?;
     specification::reject_removed(branch, &removed_members)?;
+    let removed_steps = design_topology::removed_steps(base, previous, branch)?;
+    design_topology::reject_removed(branch, &removed_steps)?;
     let removed = removed_base_ids(base, previous, branch)?;
     if let Some(id) = connection_occurrences(branch)?
         .into_iter()
@@ -70,9 +104,12 @@ pub fn prepare_landing(
     decision_document::prepare_values(previous, &mut prepared, true)?;
     specification::prepare_members(previous, &mut prepared, true)?;
     data_product::prepare_ports(previous, &mut prepared, true)?;
+    design_topology::prepare_steps(previous, &mut prepared, true)?;
     if let Some(previous) = previous {
         reconcile_branch_connection_ids(previous, &mut prepared)?;
     }
+    crate::message_claims::validate_values(&prepared)
+        .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
     prepared = stamp_system(previous, &prepared);
     if previous.is_none() {
         if let Some(system) = branch
@@ -83,7 +120,11 @@ pub fn prepare_landing(
             prepared.system = Some(system.clone());
         }
     }
-    Ok(prepared)
+    crate::message_claims::validate_values(&prepared)
+        .map_err(|e| ConnectionError::Catalog(e.to_string()))?;
+    crate::business_data::reject_encoded_size(&prepared)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
+    checked_prepared_owner(prepared)
 }
 
 /// Resolve an explicit branch choice without reviving occurrences removed since its base.
@@ -92,6 +133,8 @@ pub fn prepare_resolution(
     discarded: Option<&Entity>,
     selected: &Entity,
 ) -> Result<Entity, ConnectionError> {
+    crate::business_data::reject_unassigned(selected)
+        .map_err(|error| ConnectionError::Business(error.to_string()))?;
     let removed = removed_base_ids(base, discarded, selected)?;
     let mut resolved = selected.clone();
     renew_connection_ids(&mut resolved, &removed)?;
@@ -101,9 +144,12 @@ pub fn prepare_resolution(
     specification::restore_members(&mut resolved, &removed_members)?;
     let removed_ports = data_product::removed_ports(base, discarded, selected)?;
     data_product::restore_ports(&mut resolved, &removed_ports)?;
+    let removed_steps = design_topology::removed_steps(base, discarded, selected)?;
+    design_topology::restore_steps(&mut resolved, &removed_steps)?;
     crate::connections::renew_retargeted_connection_ids(selected, &mut resolved)?;
     crate::connections::assign_connection_ids(&mut resolved)?;
     specification::rewrite_exposure_selections(selected, &mut resolved);
+    crate::message_claims::rewrite_local_selections(selected, &mut resolved);
     crate::connections::renew_retargeted_connection_ids(selected, &mut resolved)?;
     crate::connections::assign_connection_ids(&mut resolved)?;
     prepare_landing(base, discarded, &resolved)

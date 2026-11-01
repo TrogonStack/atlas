@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package trogonatlas.api.eventmodel.v1alpha1;
+
+import "trogonatlas/type/v1alpha1/connection_id.proto";
+import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/specification.proto";
+import "trogonatlas/eventmodel/v1alpha1/resource_association_values.proto";
+import "trogonatlas/eventmodel/v1alpha1/message_claims.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
+
+// Each native authority retains its own exact occurrence and selectors.
+message ChannelMessageRecord {
+  trogonatlas.eventmodel.v1alpha1.EntityRef owner = 1;
+  string owner_uid = 2;
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 3;
+  trogonatlas.eventmodel.v1alpha1.ContractMemberRef message = 4;
+  trogonatlas.eventmodel.v1alpha1.ChannelRef channel = 5;
+  map<string, string> parameter_values = 6;
+  optional trogonatlas.eventmodel.v1alpha1.ClaimDeliveryMode delivery_mode = 7;
+  optional string doc = 8;
+  trogonatlas.eventmodel.v1alpha1.ChannelMessageAuthority authority = 9;
+  trogonatlas.eventmodel.v1alpha1.MessageClaim claim = 10;
+  trogonatlas.eventmodel.v1alpha1.ClaimRoute route = 11;
+  trogonatlas.eventmodel.v1alpha1.ContractMemberRef operation = 12;
+  trogonatlas.eventmodel.v1alpha1.OperationMessage operation_message = 13;
+  CatalogResolutionState state = 14;
+}
+
+message ListChannelMessagesRequest {
+  trogonatlas.eventmodel.v1alpha1.ChannelRef channel = 1;
+  uint32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListChannelMessagesResponse {
+  repeated ChannelMessageRecord records = 1;
+  string next_page_token = 2;
+  bool incomplete = 3;
+  bool complete = 4;
+  optional string branch = 5;
+  string scope_digest = 6;
+  uint32 authorized_namespace_count = 7;
+}
