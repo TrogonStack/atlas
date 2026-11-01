@@ -2860,6 +2860,52 @@ describe('native human interaction gateway', () => {
       expect(fakeClient.inspectHumanInteraction).not.toHaveBeenCalled();
     } finally { delete fakeClient.inspectHumanInteraction; }
   });
+  it.each([
+    ['NOT_FOUND', 5, 404],
+    ['PERMISSION_DENIED', 7, 403],
+    ['RESOURCE_EXHAUSTED', 8, 429],
+    ['UNAVAILABLE', 14, 503],
+    ['DEADLINE_EXCEEDED', 4, 504],
+    ['UNAUTHENTICATED', 16, 401],
+  ])('keeps backend %s as an operational error and never as an empty or unresolved path', async (_name, code, status) => {
+    fakeClient.inspectHumanInteraction = vi.fn((_body, _meta, _opts, cb) => cb(Object.assign(new Error('backend refusal'), { code })));
+    try {
+      const response = await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(status);
+      expect(response.body).not.toHaveProperty('state');
+      expect(response.body).not.toHaveProperty('edges');
+      expect(fakeClient.inspectHumanInteraction).toHaveBeenCalledTimes(1);
+    } finally { delete fakeClient.inspectHumanInteraction; }
+  });
+  it('retains resolved checked targets, uid and etag per edge and every visited owner row without synthesizing a snapshot', async () => {
+    const output = {
+      request: input,
+      state: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+      consistency: 'HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET',
+      scope: {
+        branch: '', revision: 'read-set-digest', authorizedNamespaces: ['review'],
+        visited: [
+          { owner: hosting.owner, uid: hosting.ownerUid, etag: 'component-etag' },
+          { owner: input.display.ui.owner, uid: input.display.ui.ownerUid, etag: 'slice-etag' },
+        ],
+      },
+      edges: [{
+        role: 'HUMAN_INTERACTION_ROLE_READ_MODEL', selection: input.display.sourceReadModel, field: 'ui_slice.source_read_models[1]',
+        target: { kind: 'ENTITY_KIND_READ_MODEL', id: id('summary') }, state: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+        checkedTarget: { uid: 'summary-uid', etag: 'summary-etag' },
+      }],
+    };
+    fakeClient.inspectHumanInteraction = vi.fn((_body, _meta, _opts, cb) => cb(null, output));
+    try {
+      const response = await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input) });
+      expect(response.status).toBe(200);
+      expect(response.body.edges[0].checkedTarget).toEqual({ uid: 'summary-uid', etag: 'summary-etag' });
+      expect(response.body.scope.visited).toEqual(output.scope.visited);
+      expect(response.body.edges[0].target.id.version).toBe(version);
+      expect(response.body).not.toHaveProperty('snapshotId');
+      expect(response.body.consistency).toBe('HUMAN_INTERACTION_CONSISTENCY_PER_OWNER_CHECKED_READ_SET');
+    } finally { delete fakeClient.inspectHumanInteraction; }
+  });
   it('does not allow historical hydration or mutation through this inspection route', async () => {
     expect((await request(app).get('/api/catalog/human-interaction').query({ request: JSON.stringify(input), asOf: 'old' })).status).toBe(400);
     expect((await request(app).post('/api/catalog/human-interaction').send(input)).status).toBe(403);
