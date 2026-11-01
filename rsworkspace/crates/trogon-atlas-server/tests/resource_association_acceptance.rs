@@ -1485,7 +1485,7 @@ async fn removed_variant_target_stays_readable_and_a_new_unresolved_binding_reje
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn advertised_writer_floor_is_revision_19_and_get_sends_no_mutation() {
+async fn advertised_writer_floor_is_revision_20_and_get_sends_no_mutation() {
     let mut client = client().await;
     let namespace = unique("writer-floor");
     let spec_id = id(&namespace, "contract");
@@ -1525,8 +1525,8 @@ async fn advertised_writer_floor_is_revision_19_and_get_sends_no_mutation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(info.contract_revision, 19);
-    assert_eq!(info.min_client_contract_revision, 19);
+    assert_eq!(info.contract_revision, 20);
+    assert_eq!(info.min_client_contract_revision, 20);
     compat::check(&info, MutationIntent::default()).unwrap();
     let refused =
         compat::writer_revision_decision(18, info.min_client_contract_revision).unwrap_err();
@@ -1534,7 +1534,7 @@ async fn advertised_writer_floor_is_revision_19_and_get_sends_no_mutation() {
         refused,
         CompatibilityError::ClientTooOld {
             client: 18,
-            minimum: 19
+            minimum: 20
         }
     ));
     assert!(

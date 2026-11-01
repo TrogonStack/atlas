@@ -4918,6 +4918,17 @@ pub struct CommunicationDeclaration {
     #[prost(message, optional, tag="7")]
     pub doc: ::core::option::Option<CatalogText>,
 }
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UiHosting {
+    #[prost(message, optional, tag="1")]
+    pub connection_id: ::core::option::Option<super::super::r#type::v1alpha1::ConnectionId>,
+    #[prost(message, optional, tag="2")]
+    pub ui: ::core::option::Option<UiRef>,
+    #[prost(message, optional, tag="3")]
+    pub label: ::core::option::Option<CatalogTitle>,
+    #[prost(message, optional, tag="4")]
+    pub doc: ::core::option::Option<CatalogText>,
+}
 /// A Component is a living implementation unit: the deployable thing that
 /// hosts processors, serves UIs, projects read models, exposes APIs, and owns
 /// its technology choices -- including the messaging it relies on (Kafka
@@ -4948,6 +4959,8 @@ pub struct Component {
     pub relationships: ::prost::alloc::vec::Vec<ArchitecturalRelationship>,
     #[prost(message, repeated, tag="9")]
     pub communications: ::prost::alloc::vec::Vec<CommunicationDeclaration>,
+    #[prost(message, repeated, tag="10")]
+    pub ui_hostings: ::prost::alloc::vec::Vec<UiHosting>,
     #[prost(message, optional, tag="11")]
     pub message_claims: ::core::option::Option<MessageClaims>,
     #[prost(message, repeated, tag="12")]

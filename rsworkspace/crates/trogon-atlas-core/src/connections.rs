@@ -426,6 +426,8 @@ fn visit(
                         kind: trogon_atlas_proto::EntityKind::Schema as i32,
                         id: Some(id),
                     })
+            } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.UiHosting" {
+                entity_target(message, "ui", trogon_atlas_proto::EntityKind::Ui)?
             } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.ChannelLink" {
                 entity_target(message, "target", trogon_atlas_proto::EntityKind::Channel)?
             } else if descriptor.full_name() == "trogonatlas.eventmodel.v1alpha1.StorageAccessClaim"

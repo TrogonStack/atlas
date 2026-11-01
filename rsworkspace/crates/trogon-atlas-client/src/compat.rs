@@ -294,21 +294,21 @@ mod tests {
     }
 
     #[test]
-    fn revision_19_refuses_an_older_writer_before_mutation() {
-        assert_eq!(pb::CONTRACT_REVISION, 19);
-        assert_eq!(pb::MIN_SERVER_CONTRACT_REVISION, 19);
-        assert_eq!(pb::MIN_CLIENT_CONTRACT_REVISION, 19);
+    fn revision_20_refuses_an_older_writer_before_mutation() {
+        assert_eq!(pb::CONTRACT_REVISION, 20);
+        assert_eq!(pb::MIN_SERVER_CONTRACT_REVISION, 20);
+        assert_eq!(pb::MIN_CLIENT_CONTRACT_REVISION, 20);
         let server_requires_newer_writer = pb::GetServerInfoResponse {
-            contract_revision: 19,
-            min_client_contract_revision: 20,
+            contract_revision: 20,
+            min_client_contract_revision: 21,
             ..current_server()
         };
         let writer = check(&server_requires_newer_writer, MutationIntent::default()).unwrap_err();
         assert!(matches!(
             writer,
             CompatibilityError::ClientTooOld {
-                client: 19,
-                minimum: 20
+                client: 20,
+                minimum: 21
             }
         ));
         assert!(
@@ -327,7 +327,7 @@ mod tests {
             server,
             CompatibilityError::ServerTooOld {
                 server: 18,
-                minimum: 19
+                minimum: 20
             }
         ));
         assert!(
@@ -380,7 +380,7 @@ mod tests {
             refused,
             CompatibilityError::ClientTooOld {
                 client: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
-                minimum: 19
+                minimum: 20
             }
         ));
         assert!(
@@ -392,20 +392,20 @@ mod tests {
     }
 
     #[test]
-    fn writer_below_revision_19_is_refused_before_any_mutation() {
+    fn writer_below_revision_20_is_refused_before_any_mutation() {
         let advertised = current_server();
-        assert_eq!(advertised.contract_revision, 19);
-        assert_eq!(advertised.min_client_contract_revision, 19);
+        assert_eq!(advertised.contract_revision, 20);
+        assert_eq!(advertised.min_client_contract_revision, 20);
         for intent in every_intent() {
             check(&advertised, intent).unwrap();
         }
         let refused =
-            writer_revision_decision(18, advertised.min_client_contract_revision).unwrap_err();
+            writer_revision_decision(19, advertised.min_client_contract_revision).unwrap_err();
         assert!(matches!(
             refused,
             CompatibilityError::ClientTooOld {
-                client: 18,
-                minimum: 19
+                client: 19,
+                minimum: 20
             }
         ));
         assert!(
@@ -422,8 +422,8 @@ mod tests {
         assert!(matches!(
             live,
             CompatibilityError::ClientTooOld {
-                client: 19,
-                minimum: 20
+                client: 20,
+                minimum: 21
             }
         ));
         assert!(
