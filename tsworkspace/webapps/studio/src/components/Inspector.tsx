@@ -1,12 +1,23 @@
 import { SourceIntegrationReview } from '@/components/SourceIntegrationReview';
 import { DecisionDocumentInspector } from '@/components/DecisionDocumentInspector';
+import { DesignGraphInspector } from '@/components/DesignGraphInspector';
 import { ExternalLink, FileCode2, Split, TriangleAlert, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { ResponsibilityInspector } from '@/components/ResponsibilityInspector';
 import { DataProductInspector } from '@/components/DataProductInspector';
+import { ChannelStorageDetails } from '@/components/ChannelStorageDetails';
 import { CommunicationIntentDetails } from '@/components/CommunicationIntentDetails';
+import { MessageClaimsDetails } from '@/components/MessageClaimsDetails';
 import { ArchitecturalRelationshipDetails } from '@/components/ArchitecturalRelationshipDetails';
+import { SchemaBusinessDetails } from '@/components/SchemaBusinessDetails';
 import { ArchitectureResourceDetails } from '@/components/ArchitectureResourceDetails';
+import {
+  AgentAnnotationDetails,
+  BadgesAnnotationDetails,
+  LifecycleAnnotationDetails,
+  ResourceGroupsAnnotationDetails,
+} from '@/components/AgentMetadataDetails';
+import { SystemGroupDetails } from '@/components/SystemGroupDetails';
 import { SpecificationDetails } from '@/components/SpecificationDetails';
 import { CopyContextButton } from '@/components/CopyContextButton';
 import { EntityHistory } from '@/components/EntityHistory';
@@ -46,6 +57,7 @@ import {
   storyboardEntryReadModel,
   subdomainsOf,
   termEmbodiedBy,
+  termOwningDomain,
   trackingOf,
   uiTransitionsOf,
 } from '@/lib/model';
@@ -303,9 +315,19 @@ function annotationLabel(type: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function AnnotationView({ annotation }: { annotation: Annotation }) {
+function AnnotationView({
+  annotation,
+  model,
+  onSelect,
+}: {
+  annotation: Annotation;
+  model: Model;
+  onSelect: (key: string) => void;
+}) {
   const d = annotation.data;
   switch (annotation.type) {
+    case 'AgentAnnotation':
+      return <AgentAnnotationDetails annotation={annotation} />;
     case 'Uuidv5IdentityAnnotation': {
       const ns = d.dns ?? d.url ?? d.uuid;
       const nsKind = d.dns ? 'dns' : d.url ? 'url' : 'uuid';
@@ -391,12 +413,11 @@ function AnnotationView({ annotation }: { annotation: Annotation }) {
       );
     }
     case 'LifecycleAnnotation':
-      return (
-        <div className="rounded-md border border-border px-2 py-1.5 text-xs">
-          <Badge variant="secondary">{String(d.status ?? '')}</Badge>
-          {d.doc ? <span className="ml-2 text-muted-foreground">{String(d.doc)}</span> : null}
-        </div>
-      );
+      return <LifecycleAnnotationDetails annotation={annotation} />;
+    case 'BadgesAnnotation':
+      return <BadgesAnnotationDetails annotation={annotation} />;
+    case 'ResourceGroupsAnnotation':
+      return <ResourceGroupsAnnotationDetails annotation={annotation} model={model} onSelect={onSelect} />;
     case 'FailureModeAnnotation':
       return (
         <div className="rounded-md border border-border px-2 py-1.5 text-xs">
@@ -639,10 +660,15 @@ export function Inspector({
           ) : null}
           <ResponsibilityInspector entity={entity} asOf={asOf} />
           <DecisionDocumentInspector entity={entity} asOf={asOf} />
+          <DesignGraphInspector entity={entity} asOf={asOf} />
           <SourceIntegrationReview namespace={entity.id.namespace} asOf={asOf} />
           <ArchitectureResourceDetails entity={entity} model={model} onSelect={onSelect} />
           <ArchitecturalRelationshipDetails entity={entity} model={model} onSelect={onSelect} />
+          <SchemaBusinessDetails entity={entity} model={model} />
+          <SystemGroupDetails entity={entity} model={model} onSelect={onSelect} />
           <CommunicationIntentDetails entity={entity} model={model} onSelect={onSelect} />
+          <MessageClaimsDetails entity={entity} model={model} onSelect={onSelect} />
+          <ChannelStorageDetails entity={entity} model={model} onSelect={onSelect} />
           <SpecificationDetails entity={entity} model={model} onSelect={onSelect} />
           {entity.kind === 'dataProduct' && <DataProductInspector entity={entity} asOf={asOf} />}
           {entity.kind === 'typeLibrary' ? <TypeLibrarySources entity={entity} /> : null}
@@ -704,6 +730,36 @@ export function Inspector({
                 );
               }
             } else if (entity.kind === 'term') {
+              const domain = termOwningDomain(entity);
+              if (domain) {
+                const target = model.entities.find(
+                  (candidate) =>
+                    candidate.kind === 'domain' &&
+                    candidate.id.namespace === domain.namespace &&
+                    candidate.id.slug === domain.slug &&
+                    candidate.id.version === domain.version,
+                );
+                rows.push(
+                  target ? (
+                    <button
+                      key="owning-domain"
+                      type="button"
+                      onClick={() => onSelect(target.key)}
+                      className="w-full rounded-md border border-lime-200 bg-lime-50/70 px-2 py-1.5 text-left text-xs hover:bg-lime-100"
+                    >
+                      owning domain{' '}
+                      <span className="font-mono">
+                        {domain.namespace}/{domain.slug}@{domain.version}
+                      </span>
+                    </button>
+                  ) : (
+                    <div key="owning-domain" className="text-xs">
+                      owning domain unavailable
+                    </div>
+                  ),
+                );
+              }
+
               for (const ref of termEmbodiedBy(entity)) {
                 const target = find(ref.kind, ref.id);
                 rows.push(
@@ -1145,7 +1201,7 @@ export function Inspector({
               <div className="space-y-1.5">
                 {listedAnnotations.map((a, i) => (
                   // oxlint-disable-next-line react/no-array-index-key -- annotations have no stable id
-                  <AnnotationView key={i} annotation={a} />
+                  <AnnotationView key={i} annotation={a} model={model} onSelect={onSelect} />
                 ))}
               </div>
             </section>

@@ -185,6 +185,36 @@ export function DataProductInspector({ entity, asOf: historicalAsOf }: { entity:
           />
         )),
       )}
+      <h4 className="font-semibold">Authored resource associations</h4>
+      <p>
+        Descriptive associations. They do not produce ports, access, or lineage, and they are not evidence that the
+        product produces the target.
+      </p>
+      {!list(entity.raw.resourceAssociations).length && <p>None declared</p>}
+      {list(entity.raw.resourceAssociations).map((association, index) => (
+        <dl className="flex flex-col gap-2 rounded border p-2" key={`${value(association.connectionId)}:${index}`}>
+          <Detail label="Association ID">{value(association.connectionId)}</Detail>
+          <Detail label="Direction">{value(association.direction).replace('DATA_PORT_DIRECTION_', '')}</Detail>
+          <Detail label="Target">
+            <ExactContent
+              value={
+                association.event ??
+                association.command ??
+                association.message ??
+                association.component ??
+                association.externalSystem ??
+                association.channel ??
+                association.dataStore ??
+                'Undeclared'
+              }
+            />
+          </Detail>
+          <Detail label="Output contract">
+            {association.contract === undefined ? 'Undeclared' : <ExactContent value={association.contract} />}
+          </Detail>
+          {association.doc !== undefined && <Detail label="Documentation">{value(association.doc)}</Detail>}
+        </dl>
+      ))}
       <p>{offeringLabel(inspection)}</p>
       <h4 className="font-semibold">Backend confirmed local Event emissions</h4>
       {inspection?.emissions?.length ? (

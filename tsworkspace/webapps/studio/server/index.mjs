@@ -344,12 +344,17 @@ const READ_RPCS = new Set([
   "listTeamMembers",
   "listPersonTeams",
   "getTeamContacts",
+  "listDecisionAmendments",
   "listSubjectDecisions",
   "listSubjectDocuments",
   "getDecisionDetail",
   "getDocumentDetail",
   "listIncomingDecisionDeclarations",
   "listIncomingDocumentDeclarations",
+  "getDesignGraphDetail",
+  "listSubjectDesignGraphs",
+  "traverseDesignGraphTopology",
+  "listIncomingDesignGraphSubflows",
 
   "getChangeset",
   "getEntityHistory",
@@ -485,7 +490,10 @@ protoBundleRoot.resolvePath = (/** @type {string} */ _origin, /** @type {string}
 /** @type {protobuf.Root} */
 let protoRoot;
 try {
-  protoRoot = await protoBundleRoot.load(PROTO_PATH);
+  protoRoot = await protoBundleRoot.load([
+    PROTO_PATH,
+    path.resolve(PROTO_INCLUDES[0], "trogonatlas/annotation/v1alpha1/annotations.proto"),
+  ]);
 } catch (err) {
   logEvent("error", "protobufjs_load_failed", {
     path: PROTO_PATH,
@@ -576,6 +584,13 @@ function valueToJs(v) {
   return null;
 }
 
+const NATIVE_METADATA_TYPES = new Set([
+  "trogonatlas.eventmodel.v1alpha1.AgentAnnotation",
+  "trogonatlas.annotation.v1alpha1.LifecycleAnnotation",
+  "trogonatlas.annotation.v1alpha1.BadgesAnnotation",
+  "trogonatlas.annotation.v1alpha1.ResourceGroupsAnnotation",
+]);
+
 /** @param {string} typeUrl @param {unknown} value @param {number} [depth] */
 function decodeAnyValue(typeUrl, value, depth = 0) {
   try {
@@ -595,6 +610,9 @@ function decodeAnyValue(typeUrl, value, depth = 0) {
       typeUrl,
       error: String(/** @type {any} */ (err)?.message ?? err).slice(0, 200),
     });
+    if (NATIVE_METADATA_TYPES.has(typeUrl.split("/").pop() ?? "")) {
+      return { "@type": typeUrl, "@decodeError": "Malformed native annotation" };
+    }
     return null;
   }
 }
@@ -1944,12 +1962,17 @@ app.get("/api/source/:query", branchHandler((req) => {
 }));
 
 const CATALOG_QUERIES = new Map([
+  ["decision-amendments", "listDecisionAmendments"],
   ["subject-decisions", "listSubjectDecisions"],
   ["subject-documents", "listSubjectDocuments"],
   ["decision-detail", "getDecisionDetail"],
   ["document-detail", "getDocumentDetail"],
   ["incoming-decisions", "listIncomingDecisionDeclarations"],
   ["incoming-documents", "listIncomingDocumentDeclarations"],
+  ["design-graph-detail", "getDesignGraphDetail"],
+  ["subject-design-graphs", "listSubjectDesignGraphs"],
+  ["design-topology", "traverseDesignGraphTopology"],
+  ["incoming-subflows", "listIncomingDesignGraphSubflows"],
 ]);
 
 app.get(

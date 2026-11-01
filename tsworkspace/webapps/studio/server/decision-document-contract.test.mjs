@@ -28,6 +28,17 @@ function roundTrip(rpc, input) {
   return codec.deserialize(method.requestSerialize(input));
 }
 describe('catalog actual serializer boundary', () => {
+  it('preserves explicit page receipts through the actual response codec', () => {
+    const service = definitions['trogonatlas.api.eventmodel.v1alpha1.EventModelService'];
+    const method = Object.values(service).find(item => item.path.endsWith('/ListIncomingDocumentDeclarations'));
+    const response = { scope: { revision: 'catalog-page-checked-v2:opaque', visited: [{ owner: { kind: 'ENTITY_KIND_DOCUMENT', id }, uid: 'owner-incarnation', etag: 'revision' }], pageReceipt: { checkedOwnerCount: '5000', totalDeclarations: '4097', startOffset: '500', endOffset: '1000' } } };
+    expect(method.responseDeserialize(method.responseSerialize(response))).toEqual(response);
+  });
+  it('preserves exact amendment page context without enum coercion', () => {
+    const input = { decision: ref, direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING', pageSize: 1, pageToken: 'opaque-context' };
+    expect(roundTrip('ListDecisionAmendments', input)).toEqual(input);
+    expect(() => roundTrip('ListDecisionAmendments', { ...input, direction: 'TYPO' })).toThrow(/known enum/);
+  });
   it('preserves exact selector alternatives, pins, optional status and explicit false', () => {
     for (const subject of subjects) {
       expect(roundTrip('ListSubjectDocuments', { subject })).toEqual({ subject });

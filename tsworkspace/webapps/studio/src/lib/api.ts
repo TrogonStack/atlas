@@ -490,6 +490,14 @@ export function listSubjectDecisions(subject: CatalogSubject, status?: string, o
 export function listSubjectDocuments(subject: CatalogSubject, opts: FetchOptions = {}) {
   return catalogQuery('subject-documents', { subject }, opts);
 }
+export function listDecisionAmendments(
+  decision: { id: EntityId },
+  direction: 'DECISION_AMENDMENT_DIRECTION_OUTGOING' | 'DECISION_AMENDMENT_DIRECTION_INCOMING',
+  pageToken = '',
+  opts: FetchOptions = {},
+) {
+  return catalogQuery('decision-amendments', { decision, direction, pageSize: 100, pageToken }, opts);
+}
 export function getDecisionDetail(decision: { id: EntityId }, followReplacement = false, opts: FetchOptions = {}) {
   return catalogQuery('decision-detail', { decision, followReplacement }, opts);
 }
@@ -501,6 +509,22 @@ export function listIncomingDecisionDeclarations(decision: { id: EntityId }, opt
 }
 export function listIncomingDocumentDeclarations(document: DocumentSelection, opts: FetchOptions = {}) {
   return catalogQuery('incoming-documents', { document }, opts);
+}
+export function getDesignGraphDetail(graph: { id: EntityId }, opts: FetchOptions = {}) {
+  return catalogQuery('design-graph-detail', { graph }, opts);
+}
+export function listSubjectDesignGraphs(subject: CatalogSubject, opts: FetchOptions = {}) {
+  return catalogQuery('subject-design-graphs', { subject }, opts);
+}
+export function traverseDesignGraphTopology(
+  root: { id: EntityId },
+  options: { followSubflows?: boolean; maxDepth?: number } = {},
+  opts: FetchOptions = {},
+) {
+  return catalogQuery('design-topology', { root, ...options }, opts);
+}
+export function listIncomingDesignGraphSubflows(graph: { id: EntityId }, opts: FetchOptions = {}) {
+  return catalogQuery('incoming-subflows', { graph }, opts);
 }
 
 export type SourceQuery =

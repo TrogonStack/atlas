@@ -1049,6 +1049,108 @@ async fn adopt_receipt_title(fixture: &mut Fixture, receipt: &pb::Entity) {
     assert_eq!(retained.files[0].content, bytes);
 }
 
+async fn browser_graphs(fixture: &mut Fixture) -> Vec<pb::Entity> {
+    let component = fixture
+        .expected
+        .values()
+        .find(|entity| matches!(entity.kind, Some(pb::entity::Kind::Component(_))))
+        .unwrap()
+        .clone();
+    let document = fixture
+        .expected
+        .values()
+        .find(|entity| matches!(entity.kind, Some(pb::entity::Kind::Document(_))))
+        .unwrap()
+        .clone();
+    let unavailable = fixture
+        .put(pb::entity::Kind::Component(pb::Component {
+            id: Some(fixture.id("browser-unavailable")),
+            title: "Unavailable fixture target".into(),
+            ..Default::default()
+        }))
+        .await;
+    let mut graphs = Vec::new();
+    for (slug, profile) in [
+        ("browser-flow", pb::DesignGraphProfile::Flow),
+        ("browser-diagram", pb::DesignGraphProfile::Diagram),
+    ] {
+        let targets = vec![
+            Some(pb::topology_step_target::Selection::Component(reference(
+                &component,
+            ))),
+            Some(pb::topology_step_target::Selection::Component(reference(
+                &component,
+            ))),
+            Some(pb::topology_step_target::Selection::Actor(
+                pb::TopologyActor {
+                    name: Some(title("Browser customer")),
+                    summary: None,
+                },
+            )),
+            None,
+            Some(pb::topology_step_target::Selection::Component(reference(
+                &unavailable,
+            ))),
+        ];
+        let first = fixture
+            .put(pb::entity::Kind::DesignGraph(pb::DesignGraph {
+                id: Some(fixture.id(slug)),
+                title: Some(title(slug)),
+                profile: profile as i32,
+                layout_document: Some(pb::DocumentRef {
+                    id: reference(&document).id,
+                }),
+                steps: targets
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, target)| pb::TopologyStep {
+                        title: Some(title(&format!("Browser step {index}"))),
+                        target: target.map(|selection| pb::TopologyStepTarget {
+                            selection: Some(selection),
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            }))
+            .await;
+        let Some(pb::entity::Kind::DesignGraph(mut graph)) = first.kind else {
+            panic!("graph")
+        };
+        graph.entry_steps = vec![graph.steps[0].step_id.clone().unwrap()];
+        graph.steps[0].transitions = vec![pb::TopologyTransition {
+            target_step_id: graph.steps[1].step_id.clone(),
+            label: Some(title("Continue")),
+            ..Default::default()
+        }];
+        let stored = fixture.put(pb::entity::Kind::DesignGraph(graph)).await;
+        assert_eq!(fixture.get(&stored).await.entity.as_ref(), Some(&stored));
+        graphs.push(stored);
+    }
+    fixture
+        .service
+        .delete_entity(Request::new(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Component as i32,
+            id: reference(&unavailable).id,
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let model = fixture
+        .expected
+        .values()
+        .find(|entity| matches!(entity.kind, Some(pb::entity::Kind::EventModel(_))))
+        .unwrap()
+        .clone();
+    let Some(pb::entity::Kind::EventModel(mut model)) = model.kind else {
+        panic!("model")
+    };
+    model.members.extend(graphs.iter().map(reference));
+    fixture.put(pb::entity::Kind::EventModel(model)).await;
+    graphs
+}
+
 fn port(variable: &str, default: u16) -> u16 {
     std::env::var(variable).map_or(default, |value| {
         value.parse().expect("fixture port must be a u16")
@@ -1058,7 +1160,8 @@ fn port(variable: &str, default: u16) -> u16 {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "manual same-graph client acceptance; serves loopback gRPC and MCP for at most ten minutes"]
 async fn serve_connected_architecture_fixture() {
-    let fixture = Box::pin(exercise()).await;
+    let mut fixture = Box::pin(exercise()).await;
+    let graphs = browser_graphs(&mut fixture).await;
     let registry = TokenRegistry::from_file_contents(
         serde_json::from_value(json!({"principals": {
             "fixture-admin": {"role": "admin", "tokens": ["connected-fixture-admin"]}
@@ -1144,6 +1247,26 @@ async fn serve_connected_architecture_fixture() {
             .entity;
         if stored.as_ref() != Some(&expected) {
             return Err("fixture startup read did not match the exercised receipt".to_owned());
+        }
+        for graph in &graphs {
+            let owner = reference(graph);
+            let mut request = Request::new(pb::GetEntityRequest { kind: owner.kind, id: owner.id });
+            request.metadata_mut().insert("authorization", "Bearer connected-fixture-admin".parse().unwrap());
+            assert_eq!(client.get_entity(request).await.unwrap().into_inner().entity.as_ref(), Some(graph));
+        }
+        let denied = client.get_entity(pb::GetEntityRequest { kind: pb::EntityKind::DesignGraph as i32, id: reference(&graphs[0]).id }).await;
+        assert_eq!(denied.unwrap_err().code(), tonic::Code::Unauthenticated);
+        if let Ok(path) = std::env::var("ATLAS_BROWSER_FIXTURE_FILE") {
+            std::fs::write(path, serde_json::to_vec_pretty(&json!({ "grpc": grpc_endpoint, "namespace": namespace, "graphs": graphs.iter().map(|entity| {
+                let Some(pb::entity::Kind::DesignGraph(graph)) = &entity.kind else { panic!("graph") };
+                json!({ "system": { "uid": uid(entity) }, "designGraph": {
+                    "id": { "slug": graph.id.as_ref().unwrap().slug },
+                    "profile": graph.profile,
+                    "layoutDocument": { "id": { "slug": graph.layout_document.as_ref().unwrap().id.as_ref().unwrap().slug } },
+                    "entrySteps": graph.entry_steps.iter().map(|id| json!({"value": id.value})).collect::<Vec<_>>(),
+                    "steps": graph.steps.iter().map(|step| json!({ "stepId": { "value": step.step_id.as_ref().unwrap().value }, "transitions": step.transitions.iter().map(|edge| json!({"connectionId": {"value": edge.connection_id.as_ref().unwrap().value}})).collect::<Vec<_>>() })).collect::<Vec<_>>()
+                }})
+            }).collect::<Vec<_>>() })).unwrap()).unwrap();
         }
         Ok(())
     })
