@@ -55,7 +55,9 @@ left pending, so a batch that already settled its own outcome keeps it. Whenever
 did not, the not-applied claim remembers the changeset that landed the
 content. A retry that finds the stored entities still exactly as that
 changeset left them skips the write and resumes at the protection step, so
-a `create_only` or `if_match` it already satisfied cannot refuse it. If
+a `create_only` or `if_match` it already satisfied cannot refuse it. That
+holds even when the changeset itself was never stored, because the claim
+names it and the entity revisions it wrote still prove what it left. If
 anything moved since, the retry writes again and its preconditions judge the
 current state. That fallback still faces the protections its own earlier
 attempt set: an op on such an identity that would change what is stored

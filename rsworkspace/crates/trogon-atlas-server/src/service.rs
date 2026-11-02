@@ -2632,7 +2632,9 @@ impl EventModelServiceImpl {
     /// landed its content before a later step failed, as its not-applied
     /// claim records it. The digest proves the retry carries the very same
     /// writes, and the changeset must carry this operation's own
-    /// attribution.
+    /// attribution. A changeset whose append was lost cannot be checked, so
+    /// the claim stands for it, as in `protections_resumed_by`: callers still
+    /// confirm the revision rows that changeset id wrote.
     async fn content_landed_by(
         &self,
         attempt: Option<&operation_receipts::OperationAttempt>,
@@ -2653,12 +2655,15 @@ impl EventModelServiceImpl {
             }
             _ => return None,
         };
-        let changeset = self.store.get_changeset(&record.changeset_id).await.ok()?;
-        (changeset.rpc == rpc
-            && changeset.branch.is_none()
-            && changeset.author == author
-            && changeset.operation_id.as_deref() == Some(operation_id))
-        .then_some(changeset.id)
+        match self.store.get_changeset(&record.changeset_id).await {
+            Ok(changeset) => (changeset.rpc == rpc
+                && changeset.branch.is_none()
+                && changeset.author == author
+                && changeset.operation_id.as_deref() == Some(operation_id))
+            .then_some(changeset.id),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => Some(record.changeset_id),
+            Err(_) => None,
+        }
     }
 
     /// What `changeset_id` left at `kind`/`id` on baseline, when that is

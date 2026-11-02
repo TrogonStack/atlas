@@ -6395,6 +6395,66 @@ async fn batch_mutate_retry_finishes_when_a_sibling_moved_and_the_protected_cont
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn put_entity_retry_finishes_a_protecting_create_whose_changeset_append_was_lost() {
+    let store = protection_failing_store().await;
+    store
+        .changeset_append_failures
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-lost-create";
+    let request = || pb::PutEntityRequest {
+        create_only: true,
+        ..protecting_put(ns, "placed", "op-protect-lost-create")
+    };
+
+    svc.put_entity(as_protecting_admin(request()))
+        .await
+        .expect_err("the registry failure must fail the write");
+    assert!(!is_protected(&store, ns, "placed").await);
+
+    svc.put_entity(as_protecting_admin(request()))
+        .await
+        .expect("a lost changeset must not make the retry trip its own create_only");
+    assert!(is_protected(&store, ns, "placed").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_retry_finishes_a_protecting_create_whose_changeset_append_was_lost() {
+    let store = protection_failing_store().await;
+    store
+        .changeset_append_failures
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-lost-batch-create";
+    let request = || pb::BatchMutateRequest {
+        operation_id: "op-protect-lost-batch-create".into(),
+        ops: vec![pb::BatchMutateOp {
+            op: Some(pb::batch_mutate_op::Op::Put(pb::PutEntityRequest {
+                create_only: true,
+                ..protecting_put(ns, "placed", "")
+            })),
+        }],
+        ..Default::default()
+    };
+
+    svc.batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect_err("the registry failure must fail the batch");
+    assert!(!is_protected(&store, ns, "placed").await);
+
+    let retried = svc
+        .batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect("a lost changeset must not make the retry trip its own create_only")
+        .into_inner();
+    assert_eq!(
+        retried.status,
+        pb::batch_mutate_response::Status::Applied as i32
+    );
+    assert!(is_protected(&store, ns, "placed").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn put_entity_retry_finishes_a_protecting_create_whose_content_already_landed() {
     let store = protection_failing_store().await;
     let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
