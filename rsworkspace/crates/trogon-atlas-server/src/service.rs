@@ -1144,7 +1144,27 @@ impl EventModelServiceImpl {
         vis: &Visibility,
     ) -> Result<(Arc<Vec<StoredEntity>>, bool, bool), Status> {
         let Some(branch) = branch else {
-            let snap = self.baseline_snapshot_with_truncation().await?;
+            let mut snap = self.baseline_snapshot_with_truncation().await?;
+            let writer = self.store.writer_status();
+            let is_writer = self.store.is_writer();
+            if cached_boundary_needs_refresh(snap.boundary_writer.as_ref(), &writer, is_writer) {
+                let refresh = self
+                    .snapshot_cache
+                    .read()
+                    .await
+                    .as_ref()
+                    .is_none_or(|candidate| {
+                        cached_boundary_needs_refresh(
+                            candidate.boundary_writer.as_ref(),
+                            &writer,
+                            is_writer,
+                        )
+                    });
+                if refresh {
+                    self.invalidate_snapshot().await;
+                    snap = self.baseline_snapshot_with_truncation().await?;
+                }
+            }
             let all = self.narrow_baseline(snap.entities, vis).await?;
             let writer = self.store.writer_status();
             let boundary_verified = cached_boundary_verified(
@@ -1205,12 +1225,21 @@ impl EventModelServiceImpl {
         &self,
         changeset_id: &str,
         lens: &Lens,
+        rendered_namespaces: &BTreeSet<&str>,
     ) -> Result<bool, Status> {
         let newer = self.baseline_changesets_after(changeset_id, lens).await?;
-        Ok(newer
-            .iter()
-            .flat_map(|(_, ops)| ops)
-            .any(|op| op.entity_ref.kind == pb::EntityKind::TypeLibrary as i32))
+        for op in newer.iter().flat_map(|(_, ops)| ops) {
+            if op.entity_ref.kind != pb::EntityKind::TypeLibrary as i32 {
+                continue;
+            }
+            let id = op.entity_ref.id.as_ref().ok_or_else(|| {
+                Status::data_loss("type-library changeset operation has no entity id")
+            })?;
+            if rendered_namespaces.contains(id.namespace.as_str()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Keys a branch holds its own delta for. A baseline write to one of
@@ -5587,7 +5616,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // not move it. Only the live type libraries it rendered through
             // can, checked after rendering so a change mid-export counts.
             if self
-                .type_libraries_changed_after(&req.as_of_changeset, &lens)
+                .type_libraries_changed_after(&req.as_of_changeset, &lens, &rendered_namespaces)
                 .await?
             {
                 reasons.insert(Reason::TypeLibrariesChanged);
@@ -10197,12 +10226,22 @@ fn cached_boundary_verified(
     is_writer && cached_writer == Some(current_writer)
 }
 
+fn cached_boundary_needs_refresh(
+    cached_writer: Option<&WriterStatus>,
+    current_writer: &WriterStatus,
+    is_writer: bool,
+) -> bool {
+    is_writer && cached_writer != Some(current_writer)
+}
+
 #[cfg(test)]
 mod attested_snapshot_tests {
     use trogon_atlas_core::{Epoch, WriterRole};
     use trogon_atlas_store::store::WriterStatus;
 
-    use super::{cached_boundary_verified, snapshot_boundary_writer};
+    use super::{
+        cached_boundary_needs_refresh, cached_boundary_verified, snapshot_boundary_writer,
+    };
 
     fn status(epoch: u64, holder: &str) -> WriterStatus {
         WriterStatus {
@@ -10236,6 +10275,23 @@ mod attested_snapshot_tests {
         let cached = status(2, "writer");
         let current = status(3, "new-writer");
         assert!(!cached_boundary_verified(Some(&cached), &current, false));
+    }
+
+    #[test]
+    fn promoted_writer_refreshes_an_unverified_cached_snapshot() {
+        let current = status(3, "promoted-writer");
+        assert!(cached_boundary_needs_refresh(None, &current, true));
+        assert!(cached_boundary_needs_refresh(
+            Some(&status(2, "old-writer")),
+            &current,
+            true,
+        ));
+        assert!(!cached_boundary_needs_refresh(
+            Some(&current),
+            &current,
+            true,
+        ));
+        assert!(!cached_boundary_needs_refresh(None, &current, false));
     }
 }
 

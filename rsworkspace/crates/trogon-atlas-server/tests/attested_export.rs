@@ -108,6 +108,21 @@ fn event_model_version(
     entity
 }
 
+fn type_library(ns: &str, slug: &str) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::TypeLibrary(pb::TypeLibrary {
+            id: Some(id(ns, slug)),
+            title: "Types".into(),
+            files: vec![pb::ProtoSourceFile {
+                path: "types.proto".into(),
+                content: format!("syntax = \"proto3\"; package {slug}.v1; message Value {{}}"),
+            }],
+            ..Default::default()
+        })),
+    }
+}
+
 fn put_req(entity: pb::Entity) -> pb::PutEntityRequest {
     pb::PutEntityRequest {
         operation_id: String::new(),
@@ -398,6 +413,24 @@ async fn versionless_historical_export_resolves_within_the_requested_snapshot() 
     assert!(historical.manifests.contains("Before"));
     assert!(!historical.manifests.contains("After"));
     assert!(entry_slugs(&historical).contains(&"placed".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unrelated_type_library_changes_do_not_taint_historical_exports() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-types";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let then = newest_changeset(&mut c, ns).await;
+
+    put(&mut c, type_library("attested-unrelated-types", "shared")).await;
+
+    let mut req = export_req(ns, "checkout");
+    req.as_of_changeset = then;
+    let historical = export(&mut c, req).await;
+
+    assert_eq!(reasons_of(&historical), Vec::<IncompleteReason>::new());
 }
 
 fn model_entry(bundle: &pb::AttestedModelBundle) -> &pb::SnapshotEntry {
