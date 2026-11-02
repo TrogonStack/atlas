@@ -2223,3 +2223,543 @@ async fn restoring_a_retired_hosting_requires_its_ui_again_before_resolution_can
         baseline_before
     );
 }
+
+fn connection_subject(selected: &pb::ConnectionRef) -> pb::CatalogSubject {
+    pb::CatalogSubject {
+        selection: Some(pb::catalog_subject::Selection::Connection(selected.clone())),
+    }
+}
+
+fn association(selected: &pb::ConnectionRef) -> pb::SubjectAssociation {
+    pb::SubjectAssociation {
+        subject: Some(connection_subject(selected)),
+        ..Default::default()
+    }
+}
+
+fn shared_document(owner: &pb::Id, subjects: Vec<pb::SubjectAssociation>) -> pb::Entity {
+    entity(pb::entity::Kind::Document(pb::Document {
+        id: Some(owner.clone()),
+        title: Some(pb::CatalogTitle {
+            value: "Guide".into(),
+        }),
+        subjects,
+        body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+            value: "https://example.com/guide".into(),
+        })),
+        ..Default::default()
+    }))
+}
+
+fn shared_decision(owner: &pb::Id, subjects: Vec<pb::SubjectAssociation>) -> pb::Entity {
+    entity(pb::entity::Kind::Decision(pb::Decision {
+        id: Some(owner.clone()),
+        title: Some(pb::CatalogTitle {
+            value: "Portal hosting".into(),
+        }),
+        status: pb::DecisionStatus::Proposed as i32,
+        context: Some(pb::CatalogText {
+            value: "Review the selected hosting assertions".into(),
+        }),
+        rationale: Some(pb::CatalogText {
+            value: "Each cited hosting stays its own subject".into(),
+        }),
+        options: vec![pb::DecisionOption {
+            title: Some(pb::CatalogTitle {
+                value: "Retain".into(),
+            }),
+            description: Some(pb::CatalogText {
+                value: "Retain the selected hostings".into(),
+            }),
+            ..Default::default()
+        }],
+        subjects,
+        ..Default::default()
+    }))
+}
+
+fn shared_person(owner: &pb::Id, subjects: &[&pb::ConnectionRef]) -> pb::Entity {
+    entity(pb::entity::Kind::Person(pb::Person {
+        id: Some(owner.clone()),
+        title: Some(pb::DirectoryDisplayName {
+            value: "Maintainer".into(),
+        }),
+        responsibilities: subjects
+            .iter()
+            .map(|selected| pb::Responsibility {
+                kind: pb::ResponsibilityKind::Maintainer as i32,
+                subject: Some(pb::ResponsibilitySubject {
+                    selection: Some(pb::responsibility_subject::Selection::Connection(
+                        (*selected).clone(),
+                    )),
+                }),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }))
+}
+
+struct SubjectView {
+    documents: pb::ListSubjectDocumentsResponse,
+    decisions: pb::ListSubjectDecisionsResponse,
+    assignments: pb::ListSubjectAssignmentsResponse,
+}
+
+async fn subject_view(client: &mut Client, subject: pb::CatalogSubject) -> SubjectView {
+    let documents = client
+        .list_subject_documents(authed(
+            pb::ListSubjectDocumentsRequest {
+                subject: Some(subject.clone()),
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let decisions = client
+        .list_subject_decisions(authed(
+            pb::ListSubjectDecisionsRequest {
+                subject: Some(subject.clone()),
+                status: None,
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let responsibility = match subject.selection {
+        Some(pb::catalog_subject::Selection::Connection(selected)) => pb::ResponsibilitySubject {
+            selection: Some(pb::responsibility_subject::Selection::Connection(selected)),
+        },
+        Some(pb::catalog_subject::Selection::Entity(selected)) => pb::ResponsibilitySubject {
+            selection: Some(pb::responsibility_subject::Selection::Entity(selected)),
+        },
+        _ => panic!("unsupported subject"),
+    };
+    let assignments = client
+        .list_subject_assignments(authed(
+            pb::ListSubjectAssignmentsRequest {
+                subject: Some(responsibility),
+                kind: None,
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(!documents.incomplete && !decisions.incomplete && !assignments.incomplete);
+    SubjectView {
+        documents,
+        decisions,
+        assignments,
+    }
+}
+
+/// Asserts that a connection subject lists exactly the expected declaring
+/// Decision and Document fields, each carrying only that one subject.
+fn assert_individual_subject(
+    view: &SubjectView,
+    selected: &pb::ConnectionRef,
+    decision: Option<(&pb::Entity, usize)>,
+    document: Option<(&pb::Entity, usize)>,
+    assignments: usize,
+) {
+    for (declarations, state, expected, role) in [
+        (
+            &view.documents.declarations,
+            view.documents.subject_state,
+            document,
+            "document",
+        ),
+        (
+            &view.decisions.declarations,
+            view.decisions.subject_state,
+            decision,
+            "decision",
+        ),
+    ] {
+        assert_eq!(state, pb::CatalogResolutionState::Resolved as i32, "{role}");
+        assert_eq!(
+            declarations.len(),
+            usize::from(expected.is_some()),
+            "{role}"
+        );
+        if let (Some(hit), Some((owner, index))) = (declarations.first(), expected) {
+            assert_eq!(hit.owner.as_ref().unwrap().owner, Some(reference(owner)));
+            assert_eq!(hit.field, format!("subjects[{index}].subject"), "{role}");
+            assert_eq!(hit.state, pb::CatalogResolutionState::Resolved as i32);
+            let Some(pb::catalog_declaration::Declaration::Subject(subject)) = &hit.declaration
+            else {
+                panic!("subject declaration")
+            };
+            assert_eq!(subject.subject, Some(connection_subject(selected)));
+        }
+    }
+    assert_eq!(view.assignments.assignments.len(), assignments);
+    assert_eq!(
+        view.assignments.subject_state,
+        pb::ResponsibilityResolutionState::Resolved as i32
+    );
+}
+
+/// A retargeted or retired occurrence stays an individual subject: its own
+/// declarations remain listed, but it no longer resolves.
+fn assert_dangling_subject(
+    view: &SubjectView,
+    selected: &pb::ConnectionRef,
+    decision: Option<usize>,
+    document: Option<usize>,
+) {
+    for (declarations, state, index, role) in [
+        (
+            &view.documents.declarations,
+            view.documents.subject_state,
+            document,
+            "document",
+        ),
+        (
+            &view.decisions.declarations,
+            view.decisions.subject_state,
+            decision,
+            "decision",
+        ),
+    ] {
+        assert_eq!(
+            state,
+            pb::CatalogResolutionState::Unresolved as i32,
+            "{role}"
+        );
+        assert_eq!(declarations.len(), usize::from(index.is_some()), "{role}");
+        if let (Some(hit), Some(index)) = (declarations.first(), index) {
+            assert_eq!(hit.field, format!("subjects[{index}].subject"), "{role}");
+            let Some(pb::catalog_declaration::Declaration::Subject(subject)) = &hit.declaration
+            else {
+                panic!("subject declaration")
+            };
+            assert_eq!(subject.subject, Some(connection_subject(selected)));
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shared_decision_and_document_subject_lists_create_no_composite_interaction_subject() {
+    let mut client = serve().await;
+    let namespace = register(&mut client, ACME_TOKEN).await;
+    let target = id(&namespace, "review");
+    let other = id(&namespace, "other-review");
+    for selected in [&target, &other] {
+        put(&mut client, ROOT_TOKEN, ui(selected), "")
+            .await
+            .unwrap();
+    }
+    let owner_id = id(&namespace, "portal");
+    let component_saved = put(
+        &mut client,
+        ROOT_TOKEN,
+        component(&owner_id, (0..4).map(|_| hosting(&target)).collect()),
+        "",
+    )
+    .await
+    .unwrap();
+    let portal = component_saved.entity.clone().unwrap();
+    let selector = |index: usize| pb::ConnectionRef {
+        owner: Some(reference(&portal)),
+        owner_uid: portal.system.as_ref().unwrap().uid.clone(),
+        id: hostings(&portal)[index].connection_id.clone(),
+    };
+    let [first, second, third, control] = [selector(0), selector(1), selector(2), selector(3)];
+    let decision_id = id(&namespace, "decision");
+    let document_id = id(&namespace, "guide");
+    let person_id = id(&namespace, "maintainer");
+    let cited = [&first, &second, &third];
+    let decision = put(
+        &mut client,
+        ROOT_TOKEN,
+        shared_decision(&decision_id, cited.iter().map(|s| association(s)).collect()),
+        "",
+    )
+    .await
+    .unwrap();
+    let document = put(
+        &mut client,
+        ROOT_TOKEN,
+        shared_document(&document_id, cited.iter().map(|s| association(s)).collect()),
+        "",
+    )
+    .await
+    .unwrap();
+    let person = put(
+        &mut client,
+        ROOT_TOKEN,
+        shared_person(&person_id, &cited),
+        "",
+    )
+    .await
+    .unwrap();
+    let (decision_entity, document_entity, person_entity) = (
+        decision.entity.clone().unwrap(),
+        document.entity.clone().unwrap(),
+        person.entity.clone().unwrap(),
+    );
+
+    // Every cited hosting stays individually addressable and resolvable, and
+    // each lists the shared Decision and Document through only its own field.
+    for (index, selected) in cited.iter().enumerate() {
+        let view = subject_view(&mut client, connection_subject(selected)).await;
+        assert_individual_subject(
+            &view,
+            selected,
+            Some((&decision_entity, index)),
+            Some((&document_entity, index)),
+            1,
+        );
+    }
+    // An uncited sibling of the same owner inherits nothing from the lists.
+    let view = subject_view(&mut client, connection_subject(&control)).await;
+    assert_individual_subject(&view, &control, None, None, 0);
+
+    // The containing Component, as an entity, is not a combined subject either.
+    let entity_view = subject_view(
+        &mut client,
+        pb::CatalogSubject {
+            selection: Some(pb::catalog_subject::Selection::Entity(reference(&portal))),
+        },
+    )
+    .await;
+    assert_eq!(entity_view.documents.declarations.len(), 0);
+    assert_eq!(entity_view.decisions.declarations.len(), 0);
+    assert_eq!(entity_view.assignments.assignments.len(), 0);
+
+    // A fabricated combined selector (joined occurrence IDs or an unknown
+    // occurrence of the same owner) names no subject.
+    let joined = format!(
+        "{}{}",
+        first.id.as_ref().unwrap().value,
+        second.id.as_ref().unwrap().value
+    );
+    for fabricated in [
+        pb::ConnectionRef {
+            id: Some(pb::ConnectionId { value: joined }),
+            ..first.clone()
+        },
+        pb::ConnectionRef {
+            id: Some(pb::ConnectionId {
+                value: "00000000-0000-4000-8000-000000000001".into(),
+            }),
+            ..first.clone()
+        },
+    ] {
+        let response = client
+            .list_subject_documents(authed(
+                pb::ListSubjectDocumentsRequest {
+                    subject: Some(connection_subject(&fabricated)),
+                },
+                ROOT_TOKEN,
+            ))
+            .await;
+        match response {
+            Ok(response) => {
+                let response = response.into_inner();
+                assert_eq!(response.declarations.len(), 0);
+                assert_ne!(
+                    response.subject_state,
+                    pb::CatalogResolutionState::Resolved as i32
+                );
+            }
+            Err(error) => assert_eq!(error.code(), Code::InvalidArgument),
+        }
+    }
+
+    // Persisted lists keep exactly the authored individual selectors.
+    let persisted = |entity: &pb::Entity| match entity.kind.as_ref().unwrap() {
+        pb::entity::Kind::Decision(value) => value.subjects.clone(),
+        pb::entity::Kind::Document(value) => value.subjects.clone(),
+        _ => panic!("shared list owner"),
+    };
+    for entity in [&decision_entity, &document_entity] {
+        let stored = get(
+            &mut client,
+            if matches!(entity.kind, Some(pb::entity::Kind::Decision(_))) {
+                pb::EntityKind::Decision
+            } else {
+                pb::EntityKind::Document
+            },
+            &match entity.kind.as_ref().unwrap() {
+                pb::entity::Kind::Decision(value) => value.id.clone().unwrap(),
+                pb::entity::Kind::Document(value) => value.id.clone().unwrap(),
+                _ => unreachable!(),
+            },
+        )
+        .await
+        .unwrap();
+        let subjects = persisted(stored.entity.as_ref().unwrap());
+        assert_eq!(
+            subjects
+                .iter()
+                .map(|value| value.subject.clone())
+                .collect::<Vec<_>>(),
+            cited
+                .iter()
+                .map(|selected| Some(connection_subject(selected)))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Reference discovery reports one hit per cited hosting per declarer and
+    // never a subject that is not one of the individual selectors.
+    let individual = cited
+        .iter()
+        .map(|selected| connection_subject(selected))
+        .collect::<Vec<_>>();
+    let incoming = client
+        .get_incoming_references(authed(
+            pb::GetReferencesRequest {
+                kind: pb::EntityKind::Component as i32,
+                id: Some(owner_id.clone()),
+                ..Default::default()
+            },
+            ROOT_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    for declarer in [&decision_entity, &document_entity, &person_entity] {
+        let hits = incoming
+            .references
+            .iter()
+            .filter(|hit| hit.from == Some(reference(declarer)))
+            .collect::<Vec<_>>();
+        assert_eq!(hits.len(), 3, "{:?}", incoming.references);
+        for hit in &hits {
+            assert_eq!(hit.to, Some(reference(&portal)));
+        }
+    }
+    let subjects_seen = incoming
+        .references
+        .iter()
+        .filter(|hit| hit.from != Some(reference(&portal)))
+        .filter_map(|hit| hit.catalog_subject.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(subjects_seen.len(), 6, "{:?}", incoming.references);
+    for subject in &subjects_seen {
+        assert!(individual.contains(subject), "{subject:?}");
+    }
+    for declarer in [&decision_entity, &document_entity] {
+        let outgoing = client
+            .get_outgoing_references(authed(
+                pb::GetReferencesRequest {
+                    kind: if declarer == &decision_entity {
+                        pb::EntityKind::Decision as i32
+                    } else {
+                        pb::EntityKind::Document as i32
+                    },
+                    id: Some(if declarer == &decision_entity {
+                        decision_id.clone()
+                    } else {
+                        document_id.clone()
+                    }),
+                    ..Default::default()
+                },
+                ROOT_TOKEN,
+            ))
+            .await
+            .unwrap()
+            .into_inner();
+        let seen = outgoing
+            .references
+            .iter()
+            .filter_map(|hit| hit.catalog_subject.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(seen, individual, "{:?}", outgoing.references);
+    }
+
+    // Removing one association from the Decision leaves the others, and the
+    // Document and Person lists, untouched.
+    let mut trimmed = decision_entity.clone();
+    let Some(pb::entity::Kind::Decision(trimmed_value)) = trimmed.kind.as_mut() else {
+        panic!("decision")
+    };
+    trimmed_value.subjects.remove(0);
+    let trimmed = put(&mut client, ROOT_TOKEN, trimmed, &decision.etag)
+        .await
+        .unwrap();
+    let decision_entity = trimmed.entity.clone().unwrap();
+    let view = subject_view(&mut client, connection_subject(&first)).await;
+    assert_individual_subject(&view, &first, None, Some((&document_entity, 0)), 1);
+    for (index, selected) in [&second, &third].into_iter().enumerate() {
+        let view = subject_view(&mut client, connection_subject(selected)).await;
+        assert_individual_subject(
+            &view,
+            selected,
+            Some((&decision_entity, index)),
+            Some((&document_entity, index + 1)),
+            1,
+        );
+    }
+
+    // Retargeting one hosting renews only that occurrence. Its old selector no
+    // longer resolves, and the sibling subjects keep resolving unchanged.
+    let before_document = get(&mut client, pb::EntityKind::Document, &document_id)
+        .await
+        .unwrap();
+    let mut retargeted = component_saved.entity.clone().unwrap();
+    {
+        let value = component_mut(&mut retargeted);
+        value.ui_hostings[1].ui = Some(pb::UiRef {
+            id: Some(other.clone()),
+        });
+        value.ui_hostings[1].connection_id = None;
+    }
+    let retargeted = put(&mut client, ROOT_TOKEN, retargeted, &component_saved.etag)
+        .await
+        .unwrap();
+    let renewed = retargeted.entity.clone().unwrap();
+    assert_ne!(
+        hostings(&renewed)[1].connection_id,
+        second.id,
+        "retarget renews the occurrence"
+    );
+    for index in [0, 2, 3] {
+        assert_eq!(
+            hostings(&renewed)[index].connection_id,
+            hostings(&portal)[index].connection_id
+        );
+    }
+    let view = subject_view(&mut client, connection_subject(&second)).await;
+    assert_dangling_subject(&view, &second, Some(0), Some(1));
+    let view = subject_view(&mut client, connection_subject(&first)).await;
+    assert_individual_subject(&view, &first, None, Some((&document_entity, 0)), 1);
+    let view = subject_view(&mut client, connection_subject(&third)).await;
+    assert_individual_subject(
+        &view,
+        &third,
+        Some((&decision_entity, 1)),
+        Some((&document_entity, 2)),
+        1,
+    );
+    assert_eq!(
+        get(&mut client, pb::EntityKind::Document, &document_id)
+            .await
+            .unwrap(),
+        before_document,
+        "retargeting rewrites no declaring list"
+    );
+
+    // Retiring another hosting likewise leaves every remaining subject alone.
+    let mut retired = renewed.clone();
+    component_mut(&mut retired).ui_hostings.remove(2);
+    put(&mut client, ROOT_TOKEN, retired, &retargeted.etag)
+        .await
+        .unwrap();
+    let view = subject_view(&mut client, connection_subject(&third)).await;
+    assert_dangling_subject(&view, &third, Some(1), Some(2));
+    let view = subject_view(&mut client, connection_subject(&first)).await;
+    assert_individual_subject(&view, &first, None, Some((&document_entity, 0)), 1);
+    assert_eq!(
+        get(&mut client, pb::EntityKind::Document, &document_id)
+            .await
+            .unwrap(),
+        before_document
+    );
+}
