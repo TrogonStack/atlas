@@ -181,5 +181,9 @@ answered from the same log as every content change. See
 
 - CLI and MCP commands for the protection RPCs. Clients reach them over gRPC
   for now.
+- `import-git` checks protection and then creates without any lock. The
+  mutation lock lives inside a running server and the command is a separate
+  process, so a `ProtectEntity` that lands between the two steps is not
+  seen. Run it against a store no server is writing to.
 - `export` does not write the annotation back out; a re-import would not
   restore protection, which is also what the import rule requires.
