@@ -959,9 +959,14 @@ async fn a_clean_install_from_the_client_config_discovers_its_first_tool_and_pro
         expected_prompts(ToolRole::Writer, server.profile())
     );
     let echoed = serde_json::to_string(&(&info, &tools, &prompts, &who_am_i)).unwrap();
-    for secret in [WRITER_TOKEN, credential.0] {
-        assert!(!echoed.contains(secret), "the session echoed {secret}");
-    }
+    assert!(
+        !echoed.contains(WRITER_TOKEN),
+        "the session echoed the bearer token"
+    );
+    assert!(
+        !echoed.contains(credential.0),
+        "the session echoed the credential reference"
+    );
 
     let mut authoring = server.expanded_headers(&env);
     authoring.insert(
