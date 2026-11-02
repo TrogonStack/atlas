@@ -51,10 +51,12 @@ of these:
 - a user-level settings file, for servers you use in every project;
 - a settings screen that accepts the same JSON pasted in.
 
-Change `url` if the server is not on this machine or listens on another
-port. A host name other than `localhost`, `127.0.0.1` or `::1` must also be
-in the server's `TROGON_ATLAS_MCP_ALLOWED_HOSTS`, or the server refuses the
-request.
+Change `url` if the server listens on another port. For a server on another
+machine, use an HTTPS URL through a TLS endpoint or connect through an
+authenticated encrypted tunnel. Do not send the bearer token to a non-loopback
+HTTP URL. The remote host must also be in the server's
+`TROGON_ATLAS_MCP_ALLOWED_HOSTS`, or the server refuses the request. Adding a
+host to that setting permits the request but does not encrypt the connection.
 
 Default chosen for review: Atlas ships this one host-neutral file and no
 host-specific packaging, so there is a single configuration to keep

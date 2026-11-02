@@ -795,7 +795,7 @@ impl ClientServer {
         value
             .strip_prefix("Bearer ")
             .and_then(EnvReference::parse)
-            .unwrap_or_else(|| panic!("Authorization must be `Bearer ${{NAME}}`, got {value:?}"))
+            .expect("Authorization must be `Bearer ${NAME}`")
     }
 
     fn profile(&self) -> ToolProfile {
@@ -870,6 +870,30 @@ fn the_client_config_keeps_credentials_as_references_and_starts_least_privileged
             "{name} sends a header this test does not check"
         );
     }
+}
+
+#[test]
+fn rejected_client_config_credentials_do_not_appear_in_panic_output() {
+    let rejected = "literal-api-key-that-must-not-leak";
+    let server = ClientServer {
+        transport: "http".to_owned(),
+        url: "http://localhost:50069/mcp".to_owned(),
+        headers: std::collections::BTreeMap::from([(
+            "Authorization".to_owned(),
+            format!("Bearer {rejected}"),
+        )]),
+    };
+
+    let panic = std::panic::catch_unwind(|| {
+        server.credential();
+    })
+    .unwrap_err();
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap();
+    assert!(!message.contains(rejected), "panic exposed the credential");
 }
 
 #[test]
