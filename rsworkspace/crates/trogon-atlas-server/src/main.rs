@@ -325,13 +325,18 @@ struct Args {
     #[arg(
         long,
         env = "TROGON_ATLAS_ATTESTED_SIGNING_KEY_FILE",
+        hide_env_values = true,
         conflicts_with = "attested_signing_key_env"
     )]
     attested_signing_key_file: Option<PathBuf>,
     /// Name of an environment variable holding the PKCS#8 PEM Ed25519
     /// private key, instead of `--attested-signing-key-file`. Names the
     /// variable; never pass the key itself here.
-    #[arg(long, env = "TROGON_ATLAS_ATTESTED_SIGNING_KEY_ENV")]
+    #[arg(
+        long,
+        env = "TROGON_ATLAS_ATTESTED_SIGNING_KEY_ENV",
+        hide_env_values = true
+    )]
     attested_signing_key_env: Option<trogon_atlas_server::attested_signing::EnvVarName>,
 }
 
