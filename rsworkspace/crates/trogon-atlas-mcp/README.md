@@ -58,7 +58,7 @@ of `binpb_base64` and carry no `scope`, because protection is baseline-only
 and the same on every branch. `protect_entity` and `unprotect_entity` refuse
 to run while a branch is set. A listing reports `verdict: "partial"` when the
 server could not read every row or enumerate the whole registry. See
-`docs/reference/entity-protection-commands.md`.
+[the entity protection command reference](../../../docs/reference/entity-protection-commands.md).
 
 `put_entity`, `put_entity_json`, `delete_entity`, `batch_mutate` and
 `batch_mutate_json` also return the server's validation findings as a JSON
