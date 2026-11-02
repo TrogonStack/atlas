@@ -1170,3 +1170,119 @@ async fn an_identity_can_be_protected_again_after_a_lift() {
         .await
         .is_some());
 }
+
+/// Leaves `operation_id` claimed and never settled, as a `PutEntity` that
+/// died after its claim would.
+async fn leave_put_pending(
+    store: &dyn trogon_atlas_store::Store,
+    operation_id: &str,
+    entity: pb::Entity,
+) {
+    let digest_req = pb::PutEntityRequest {
+        entity: Some(entity),
+        create_only: false,
+        if_match: String::new(),
+        validate_only: false,
+        force: false,
+        operation_id: String::new(),
+    };
+    let attempt = trogon_atlas_server::operation_receipts::OperationAttempt::new(
+        ADMIN_NAME,
+        operation_id,
+        "PutEntity",
+        None,
+        "trogonatlas.api.eventmodel.v1alpha1.PutEntityRequest",
+        &digest_req,
+    )
+    .unwrap();
+    store
+        .claim_operation(&attempt.claim_key, &attempt.digest, "PutEntity", None)
+        .await
+        .unwrap();
+}
+
+fn put_with_operation(operation_id: &str, entity: pb::Entity) -> pb::PutEntityRequest {
+    let mut request = put(entity);
+    request.operation_id = operation_id.into();
+    request
+}
+
+async fn operation_status(c: &mut Client, operation_id: &str) -> i32 {
+    c.get_operation(as_token(
+        pb::GetOperationRequest {
+            operation_id: operation_id.into(),
+        },
+        ADMIN,
+    ))
+    .await
+    .unwrap()
+    .into_inner()
+    .status
+}
+
+/// What a retry meets after a `PutEntity` died between its claim and its
+/// settlement. Only a batch has a journal that can convert such a claim; a
+/// put's claim answers `OPERATION_IN_PROGRESS` for as long as it lives,
+/// whether or not the protection landed. The protection check runs before
+/// the claim, so once the mark is in place the retry is told the identity is
+/// protected instead, and the claim stays pending either way.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_put_left_pending_by_a_crash_cannot_be_resumed_by_its_operation_id() {
+    let store: Arc<dyn trogon_atlas_store::Store> =
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    let svc = EventModelServiceImpl::try_new(Arc::clone(&store), ServerMetrics::default()).unwrap();
+    let mut c = serve(svc, Some(registry())).await;
+
+    // Content landed, the protection did not: the id is stuck in progress,
+    // and a fresh id finishes protecting without writing again.
+    let unprotected = annotated(
+        event("ep-pending", "unprotected", 1, "Placed"),
+        "published contract",
+    );
+    leave_put_pending(&*store, "ep-pending-before", unprotected.clone()).await;
+    seed(&mut c, event("ep-pending", "unprotected", 1, "Placed")).await;
+    let err = c
+        .put_entity(as_token(
+            put_with_operation("ep-pending-before", unprotected.clone()),
+            ADMIN,
+        ))
+        .await
+        .expect_err("a claim left pending blocks the same operation_id");
+    let info = err.get_details_error_info().unwrap();
+    assert_eq!(info.reason, reason::OPERATION_IN_PROGRESS, "{err:?}");
+    assert_eq!(
+        operation_status(&mut c, "ep-pending-before").await,
+        pb::OperationStatus::Pending as i32
+    );
+    c.put_entity(as_token(
+        put_with_operation("ep-pending-fresh", unprotected),
+        ADMIN,
+    ))
+    .await
+    .unwrap();
+    assert!(protection_of(&mut c, "ep-pending", "unprotected")
+        .await
+        .is_some());
+
+    // Content and protection both landed: the work is done, but the retry is
+    // refused as protected rather than answered, and the claim stays pending.
+    let protected = annotated(
+        event("ep-pending", "protected", 1, "Placed"),
+        "published contract",
+    );
+    leave_put_pending(&*store, "ep-pending-after", protected.clone()).await;
+    seed(&mut c, event("ep-pending", "protected", 1, "Placed")).await;
+    protect(&mut c, pb::EntityKind::Event, "ep-pending", "protected").await;
+    assert_protected(
+        c.put_entity(as_token(
+            put_with_operation("ep-pending-after", protected),
+            ADMIN,
+        ))
+        .await,
+        "event/ep-pending/protected",
+    );
+    assert_eq!(
+        operation_status(&mut c, "ep-pending-after").await,
+        pb::OperationStatus::Pending as i32
+    );
+}

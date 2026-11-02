@@ -187,3 +187,15 @@ answered from the same log as every content change. See
   seen. Run it against a store no server is writing to.
 - `export` does not write the annotation back out; a re-import would not
   restore protection, which is also what the import rule requires.
+- A protecting `PutEntity` that dies after it claimed its `operation_id`, by
+  a process crash or a cancelled request, leaves the claim pending. Only a
+  protecting `BatchMutate` has a journal that converts a pending claim, so
+  the same id keeps answering `OPERATION_IN_PROGRESS` until the receipt
+  expires. Once the protection landed it answers `ENTITY_PROTECTED` instead,
+  because the protection check runs before the claim, and the claim stays
+  pending either way. Resuming from a pending claim would need a way to tell
+  a dead attempt from a live one, which a claim does not record. To finish
+  such a write, read `GetOperation` and `GetEntityProtection`. Content that
+  landed together with its protection is done. When it landed without one,
+  send the same write under a new `operation_id`: it finds the content
+  unchanged and protects it.
