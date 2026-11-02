@@ -138,6 +138,23 @@ async fn put(c: &mut EventModelServiceClient<Channel>, entity: pb::Entity) {
     c.put_entity(put_req(entity)).await.unwrap();
 }
 
+async fn put_many(c: &mut EventModelServiceClient<Channel>, entities: Vec<pb::Entity>) {
+    for chunk in entities.chunks(1_000) {
+        c.batch_mutate(pb::BatchMutateRequest {
+            ops: chunk
+                .iter()
+                .cloned()
+                .map(|entity| pb::BatchMutateOp {
+                    op: Some(pb::batch_mutate_op::Op::Put(put_req(entity))),
+                })
+                .collect(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    }
+}
+
 fn export_req(ns: &str, slug: &str) -> pb::ExportAttestedModelRequest {
     pb::ExportAttestedModelRequest {
         id: Some(id(ns, slug)),
@@ -413,6 +430,46 @@ async fn versionless_historical_export_resolves_within_the_requested_snapshot() 
     assert!(historical.manifests.contains("Before"));
     assert!(!historical.manifests.contains("After"));
     assert!(entry_slugs(&historical).contains(&"placed".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn capped_versionless_refill_filters_the_requested_model_before_the_cap() {
+    let endpoint = start_server(Some(0)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-refill-cap";
+    let fillers = (0..5_000)
+        .map(|index| event_model(ns, &format!("a-{index:04}"), "Filler", &[]))
+        .collect();
+    put_many(&mut c, fillers).await;
+
+    let mut warm_req = export_req(ns, "a-0000");
+    warm_req.id.as_mut().unwrap().version = 0;
+    warm_req.allow_incomplete = true;
+    export(&mut c, warm_req).await;
+
+    put(&mut c, event_model(ns, "z-target", "Target", &[])).await;
+    let then = newest_changeset(&mut c, ns).await;
+
+    let mut current_req = export_req(ns, "z-target");
+    current_req.id.as_mut().unwrap().version = 0;
+    current_req.allow_incomplete = true;
+    let current = export(&mut c, current_req).await;
+    assert_eq!(
+        current.scope.as_ref().unwrap().event_model_id,
+        Some(id(ns, "z-target"))
+    );
+    assert!(current.manifests.contains("Target"));
+
+    let mut historical_req = export_req(ns, "z-target");
+    historical_req.id.as_mut().unwrap().version = 0;
+    historical_req.as_of_changeset = then;
+    historical_req.allow_incomplete = true;
+    let historical = export(&mut c, historical_req).await;
+    assert_eq!(
+        historical.scope.as_ref().unwrap().event_model_id,
+        Some(id(ns, "z-target"))
+    );
+    assert!(historical.manifests.contains("Target"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -782,6 +782,7 @@ async fn load(
                 kinds: &[pb::EntityKind::TypeLibrary],
                 namespaces: &namespaces,
                 latest_versions_only: false,
+                ..Default::default()
             },
             None,
             branch,

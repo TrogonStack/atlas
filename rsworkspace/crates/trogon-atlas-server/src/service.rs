@@ -171,11 +171,13 @@ pub async fn get_latest_version_with_cap(
         vec![namespace.to_string()]
     };
     let kinds = [kind];
+    let slugs = [slug.to_owned()];
     let all = store
         .list(
             ListFilter {
                 kinds: &kinds,
                 namespaces: &namespaces,
+                slugs: &slugs,
                 latest_versions_only: true,
             },
             Some(cap),
@@ -948,12 +950,14 @@ impl EventModelServiceImpl {
         if root_id.version == 0 {
             let kinds = [root_kind];
             let namespaces = [root_id.namespace.clone()];
+            let slugs = [root_id.slug.clone()];
             let mut candidates = self
                 .store
                 .list(
                     ListFilter {
                         kinds: &kinds,
                         namespaces: &namespaces,
+                        slugs: &slugs,
                         latest_versions_only: false,
                     },
                     Some(MAX_PROJECTION_ENTITIES + 1),

@@ -133,6 +133,7 @@ async fn list_filters_by_kind_and_namespace() {
                 kinds: &[pb::EntityKind::Event],
                 namespaces: &namespaces,
                 latest_versions_only: false,
+                ..Default::default()
             },
             None,
             None,
@@ -351,6 +352,7 @@ async fn list_latest_versions_only() {
                 kinds: &[kind],
                 namespaces: &[],
                 latest_versions_only: true,
+                ..Default::default()
             },
             None,
             None,

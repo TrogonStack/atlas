@@ -277,6 +277,7 @@ async fn list_kind_namespace_filters_with_limit() {
         kinds: &kinds,
         namespaces: &namespaces,
         latest_versions_only: false,
+        ..Default::default()
     };
 
     let result = store.list(filter, Some(2), None).await.unwrap();
@@ -345,6 +346,7 @@ async fn list_limit_with_latest_versions_considers_all_versions_before_cap() {
         kinds: &kinds,
         namespaces: &namespaces,
         latest_versions_only: true,
+        ..Default::default()
     };
 
     let limited = store.list(filter, Some(2), None).await.unwrap();

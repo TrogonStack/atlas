@@ -1216,6 +1216,9 @@ impl NatsStore {
             if !filter.namespaces.is_empty() && !filter.namespaces.contains(&id.namespace) {
                 continue;
             }
+            if !filter.slugs.is_empty() && !filter.slugs.contains(&id.slug) {
+                continue;
+            }
             let entry = kv_entry_timeout(&self.branches_kv, key.clone()).await?;
             let Some(entry) = live_entry(entry) else {
                 continue;
@@ -3618,6 +3621,7 @@ impl Store for NatsStore {
             let kv = self.kv.clone();
             let kinds: Vec<EntityKind> = filter.kinds.to_vec();
             let namespaces: Vec<String> = filter.namespaces.to_vec();
+            let slugs: Vec<String> = filter.slugs.to_vec();
             let latest_versions_only = filter.latest_versions_only;
             tokio::time::timeout(LIST_TOTAL_TIMEOUT, async move {
                 let effective_limit = limit.unwrap_or(LIST_HARD_CAP).min(LIST_HARD_CAP);
@@ -3680,6 +3684,11 @@ impl Store for NatsStore {
                         continue;
                     }
                     if !prefixes.is_empty() && !prefixes.iter().any(|p| key.starts_with(p)) {
+                        continue;
+                    }
+                    if !slugs.is_empty()
+                        && !parse_entity_key(&key).is_some_and(|(_, id)| slugs.contains(&id.slug))
+                    {
                         continue;
                     }
                     matching_keys.push(key);

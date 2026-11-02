@@ -1459,6 +1459,7 @@ pub struct Written {
 pub struct ListFilter<'a> {
     pub kinds: &'a [EntityKind],
     pub namespaces: &'a [String],
+    pub slugs: &'a [String],
     pub latest_versions_only: bool,
 }
 
