@@ -7631,6 +7631,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         Some(landed) if resuming && changeset.ops.is_empty() => landed.clone(),
                         _ => changeset.id.clone(),
                     };
+                    // A batch whose content was all unchanged may still have
+                    // set some marks before one failed. The claim must name
+                    // the changeset that set them, which a retry needs when
+                    // that changeset's append was lost.
+                    let unfinished_changeset_id = content_changeset_id
+                        .clone()
+                        .or_else(|| (!changeset.ops.is_empty()).then(|| changeset.id.clone()));
                     self.record_changeset(
                         changeset,
                         git_mirror::batch_commit_message(outcomes.len()),
@@ -7660,7 +7667,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                                 )
                                 .await;
                             }
-                            Err(status) => match &content_changeset_id {
+                            Err(status) => match &unfinished_changeset_id {
                                 Some(changeset_id) => {
                                     operation_receipts::settle_unfinished_for_status(
                                         &*self.store,

@@ -6289,6 +6289,54 @@ async fn batch_mutate_retry_finishes_protections_after_some_already_landed() {
     assert_eq!(refused.code(), tonic::Code::FailedPrecondition);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_retry_finishes_protections_on_unchanged_content_whose_changeset_was_lost() {
+    let store = protection_failing_store().await;
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-resume-unchanged";
+    for slug in ["placed", "shipped"] {
+        svc.put_entity(as_protecting_admin(pb::PutEntityRequest {
+            entity: Some(make_event(ns, slug, 1)),
+            ..protecting_put(ns, slug, "")
+        }))
+        .await
+        .unwrap();
+    }
+    store
+        .protection_passes
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    store
+        .changeset_append_failures
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let request = || pb::BatchMutateRequest {
+        operation_id: "op-protect-resume-unchanged".into(),
+        ops: ["placed", "shipped"]
+            .into_iter()
+            .map(|slug| pb::BatchMutateOp {
+                op: Some(pb::batch_mutate_op::Op::Put(protecting_put(ns, slug, ""))),
+            })
+            .collect(),
+        ..Default::default()
+    };
+
+    svc.batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect_err("the second protection failure must fail the batch");
+    assert!(is_protected(&store, ns, "placed").await);
+    assert!(!is_protected(&store, ns, "shipped").await);
+
+    let retried = svc
+        .batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect("the claim must prove the mark its first attempt set, though no content changed")
+        .into_inner();
+    assert_eq!(
+        retried.status,
+        pb::batch_mutate_response::Status::Applied as i32
+    );
+    assert!(is_protected(&store, ns, "shipped").await);
+}
+
 fn batch_with_moved_sibling(ns: &str, operation_id: &str, force: bool) -> pb::BatchMutateRequest {
     let mut ops: Vec<pb::BatchMutateOp> = ["placed", "shipped"]
         .into_iter()
