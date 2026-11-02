@@ -59,12 +59,13 @@ a `create_only` or `if_match` it already satisfied cannot refuse it. That
 holds even when the changeset itself was never stored, because the claim
 names it and the entity revisions it wrote still prove what it left. If
 anything moved since, the retry writes again and its preconditions judge the
-current state. That fallback still faces the protections its own earlier
-attempt set: an op on such an identity that would change what is stored
-there, including a `force` put of identical content, is refused as
-protected, so a sibling that moved can never carry a rewrite past a
-protection. Anyone else's annotation, and every annotation that arrives
-through `import-git`, is dropped without effect.
+current state, except that a `create` the first attempt already landed and
+that is still as it left it is not created a second time. That fallback
+still faces the protections its own earlier attempt set: an op on such an
+identity that would change what is stored there, including a `force` put of
+identical content, is refused as protected, so a sibling that moved can
+never carry a rewrite past a protection. Anyone else's annotation, and every
+annotation that arrives through `import-git`, is dropped without effect.
 
 Protection does not exempt admins. An admin's write to a protected identity
 is refused like anyone else's; lifting the mark first is the deliberate,

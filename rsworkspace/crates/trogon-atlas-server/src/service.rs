@@ -2740,6 +2740,44 @@ impl EventModelServiceImpl {
         Some((changeset_id, outcomes))
     }
 
+    /// Turns each `Create` that an earlier attempt of this `BatchMutate`
+    /// already landed, and that is still as that attempt left it, into a
+    /// `Put` of the same entity. The store then sees an unchanged write
+    /// instead of failing the whole batch as already existing, while every
+    /// other op still faces its own preconditions.
+    async fn creates_landed_as_puts(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        operation_id: &str,
+        author: &str,
+        metas: &[OpMetaLike],
+        mutations: &mut [MutationOp],
+    ) {
+        let Some(changeset_id) = self
+            .content_landed_by(attempt, "BatchMutate", operation_id, author)
+            .await
+        else {
+            return;
+        };
+        for (meta, op) in metas.iter().zip(mutations) {
+            let MutationOp::Create { kind, entity } = op else {
+                continue;
+            };
+            if matches!(
+                self.still_as_landed(meta.kind, &meta.id, &changeset_id)
+                    .await,
+                Some(Some(_))
+            ) {
+                *op = MutationOp::Put {
+                    kind: *kind,
+                    entity: entity.clone(),
+                    if_match: None,
+                    force: false,
+                };
+            }
+        }
+    }
+
     /// Whether applying `op` to `id` on baseline would leave what is stored
     /// there exactly as it is. Anything that cannot be confirmed counts as a
     /// change.
@@ -2755,14 +2793,14 @@ impl EventModelServiceImpl {
             Err(_) => return false,
         };
         match (op, current) {
-            (MutationOp::Put { force: true, .. }, _) | (MutationOp::Put { .. }, None) => false,
+            (MutationOp::Put { force: true, .. } | MutationOp::Create { .. }, _)
+            | (MutationOp::Put { .. }, None) => false,
             (MutationOp::Put { entity, .. }, Some(current)) => {
                 trogon_atlas_core::connection_persistence::prepare_entity(Some(&current), entity)
                     .is_ok_and(|prepared| {
                         trogon_atlas_core::semantically_equal(&current, &prepared)
                     })
             }
-            (MutationOp::Create { .. }, current) => current.is_some(),
             (MutationOp::Delete { .. }, current) => current.is_none(),
         }
     }
@@ -7012,9 +7050,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             self.batch_landed_by(attempt.as_ref(), &req.operation_id, &author.name, &metas)
                 .await
         };
-        // Falling back to a full rewrite must not change an identity this
-        // operation already protected, so those ops face the protection
-        // again unless rewriting them leaves the store as it is.
+        // Falling back to a full rewrite must not create again what the
+        // first attempt created, nor change an identity this operation
+        // already protected, so those ops face the protection again unless
+        // rewriting them leaves the store as it is.
+        if landed.is_none() && !protect_requests.is_empty() && !dry_run {
+            self.creates_landed_as_puts(
+                attempt.as_ref(),
+                &req.operation_id,
+                &author.name,
+                &metas,
+                &mut mutations,
+            )
+            .await;
+        }
         if landed.is_none() && !resumed.is_empty() {
             let mut rewritten = Vec::new();
             for (m, op) in metas.iter().zip(&mutations) {

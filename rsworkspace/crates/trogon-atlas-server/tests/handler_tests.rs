@@ -6395,6 +6395,43 @@ async fn batch_mutate_retry_finishes_when_a_sibling_moved_and_the_protected_cont
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn batch_mutate_retry_does_not_create_again_what_it_created_once_a_sibling_moved() {
+    let store = protection_failing_store().await;
+    store
+        .protection_passes
+        .store(1, std::sync::atomic::Ordering::SeqCst);
+    let svc = EventModelServiceImpl::try_new(store.clone(), ServerMetrics::default()).unwrap();
+    let ns = "protect-resume-created";
+    let request = || {
+        let mut request = batch_with_moved_sibling(ns, "op-protect-resume-created", false);
+        for op in request.ops.iter_mut().take(2) {
+            if let Some(pb::batch_mutate_op::Op::Put(put)) = op.op.as_mut() {
+                put.create_only = true;
+            }
+        }
+        request
+    };
+    let protected_etag = protect_one_then_move_a_sibling(&store, &svc, ns, request()).await;
+
+    let retried = svc
+        .batch_mutate(as_protecting_admin(request()))
+        .await
+        .expect("a retry must not create again what its first attempt created")
+        .into_inner();
+    assert_eq!(
+        retried.status,
+        pb::batch_mutate_response::Status::Applied as i32
+    );
+    assert!(is_protected(&store, ns, "shipped").await);
+    let current = store
+        .inner
+        .get(pb::EntityKind::Event, &id(ns, "placed", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(current.etag, protected_etag);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn put_entity_retry_finishes_a_protecting_create_whose_changeset_append_was_lost() {
     let store = protection_failing_store().await;
     store
