@@ -1116,12 +1116,24 @@ struct FailingBatchStore {
     failure: fn() -> StoreError,
     fail_batches: bool,
     get_failure: Option<(pb::Id, Arc<std::sync::atomic::AtomicBool>)>,
+    /// Rewrites the stored row after a successful read, so a decoded entity
+    /// arrives with an invalid identity, incarnation or connection inventory.
+    get_rewrite: Option<GetRewrite>,
+    /// Never answers the read for this id while armed, so only a caller
+    /// deadline can end the request.
+    get_hang: Option<(pb::Id, Arc<std::sync::atomic::AtomicBool>)>,
     term_read_fault: Arc<std::sync::atomic::AtomicU8>,
     resource_scan_overflow: Arc<std::sync::atomic::AtomicBool>,
     resource_scan_gate: Option<Arc<ResourceScanGate>>,
     reference_scans: std::sync::atomic::AtomicUsize,
     human_read_probe: Option<Arc<HumanReadProbe>>,
 }
+
+type GetRewrite = (
+    pb::Id,
+    Arc<std::sync::atomic::AtomicBool>,
+    fn(&mut StoredEntity),
+);
 
 struct HumanReadProbe {
     active: std::sync::atomic::AtomicBool,
@@ -1151,6 +1163,8 @@ impl FailingBatchStore {
             failure,
             fail_batches: true,
             get_failure: None,
+            get_rewrite: None,
+            get_hang: None,
             term_read_fault: Arc::default(),
             resource_scan_overflow: Arc::default(),
             resource_scan_gate: None,
@@ -1262,7 +1276,17 @@ impl Store for FailingBatchStore {
         }) {
             return Err((self.failure)());
         }
-        let row = self.inner.get(kind, id, branch).await?;
+        if self.get_hang.as_ref().is_some_and(|(target, armed)| {
+            target == id && armed.load(std::sync::atomic::Ordering::SeqCst)
+        }) {
+            std::future::pending::<()>().await;
+        }
+        let mut row = self.inner.get(kind, id, branch).await?;
+        if let Some((_, _, rewrite)) = self.get_rewrite.as_ref().filter(|(target, armed, _)| {
+            target == id && armed.load(std::sync::atomic::Ordering::SeqCst)
+        }) {
+            rewrite(&mut row);
+        }
         if let Some(probe) = &self.human_read_probe {
             use std::sync::atomic::Ordering;
             if probe.active.load(Ordering::SeqCst) {
@@ -5581,6 +5605,223 @@ async fn human_inspection_propagates_dependency_failures_and_hosting_writes_publ
                 .into_inner();
             assert_eq!(resolved, before);
         }
+    }
+}
+
+const HUMAN_ROWS: [&str; 5] = ["portal", "issue", "review", "reviewer", "approve"];
+
+fn rewrite_identity(row: &mut StoredEntity) {
+    let version = match row.entity.kind.as_mut() {
+        Some(pb::entity::Kind::Component(value)) => value.id.as_mut(),
+        Some(pb::entity::Kind::CommandSlice(value)) => value.id.as_mut(),
+        Some(pb::entity::Kind::Ui(value)) => value.id.as_mut(),
+        Some(pb::entity::Kind::Persona(value)) => value.id.as_mut(),
+        Some(pb::entity::Kind::Command(value)) => value.id.as_mut(),
+        _ => panic!("unexpected human interaction row"),
+    };
+    version.unwrap().slug = "someone-else".into();
+}
+
+fn rewrite_missing_incarnation(row: &mut StoredEntity) {
+    row.entity.system.as_mut().unwrap().uid.clear();
+}
+
+fn rewrite_dropped_connection_ids(row: &mut StoredEntity) {
+    match row.entity.kind.as_mut() {
+        Some(pb::entity::Kind::Component(value)) => {
+            for hosting in &mut value.ui_hostings {
+                hosting.connection_id = None;
+            }
+        }
+        Some(pb::entity::Kind::CommandSlice(value)) => {
+            value.persona.as_mut().unwrap().connection_id = None;
+            value.ui.as_mut().unwrap().connection_id = None;
+            value.command.as_mut().unwrap().connection_id = None;
+        }
+        _ => panic!("only owners carry connection inventories"),
+    }
+}
+
+fn rewrite_malformed_connection_id(row: &mut StoredEntity) {
+    let malformed = Some(pb::ConnectionId {
+        value: "not-a-connection-id".into(),
+    });
+    match row.entity.kind.as_mut() {
+        Some(pb::entity::Kind::Component(value)) => {
+            value.ui_hostings[0].connection_id = malformed;
+        }
+        Some(pb::entity::Kind::CommandSlice(value)) => {
+            value.command.as_mut().unwrap().connection_id = malformed;
+        }
+        _ => panic!("only owners carry connection inventories"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn human_inspection_reports_undecodable_stored_rows_as_data_loss_never_absence_or_empty_paths(
+) {
+    type Case<'a> = (&'a str, fn(&mut StoredEntity), &'a [&'a str]);
+    let rewrites: [Case; 4] = [
+        ("foreign identity", rewrite_identity, &HUMAN_ROWS),
+        (
+            "missing incarnation",
+            rewrite_missing_incarnation,
+            &HUMAN_ROWS,
+        ),
+        (
+            "dropped connection ids",
+            rewrite_dropped_connection_ids,
+            &["portal", "issue"],
+        ),
+        (
+            "malformed connection id",
+            rewrite_malformed_connection_id,
+            &["portal", "issue"],
+        ),
+    ];
+    for (name, rewrite, slugs) in rewrites {
+        for slug in slugs {
+            let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut backend = FailingBatchStore::new().await;
+            backend.fail_batches = false;
+            backend.get_rewrite = Some((id("human-handler", slug, 1), armed.clone(), rewrite));
+            let service =
+                EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+                    .unwrap();
+            let (request, _, _) = seed_human_interaction(&service).await;
+            let before = service
+                .inspect_human_interaction(Request::new(request.clone()))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(before.state, pb::CatalogResolutionState::Resolved as i32);
+            armed.store(true, std::sync::atomic::Ordering::SeqCst);
+            let error = service
+                .inspect_human_interaction(Request::new(request.clone()))
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.code(),
+                tonic::Code::DataLoss,
+                "{name} {slug}: {error}"
+            );
+            assert!(!error.message().contains("someone-else"), "{name} {slug}");
+            assert!(
+                !error.message().contains("not-a-connection-id"),
+                "{name} {slug}"
+            );
+            armed.store(false, std::sync::atomic::Ordering::SeqCst);
+            let recovered = service
+                .inspect_human_interaction(Request::new(request))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(recovered, before, "{name} {slug}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn human_inspection_reports_store_timeouts_as_rpc_errors_never_absence_or_empty_paths() {
+    let failures: [(fn() -> StoreError, tonic::Code); 2] = [
+        (
+            || StoreError::Unavailable("kv.get: request timed out".into()),
+            tonic::Code::Unavailable,
+        ),
+        (
+            || StoreError::Backend("kv.get private-key: timeout".into()),
+            tonic::Code::Internal,
+        ),
+    ];
+    for (failure, expected) in failures {
+        for slug in HUMAN_ROWS {
+            let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut backend = FailingBatchStore::with_failure(failure).await;
+            backend.fail_batches = false;
+            backend.get_failure = Some((id("human-handler", slug, 1), armed.clone()));
+            let service =
+                EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default())
+                    .unwrap();
+            let (request, _, _) = seed_human_interaction(&service).await;
+            let before = service
+                .inspect_human_interaction(Request::new(request.clone()))
+                .await
+                .unwrap()
+                .into_inner();
+            armed.store(true, std::sync::atomic::Ordering::SeqCst);
+            let error = service
+                .inspect_human_interaction(Request::new(request.clone()))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code(), expected, "{slug}: {error}");
+            assert!(!error.message().contains("private-key"), "{slug}");
+            armed.store(false, std::sync::atomic::Ordering::SeqCst);
+            let recovered = service
+                .inspect_human_interaction(Request::new(request))
+                .await
+                .unwrap()
+                .into_inner();
+            assert_eq!(recovered, before, "{slug}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn human_inspection_deadline_expiry_is_an_rpc_error_never_absence_or_an_empty_path() {
+    use pb::{
+        event_model_service_client::EventModelServiceClient,
+        event_model_service_server::EventModelServiceServer,
+    };
+    for slug in HUMAN_ROWS {
+        let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut backend = FailingBatchStore::new().await;
+        backend.fail_batches = false;
+        backend.get_hang = Some((id("human-handler", slug, 1), armed.clone()));
+        let service =
+            EventModelServiceImpl::try_new(Arc::new(backend), ServerMetrics::default()).unwrap();
+        let (request, _, _) = seed_human_interaction(&service).await;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(EventModelServiceServer::new(service))
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .unwrap();
+        });
+        let mut client = EventModelServiceClient::connect(format!("http://{address}"))
+            .await
+            .unwrap();
+        let with_deadline = |millis: u64| {
+            let mut call = Request::new(request.clone());
+            call.set_timeout(std::time::Duration::from_millis(millis));
+            call
+        };
+        let before = client
+            .inspect_human_interaction(with_deadline(15_000))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(before.state, pb::CatalogResolutionState::Resolved as i32);
+        armed.store(true, std::sync::atomic::Ordering::SeqCst);
+        let error = client
+            .inspect_human_interaction(with_deadline(300))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(
+                error.code(),
+                tonic::Code::DeadlineExceeded | tonic::Code::Cancelled
+            ),
+            "{slug}: {error}"
+        );
+        armed.store(false, std::sync::atomic::Ordering::SeqCst);
+        let recovered = client
+            .inspect_human_interaction(with_deadline(15_000))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(recovered, before, "{slug}");
     }
 }
 
