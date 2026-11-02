@@ -918,6 +918,61 @@ async fn live_writes_do_not_taint_a_historical_export() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn versionless_historical_export_excludes_versions_written_while_refilling() {
+    let endpoint = start_server(Some(0)).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-history-refill-race";
+    put(&mut c, event(ns, "placed")).await;
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 1, "Before", &["placed"]),
+    )
+    .await;
+    let then = newest_changeset(&mut c, ns).await;
+
+    let mut writer = client(&endpoint).await;
+    let writes = tokio::spawn(async move {
+        for version in 2..=64 {
+            put(
+                &mut writer,
+                event_model_version(
+                    ns,
+                    "checkout",
+                    version,
+                    &format!("After {version}"),
+                    &["placed"],
+                ),
+            )
+            .await;
+        }
+    });
+
+    let mut observed = 0;
+    while !writes.is_finished() {
+        let mut req = export_req(ns, "checkout");
+        req.id.as_mut().unwrap().version = 0;
+        req.as_of_changeset = then.clone();
+        req.allow_incomplete = true;
+        let historical = export(&mut c, req).await;
+        observed += 1;
+        assert_eq!(
+            historical
+                .scope
+                .as_ref()
+                .unwrap()
+                .event_model_id
+                .as_ref()
+                .unwrap()
+                .version,
+            1
+        );
+        assert!(historical.manifests.contains("Before"));
+    }
+    writes.await.unwrap();
+    assert_ne!(observed, 0, "the race must produce at least one export");
+}
+
 /// Writes that land while a capped historical export runs drop the cached
 /// snapshot; the export must still report the cap of the load it rewound.
 #[tokio::test(flavor = "multi_thread")]

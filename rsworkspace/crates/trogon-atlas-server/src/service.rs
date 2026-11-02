@@ -933,30 +933,7 @@ impl EventModelServiceImpl {
         } = self.baseline_snapshot_with_truncation().await?;
         let lens = self.lens(vis).await?;
         let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
-
-        let mut pre_images: Vec<as_of::PreImage> = Vec::new();
-        for (record_id, ops) in &newer {
-            for op in ops {
-                let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
-                let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
-                let revision = self
-                    .store
-                    .get_entity_revision(kind, id, record_id, None)
-                    .await
-                    .map_err(|e| match e {
-                        trogon_atlas_store::error::StoreError::NotFound => {
-                            Status::failed_precondition(format!(
-                                "changeset {} recorded no revision for {}/{}: it predates \
-                                 revision recording or was written without changeset \
-                                 attribution, so the model as of an older changeset is not recoverable",
-                                record_id, id.namespace, id.slug
-                            ))
-                        }
-                        other => store_err(other),
-                    })?;
-                pre_images.push((pb::EntityKey::new(kind, id), revision.before));
-            }
-        }
+        let pre_images = self.rewind_pre_images(&newer).await?;
 
         // The snapshot is capped, so it can omit the root and the members and
         // halo the board reaches. Fetch those by key and let the pre-images
@@ -1017,7 +994,7 @@ impl EventModelServiceImpl {
         let touched: std::collections::HashSet<pb::EntityKey> =
             pre_images.iter().map(|(key, _)| key.clone()).collect();
         let mut absent: std::collections::HashSet<pb::EntityKey> = std::collections::HashSet::new();
-        let rewound = loop {
+        let mut rewound = loop {
             let rewound = as_of::rewind(&current, pre_images.clone());
             let mut wanted: Vec<(pb::EntityKind, pb::Id)> = vec![(root_kind, root_id.clone())];
             let root_members = event_model_in(&rewound, root_id).and_then(|entity| {
@@ -1067,6 +1044,14 @@ impl EventModelServiceImpl {
                 break as_of::rewind(&current, pre_images.clone());
             }
         };
+        let closing_newer = self.baseline_changesets_after(changeset_id, &lens).await?;
+        if closing_newer
+            .iter()
+            .map(|(id, _)| id)
+            .ne(newer.iter().map(|(id, _)| id))
+        {
+            rewound = as_of::rewind(&current, self.rewind_pre_images(&closing_newer).await?);
+        }
         // Narrow with the lens the walk used: a namespace admitted only by a
         // later lookup was never rewound and would show its current state.
         let entities = if lens.is_unrestricted() {
@@ -1079,6 +1064,36 @@ impl EventModelServiceImpl {
             truncated,
             incomplete,
         })
+    }
+
+    async fn rewind_pre_images(
+        &self,
+        newer: &[(String, Vec<ChangesetOp>)],
+    ) -> Result<Vec<as_of::PreImage>, Status> {
+        let mut pre_images = Vec::new();
+        for (record_id, ops) in newer {
+            for op in ops {
+                let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
+                let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
+                let revision = self
+                    .store
+                    .get_entity_revision(kind, id, record_id, None)
+                    .await
+                    .map_err(|e| match e {
+                        trogon_atlas_store::error::StoreError::NotFound => {
+                            Status::failed_precondition(format!(
+                                "changeset {} recorded no revision for {}/{}: it predates \
+                                 revision recording or was written without changeset \
+                                 attribution, so the model as of an older changeset is not recoverable",
+                                record_id, id.namespace, id.slug
+                            ))
+                        }
+                        other => store_err(other),
+                    })?;
+                pre_images.push((pb::EntityKey::new(kind, id), revision.before));
+            }
+        }
+        Ok(pre_images)
     }
 
     /// Baseline changesets newer than `changeset_id`, newest first, with
