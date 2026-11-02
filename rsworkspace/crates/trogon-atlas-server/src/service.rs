@@ -169,6 +169,10 @@ pub const MAX_PROJECTION_ENTITIES: usize = 5000;
 /// handed to `store.list`, never `""` (every tenant's). Otherwise another
 /// tenant's entities can exhaust the cap before the caller's own entity is
 /// ever reached, and visibility would be consulted too late to matter.
+///
+/// The store is also asked for `slug` alone, so the cap bounds how many
+/// namespaces' identities of that one slug may be listed, never whether an
+/// identity named exactly is found among its namespace's other identities.
 pub async fn get_latest_version_with_cap(
     store: &Arc<dyn Store>,
     lens: &Lens,
@@ -200,6 +204,7 @@ pub async fn get_latest_version_with_cap(
             ListFilter {
                 kinds: &kinds,
                 namespaces: &namespaces,
+                slug: Some(slug),
                 latest_versions_only: true,
             },
             Some(cap),

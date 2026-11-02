@@ -1007,6 +1007,81 @@ async fn a_lift_against_a_stale_revision_is_refused() {
     assert!(protection_of(&mut c, "ep-stale", "placed").await.is_none());
 }
 
+/// An identity is found by its own key, so it is protected and lifted however
+/// many other identities of its kind share the namespace. Stored rows sort by
+/// slug, so the target sorts after more rows than the server will ever list at
+/// once; answering from that listing would call it missing.
+#[tokio::test(flavor = "multi_thread")]
+async fn protect_and_lift_find_an_identity_past_the_namespace_listing_cap() {
+    use trogon_atlas_store::{store::MutationOp, Store, WriteContext};
+
+    let store = Arc::new(trogon_atlas_testsupport::shared().await.store().await);
+    for start in (0..=trogon_atlas_server::service::MAX_PROJECTION_ENTITIES).step_by(128) {
+        let end = (start + 128).min(trogon_atlas_server::service::MAX_PROJECTION_ENTITIES + 1);
+        let ops: Vec<_> = (start..end)
+            .map(|index| MutationOp::Create {
+                kind: pb::EntityKind::Event,
+                entity: event("ep-capped", &format!("a-{index:05}"), 1, "Filler"),
+            })
+            .collect();
+        store
+            .batch_apply(&ops, WriteContext::baseline())
+            .await
+            .unwrap();
+    }
+    let mut c = serve(
+        EventModelServiceImpl::try_new(store, ServerMetrics::default()).unwrap(),
+        Some(registry()),
+    )
+    .await;
+    seed(&mut c, event("ep-capped", "zzz-target", 1, "Target")).await;
+
+    let record = protect(&mut c, pb::EntityKind::Event, "ep-capped", "zzz-target").await;
+    assert_eq!(record.protected_by, ADMIN_NAME);
+    assert_protected(
+        c.put_entity(as_token(
+            put(event("ep-capped", "zzz-target", 2, "Next")),
+            WRITER,
+        ))
+        .await,
+        "event/ep-capped/zzz-target",
+    );
+
+    let lifted = c
+        .unprotect_entity(as_token(
+            lift_req("ep-capped", "zzz-target", record.revision),
+            ADMIN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(lifted.changed);
+    let lift = c
+        .get_changeset(as_token(
+            pb::GetChangesetRequest {
+                id: lifted.changeset_id,
+            },
+            READER,
+        ))
+        .await
+        .unwrap()
+        .into_inner()
+        .changeset
+        .unwrap();
+    assert_eq!(
+        lift.ops[0]
+            .entity
+            .as_ref()
+            .unwrap()
+            .id
+            .as_ref()
+            .unwrap()
+            .version,
+        1,
+        "the lift must name the version that is stored, not a placeholder"
+    );
+}
+
 fn assert_unknown(result: Result<impl std::fmt::Debug, tonic::Status>, identity: &str) {
     let err = result.unwrap_err();
     assert_eq!(err.code(), Code::Unavailable, "{err:?}");

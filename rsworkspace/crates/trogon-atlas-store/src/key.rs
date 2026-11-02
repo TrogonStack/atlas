@@ -35,10 +35,8 @@ pub fn entity_key(kind: EntityKind, id: &Id) -> String {
     )
 }
 
-// Kept test-only: nothing in the production paths consumes this prefix
-// today, and the kind/namespace/slug layout is an internal key-layout
-// concern. Promote to `pub(crate)` / `pub` if a real consumer appears.
-#[cfg(test)]
+/// Prefix matching every stored version of one identity:
+/// `"<kind_short>.<namespace>.<slug>."`.
 pub(crate) fn slug_prefix(kind: EntityKind, namespace: &str, slug: &str) -> String {
     format!(
         "{}.{}.{}.",

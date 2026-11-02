@@ -65,7 +65,7 @@ use crate::{
     key::{
         branch_delta_key, branch_delta_prefix, branch_meta_key, entity_key, kind_prefix,
         namespace_name_key, namespace_prefix, namespace_record_key, namespace_record_prefix,
-        parse_entity_key, parse_namespace_record_key, revision_key, revision_prefix,
+        parse_entity_key, parse_namespace_record_key, revision_key, revision_prefix, slug_prefix,
     },
     metrics::StoreMetrics,
     protection::{
@@ -1228,6 +1228,9 @@ impl NatsStore {
                 continue;
             }
             if !filter.namespaces.is_empty() && !filter.namespaces.contains(&id.namespace) {
+                continue;
+            }
+            if filter.slug.is_some_and(|slug| slug != id.slug) {
                 continue;
             }
             let entry = kv_entry_timeout(&self.branches_kv, key.clone()).await?;
@@ -3666,6 +3669,7 @@ impl Store for NatsStore {
             let kv = self.kv.clone();
             let kinds: Vec<EntityKind> = filter.kinds.to_vec();
             let namespaces: Vec<String> = filter.namespaces.to_vec();
+            let slug: Option<String> = filter.slug.map(str::to_owned);
             let latest_versions_only = filter.latest_versions_only;
             tokio::time::timeout(LIST_TOTAL_TIMEOUT, async move {
                 let effective_limit = limit.unwrap_or(LIST_HARD_CAP).min(LIST_HARD_CAP);
@@ -3694,10 +3698,16 @@ impl Store for NatsStore {
                 } else if namespaces.is_empty() {
                     kinds.iter().map(|k| kind_prefix(*k)).collect()
                 } else {
+                    // One kind, one namespace and a slug name a single
+                    // identity: its versions share one key prefix, so only
+                    // that identity's rows are ever fetched.
                     let mut p = Vec::with_capacity(kinds.len() * namespaces.len());
                     for k in &kinds {
                         for ns in &namespaces {
-                            p.push(namespace_prefix(*k, ns));
+                            p.push(match &slug {
+                                Some(slug) => slug_prefix(*k, ns, slug),
+                                None => namespace_prefix(*k, ns),
+                            });
                         }
                     }
                     p
@@ -3729,6 +3739,14 @@ impl Store for NatsStore {
                     }
                     if !prefixes.is_empty() && !prefixes.iter().any(|p| key.starts_with(p)) {
                         continue;
+                    }
+                    if let Some(slug) = &slug {
+                        // The prefix above already pins the slug when kinds
+                        // and namespaces are both given; otherwise the key
+                        // has to be read to know its slug.
+                        if parse_entity_key(&key).is_none_or(|(_, id)| id.slug != *slug) {
+                            continue;
+                        }
                     }
                     matching_keys.push(key);
                     // Memory ceiling for the raw key set. Callers observe the

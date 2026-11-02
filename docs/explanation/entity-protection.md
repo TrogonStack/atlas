@@ -147,7 +147,11 @@ answered from the same log as every content change. See
 - Default chosen for review: protect and lift are baseline-only. A branch
   header on either is refused; branch merges into baseline are what the mark
   guards against.
-- Default chosen for review: protecting requires the identity to exist.
+- Default chosen for review: protecting requires the identity to exist. The
+  check asks the store for that one identity's versions, never for a listing
+  of the namespace, so a namespace holding more identities than a listing
+  returns does not make a stored identity look missing. `UnprotectEntity` reads
+  the version it records the same way.
 - Default chosen for review: a source run that carries a
   `ProtectionAnnotation` is refused outright, since source runs are synced
   rather than authored.

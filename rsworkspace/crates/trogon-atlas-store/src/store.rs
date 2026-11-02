@@ -1560,6 +1560,12 @@ pub struct Written {
 pub struct ListFilter<'a> {
     pub kinds: &'a [EntityKind],
     pub namespaces: &'a [String],
+    /// Restrict the listing to one slug. With one kind and one namespace this
+    /// names a single identity, so the answer is every stored version of it
+    /// (or just the latest with `latest_versions_only`) no matter how many
+    /// other identities the store holds, and a result cap can never push the
+    /// identity out of the listing.
+    pub slug: Option<&'a str>,
     pub latest_versions_only: bool,
 }
 
