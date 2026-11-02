@@ -113,6 +113,27 @@ async fn build() -> Built {
     let observation = json!({"readModel": {"id": id("summary")}});
     let display = put(&service, json!({"uiSlice": {"id": id("display"), "title": "Display summary", "persona": {"persona": {"id": id("reviewer")}}, "ui": {"ui": {"id": id("review")}}, "sourceReadModels": [observation.clone(), observation]}})).await;
     let unavailable_display = put(&service, json!({"uiSlice": {"id": id("unavailable-display"), "title": "Unavailable display", "persona": {"persona": {"id": id("reviewer")}}, "ui": {"ui": {"id": id("gone")}}, "sourceReadModels": [{"readModel": {"id": id("summary")}}]}})).await;
+    let incomplete_display = put(&service, json!({"uiSlice": {"id": id("incomplete-display"), "title": "Incomplete display", "persona": {"persona": {"id": id("reviewer")}}, "sourceReadModels": [{"readModel": {"id": id("summary")}}]}})).await;
+    let incomplete_issuance = put(&service, json!({"commandSlice": {"id": id("incomplete-issue"), "title": "Incomplete issuance", "persona": {"persona": {"id": id("reviewer")}}, "command": {"command": {"id": id("approve")}}}})).await;
+    let cited_hosting = selected(&component, "component.ui_hostings[1]");
+    let retired_body = json!({"component": {"id": id("retired-portal"), "title": "Retired portal", "uiHostings": [{"ui": {"id": id("review")}, "label": {"value": "Retired hosting"}}]}});
+    let retired = put(&service, retired_body.clone()).await;
+    let stale_hosting = selected(&retired, "component.ui_hostings[0]");
+    let subjects = |connection: &Value| json!([{"subject": {"connection": connection}}]);
+    let document = put(&service, json!({"document": {"id": id("hosting-guide"), "title": {"value": "Hosting guide"}, "subjects": subjects(&cited_hosting), "link": {"value": "https://example.com/hosting-guide"}}})).await;
+    let decision = put(&service, json!({"decision": {"id": id("hosting-decision"), "title": {"value": "Hosting decision"}, "status": "DECISION_STATUS_PROPOSED", "context": {"value": "Review the cited hosting"}, "rationale": {"value": "Keep the sibling distinct"}, "options": [{"title": {"value": "Retain"}, "description": {"value": "Retain the cited hosting"}}], "subjects": subjects(&cited_hosting)}})).await;
+    let stale_document = put(&service, json!({"document": {"id": id("stale-hosting-guide"), "title": {"value": "Stale hosting guide"}, "subjects": subjects(&stale_hosting), "link": {"value": "https://example.com/stale-hosting-guide"}}})).await;
+    service
+        .delete_entity(Request::new(pb::DeleteEntityRequest {
+            kind: pb::EntityKind::Component as i32,
+            id: reference(&retired).id,
+            mode: pb::delete_entity_request::Mode::Force as i32,
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+    let replacement = put(&service, retired_body).await;
+    assert_ne!(uid(&retired), uid(&replacement));
     service
         .delete_entity(Request::new(pb::DeleteEntityRequest {
             kind: pb::EntityKind::Ui as i32,
@@ -132,6 +153,12 @@ async fn build() -> Built {
         &issuance,
         &display,
         &unavailable_display,
+        &incomplete_display,
+        &incomplete_issuance,
+        &document,
+        &decision,
+        &stale_document,
+        &replacement,
     ]
     .into_iter()
     .map(reference)
@@ -161,6 +188,8 @@ async fn build() -> Built {
         "hosting": [selected(&component, "component.ui_hostings[0]"), selected(&component, "component.ui_hostings[1]")],
         "issuance": {"persona": selected(&issuance, "command_slice.persona"), "ui": selected(&issuance, "command_slice.ui"), "command": selected(&issuance, "command_slice.command")},
         "display": {"persona": selected(&display, "ui_slice.persona"), "ui": selected(&display, "ui_slice.ui"), "sourceReadModel": selected(&display, "ui_slice.source_read_models[1]")},
+        "citations": {"document": "hosting-guide", "decision": "hosting-decision", "stale": "stale-hosting-guide", "ownerUid": uid(&component), "staleOwnerUid": uid(&retired), "replacementOwnerUid": uid(&replacement)},
+        "incomplete": {"display": id("incomplete-display"), "issuance": id("incomplete-issue")},
         "unavailable": {"hosting": selected(&unavailable_component, "component.ui_hostings[0]"), "display": {"persona": selected(&unavailable_display, "ui_slice.persona"), "ui": selected(&unavailable_display, "ui_slice.ui"), "sourceReadModel": selected(&unavailable_display, "ui_slice.source_read_models[0]")}},
     });
     Built { service, receipt }
@@ -168,7 +197,7 @@ async fn build() -> Built {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn human_interaction_fixture_keeps_persisted_selectors() {
-    let built = build().await;
+    let built = Box::pin(build()).await;
     assert_ne!(
         built.receipt["hosting"][0]["id"],
         built.receipt["hosting"][1]["id"]
@@ -197,7 +226,7 @@ async fn serve_human_interaction_fixture() {
     let Built {
         service,
         mut receipt,
-    } = build().await;
+    } = Box::pin(build()).await;
     let registry = TokenRegistry::from_file_contents(
         serde_json::from_value(
             json!({"principals": {"native-reader": {"role": "reader", "tokens": [TOKEN]}}}),
