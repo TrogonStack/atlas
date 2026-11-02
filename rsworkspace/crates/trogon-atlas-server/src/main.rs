@@ -39,6 +39,7 @@ struct Args {
     #[arg(
         long,
         env = "TROGON_ATLAS_NATS_URL",
+        hide_env_values = true,
         default_value = "nats://127.0.0.1:4222"
     )]
     nats_url: String,
@@ -117,7 +118,7 @@ struct Args {
     /// treated as belonging to a synthetic principal named "legacy-admin" with
     /// Admin role. Omit both this and `--auth-tokens-file` only when
     /// `--insecure-allow-anonymous` is also set.
-    #[arg(long, env = "TROGON_ATLAS_AUTH_TOKEN")]
+    #[arg(long, env = "TROGON_ATLAS_AUTH_TOKEN", hide_env_values = true)]
     auth_token: Option<String>,
     /// Path to a TOML token registry file. When set, overrides `--auth-token`.
     /// See examples/tokens.toml for the file format.
@@ -205,7 +206,7 @@ struct Args {
     /// API key for the selected LLM provider. Prefers `TROGON_ATLAS_LLM_API_KEY`
     /// so the variable is provider-agnostic; falls back to
     /// `ANTHROPIC_API_KEY` for compatibility with existing tooling.
-    #[arg(long, env = "TROGON_ATLAS_LLM_API_KEY")]
+    #[arg(long, env = "TROGON_ATLAS_LLM_API_KEY", hide_env_values = true)]
     llm_api_key: Option<String>,
     /// Override the default model for the selected provider. The default
     /// is a cost-balanced Sonnet-class model; see llm.rs.
@@ -213,7 +214,7 @@ struct Args {
     llm_model: Option<String>,
     /// Override the provider base URL (e.g. to route through a proxy).
     /// Prefers `TROGON_ATLAS_LLM_BASE_URL`; falls back to `ANTHROPIC_BASE_URL`.
-    #[arg(long, env = "TROGON_ATLAS_LLM_BASE_URL")]
+    #[arg(long, env = "TROGON_ATLAS_LLM_BASE_URL", hide_env_values = true)]
     llm_base_url: Option<String>,
     /// Character budget for analysis prompts before doc strings are dropped.
     #[arg(long, env = "TROGON_ATLAS_LLM_PROMPT_BUDGET", default_value_t = 24_000)]
@@ -240,6 +241,7 @@ struct Args {
     #[arg(
         long,
         env = "TROGON_ATLAS_JEV_BASE_URL",
+        hide_env_values = true,
         default_value = "https://ai-gateway.vercel.sh"
     )]
     jev_base_url: String,
@@ -261,12 +263,16 @@ struct Args {
     ///
     /// The registry stays the source of truth for whether a namespace exists
     /// and what its id is; only the permission question moves.
-    #[arg(long, env = "TROGON_ATLAS_SPICEDB_ENDPOINT")]
+    #[arg(long, env = "TROGON_ATLAS_SPICEDB_ENDPOINT", hide_env_values = true)]
     spicedb_endpoint: Option<String>,
 
     /// Preshared key SpiceDB was started with. Required whenever
     /// `--spicedb-endpoint` is set.
-    #[arg(long, env = "TROGON_ATLAS_SPICEDB_PRESHARED_KEY")]
+    #[arg(
+        long,
+        env = "TROGON_ATLAS_SPICEDB_PRESHARED_KEY",
+        hide_env_values = true
+    )]
     spicedb_preshared_key: Option<String>,
 
     /// How fresh a permission check has to be.
@@ -1885,5 +1891,94 @@ mod bearer_auth_tests {
             .expect("Principal must be in extensions after successful auth");
         assert_eq!(principal.name.as_ref(), "legacy-admin");
         assert_eq!(principal.role, trogon_atlas_server::auth::Role::Admin);
+    }
+}
+
+/// Structural guard behind `tests/secret_help_output.rs`: clap prints the live
+/// value of an env-backed argument in `--help` unless the argument hides it, so
+/// every secret-looking env var must set `hide_env_values = true`.
+#[cfg(test)]
+mod secret_env_help_guard {
+    use clap::CommandFactory;
+
+    use super::Args;
+
+    /// Env var name fragments that mark an argument as secret-bearing, or as a
+    /// connection string that may embed credentials.
+    const SECRET_MARKERS: &[&str] = &[
+        "TOKEN",
+        "KEY",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRESHARED",
+        "DSN",
+        "URL",
+        "ENDPOINT",
+    ];
+
+    /// Matches a marker but carries no secret (a path to a key file, a count,
+    /// a file path, an interval). Adding a name here is a deliberate decision.
+    const PUBLIC_ENV: &[&str] = &[
+        "TROGON_ATLAS_TLS_KEY",
+        "TROGON_ATLAS_AUTH_TOKENS_FILE",
+        "TROGON_ATLAS_AUTH_TOKENS_RELOAD_INTERVAL",
+        "TROGON_ATLAS_LLM_MAX_TOKENS",
+    ];
+
+    fn collect(
+        cmd: &clap::Command,
+        path: &str,
+        checked: &mut Vec<String>,
+        offenders: &mut Vec<String>,
+    ) {
+        for arg in cmd.get_arguments() {
+            let Some(env) = arg.get_env().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let upper = env.to_ascii_uppercase();
+            let secretish = SECRET_MARKERS.iter().any(|marker| upper.contains(marker))
+                && !PUBLIC_ENV.contains(&env);
+            if !secretish {
+                continue;
+            }
+            checked.push(env.to_owned());
+            if !arg.is_hide_env_values_set() {
+                offenders.push(format!("{env} on `{path}`"));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            collect(
+                sub,
+                &format!("{path} {}", sub.get_name()),
+                checked,
+                offenders,
+            );
+        }
+    }
+
+    #[test]
+    fn secret_env_arguments_hide_their_values_in_help() {
+        let mut checked = Vec::new();
+        let mut offenders = Vec::new();
+        let cmd = Args::command();
+        collect(&cmd, cmd.get_name(), &mut checked, &mut offenders);
+        for expected in [
+            "TROGON_ATLAS_AUTH_TOKEN",
+            "TROGON_ATLAS_LLM_API_KEY",
+            "TROGON_ATLAS_JEV_API_KEY",
+            "TROGON_ATLAS_SPICEDB_PRESHARED_KEY",
+            "TROGON_ATLAS_CHANGE_CURSOR_KEY",
+        ] {
+            assert!(
+                checked.iter().any(|name| name == expected),
+                "guard must see {expected}, saw {checked:?}"
+            );
+        }
+        assert!(
+            offenders.is_empty(),
+            "env-backed secrets must set `hide_env_values = true`: {offenders:?}"
+        );
     }
 }

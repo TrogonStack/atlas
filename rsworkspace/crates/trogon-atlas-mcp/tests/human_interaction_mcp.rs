@@ -201,6 +201,17 @@ async fn authenticated_mcp_authors_and_inspects_exact_hosting_through_export_rea
     .await
     .unwrap();
     let (issuance, display, before) = fixture::selections(&mut grpc, &namespace).await;
+    let mut grpc_reader = connect_with_options(
+        &endpoint,
+        Some(READER),
+        30,
+        ConnectOptions {
+            branch: Some(BRANCH.into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     for request in [&issuance, &display] {
         let response = succeed(
             &reader,
@@ -209,6 +220,7 @@ async fn authenticated_mcp_authors_and_inspects_exact_hosting_through_export_rea
         )
         .await;
         fixture::assert_checked(&response, request);
+        fixture::assert_checked_identity(&mut grpc_reader, &response, request).await;
     }
     let mut wrong_role = display.clone();
     wrong_role["display"]["persona"] = display["display"]["sourceReadModel"].clone();

@@ -2215,7 +2215,7 @@ fn decode_entity_logged(bytes: &[u8], key: &str) -> StoreResult<Entity> {
         tracing::error!(
             key = %key,
             error = %e,
-            "corrupt entity in KV store; entry will be treated as absent"
+            "corrupt entity in KV store; failing the read"
         );
         StoreError::CorruptEntry {
             key: key.to_string(),

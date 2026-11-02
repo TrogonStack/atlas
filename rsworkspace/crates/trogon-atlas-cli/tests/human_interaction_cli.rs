@@ -134,6 +134,17 @@ async fn authenticated_cli_authors_and_inspects_exact_hosting_through_export_rea
     .await
     .unwrap();
     let (issuance, display, before) = fixture::selections(&mut writer, &namespace).await;
+    let mut reader = connect_with_options(
+        &endpoint,
+        Some(READER),
+        30,
+        ConnectOptions {
+            branch: Some(BRANCH.into()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let hosted = before.entity.as_ref().unwrap();
     let Some(pb::entity::Kind::Component(component)) = &hosted.kind else {
         panic!("Component")
@@ -158,6 +169,7 @@ async fn authenticated_cli_authors_and_inspects_exact_hosting_through_export_rea
             ],
         );
         fixture::assert_checked(&response, request);
+        fixture::assert_checked_identity(&mut reader, &response, request).await;
     }
     let mut stale = issuance.clone();
     stale["hosting"]["ownerUid"] = json!("11111111-1111-4111-8111-111111111111");

@@ -33,8 +33,9 @@ pub enum StoreError {
     /// retry the whole operation or accept the gap.
     #[error("change event publish failed after retries; entity write succeeded but change feed has a gap")]
     ChangeEventLost,
-    /// A stored KV entry could not be decoded as a valid `Entity`. The entry
-    /// is skipped rather than served, so callers observe it as absent.
+    /// A stored KV entry could not be decoded as a valid `Entity`, or its
+    /// references could not be read. The read that reaches it fails instead
+    /// of skipping the entry, so a scan never silently drops stored data.
     #[error("corrupt entity in store for key {key}: {reason}")]
     CorruptEntry { key: String, reason: String },
     /// Returned by `batch_apply` when op `index` failed. The zero-based

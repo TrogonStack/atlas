@@ -20,12 +20,18 @@ struct Args {
         long,
         global = true,
         env = "TROGON_ATLAS_ENDPOINT",
+        hide_env_values = true,
         default_value = "http://127.0.0.1:50069"
     )]
     endpoint: String,
 
     /// Bearer token; omit only against servers allowing anonymous access.
-    #[arg(long, global = true, env = "TROGON_ATLAS_AUTH_TOKEN")]
+    #[arg(
+        long,
+        global = true,
+        env = "TROGON_ATLAS_AUTH_TOKEN",
+        hide_env_values = true
+    )]
     auth_token: Option<String>,
 
     #[arg(
@@ -2991,5 +2997,81 @@ mod tests {
                 "{name} should exit {expected}"
             );
         }
+    }
+}
+
+/// Structural guard behind `tests/secret_help_output.rs`: clap prints the live
+/// value of an env-backed argument in `--help` unless the argument hides it, so
+/// every secret-looking env var must set `hide_env_values = true`.
+#[cfg(test)]
+mod secret_env_help_guard {
+    use clap::CommandFactory;
+
+    use super::Args;
+
+    /// Env var name fragments that mark an argument as secret-bearing, or as a
+    /// connection string that may embed credentials.
+    const SECRET_MARKERS: &[&str] = &[
+        "TOKEN",
+        "KEY",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRESHARED",
+        "DSN",
+        "URL",
+        "ENDPOINT",
+    ];
+
+    /// Matches a marker but carries no secret (a path to a key file, a count,
+    /// a file path, an interval). Adding a name here is a deliberate decision.
+    const PUBLIC_ENV: &[&str] = &[];
+
+    fn collect(
+        cmd: &clap::Command,
+        path: &str,
+        checked: &mut Vec<String>,
+        offenders: &mut Vec<String>,
+    ) {
+        for arg in cmd.get_arguments() {
+            let Some(env) = arg.get_env().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let upper = env.to_ascii_uppercase();
+            let secretish = SECRET_MARKERS.iter().any(|marker| upper.contains(marker))
+                && !PUBLIC_ENV.contains(&env);
+            if !secretish {
+                continue;
+            }
+            checked.push(env.to_owned());
+            if !arg.is_hide_env_values_set() {
+                offenders.push(format!("{env} on `{path}`"));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            collect(
+                sub,
+                &format!("{path} {}", sub.get_name()),
+                checked,
+                offenders,
+            );
+        }
+    }
+
+    #[test]
+    fn secret_env_arguments_hide_their_values_in_help() {
+        let mut checked = Vec::new();
+        let mut offenders = Vec::new();
+        let cmd = Args::command();
+        collect(&cmd, cmd.get_name(), &mut checked, &mut offenders);
+        assert!(
+            checked.iter().any(|name| name == "TROGON_ATLAS_AUTH_TOKEN"),
+            "guard must see the auth token argument, saw {checked:?}"
+        );
+        assert!(
+            offenders.is_empty(),
+            "env-backed secrets must set `hide_env_values = true`: {offenders:?}"
+        );
     }
 }

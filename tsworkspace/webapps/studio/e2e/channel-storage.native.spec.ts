@@ -68,7 +68,7 @@ test('authenticated native Channel and storage declarations keep exact identitie
   const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
   const evidenceDirectory = process.env.ATLAS_NATIVE_EVIDENCE_DIR;
   if (!evidenceDirectory) throw new Error('Missing evidence directory');
-  const evidence = path.resolve(evidenceDirectory);
+  const evidence = path.resolve(evidenceDirectory, 'channel-storage');
   await mkdir(evidence, { recursive: true });
   if (!(await realpath(evidence)).startsWith(`${await realpath(root)}/.trogonai/`))
     throw new Error('Evidence must remain under .trogonai');

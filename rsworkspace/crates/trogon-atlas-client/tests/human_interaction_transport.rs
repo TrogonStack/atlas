@@ -1,16 +1,28 @@
 #![allow(clippy::unwrap_used)]
 
-use std::convert::Infallible;
+#[path = "support/human_interaction_fixture.rs"]
+mod fixture;
 
+use std::{convert::Infallible, sync::Arc};
+
+use fixture::{ADMIN, BRANCH, OWNER, READER, WRITER};
 use serde_json::json;
+use tokio::net::TcpListener;
 use tonic::{body::Body, Code, Status};
 use trogon_atlas_client::{
-    client::{client_for_transport, ConnectOptions, Transport},
+    apply,
+    client::{client_for_transport, connect, connect_with_options, ConnectOptions, Transport},
     failure::{Failure, FailureCategory},
-    human_interaction,
+    human_interaction, manifest,
 };
 use trogon_atlas_core::transcode::TranscodePool;
-use trogon_atlas_proto as pb;
+use trogon_atlas_proto::{self as pb, event_model_service_server::EventModelServiceServer};
+use trogon_atlas_server::{
+    auth::{BearerAuth, TokenRegistry},
+    mcp::data_plane,
+    metrics::ServerMetrics,
+    service::EventModelServiceImpl,
+};
 
 #[test]
 fn interaction_request_codec_keeps_full_selectors_and_large_versions() {
@@ -130,4 +142,78 @@ async fn inspection_forwards_branch_auth_and_preserves_operational_refusals() {
         };
         assert_eq!(Failure::classify(&error).category, category);
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn inspection_over_the_wire_keeps_checked_identity_at_the_exact_version() {
+    let registry = TokenRegistry::from_file_contents(
+        serde_json::from_value(json!({"principals":{
+            "admin":{"role":"admin","tokens":[ADMIN]},
+            "writer":{"role":"writer","kind":"agent","parent":OWNER,"tokens":[WRITER]},
+            "reader":{"role":"reader","kind":"agent","parent":OWNER,"tokens":[READER]}
+        }}))
+        .unwrap(),
+    )
+    .unwrap();
+    let service = EventModelServiceImpl::try_new(
+        Arc::new(trogon_atlas_testsupport::shared().await.store().await),
+        ServerMetrics::default(),
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let secured = data_plane(
+        EventModelServiceServer::new(service),
+        BearerAuth::new(registry),
+    );
+    let task = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(secured)
+            .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+            .await
+            .unwrap();
+    });
+    let mut admin = connect(&endpoint, Some(ADMIN), 30).await.unwrap();
+    let namespace = admin
+        .register_namespace(pb::RegisterNamespaceRequest {
+            name: "human-transport".into(),
+            parent: OWNER.into(),
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id;
+    admin
+        .create_branch(pb::CreateBranchRequest {
+            name: BRANCH.into(),
+            doc: "Human inspection".into(),
+        })
+        .await
+        .unwrap();
+    let options = || ConnectOptions {
+        branch: Some(BRANCH.into()),
+        ..Default::default()
+    };
+    let mut writer = connect_with_options(&endpoint, Some(WRITER), 30, options())
+        .await
+        .unwrap();
+    let loaded = manifest::parse_str(&fixture::manifests(&namespace), "hosting.yaml").unwrap();
+    let plan = apply::plan(&mut writer, loaded).await.unwrap();
+    apply::apply(&mut writer, plan, false, None).await.unwrap();
+    let (issuance, display, _) = fixture::selections(&mut writer, &namespace).await;
+    let mut reader = connect_with_options(&endpoint, Some(READER), 30, options())
+        .await
+        .unwrap();
+    for request in [&issuance, &display] {
+        let parsed =
+            human_interaction::parse_request("InspectHumanInteractionRequest", request).unwrap();
+        let response = human_interaction::inspect_human_interaction(&mut reader, parsed)
+            .await
+            .unwrap();
+        fixture::assert_checked(&response, request);
+        fixture::assert_checked_identity(&mut reader, &response, request).await;
+    }
+    task.abort();
 }
