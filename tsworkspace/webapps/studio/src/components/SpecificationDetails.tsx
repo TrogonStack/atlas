@@ -58,6 +58,26 @@ function Selector({ selector }: { selector: unknown }) {
     </Row>
   );
 }
+function declaredDefault(flag: unknown): string {
+  if (flag === true) return 'Declared default. This is not a deployed selection.';
+  if (flag === false) return 'Explicitly not the default';
+  return 'Default unknown';
+}
+function deliveryMode(mode: unknown): string {
+  if (mode === undefined || mode === null || mode === '') return 'Delivery mode undeclared';
+  const names: Record<string, string> = {
+    CLAIM_DELIVERY_MODE_PUSH: 'Push',
+    CLAIM_DELIVERY_MODE_PULL: 'Pull',
+    CLAIM_DELIVERY_MODE_PUSH_PULL: 'Push and pull',
+  };
+  return names[String(mode)] ?? String(mode);
+}
+function parameterText(values: unknown): string {
+  const map = record(values);
+  const names = Object.keys(map);
+  if (!names.length) return 'No parameter values';
+  return names.map((name) => `${name}=${typeof map[name] === 'string' ? map[name] : value(map[name])}`).join(', ');
+}
 
 export function SpecificationDetails({
   entity,
@@ -174,13 +194,36 @@ export function SpecificationDetails({
             <p>ReadModel mapping undeclared</p>
           )}
           {!list(message.schemas).length ? <p>Message shape undeclared</p> : null}
-          {list(message.schemas).map((binding) => (
-            <Occurrence key={value(binding.connectionId)} item={binding}>
+          {list(message.schemas).map((binding, index) => (
+            <Occurrence key={`${value(binding.connectionId)}:${index}`} item={binding}>
               <Row label="Schema role">{value(binding.role).replace('ROLE_', '')}</Row>
               <Row label="Schema type">{schemaType(binding)}</Row>
+              <Row label="Environments">
+                {list(binding.environments).length
+                  ? list(binding.environments)
+                      .map((environment) => value(environment))
+                      .join(', ')
+                  : 'None declared'}
+              </Row>
+              <Row label="Default">{declaredDefault(binding.isDefault)}</Row>
             </Occurrence>
           ))}
         </Member>
+      ))}
+      <h3 className="font-semibold">Message channels</h3>
+      <p className="text-xs text-muted-foreground">
+        Independent declarations. They are not Component or Domain claims and they are not operation bindings.
+      </p>
+      {!list(raw.messageChannels).length ? <p>No message channels declared</p> : null}
+      {list(raw.messageChannels).map((declaration, index) => (
+        <Occurrence key={`${value(declaration.connectionId)}:${index}`} item={declaration}>
+          <Row label="Message">
+            <LocalMember owner={entity} collection="messages" memberId={declaration.memberId} />
+          </Row>
+          <Row label="Channel">{reference('channel', declaration.channel)}</Row>
+          <Row label="Parameters">{parameterText(declaration.parameterValues)}</Row>
+          <Row label="Delivery">{deliveryMode(declaration.deliveryMode)}</Row>
+        </Occurrence>
       ))}
       <h3 className="font-semibold">Operations</h3>
       {list(raw.operations).map((operation) => {

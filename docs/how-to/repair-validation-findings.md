@@ -45,6 +45,12 @@ scenario.
 
 ## Discover the full dependency context
 
+Start from the finding's `evidence` when it has any: each item names an
+exact entity, field, pinned target and, for storyboard-order rules, the
+storyboard position. See [finding evidence](../reference/finding-evidence.md)
+for the roles and which rules carry them. Evidence names the direct causes,
+not the full dependency context.
+
 Use existing model tools before searching exports manually:
 
 | Tool | Use |

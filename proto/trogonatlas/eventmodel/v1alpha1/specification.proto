@@ -9,6 +9,7 @@ import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/type_library.proto";
 import "trogonatlas/eventmodel/v1alpha1/architecture.proto";
 import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
+import "trogonatlas/eventmodel/v1alpha1/resource_association_values.proto";
 
 message ContractMemberId { string value = 1; }
 message MemberName { string value = 1; }
@@ -100,6 +101,8 @@ message TypeLibraryTypeRef {
   QualifiedProtoName message = 2;
 }
 
+message EnvironmentName { string value = 1; }
+
 message SchemaBinding {
   trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
   enum Role {
@@ -115,6 +118,19 @@ message SchemaBinding {
     TypeLibraryTypeRef library_type = 6;
   }
   optional string doc = 7;
+  repeated EnvironmentName environments = 8;
+  optional bool is_default = 9;
+}
+
+// Independent declaration that a returned message is carried by an exact
+// channel. This is not a Component or Domain claim and not an operation binding.
+message MessageChannelDeclaration {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ContractMemberId member_id = 2;
+  ChannelRef channel = 3;
+  map<string, string> parameter_values = 4;
+  optional ClaimDeliveryMode delivery_mode = 5;
+  optional string doc = 6;
 }
 
 message MessageReadModelMapping {
@@ -229,4 +245,5 @@ message Specification {
   repeated ProviderExposure exposures = 10;
   repeated ApiUsage usages = 11;
   repeated ContractDependency dependencies = 12;
+  repeated MessageChannelDeclaration message_channels = 13;
 }

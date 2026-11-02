@@ -47,6 +47,10 @@ function validateMessage(type, input, at) {
       if (typeof value !== "string") return reject(`${path}: expected a string`);
     } else if (field.type === "bool") {
       if (typeof value !== "boolean") return reject(`${path}: expected a boolean`);
+    } else if (field.type === "uint32") {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > 4294967295) {
+        return reject(`${path}: expected an exact uint32`);
+      }
     } else if (field.type === "uint64") {
       if (typeof value === "number") {
         if (!Number.isSafeInteger(value) || value < 0) return reject(`${path}: expected an exact uint64`);

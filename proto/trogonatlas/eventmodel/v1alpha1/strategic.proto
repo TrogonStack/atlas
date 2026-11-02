@@ -5,6 +5,8 @@ package trogonatlas.eventmodel.v1alpha1;
 import "google/protobuf/any.proto";
 import "trogonatlas/type/v1alpha1/id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/message_claims.proto";
+import "trogonatlas/eventmodel/v1alpha1/system_group.proto";
 // The bounded context itself, as data (Decision #27): one per namespace,
 // identified BY the namespace (id.slug == id.namespace). Carries the
 // context charter -- what this boundary owns, its links and metadata.
@@ -57,6 +59,8 @@ message Domain {
   // different Projects can share a namespace prefix without colliding
   // identity). Surfaced via validator rules -- see DOMAIN_MISSING_PROJECT.
   ProjectRef project = 6;
+  MessageClaims message_claims = 7;
+  repeated DomainMembership members = 8;
 }
 
 // The codebase / repository / customer the model is being mapped FROM.
@@ -99,6 +103,7 @@ message Term {
   repeated EntityRef embodied_by = 4;
   repeated google.protobuf.Any metadata = 5;
   trogonatlas.type.v1alpha1.Id supersedes = 6;
+  DomainRef owning_domain = 7;
 }
 
 message Ambiguity {

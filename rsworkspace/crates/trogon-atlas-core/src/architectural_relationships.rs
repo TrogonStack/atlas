@@ -114,6 +114,11 @@ pub fn resolve_connection_context(
     )?;
     let occurrence = connections::resolve_connection(owner, reference)
         .map_err(|e| ArchitecturalRelationshipError(e.to_string()))?;
+    if occurrence.path.starts_with("component.ui_hostings[") {
+        return occurrence
+            .target
+            .ok_or_else(|| ArchitecturalRelationshipError("hosting UI required".into()));
+    }
     let prefix = match entity_kind(owner) {
         Some(EntityKind::Component) => "component.relationships[",
         _ => "external_system.relationships[",

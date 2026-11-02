@@ -126,6 +126,7 @@ mod tests {
             branch: None,
             ops,
             operation_id: None,
+            validation: trogon_atlas_store::ChangesetValidation::NotRecorded,
         }
     }
 

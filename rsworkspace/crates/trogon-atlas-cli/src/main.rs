@@ -20,12 +20,18 @@ struct Args {
         long,
         global = true,
         env = "TROGON_ATLAS_ENDPOINT",
+        hide_env_values = true,
         default_value = "http://127.0.0.1:50069"
     )]
     endpoint: String,
 
     /// Bearer token; omit only against servers allowing anonymous access.
-    #[arg(long, global = true, env = "TROGON_ATLAS_AUTH_TOKEN")]
+    #[arg(
+        long,
+        global = true,
+        env = "TROGON_ATLAS_AUTH_TOKEN",
+        hide_env_values = true
+    )]
     auth_token: Option<String>,
 
     #[arg(
@@ -253,6 +259,12 @@ enum Cmd {
         /// or an id that `describe` prints.
         entity: String,
     },
+    /// List exact Decision amendments using proto3 JSON `ListDecisionAmendmentsRequest`.
+    ListDecisionAmendments {
+        /// Proto3 JSON `ListDecisionAmendmentsRequest`.
+        #[arg(long)]
+        request: String,
+    },
     /// List Decisions for an exact subject using proto3 JSON `ListSubjectDecisionsRequest`.
     ListSubjectDecisions {
         /// Proto3 JSON `ListSubjectDecisionsRequest`.
@@ -283,9 +295,50 @@ enum Cmd {
         #[arg(long)]
         request: String,
     },
+    /// Find declarations selecting an exact Domain using proto3 JSON `ListTermDomainDeclarationsRequest`.
+    ListTermDomainDeclarations {
+        /// Proto3 JSON `ListTermDomainDeclarationsRequest`.
+        #[arg(long)]
+        request: String,
+    },
     /// Find declarations selecting a Document using proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
     ListIncomingDocumentDeclarations {
         /// Proto3 JSON `ListIncomingDocumentDeclarationsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Check one exact authored hosting and human path using proto3 JSON.
+    InspectHumanInteraction {
+        #[arg(long)]
+        request: String,
+    },
+    /// List messages carried by an exact channel using proto3 JSON `ListChannelMessagesRequest`.
+    ListChannelMessages {
+        /// Proto3 JSON `ListChannelMessagesRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Inspect a DesignGraph with exact hydrated targets using proto3 JSON `GetDesignGraphDetailRequest`.
+    GetDesignGraphDetail {
+        /// Proto3 JSON `GetDesignGraphDetailRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// List DesignGraphs associated with an exact subject using proto3 JSON `ListSubjectDesignGraphsRequest`.
+    ListSubjectDesignGraphs {
+        /// Proto3 JSON `ListSubjectDesignGraphsRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Traverse flow topology across subflows with explicit depth and cycle boundaries using proto3 JSON `TraverseDesignGraphTopologyRequest`.
+    TraverseDesignGraphTopology {
+        /// Proto3 JSON `TraverseDesignGraphTopologyRequest`.
+        #[arg(long)]
+        request: String,
+    },
+    /// Find steps in other DesignGraphs that reference a DesignGraph as a subflow using proto3 JSON `ListIncomingDesignGraphSubflowsRequest`.
+    ListIncomingDesignGraphSubflows {
+        /// Proto3 JSON `ListIncomingDesignGraphSubflowsRequest`.
         #[arg(long)]
         request: String,
     },
@@ -1659,6 +1712,28 @@ async fn run(
             }
             Ok((ExitCode::SUCCESS, Some(result)))
         }
+        Cmd::ListDecisionAmendments { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListDecisionAmendmentsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::decision_document::list_decision_amendments(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
         Cmd::ListSubjectDecisions { request } => {
             let json = serde_json::from_str(&request).map_err(|error| {
                 trogon_atlas_client::failure::invalid_input(format!(
@@ -1766,6 +1841,28 @@ async fn run(
             }
             Ok((ExitCode::SUCCESS, Some(result)))
         }
+        Cmd::ListTermDomainDeclarations { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::decision_document::parse_request(
+                "ListTermDomainDeclarationsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::term_domains::list_term_domain_declarations(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
         Cmd::ListIncomingDocumentDeclarations { request } => {
             let json = serde_json::from_str(&request).map_err(|error| {
                 trogon_atlas_client::failure::invalid_input(format!(
@@ -1784,6 +1881,134 @@ async fn run(
                     request,
                 )
                 .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::InspectHumanInteraction { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::human_interaction::parse_request(
+                "InspectHumanInteractionRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::human_interaction::inspect_human_interaction(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListChannelMessages { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::channel_messages::parse_request(
+                "ListChannelMessagesRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::channel_messages::list_channel_messages(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::GetDesignGraphDetail { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "GetDesignGraphDetailRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result =
+                trogon_atlas_client::design_topology::get_design_graph_detail(&mut client, request)
+                    .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListSubjectDesignGraphs { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "ListSubjectDesignGraphsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::list_subject_design_graphs(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::TraverseDesignGraphTopology { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "TraverseDesignGraphTopologyRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::traverse_design_graph_topology(
+                &mut client,
+                request,
+            )
+            .await?;
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
+        Cmd::ListIncomingDesignGraphSubflows { request } => {
+            let json = serde_json::from_str(&request).map_err(|error| {
+                trogon_atlas_client::failure::invalid_input(format!(
+                    "invalid request JSON: {error}"
+                ))
+            })?;
+            let request = trogon_atlas_client::design_topology::parse_request(
+                "ListIncomingDesignGraphSubflowsRequest",
+                &json,
+            )?;
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let result = trogon_atlas_client::design_topology::list_incoming_design_graph_subflows(
+                &mut client,
+                request,
+            )
+            .await?;
             if text {
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
@@ -2648,5 +2873,81 @@ mod tests {
                 "{name} should exit {expected}"
             );
         }
+    }
+}
+
+/// Structural guard behind `tests/secret_help_output.rs`: clap prints the live
+/// value of an env-backed argument in `--help` unless the argument hides it, so
+/// every secret-looking env var must set `hide_env_values = true`.
+#[cfg(test)]
+mod secret_env_help_guard {
+    use clap::CommandFactory;
+
+    use super::Args;
+
+    /// Env var name fragments that mark an argument as secret-bearing, or as a
+    /// connection string that may embed credentials.
+    const SECRET_MARKERS: &[&str] = &[
+        "TOKEN",
+        "KEY",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRESHARED",
+        "DSN",
+        "URL",
+        "ENDPOINT",
+    ];
+
+    /// Matches a marker but carries no secret (a path to a key file, a count,
+    /// a file path, an interval). Adding a name here is a deliberate decision.
+    const PUBLIC_ENV: &[&str] = &[];
+
+    fn collect(
+        cmd: &clap::Command,
+        path: &str,
+        checked: &mut Vec<String>,
+        offenders: &mut Vec<String>,
+    ) {
+        for arg in cmd.get_arguments() {
+            let Some(env) = arg.get_env().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let upper = env.to_ascii_uppercase();
+            let secretish = SECRET_MARKERS.iter().any(|marker| upper.contains(marker))
+                && !PUBLIC_ENV.contains(&env);
+            if !secretish {
+                continue;
+            }
+            checked.push(env.to_owned());
+            if !arg.is_hide_env_values_set() {
+                offenders.push(format!("{env} on `{path}`"));
+            }
+        }
+        for sub in cmd.get_subcommands() {
+            collect(
+                sub,
+                &format!("{path} {}", sub.get_name()),
+                checked,
+                offenders,
+            );
+        }
+    }
+
+    #[test]
+    fn secret_env_arguments_hide_their_values_in_help() {
+        let mut checked = Vec::new();
+        let mut offenders = Vec::new();
+        let cmd = Args::command();
+        collect(&cmd, cmd.get_name(), &mut checked, &mut offenders);
+        assert!(
+            checked.iter().any(|name| name == "TROGON_ATLAS_AUTH_TOKEN"),
+            "guard must see the auth token argument, saw {checked:?}"
+        );
+        assert!(
+            offenders.is_empty(),
+            "env-backed secrets must set `hide_env_values = true`: {offenders:?}"
+        );
     }
 }

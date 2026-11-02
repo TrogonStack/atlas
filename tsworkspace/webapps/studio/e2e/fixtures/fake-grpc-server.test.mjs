@@ -140,3 +140,25 @@ describe('fake-grpc type library RPCs', () => {
     expect(res.messages?.map((m) => m.fullName)).toEqual(['shop.orders.v1.OrderPlaced']);
   });
 });
+
+describe('fake-grpc subject inspection RPCs', () => {
+  const subject = { entity: { kind: 'ENTITY_KIND_EVENT', id: { namespace: 'shop', slug: 'order.placed', version: '1' } } };
+
+  it('ListSubjectDecisions and ListSubjectDocuments resolve the subject with nothing declared', async () => {
+    for (const method of ['listSubjectDecisions', 'listSubjectDocuments']) {
+      const res = await call(method, { subject });
+      expect(res.declarations ?? []).toEqual([]);
+      expect(res.incomplete ?? false).toBe(false);
+      expect(res.subjectState).toBe('CATALOG_RESOLUTION_STATE_RESOLVED');
+      expect(res.scope?.visitedSubjects?.[0]?.entity?.id?.slug).toBe('order.placed');
+    }
+  });
+
+  it('ListSubjectAssignments resolves the subject with no assignments', async () => {
+    const res = await call('listSubjectAssignments', { subject });
+    expect(res.assignments ?? []).toEqual([]);
+    expect(res.incomplete ?? false).toBe(false);
+    expect(res.subjectState).toBe('RESPONSIBILITY_RESOLUTION_STATE_RESOLVED');
+    expect(res.scope?.visitedSubjects?.[0]?.entity?.id?.slug).toBe('order.placed');
+  });
+});

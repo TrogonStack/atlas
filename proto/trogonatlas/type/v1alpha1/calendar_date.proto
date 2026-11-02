@@ -1,0 +1,5 @@
+syntax = "proto3";
+
+package trogonatlas.type.v1alpha1;
+
+message CalendarDate { string value = 1; }

@@ -13,9 +13,11 @@
 //! lease window.
 //!
 //! The in-memory [`WriterLease`] is what [`crate::store::Store::is_writer`]
-//! actually consults. It is believed current only while both are true: the
-//! last attempt to create/renew/take over succeeded, and that success
-//! happened within the lease duration of now. The second check is a local
+//! actually consults. It is believed current only while both are true: no
+//! attempt since the last successful create/renew/take over proved the
+//! lease lost, and that success happened within the lease duration of now.
+//! A renewal that fails without losing a CAS race (a timeout, a dropped
+//! connection) proves nothing, so it leaves the belief to the second check. The second check is a local
 //! defense against a renewal loop that has stalled (e.g. a GC pause):
 //! without it, a process that silently stopped renewing would otherwise
 //! keep believing it is the writer indefinitely.
@@ -165,6 +167,17 @@ impl WriterLease {
         self.holding.store(false, Ordering::Release);
     }
 
+    /// Our renewal of a row we hold failed. Only a lost CAS race proves
+    /// another process rewrote the row. Any other failure (a timeout, a
+    /// dropped connection) leaves the outcome unknown, so the belief stays
+    /// bounded by the staleness check in [`Self::is_writer`] rather than
+    /// refusing every mutation until the next tick.
+    fn record_renewal_failed(&self, lost_race: bool) {
+        if lost_race {
+            self.record_not_holding();
+        }
+    }
+
     fn observe(&self, holder_id: String, epoch: u64) {
         self.epoch.store(epoch, Ordering::Release);
         *self.last_known_holder.lock() = holder_id;
@@ -252,9 +265,10 @@ async fn tick(lease_kv: &KvStore, lease: &WriterLease) -> StoreResult<()> {
                 {
                     Ok(_) => lease.record_acquired(renewed.epoch, renewed.holder_id),
                     Err(e) => {
-                        lease.record_not_holding();
                         use async_nats::jetstream::kv::UpdateErrorKind;
-                        if !matches!(e.kind(), UpdateErrorKind::WrongLastRevision) {
+                        let lost_race = matches!(e.kind(), UpdateErrorKind::WrongLastRevision);
+                        lease.record_renewal_failed(lost_race);
+                        if !lost_race {
                             return Err(StoreError::Backend(format!("writer lease renew: {e}")));
                         }
                     }
@@ -355,6 +369,22 @@ mod tests {
         assert_eq!(status.role, WriterRole::Writer);
         assert_eq!(status.epoch, Epoch::new(3));
         assert_eq!(status.lease_holder, "holder-a");
+    }
+
+    #[test]
+    fn a_renewal_failure_that_lost_no_race_keeps_the_writer_role() {
+        let lease = WriterLease::new(WriterRole::Writer, DEFAULT_LEASE_DURATION);
+        lease.record_acquired(1, lease.holder_id.clone());
+        lease.record_renewal_failed(false);
+        assert!(lease.is_writer());
+    }
+
+    #[test]
+    fn a_renewal_that_lost_the_race_stops_reporting_as_writer() {
+        let lease = WriterLease::new(WriterRole::Writer, DEFAULT_LEASE_DURATION);
+        lease.record_acquired(1, lease.holder_id.clone());
+        lease.record_renewal_failed(true);
+        assert!(!lease.is_writer());
     }
 
     #[test]

@@ -151,6 +151,7 @@ impl Scenario {
                 branch: None,
                 ops: Vec::new(),
                 operation_id: None,
+                validation: crate::ChangesetValidation::NotRecorded,
             })
             .await
     }

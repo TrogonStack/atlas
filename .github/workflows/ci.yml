@@ -54,6 +54,10 @@ jobs:
     needs: [runs-on, changes]
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -69,6 +73,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: rsworkspace
+          prefix-key: v1-line-tables
 
       - name: cargo fmt --check
         run: mise run github:workflows:ci:rust-fmt
@@ -92,6 +97,10 @@ jobs:
     needs: [runs-on, changes]
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
     runs-on: ${{ needs.runs-on.outputs.runs-on }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
     permissions:
       contents: read
       id-token: write
@@ -110,6 +119,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: rsworkspace
+          prefix-key: v1-line-tables
 
       - name: cargo llvm-cov
         env:

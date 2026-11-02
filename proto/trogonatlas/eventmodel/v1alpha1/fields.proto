@@ -4,7 +4,9 @@ package trogonatlas.eventmodel.v1alpha1;
 
 import "google/protobuf/any.proto";
 import "trogonatlas/type/v1alpha1/id.proto";
+import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
 // Generic reference to any type definition. Used by FieldSpec when a payload
 // field references another type and the kind is unknown ahead of time.
 message TypeRef {
@@ -101,6 +103,42 @@ message Schema {
   repeated FieldSpec fields = 4;
   repeated google.protobuf.Any metadata = 5;
   trogonatlas.type.v1alpha1.Id supersedes = 6;
+  // Unset, true, and false are distinct. Unset is not false.
+  optional bool aggregate_root = 7;
+  repeated BusinessIdentifier identifiers = 8;
+  repeated BusinessPropertyRelationship property_relationships = 9;
+}
+
+// One step of a property path. `repeated` must match the FieldSpec it names.
+message PropertySegment {
+  string name = 1;
+  bool repeated = 2;
+}
+
+message PropertyPath {
+  repeated PropertySegment segments = 1;
+}
+
+enum BusinessIdentifierRole {
+  BUSINESS_IDENTIFIER_ROLE_UNSPECIFIED = 0;
+  BUSINESS_IDENTIFIER_ROLE_PRIMARY = 1;
+  BUSINESS_IDENTIFIER_ROLE_ALTERNATE = 2;
+}
+
+message BusinessIdentifier {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  PropertyPath property = 2;
+  BusinessIdentifierRole role = 3;
+  CatalogText doc = 4;
+}
+
+message BusinessPropertyRelationship {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  PropertyPath source = 2;
+  SchemaRef target_entity = 3;
+  PropertyPath target_property = 4;
+  CatalogTitle label = 5;
+  CatalogText doc = 6;
 }
 
 enum TypeKind {
