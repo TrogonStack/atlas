@@ -505,6 +505,57 @@ async fn a_model_changed_underneath_a_cached_snapshot_is_marked_not_mixed() {
     assert!(!marked.manifests.contains("After"));
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_model_version_underneath_a_cached_snapshot_is_marked() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-version-race";
+    put(&mut c, event(ns, "placed")).await;
+    let members = vec!["placed"; 2_000];
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 1, "Before", &members),
+    )
+    .await;
+    let mut allowed = export_req(ns, "checkout");
+    allowed.id.as_mut().unwrap().version = 0;
+    allowed.allow_incomplete = true;
+    export(&mut c, allowed.clone()).await;
+
+    let endpoint = endpoint.clone();
+    let exporting = tokio::spawn(async move {
+        let mut reader = client(&endpoint).await;
+        export(&mut reader, allowed).await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    assert!(
+        !exporting.is_finished(),
+        "the export must still be in flight"
+    );
+    put(
+        &mut c,
+        event_model_version(ns, "checkout", 2, "After", &["placed"]),
+    )
+    .await;
+    let raced = exporting.await.unwrap();
+    assert_eq!(
+        model_entry(&raced)
+            .entity
+            .as_ref()
+            .unwrap()
+            .id
+            .as_ref()
+            .unwrap()
+            .version,
+        1
+    );
+    assert!(
+        reasons_of(&raced).contains(&IncompleteReason::ConcurrentWrite),
+        "{:?}",
+        reasons_of(&raced)
+    );
+}
+
 /// Exports racing a writer never lock it out and never mix states: a
 /// complete bundle is the revision its boundary names, and every bundle,
 /// partial or not, agrees with itself across entries, manifests and

@@ -1267,6 +1267,7 @@ impl EventModelServiceImpl {
         since: &str,
         lens: &Lens,
         read: &std::collections::HashSet<pb::EntityKey>,
+        versionless_root: Option<&pb::EntityKey>,
         namespaces: &BTreeSet<&str>,
         overlaid: &std::collections::HashSet<pb::EntityKey>,
     ) -> bool {
@@ -1285,6 +1286,11 @@ impl EventModelServiceImpl {
                 return false;
             }
             read.contains(&key)
+                || versionless_root.is_some_and(|root| {
+                    root.kind == key.kind
+                        && root.namespace == key.namespace
+                        && root.slug == key.slug
+                })
                 || (kind == pb::EntityKind::TypeLibrary
                     && namespaces.contains(id.namespace.as_str()))
         })
@@ -5587,7 +5593,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
             }
         }
-
         let view_truncated = snapshot_truncated || history_incomplete;
         let issues = validation::validate_model(model, &all);
         let checks = vec![
@@ -5631,6 +5636,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     &baseline_before,
                     &lens,
                     &read,
+                    (requested_id.version == 0).then_some(&root_key),
                     &rendered_namespaces,
                     &overlaid,
                 )
