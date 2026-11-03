@@ -33,6 +33,7 @@ Solve a specific problem:
 
 Look up exact behavior:
 
+- [Change assessment](reference/change-assessment.md)
 - [Consequence delta](reference/consequence-delta.md)
 - [Failure reasons](reference/failure-reasons.md)
 - [MCP tool reference](reference/mcp-tools.md)
@@ -83,6 +84,7 @@ Understand how Atlas works and why:
 - [Authorization design](explanation/authorization.md)
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)
+- [Change assessment](explanation/change-assessment.md)
 - [Changesets](explanation/changesets.md)
 - [Consequence deltas](explanation/consequence-delta.md)
 - [Entity protection](explanation/entity-protection.md)

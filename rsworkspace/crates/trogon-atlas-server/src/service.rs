@@ -9978,17 +9978,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .map_err(store_err)?;
         let mut classified = Vec::with_capacity(deltas.len());
         let mut fork_bases = std::collections::HashMap::with_capacity(deltas.len());
+        // An assessment pins the baseline as classification read it, not the
+        // fork-time `base_etag` a conflicting entry still carries.
+        let mut baseline_etags = std::collections::HashMap::with_capacity(deltas.len());
         for delta in deltas {
-            fork_bases.insert(
-                pb::EntityKey::new(delta.kind, &delta.id),
-                delta.base.clone(),
-            );
+            let key = pb::EntityKey::new(delta.kind, &delta.id);
+            fork_bases.insert(key.clone(), delta.base.clone());
             let (mut entry, theirs_etag) = self.classify_branch_delta(delta).await?;
             if req.auto_merge {
                 accept_structural_merge(&mut entry, theirs_etag.as_deref());
             }
+            baseline_etags.insert(key, theirs_etag.unwrap_or_default());
             classified.push(entry);
         }
+        let baseline_etag = |entity_ref: &pb::EntityRef| {
+            let kind = pb::EntityKind::try_from(entity_ref.kind).ok()?;
+            baseline_etags
+                .get(&pb::EntityKey::new(kind, entity_ref.id.as_ref()?))
+                .cloned()
+        };
 
         let conflicts: Vec<pb::BranchDiffEntry> = classified
             .iter()
@@ -9996,9 +10004,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .cloned()
             .collect();
         if !conflicts.is_empty() {
+            let change_assessment = req.dry_run.then(|| {
+                crate::assessment::assess(
+                    &crate::assessment::Evidence::Conflicts,
+                    crate::assessment::binding(&req.name, &classified, baseline_etag, None, &vis),
+                )
+            });
             return Ok(Response::new(pb::MergeBranchResponse {
                 status: pb::merge_branch_response::Status::Conflicts as i32,
                 conflicts,
+                change_assessment,
                 ..Default::default()
             }));
         }
@@ -10162,11 +10177,27 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let consequence_delta = self
                 .consequence_delta(&pre_all, &post_world, snapshot_truncated, None, &vis)
                 .await;
+            let assessment_binding = || {
+                crate::assessment::binding(
+                    &req.name,
+                    landable.iter().copied(),
+                    baseline_etag,
+                    consequence_delta.as_ref(),
+                    &vis,
+                )
+            };
             if has_error {
+                let change_assessment = crate::assessment::assess(
+                    &crate::assessment::Evidence::Blocked {
+                        delta: consequence_delta.as_ref(),
+                    },
+                    assessment_binding(),
+                );
                 return Ok(Response::new(pb::MergeBranchResponse {
                     status: pb::merge_branch_response::Status::Invalid as i32,
                     validation: validation_issues,
                     coverage: Some(merge_coverage(snapshot_truncated, false)),
+                    change_assessment: Some(change_assessment),
                     consequence_delta,
                     ..landed.into_response()
                 }));
@@ -10179,7 +10210,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .check_invariants(invariant_scope, &landing, &vis)
                 .await?;
             validation_issues.extend(merge_strategic_findings(&op_metas, &pre_all, &post_world));
+            let change_assessment = crate::assessment::assess(
+                &crate::assessment::Evidence::Admissible {
+                    delta: consequence_delta.as_ref(),
+                    invariants: invariant_check.as_ref(),
+                },
+                assessment_binding(),
+            );
             return Ok(Response::new(pb::MergeBranchResponse {
+                change_assessment: Some(change_assessment),
                 invariant_check,
                 status: pb::merge_branch_response::Status::Validated as i32,
                 validation: validation_issues,
