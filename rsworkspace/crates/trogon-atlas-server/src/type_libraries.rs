@@ -481,6 +481,8 @@ impl TypeLibraryGate {
 
     /// The namespace's live tenant files and their imports, ready to layer
     /// onto a transcode pool without a trip through the wire encoding.
+    /// `pending` are type libraries written alongside the caller's request;
+    /// they stand in for the live version of the same library.
     ///
     /// # Errors
     ///
@@ -489,9 +491,10 @@ impl TypeLibraryGate {
         &self,
         store: &dyn Store,
         namespace: &str,
+        pending: &[&pb::TypeLibrary],
         branch: Option<&str>,
     ) -> Result<Vec<prost_types::FileDescriptorProto>, Status> {
-        let live = self.live_pool(store, namespace, &[], branch).await?;
+        let live = self.live_pool(store, namespace, pending, branch).await?;
         let files: Vec<FileDescriptor> = live
             .pool
             .files()

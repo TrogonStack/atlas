@@ -281,6 +281,33 @@ function getTypeLibraryDescriptorSet(call, callback) {
   callback(null, { fileDescriptorSet: Buffer.alloc(0), messages });
 }
 
+// The Inspector asks for a selected subject's decisions, documents and
+// responsibility assignments. The fixture records none, so each query
+// answers "resolved, nothing declared" and echoes the subject in the
+// checked scope, the way the real server reports a subject it resolved.
+function listSubjectDecisions(call, callback) {
+  callback(null, {
+    declarations: [],
+    scope: { authorizedNamespaces: [ORDER_MODEL_ID.namespace], visitedSubjects: [call.request.subject] },
+    incomplete: false,
+    failures: [],
+    subjectState: 'CATALOG_RESOLUTION_STATE_RESOLVED',
+  });
+}
+
+function listSubjectDocuments(call, callback) {
+  listSubjectDecisions(call, callback);
+}
+
+function listSubjectAssignments(call, callback) {
+  callback(null, {
+    assignments: [],
+    scope: { authorizedNamespaces: [ORDER_MODEL_ID.namespace], visitedSubjects: [call.request.subject] },
+    incomplete: false,
+    subjectState: 'RESPONSIBILITY_RESOLUTION_STATE_RESOLVED',
+  });
+}
+
 function unimplemented(_call, callback) {
   callback({ code: grpc.status.UNIMPLEMENTED, message: 'not implemented in the e2e fixture server' });
 }
@@ -322,6 +349,9 @@ export async function startFakeGrpcServer() {
     deleteByQuery,
     compileTypeLibrary,
     getTypeLibraryDescriptorSet,
+    listSubjectDecisions,
+    listSubjectDocuments,
+    listSubjectAssignments,
     createBranch: unimplemented,
     deleteBranch: unimplemented,
     mergeBranch: unimplemented,

@@ -1164,3 +1164,89 @@ async fn read_changes_skips_undecodable_payload_and_continues() {
         "undecodable payload must be skipped; both flanking good records must be returned"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exact_mebibyte_entity_survives_write_read_reapply() {
+    use prost::Message;
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let kind = pb::EntityKind::Document;
+    let mut owner = pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::Document(pb::Document {
+            id: Some(id("capacity", "exact", 1)),
+            title: Some(pb::CatalogTitle {
+                value: "Owner".into(),
+            }),
+            doc: Some("x".repeat(1_048_576 - 128)),
+            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                value: "https://example.com/document".into(),
+            })),
+            ..Default::default()
+        })),
+    };
+    loop {
+        let size = trogon_atlas_core::stamp_system(None, &owner).encoded_len();
+        if size == 1_048_576 {
+            break;
+        }
+        if let Some(pb::entity::Kind::Document(ref mut document)) = owner.kind {
+            let doc = document.doc.as_mut().unwrap();
+            if size < 1_048_576 {
+                doc.push_str(&"x".repeat(1_048_576 - size));
+            } else {
+                doc.truncate(doc.len() - (size - 1_048_576));
+            }
+        }
+    }
+    assert_eq!(
+        trogon_atlas_core::stamp_system(None, &owner).encoded_len(),
+        1_048_576
+    );
+    let receipt = store
+        .create(kind, &owner, WriteContext::baseline())
+        .await
+        .unwrap();
+    let stored = store
+        .get(kind, &id("capacity", "exact", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(stored.entity.encoded_len(), 1_048_576);
+    assert_eq!(stored.etag, receipt.etag);
+    assert_eq!(stored.entity.kind, owner.kind);
+    store
+        .update(kind, &owner, &stored.etag, true, WriteContext::baseline())
+        .await
+        .unwrap();
+    let reapplied = store
+        .get(kind, &id("capacity", "exact", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(reapplied.entity.kind, owner.kind);
+    if let Some(pb::entity::Kind::Document(ref mut document)) = owner.kind {
+        document.doc.as_mut().unwrap().push('x');
+    }
+    assert_eq!(
+        trogon_atlas_core::stamp_system(Some(&reapplied.entity), &owner).encoded_len(),
+        1_048_577
+    );
+    let sequence = store.current_change_seq().await.unwrap();
+    assert!(matches!(
+        store
+            .update(
+                kind,
+                &owner,
+                &reapplied.etag,
+                true,
+                WriteContext::baseline()
+            )
+            .await,
+        Err(StoreError::InvalidArgument(_))
+    ));
+    assert_eq!(store.current_change_seq().await.unwrap(), sequence);
+    let unchanged = store
+        .get(kind, &id("capacity", "exact", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(unchanged.etag, reapplied.etag);
+    assert_eq!(unchanged.entity, reapplied.entity);
+}

@@ -37,9 +37,13 @@ processes run a background loop that tries, once every few seconds, to
 create the row (if absent), renew it (if they hold it), or take it over (if
 it expired). `Reader` processes only read the row to report status.
 
-A process believes it holds the lease only while both are true: its last
-renewal attempt succeeded, and that success happened recently enough that
-the lease could not have expired out from under it. That second check is a
+A process believes it holds the lease only while both are true: no attempt
+since its last successful renewal proved the lease lost, and that success
+happened recently enough that the lease could not have expired out from
+under it. Only a lost compare-and-swap proves the loss. A renewal that times
+out or loses its connection might still have landed, so it leaves the
+belief to the second check instead of refusing writes until the next
+attempt. That second check is a
 local defense against a stalled renewal loop (for example, after a long GC
 pause): without it, a process that silently stopped renewing would keep
 believing it was the writer indefinitely, even after another process took

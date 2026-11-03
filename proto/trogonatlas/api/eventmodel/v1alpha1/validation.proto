@@ -35,6 +35,68 @@ message ValidationIssue {
   string rule_title = 6;
   string rule_category = 7;
   Severity rule_default_severity = 8;
+
+  // The causes behind this finding, in canonical order so the list is a
+  // stable part of finding identity (code, subject, subject_field,
+  // evidence). Empty for rules that still explain their causes only in
+  // `message`; ValidationRule.evidence_roles says which rules carry it.
+  repeated ValidationEvidence evidence = 9;
+}
+
+// One cause of a finding, typed so clients never parse `message`. Every
+// reference names an exact version. Evidence only names entities the
+// validator read from the caller's visible snapshot, or references those
+// entities carry.
+//
+// Canonical order: role, then entity, field, target and occurrence, each
+// compared by kind, namespace, slug, version, then storyboard position.
+// `detail` is presentation only and is not part of finding identity.
+message ValidationEvidence {
+  enum Role {
+    ROLE_UNSPECIFIED = 0;
+    // `entity.field` wires `target` (a UI or processor) as an issuer of the
+    // subject command.
+    ROLE_ISSUER = 1;
+    // `entity.field` names `target` as a command that emits the subject
+    // event.
+    ROLE_EMITTER = 2;
+    // `entity.field` pins `target`, an older version than the latest
+    // loaded.
+    ROLE_STALE_PIN = 3;
+    // `entity` is the latest loaded version of a stale pin's target.
+    ROLE_LATEST_VERSION = 4;
+    // `entity.field` consumes `target` at `occurrence`.
+    ROLE_CONSUMER = 5;
+    // `entity.field` emits `target`, but only after the consuming
+    // occurrence in the same storyboard.
+    ROLE_LATER_EMITTER = 6;
+    // `entity.field` emits `target` at the nearest occurrence before the
+    // consumer.
+    ROLE_EARLIER_EMITTER = 7;
+    // `entity` is an action slice placed between an emitter and its
+    // projection.
+    ROLE_INTERVENING_ACTION = 8;
+  }
+  Role role = 1;
+  // Entity holding the cause.
+  trogonatlas.eventmodel.v1alpha1.EntityRef entity = 2;
+  // Structural path inside `entity`, with list indexes (for example
+  // `emitted_events[2]`). Empty when the entity itself is the cause.
+  string field = 3;
+  // What `entity.field` references, at the exact version it pins.
+  trogonatlas.eventmodel.v1alpha1.EntityRef target = 4;
+  // Where the cause sits in a storyboard. Set for storyboard-order rules
+  // so repeated occurrences of one slice stay distinguishable.
+  StoryboardOccurrence occurrence = 5;
+  // Human note for this cause. Presentation only.
+  string detail = 6;
+}
+
+// One placement of a slice in a storyboard.
+message StoryboardOccurrence {
+  trogonatlas.type.v1alpha1.Id storyboard = 1;
+  // Zero-based index into Storyboard.slices.
+  uint32 position = 2;
 }
 
 message ValidateEventModelRequest {
@@ -66,6 +128,9 @@ message ValidationRule {
   trogonatlas.eventmodel.v1alpha1.EntityKind subject_kind = 5;                      // primary kind this rule attaches to (or ENTITY_KIND_UNSPECIFIED)
   string subject_field = 6;                         // structural path inside the entity (or empty)
   string category = 7;                              // grouping: "model" | "scenarios" | "strategic" | "schema" | "storyboard"
+  // Evidence roles this rule's findings carry. Empty means the rule
+  // explains its causes only in the finding message.
+  repeated ValidationEvidence.Role evidence_roles = 8;
 }
 
 message ListValidationRulesRequest {}

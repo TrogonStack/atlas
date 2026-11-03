@@ -137,6 +137,10 @@ are. Failing closed on unknown reasons means a new by-design reason needs a
 client update before it stops reading as incomplete, which is preferable to
 a new "blocked" reason silently reading as a pass.
 
+The same rule decides whether a write's
+[changeset receipt](changesets.md#what-was-checked-when-it-landed) records
+coverage as complete, so history and CI agree on what counts as a pass.
+
 ### Enforcement is a separate decision
 
 Reporting that Merge only ran hygiene does not by itself expand Merge to
@@ -160,4 +164,6 @@ the snapshot cannot claim a finding was resolved.
   `rsworkspace/crates/trogon-atlas-server/src/service.rs`
 - Wire: `proto/trogonatlas/api/eventmodel/v1alpha1/validation.proto`,
   mutating responses in `service.proto`
+- Changeset receipts and the rule catalogue digest:
+  `rsworkspace/crates/trogon-atlas-server/src/changeset_receipt.rs`
 - MCP apply: `trogon-atlas-mcp` → client `apply` → `BatchMutate`

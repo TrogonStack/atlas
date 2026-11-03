@@ -60,6 +60,7 @@ opentelemetry-otlp = { version = "0.33", features = ["grpc-tonic", "tls-ring", "
 tracing-opentelemetry = "0.34"
 
 [dev-dependencies]
+async-nats = { workspace = true }
 rcgen = "0.14"
 tonic = { workspace = true, features = ["tls-ring"] }
 wiremock = "0.6"

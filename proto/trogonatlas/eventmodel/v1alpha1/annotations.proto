@@ -184,3 +184,34 @@ message DomainTagAnnotation {
   // "acme.billing.currency-code".
   string tag = 1;
 }
+
+message ModelProvider { string value = 1; }
+
+message ModelName { string value = 1; }
+
+message ModelVersion { string value = 1; }
+
+message ToolName { string value = 1; }
+
+message ToolKindText { string value = 1; }
+
+message AgentModel {
+  ModelProvider provider = 1;
+  ModelName name = 2;
+  ModelVersion version = 3;
+}
+message AgentTool {
+  ToolName name = 1;
+  ToolKindText type = 2;
+  AgentDescription description = 3;
+  AgentIcon icon = 4;
+  AgentUrl url = 5;
+}
+message AgentAnnotation {
+  AgentModel model = 1;
+  repeated AgentTool tools = 2;
+}
+
+message AgentDescription { string value = 1; }
+message AgentIcon { string value = 1; }
+message AgentUrl { string value = 1; }
