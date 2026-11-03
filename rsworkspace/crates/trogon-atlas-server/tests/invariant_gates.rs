@@ -229,6 +229,15 @@ async fn a_violating_write_is_refused_and_leaves_the_store_unchanged() {
     assert_eq!(metadata(&refused, "invariant"), "no-dangling");
     assert_eq!(metadata(&refused, "carrier"), "ig-break/checkout@1");
     assert_eq!(
+        refused
+            .get_details_error_info()
+            .unwrap()
+            .metadata
+            .get("reason")
+            .map(String::as_str),
+        Some("")
+    );
+    assert_eq!(
         metadata(&refused, "snapshot_id"),
         metadata(&previewed, "snapshot_id")
     );
@@ -280,6 +289,79 @@ async fn removing_an_entity_another_model_depends_on_is_judged_by_that_model() {
         }))
         .await
         .expect("the refused delete removed nothing");
+}
+
+async fn register(service: &EventModelServiceImpl, name: &str, parent: &str) -> String {
+    service
+        .register_namespace(Request::new(pb::RegisterNamespaceRequest {
+            name: name.into(),
+            parent: parent.into(),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .namespace
+        .unwrap()
+        .id
+}
+
+fn bound_to<T>(owner: &str, body: T) -> Request<T> {
+    use trogon_atlas_server::auth::{Principal, PrincipalKind, Role};
+
+    let mut request = Request::new(body);
+    request.extensions_mut().insert(Principal {
+        name: Arc::from("bound-writer"),
+        role: Role::Writer,
+        kind: PrincipalKind::User,
+        is_anonymous: false,
+        namespaces: trogon_atlas_server::scope::NamespaceScope::unrestricted(),
+        parent: Some(trogon_atlas_core::OwnerId::parse(owner).unwrap()),
+    });
+    request
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_model_the_caller_cannot_see_still_judges_its_delete() {
+    let service = service().await;
+    let run = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let visible = register(&service, &format!("ig-seen-{run}"), "ig-acme").await;
+    let hidden = register(&service, &format!("ig-unseen-{run}"), "ig-beta").await;
+    put(&service, event(&visible, "placed")).await.unwrap();
+    put(
+        &service,
+        model(
+            &hidden,
+            "checkout",
+            &[member(&visible, "placed")],
+            &[forbidding("no-dangling", NO_DANGLING)],
+        ),
+    )
+    .await
+    .unwrap();
+
+    let refused = service
+        .delete_entity(bound_to(
+            "ig-acme",
+            pb::DeleteEntityRequest {
+                kind: pb::EntityKind::Event as i32,
+                id: Some(id(&visible, "placed")),
+                mode: pb::delete_entity_request::Mode::Force as i32,
+                ..Default::default()
+            },
+        ))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        reason(&refused),
+        (Code::FailedPrecondition, "INVARIANT_VIOLATED".into())
+    );
+    assert_eq!(metadata(&refused, "invariant"), "");
+    assert_eq!(metadata(&refused, "carrier"), "");
+    assert!(event_exists(&service, &visible, "placed").await);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -575,4 +657,77 @@ async fn a_delete_by_query_is_refused_and_its_dry_run_agrees() {
     );
     assert_eq!(reason(&previewed), reason(&refused));
     assert!(event_exists(&service, "ig-dbq", "placed").await);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_delete_by_query_matching_nothing_still_reports_the_check() {
+    let service = service().await;
+    guarded_checkout(&service, "ig-dbq-none").await;
+
+    let query = |mode: pb::delete_entity_request::Mode| {
+        Request::new(pb::DeleteByQueryRequest {
+            namespace: "ig-dbq-none".into(),
+            kind: pb::EntityKind::Command as i32,
+            mode: mode as i32,
+            max_deletes: 10,
+            ..Default::default()
+        })
+    };
+    let previewed = service
+        .delete_by_query(query(pb::delete_entity_request::Mode::DryRun))
+        .await
+        .unwrap()
+        .into_inner();
+    let applied = service
+        .delete_by_query(query(pb::delete_entity_request::Mode::Force))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(applied.deleted_count, 0);
+    let check = applied.invariant_check.expect("the scope declares one");
+    assert_eq!(
+        statuses(&check),
+        [("no-dangling".to_string(), Verdict::Holds)]
+    );
+    assert_eq!(Some(check), previewed.invariant_check);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_retarget_with_no_referrers_still_reports_the_check() {
+    let service = service().await;
+    guarded_checkout(&service, "ig-rt-none").await;
+    put(&service, event("ig-rt-none", "lonely")).await.unwrap();
+    put(&service, event("ig-rt-none", "renamed")).await.unwrap();
+
+    let retarget = |dry_run: bool| {
+        let event_ref = |slug: &str| pb::EntityRef {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(id("ig-rt-none", slug)),
+        };
+        Request::new(pb::RetargetReferencesRequest {
+            from: Some(event_ref("lonely")),
+            to: Some(event_ref("renamed")),
+            dry_run,
+            ..Default::default()
+        })
+    };
+    let previewed = service
+        .retarget_references(retarget(true))
+        .await
+        .unwrap()
+        .into_inner();
+    let applied = service
+        .retarget_references(retarget(false))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(applied.rewritten, 0);
+    let check = applied.invariant_check.expect("the scope declares one");
+    assert_eq!(
+        statuses(&check),
+        [("no-dangling".to_string(), Verdict::Holds)]
+    );
+    assert_eq!(Some(check), previewed.invariant_check);
 }

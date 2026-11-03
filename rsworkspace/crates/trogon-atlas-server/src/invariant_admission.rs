@@ -177,6 +177,16 @@ impl EventModelServiceImpl {
         self.publish_tick(branch, touches_models, tick);
     }
 
+    /// `note_write` for a write that may have changed baseline entities: the
+    /// cached baseline snapshot goes first, so a verdict that pins the new
+    /// clock is never judged against the state before the write.
+    pub(super) async fn note_entity_write(&self, branch: Option<&str>, touches_models: bool) {
+        if branch.is_none() {
+            self.invalidate_snapshot().await;
+        }
+        self.note_write(branch, touches_models);
+    }
+
     fn publish_tick(&self, branch: Option<&str>, touches_models: bool, tick: u64) {
         let state = &self.invariants;
         match branch {
@@ -301,7 +311,10 @@ impl EventModelServiceImpl {
             .into_iter()
             .filter(|input| input.r#ref.as_ref().is_some_and(admitted))
             .collect();
-        let snapshot_id = snapshot_digest(&before, &BTreeSet::new(), false)
+        // The id the caller's own GetSnapshotId reports, so it never moves
+        // with a write the caller cannot read.
+        let visible = self.narrow(before.clone(), vis).await?;
+        let snapshot_id = snapshot_digest(&visible, &BTreeSet::new(), false)
             .map(|digest| digest.snapshot_id)
             .unwrap_or_default();
         if let Some(refusal) = invariants::refusal(&outcomes) {

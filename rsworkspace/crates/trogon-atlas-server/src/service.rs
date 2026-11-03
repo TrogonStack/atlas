@@ -2509,7 +2509,8 @@ impl EventModelServiceImpl {
             .ops
             .iter()
             .any(|op| op.entity_ref.kind == pb::EntityKind::EventModel as i32);
-        self.note_write(changeset.branch.as_deref(), touches_models);
+        self.note_entity_write(changeset.branch.as_deref(), touches_models)
+            .await;
         let record = changeset.into_record(message);
         if let Err(err) = self.store.append_changeset(&record).await {
             self.metrics.record_changeset_lost();
@@ -5678,8 +5679,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }));
         }
         if staged.is_empty() {
+            // Nothing applies, so there is nothing for the verdict to go
+            // stale against; report it as the dry run does.
+            let invariant_check = invariant_ticket
+                .as_ref()
+                .map_or(Ok(None), invariant_admission::InvariantTicket::preview)?;
             return Ok(Response::new(pb::RetargetReferencesResponse {
-                invariant_check: None,
+                invariant_check,
                 rewritten: staged_count,
                 failed: load_fail_count,
                 results,
@@ -5728,7 +5734,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
             Err(e) => {
                 if e.is_partial_apply() {
-                    self.note_write(branch.as_deref(), true);
+                    self.note_entity_write(branch.as_deref(), true).await;
                 }
                 tracing::warn!(error = %e, "retarget_references batch_apply failed");
                 for r in &mut results {
@@ -7879,8 +7885,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     .map_err(|_| Status::internal("source outcome lock unavailable"))? =
                     Some(outcome);
                 if applied {
-                    self.note_write(branch.as_deref(), true);
                     self.invalidate_snapshot().await;
+                    self.note_write(branch.as_deref(), true);
                     self.search_ready.store(false, Ordering::Release);
                 }
                 return Ok(Response::new(pb::BatchMutateResponse {
@@ -8020,7 +8026,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 // resolves what actually landed, which this handler cannot
                 // know yet.
                 Err(err) if err.is_partial_apply() => {
-                    self.note_write(branch.as_deref(), true);
+                    self.note_entity_write(branch.as_deref(), true).await;
                     Err(store_err(err))
                 }
                 Err(err) => {
@@ -8702,7 +8708,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // claim Pending and let `nats_journal`'s crash-recovery pass
             // settle it once it knows what actually landed.
             Err(err) if err.is_partial_apply() => {
-                self.note_write(branch.as_deref(), true);
+                self.note_entity_write(branch.as_deref(), true).await;
                 return Err(store_err(err));
             }
             Err(err) => {
@@ -9526,8 +9532,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             invariant_check = self
                 .check_invariants(invariant_scope, &changes, &vis)
                 .await?;
-        } else if let Some(ticket) = invariant_ticket.as_ref().filter(|_| !victims.is_empty()) {
-            invariant_check = self.invariant_gate(invariant_scope, ticket)?;
+        } else if let Some(ticket) = invariant_ticket.as_ref() {
+            // Nothing applies when nothing matched, so there is nothing for
+            // the verdict to go stale against; report it as the dry run does.
+            invariant_check = if victims.is_empty() {
+                ticket.preview()?
+            } else {
+                self.invariant_gate(invariant_scope, ticket)?
+            };
         }
 
         if !dry_run && !victims.is_empty() {
@@ -9549,15 +9561,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 })
                 .collect();
             let mut changeset = PendingChangeset::mint("DeleteByQuery", &author, branch.as_deref());
-            self.store
-                .batch_apply(&ops, changeset.write_ctx())
-                .await
-                .map_err(|error| {
-                    if error.is_partial_apply() {
-                        self.note_write(branch.as_deref(), true);
-                    }
-                    store_err(error)
-                })?;
+            if let Err(error) = self.store.batch_apply(&ops, changeset.write_ctx()).await {
+                if error.is_partial_apply() {
+                    self.note_entity_write(branch.as_deref(), true).await;
+                }
+                return Err(store_err(error));
+            }
             let outcomes: Vec<MutationOutcome> =
                 victims.iter().map(|_| MutationOutcome::Deleted).collect();
             changeset.record_batch(&metas, &outcomes);
@@ -10361,7 +10370,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // claim Pending and let `nats_journal`'s crash-recovery pass
             // settle it once it knows what actually landed.
             Err(err) if err.is_partial_apply() => {
-                self.note_write(None, true);
+                self.note_entity_write(None, true).await;
                 return Err(store_err(err));
             }
             Err(err) => {

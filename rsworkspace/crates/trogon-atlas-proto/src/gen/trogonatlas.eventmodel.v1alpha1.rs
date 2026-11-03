@@ -1232,8 +1232,9 @@ pub struct AgentUrl {
     pub value: ::prost::alloc::string::String,
 }
 /// Declares an invariant over the event model that carries it: a write that
-/// would leave the model's own validation reporting a forbidden finding is
-/// refused before anything applies. Only an EventModel may carry it, so only
+/// would add a forbidden finding to the model's own validation is refused
+/// before anything applies. A forbidden finding that was already there does
+/// not refuse the write. Only an EventModel may carry it, so only
 /// writers of the model's namespace can add, change or remove it. See
 /// docs/explanation/invariant-gates.md.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

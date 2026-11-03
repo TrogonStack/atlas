@@ -47,7 +47,7 @@ write.
 | `outcomes` | One per declared invariant, in carrier then name order |
 | `snapshot_id` | Snapshot the verdict was computed against, as `GetSnapshotId` reports it. Empty when the snapshot has no content identity |
 | `inputs` | Carriers and touched entities, each with the etag it had in that snapshot. An empty etag means the entity was absent |
-| `complete` | True when no outcome is unevaluable and none is redacted |
+| `complete` | True when no outcome is unevaluable, none is redacted, and `snapshot_id` is set |
 
 ## `InvariantOutcome`
 

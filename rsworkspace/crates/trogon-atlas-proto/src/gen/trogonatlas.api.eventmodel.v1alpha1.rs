@@ -2103,7 +2103,8 @@ pub struct InvariantCheck {
     /// had in that snapshot. An empty etag records that the entity was absent.
     #[prost(message, repeated, tag="3")]
     pub inputs: ::prost::alloc::vec::Vec<InvariantInput>,
-    /// True when no outcome is STATUS_UNEVALUABLE and none is redacted.
+    /// True when no outcome is STATUS_UNEVALUABLE, none is redacted, and
+    /// snapshot_id is set.
     #[prost(bool, tag="4")]
     pub complete: bool,
 }

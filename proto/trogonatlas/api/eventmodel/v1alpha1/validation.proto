@@ -244,7 +244,8 @@ message InvariantCheck {
   // The carriers and the entities the write touches, each with the etag it
   // had in that snapshot. An empty etag records that the entity was absent.
   repeated InvariantInput inputs = 3;
-  // True when no outcome is STATUS_UNEVALUABLE and none is redacted.
+  // True when no outcome is STATUS_UNEVALUABLE, none is redacted, and
+  // snapshot_id is set.
   bool complete = 4;
 }
 

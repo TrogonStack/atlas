@@ -155,7 +155,8 @@ fn forbids(annotation: &pb::InvariantAnnotation, issue: &pb::ValidationIssue) ->
 }
 
 /// A finding with every version, severity and prose erased, so the same
-/// finding on a successor version counts as already present.
+/// finding on a successor version, or against a newer target, counts as
+/// already present.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Lineage {
     code: String,
@@ -175,6 +176,20 @@ impl Lineage {
         structure.rule_title.clear();
         structure.rule_category.clear();
         structure.rule_default_severity = 0;
+        for evidence in &mut structure.evidence {
+            evidence.detail.clear();
+            for entity in [&mut evidence.entity, &mut evidence.target]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(id) = entity.id.as_mut() {
+                    id.version = 0;
+                }
+            }
+        }
+        structure
+            .evidence
+            .sort_by_key(prost::Message::encode_to_vec);
         Self {
             code: issue.code.clone(),
             subject: issue.subject.as_ref().map(|s| {
@@ -222,7 +237,7 @@ pub struct Worlds<'a> {
 }
 
 /// One outcome per invariant declared in `after`, ordered by carrier key
-/// then declaration order. Unredacted.
+/// then name. Unredacted.
 #[must_use]
 pub fn evaluate(worlds: &Worlds<'_>, budget: usize) -> Vec<pb::InvariantOutcome> {
     let mut carriers: Vec<(pb::EntityKey, &StoredEntity)> = worlds
@@ -255,6 +270,7 @@ pub fn evaluate(worlds: &Worlds<'_>, budget: usize) -> Vec<pb::InvariantOutcome>
         });
         let mut after_findings: Option<Vec<pb::ValidationIssue>> = None;
         let mut before_findings: Option<Vec<pb::ValidationIssue>> = None;
+        let first = outcomes.len();
         for declared in declarations(&stored.entity) {
             let mut outcome = pb::InvariantOutcome {
                 carrier: Some(carrier.clone()),
@@ -300,6 +316,7 @@ pub fn evaluate(worlds: &Worlds<'_>, budget: usize) -> Vec<pb::InvariantOutcome>
             }
             outcomes.push(outcome);
         }
+        outcomes[first..].sort_by(|a, b| a.name.cmp(&b.name));
     }
     outcomes
 }
@@ -638,6 +655,53 @@ mod tests {
         );
         assert_eq!(outcomes[0].status(), Status::Holds);
         assert_eq!(outcomes[1].reason(), Reason::BudgetExhausted);
+    }
+
+    #[test]
+    fn outcomes_follow_carrier_then_name() {
+        let after = vec![model(
+            &[],
+            &[annotation("b", &["B"]), annotation("a", &["A"])],
+        )];
+        let outcomes = evaluate(
+            &Worlds {
+                before: &[],
+                after: &after,
+                truncated: false,
+            },
+            DEFAULT_BUDGET,
+        );
+        let names: Vec<&str> = outcomes.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, ["a", "b"]);
+    }
+
+    #[test]
+    fn a_newer_target_keeps_a_stale_pin_the_same_finding() {
+        use pb::validation_evidence::Role;
+        let stale_pin = |latest: u64| pb::ValidationIssue {
+            code: "SLICE_STALE_REF".into(),
+            evidence: vec![
+                pb::ValidationEvidence {
+                    role: Role::StalePin as i32,
+                    target: Some(event_ref("placed")),
+                    ..Default::default()
+                },
+                pb::ValidationEvidence {
+                    role: Role::LatestVersion as i32,
+                    entity: Some(pb::EntityRef {
+                        id: Some(pb::Id {
+                            version: latest,
+                            ..id("placed")
+                        }),
+                        ..event_ref("placed")
+                    }),
+                    detail: format!("latest is v{latest}"),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(Lineage::of(&stale_pin(2)), Lineage::of(&stale_pin(3)));
     }
 
     #[test]

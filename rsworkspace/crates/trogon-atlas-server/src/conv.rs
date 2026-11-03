@@ -231,11 +231,15 @@ pub fn invariant_refused(outcome: &pb::InvariantOutcome, snapshot_id: &str) -> S
         ),
         (
             "reason".to_string(),
-            outcome
-                .reason()
-                .as_str_name()
-                .trim_start_matches("REASON_")
-                .to_string(),
+            if violated {
+                String::new()
+            } else {
+                outcome
+                    .reason()
+                    .as_str_name()
+                    .trim_start_matches("REASON_")
+                    .to_string()
+            },
         ),
         ("snapshot_id".to_string(), snapshot_id.to_string()),
         ("redacted".to_string(), outcome.redacted.to_string()),
