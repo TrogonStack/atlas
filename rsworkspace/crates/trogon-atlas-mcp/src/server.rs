@@ -901,6 +901,12 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         area: ToolArea::Discovery,
     },
     ToolPolicy {
+        tool: "get_entity_schema",
+        rpcs: &["ListValidationRules"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
         tool: "get_operation",
         rpcs: &["GetOperation"],
         min_role: ToolRole::Writer,
