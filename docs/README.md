@@ -34,6 +34,7 @@ Solve a specific problem:
 Look up exact behavior:
 
 - [Failure reasons](reference/failure-reasons.md)
+- [MCP tool reference](reference/mcp-tools.md)
 - [Finding evidence](reference/finding-evidence.md)
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)

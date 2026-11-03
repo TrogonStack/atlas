@@ -20,6 +20,11 @@ client's role can call. A request without the header is refused unless the
 server allows anonymous callers; a header that is not a bearer token is
 rejected.
 
+The [MCP tool reference](../../../docs/reference/mcp-tools.md) lists every
+tool with its minimum role, effect, gRPC methods and parameters. It is
+generated from the tool registry; regenerate it with
+`mise run rust:mcp-reference` after adding, removing or changing a tool.
+
 Send `x-trogon-atlas-branch: <name>` on a request to scope its tool calls
 to that branch. Omit it for baseline.
 
