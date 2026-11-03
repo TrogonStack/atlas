@@ -79,6 +79,7 @@ async fn server() -> (String, tokio::task::JoinHandle<()>, String, String) {
         Some(Duration::from_secs(30)),
         36 * 1024 * 1024,
         "127.0.0.1".parse().unwrap(),
+        None,
     )
     .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

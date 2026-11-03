@@ -41,6 +41,10 @@ Tenant types from a registered type library are not inlined; resolve them
 with `resolve_type`. An unknown kind is `invalid_params`; `list_entity_kinds`
 names every kind.
 
+Send `x-trogon-atlas-profile: <profile>` to narrow a session to one task's
+tools, or fix every session to one with the server's `--mcp-profile`. See
+[MCP tool profiles](../../../docs/reference/mcp-tool-profiles.md).
+
 Send `x-trogon-atlas-branch: <name>` on a request to scope its tool calls
 to that branch. Omit it for baseline.
 

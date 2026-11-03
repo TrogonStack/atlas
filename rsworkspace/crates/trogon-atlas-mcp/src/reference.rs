@@ -6,7 +6,10 @@ use std::{fmt::Write as _, path::PathBuf};
 
 use rmcp::model::Tool;
 
-use crate::server::{McpServer, ToolPolicy, TOOL_POLICIES};
+use crate::{
+    profile::{ToolEffect, ToolProfile},
+    server::{McpServer, ToolPolicy, TOOL_POLICIES},
+};
 
 /// Where the committed reference lives, relative to this crate's manifest.
 pub const REFERENCE_PATH: &str = "../../../docs/reference/mcp-tools.md";
@@ -60,17 +63,18 @@ pub fn render(tools: &[Tool], policies: &[ToolPolicy]) -> Result<String, Registr
     let mut out = String::new();
     out.push_str(HEADER);
     out.push_str(
-        "| Tool | Minimum role | Effect | Idempotent | gRPC methods | Parameters | Description |\n\
-         | --- | --- | --- | --- | --- | --- | --- |\n",
+        "| Tool | Minimum role | Effect | Idempotent | Profiles | gRPC methods | Parameters | Description |\n\
+         | --- | --- | --- | --- | --- | --- | --- | --- |\n",
     );
     for (tool, policy) in rows {
         let _ = writeln!(
             out,
-            "| `{}` | {} | {} | {} | {} | {} | {} |",
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} |",
             tool.name,
             policy.min_role.as_str(),
-            Effect::of(tool).as_str(),
+            ToolEffect::of(tool).as_str(),
             if is_idempotent(tool) { "yes" } else { "no" },
+            profiles(tool),
             code_list(policy.rpcs.iter().copied()),
             parameters(tool),
             cell(tool.description.as_deref().unwrap_or_default()),
@@ -95,35 +99,24 @@ registered tool and its policy row disagree.
   fails, it lists reader tools only.
 - **Effect** comes from the tool's annotations: `read`, `write`, or
   `destructive` for writes annotated as able to remove or overwrite data.
+- **Profiles** are the tool profiles that offer the tool. A tool in no
+  profile is offered only when the session runs without one. See
+  [MCP tool profiles](mcp-tool-profiles.md).
 - **Parameters** are the top-level input fields. A trailing `?` marks an
   optional field.
 
 ";
 
-enum Effect {
-    Read,
-    Write,
-    Destructive,
-}
-
-impl Effect {
-    fn of(tool: &Tool) -> Self {
-        let annotations = tool.annotations.as_ref();
-        if annotations.and_then(|a| a.read_only_hint).unwrap_or(false) {
-            Self::Read
-        } else if annotations.is_some_and(rmcp::model::ToolAnnotations::is_destructive) {
-            Self::Destructive
-        } else {
-            Self::Write
-        }
-    }
-
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Write => "write",
-            Self::Destructive => "destructive",
-        }
+fn profiles(tool: &Tool) -> String {
+    let homes: Vec<&str> = ToolProfile::ALL
+        .iter()
+        .filter(|profile| profile.admits(tool))
+        .map(|profile| profile.as_str())
+        .collect();
+    if homes.is_empty() {
+        "none".to_owned()
+    } else {
+        code_list(homes.into_iter())
     }
 }
 
@@ -190,7 +183,7 @@ mod tests {
     use rmcp::model::ToolAnnotations;
 
     use super::*;
-    use crate::server::ToolRole;
+    use crate::server::{ToolArea, ToolRole};
 
     #[test]
     fn committed_reference_matches_the_registry() {
@@ -228,11 +221,13 @@ mod tests {
             tool: "alpha",
             rpcs: &["GetAlpha"],
             min_role: ToolRole::Reader,
+            area: ToolArea::Model,
         },
         ToolPolicy {
             tool: "beta",
             rpcs: &["PutBeta", "DeleteBeta"],
             min_role: ToolRole::Writer,
+            area: ToolArea::Model,
         },
     ];
 
@@ -248,9 +243,10 @@ mod tests {
 
         assert!(!without.contains("`beta`"));
         assert!(with.contains(
-            "| `alpha` | reader | read | no | `GetAlpha` | `namespace`, `page_size?` | Reads \\| writes things. |"
+            "| `alpha` | reader | read | no | none | `GetAlpha` | `namespace`, `page_size?` | Reads \\| writes things. |"
         ));
-        assert!(with.contains("| `beta` | writer | destructive | no | `PutBeta`, `DeleteBeta` |"));
+        assert!(with
+            .contains("| `beta` | writer | destructive | no | none | `PutBeta`, `DeleteBeta` |"));
         assert!(with.find("`alpha`") < with.find("`beta`"));
     }
 
