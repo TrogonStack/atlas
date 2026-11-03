@@ -638,3 +638,45 @@ async fn validate_event_model_does_not_load_another_owners_model() {
         .await;
     assert_hidden("validate_event_model", out, |r| r.issues.is_empty());
 }
+
+/// What beta sees of acme's namespace is an empty view. Its id must not
+/// collide with acme's id for an empty namespace, or a cache keyed on the id
+/// would hand one tenant's answer to the other.
+#[tokio::test(flavor = "multi_thread")]
+async fn get_snapshot_id_binds_the_reader_into_the_id() {
+    let mut c = world().await;
+    let ask = |token| {
+        let mut c = c.clone();
+        async move {
+            c.get_snapshot_id(authed(
+                pb::GetSnapshotIdRequest {
+                    namespaces: vec!["xt-snapshot-unclaimed".into()],
+                    include_entries: false,
+                },
+                token,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+        }
+    };
+    let (acme, beta) = (ask(ACME_TOKEN).await, ask(BETA_TOKEN).await);
+    assert_eq!((acme.entity_count, beta.entity_count), (0, 0));
+    assert_ne!(acme.snapshot_id, beta.snapshot_id);
+    assert_eq!(acme.scope.unwrap().owner, "acme");
+    assert_eq!(beta.scope.unwrap().owner, "beta");
+
+    let hidden = c
+        .get_snapshot_id(authed(
+            pb::GetSnapshotIdRequest {
+                namespaces: vec![NS.into()],
+                include_entries: true,
+            },
+            BETA_TOKEN,
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(hidden.entity_count, 0);
+    assert_eq!(hidden.entries, Vec::<pb::SnapshotEntry>::new());
+}

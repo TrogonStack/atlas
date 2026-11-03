@@ -57,7 +57,7 @@
 //! be mistaken for the other.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fmt::{self, Write as _},
     str::FromStr,
 };
@@ -65,12 +65,20 @@ use std::{
 use sha2::{Digest, Sha256};
 use trogon_atlas_proto::Entity;
 
-use crate::transcode::{self, TranscodeError};
+use crate::{
+    namespace::{NamespaceError, NamespaceName, OwnerId},
+    transcode::{self, TranscodeError},
+};
 
 /// Domain tag for a single entity's content hash.
 const ENTITY_DOMAIN: &[u8] = b"trogonatlas.content.entity.v1\0";
-/// Domain tag for a whole-model snapshot hash.
-const SNAPSHOT_DOMAIN: &[u8] = b"trogonatlas.content.snapshot.v1\0";
+/// Domain tag for a whole-model snapshot hash. `v2` binds the declared
+/// scope into the digest; `v1` ids covered content only.
+const SNAPSHOT_DOMAIN: &[u8] = b"trogonatlas.content.snapshot.v2\0";
+
+/// Version of the snapshot identity format, reported beside every id so a
+/// caller holding one from an older format knows not to compare it.
+pub const SNAPSHOT_IDENTITY_VERSION: u32 = 2;
 
 /// Width of a [`ContentHash`] in bytes (SHA-256).
 pub const CONTENT_HASH_LEN: usize = 32;
@@ -268,6 +276,123 @@ fn write_string(s: &str) -> Result<String, ContentHashError> {
     serde_json::to_string(s).map_err(ContentHashError::Serialize)
 }
 
+/// Whose view a snapshot id was computed from.
+///
+/// Part of the digest because the same requested namespaces can resolve to
+/// different content for different readers: a tenant asking for a namespace
+/// it does not own sees nothing, and an id for that empty view must not
+/// match one an owner computed over a genuinely empty namespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotReader {
+    /// No owner boundary.
+    Everything,
+    /// Bound to one owner's namespaces.
+    Owner(OwnerId),
+}
+
+/// Which namespaces a snapshot id was declared over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NamespaceSelection {
+    /// Every namespace the reader can see.
+    Readable,
+    /// Exactly these namespaces, normalized: order and repeats in the
+    /// request do not change what was asked.
+    Only(BTreeSet<NamespaceName>),
+}
+
+/// The question a snapshot id answers.
+///
+/// Part of the digest, so identical content under two different declared
+/// scopes has two different ids, and two ids are only equal when they
+/// answer the same question about the same content. The branch is not part
+/// of it: branch content differs where it differs, and a branch nobody has
+/// written to has the baseline's id by design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotScope {
+    reader: SnapshotReader,
+    namespaces: NamespaceSelection,
+}
+
+impl SnapshotScope {
+    #[must_use]
+    pub fn new(reader: SnapshotReader, namespaces: NamespaceSelection) -> Self {
+        Self { reader, namespaces }
+    }
+
+    #[must_use]
+    pub fn reader(&self) -> &SnapshotReader {
+        &self.reader
+    }
+
+    #[must_use]
+    pub fn namespaces(&self) -> &NamespaceSelection {
+        &self.namespaces
+    }
+
+    fn hash_into(&self, hasher: &mut Sha256) {
+        match &self.reader {
+            SnapshotReader::Everything => hasher.update(b"reader:everything\0"),
+            SnapshotReader::Owner(owner) => {
+                hasher.update(b"reader:owner\0");
+                hash_framed(hasher, owner.as_str());
+            }
+        }
+        match &self.namespaces {
+            NamespaceSelection::Readable => hasher.update(b"namespaces:readable\0"),
+            NamespaceSelection::Only(set) => {
+                hasher.update(b"namespaces:only\0");
+                hasher.update(set.len().to_string().as_bytes());
+                hasher.update(b"\0");
+                for ns in set {
+                    hash_framed(hasher, ns.as_str());
+                }
+            }
+        }
+    }
+}
+
+impl NamespaceSelection {
+    /// An empty request means [`NamespaceSelection::Readable`].
+    ///
+    /// # Errors
+    ///
+    /// Rejects any value that is not a valid namespace name, including the
+    /// empty string, which would otherwise silently match nothing.
+    pub fn from_requested<S: AsRef<str>>(namespaces: &[S]) -> Result<Self, NamespaceError> {
+        if namespaces.is_empty() {
+            return Ok(Self::Readable);
+        }
+        namespaces
+            .iter()
+            .map(|ns| NamespaceName::parse(ns.as_ref()))
+            .collect::<Result<_, _>>()
+            .map(Self::Only)
+    }
+
+    #[must_use]
+    pub fn admits(&self, namespace: &str) -> bool {
+        match self {
+            Self::Readable => true,
+            Self::Only(set) => set.iter().any(|ns| ns.as_str() == namespace),
+        }
+    }
+
+    /// The normalized namespace list, empty for [`NamespaceSelection::Readable`].
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        match self {
+            Self::Readable => Vec::new(),
+            Self::Only(set) => set.iter().map(|ns| ns.as_str().to_owned()).collect(),
+        }
+    }
+}
+
+fn hash_framed(hasher: &mut Sha256, value: &str) {
+    hasher.update(value.len().to_string().as_bytes());
+    hasher.update(b":");
+    hasher.update(value.as_bytes());
+}
+
 /// Accumulates `(key, entity hash)` pairs into one whole-model snapshot
 /// identity.
 ///
@@ -329,14 +454,15 @@ impl SnapshotHasher {
         self.entries.is_empty()
     }
 
-    /// The snapshot identity. An empty snapshot has a well-defined hash
-    /// (the domain tag plus a zero count), which is what makes "the model
-    /// is empty" a state a caller can compare against rather than a special
-    /// case.
+    /// The snapshot identity over `scope`. An empty snapshot has a
+    /// well-defined hash (the domain tag, the scope and a zero count), which
+    /// is what makes "the model is empty" a state a caller can compare
+    /// against rather than a special case.
     #[must_use]
-    pub fn finish(&self) -> ContentHash {
+    pub fn finish(&self, scope: &SnapshotScope) -> ContentHash {
         let mut hasher = Sha256::new();
         hasher.update(SNAPSHOT_DOMAIN);
+        scope.hash_into(&mut hasher);
         hasher.update(self.entries.len().to_string().as_bytes());
         hasher.update(b"\0");
         for (key, hash) in &self.entries {
@@ -569,7 +695,7 @@ mod tests {
         reversed.insert("ev.ns.b.1", b).unwrap();
         reversed.insert("ev.ns.a.1", a).unwrap();
 
-        assert_eq!(forward.finish(), reversed.finish());
+        assert_eq!(forward.finish(&readable()), reversed.finish(&readable()));
         assert_eq!(forward.len(), 2);
     }
 
@@ -579,7 +705,7 @@ mod tests {
         before.insert_entity("ev.ns.a.1", &event("A")).unwrap();
         let mut after = SnapshotHasher::new();
         after.insert_entity("ev.ns.a.1", &event("A!")).unwrap();
-        assert_ne!(before.finish(), after.finish());
+        assert_ne!(before.finish(&readable()), after.finish(&readable()));
     }
 
     #[test]
@@ -589,7 +715,7 @@ mod tests {
         one.insert("ev.ns.a.1", h).unwrap();
         let mut other = SnapshotHasher::new();
         other.insert("ev.ns.b.1", h).unwrap();
-        assert_ne!(one.finish(), other.finish());
+        assert_ne!(one.finish(&readable()), other.finish(&readable()));
     }
 
     /// Length-prefix framing: a key that embeds the separator must not be
@@ -602,18 +728,93 @@ mod tests {
         let mut other = SnapshotHasher::new();
         other.insert("a", h).unwrap();
         other.insert("b", h).unwrap();
-        assert_ne!(one.finish(), other.finish());
+        assert_ne!(one.finish(&readable()), other.finish(&readable()));
     }
 
     #[test]
     fn empty_snapshot_has_a_defined_identity() {
         let empty = SnapshotHasher::new();
         assert!(empty.is_empty());
-        assert_eq!(empty.finish(), SnapshotHasher::new().finish());
+        assert_eq!(
+            empty.finish(&readable()),
+            SnapshotHasher::new().finish(&readable())
+        );
 
         let mut one = SnapshotHasher::new();
         one.insert_entity("ev.ns.a.1", &event("A")).unwrap();
-        assert_ne!(empty.finish(), one.finish());
+        assert_ne!(empty.finish(&readable()), one.finish(&readable()));
+    }
+
+    fn readable() -> SnapshotScope {
+        SnapshotScope::new(SnapshotReader::Everything, NamespaceSelection::Readable)
+    }
+
+    fn only(namespaces: &[&str]) -> NamespaceSelection {
+        NamespaceSelection::from_requested(namespaces).unwrap()
+    }
+
+    fn scope(namespaces: &[&str]) -> SnapshotScope {
+        SnapshotScope::new(SnapshotReader::Everything, only(namespaces))
+    }
+
+    #[test]
+    fn identical_content_under_distinct_scopes_has_distinct_ids() {
+        let mut s = SnapshotHasher::new();
+        s.insert_entity("ev.ns.a.1", &event("A")).unwrap();
+        assert_ne!(
+            s.finish(&scope(&["ns"])),
+            s.finish(&scope(&["ns", "other"]))
+        );
+        assert_ne!(s.finish(&scope(&["ns"])), s.finish(&readable()));
+        let empty = SnapshotHasher::new();
+        assert_ne!(
+            empty.finish(&scope(&["ns"])),
+            empty.finish(&scope(&["other"])),
+            "two empty scopes are still two different questions"
+        );
+    }
+
+    #[test]
+    fn the_reader_boundary_is_part_of_the_id() {
+        let empty = SnapshotHasher::new();
+        let owner = |o: &str| SnapshotReader::Owner(OwnerId::parse(o).unwrap());
+        let as_reader = |r| SnapshotScope::new(r, only(&["ns"]));
+        assert_ne!(
+            empty.finish(&as_reader(SnapshotReader::Everything)),
+            empty.finish(&as_reader(owner("acme")))
+        );
+        assert_ne!(
+            empty.finish(&as_reader(owner("acme"))),
+            empty.finish(&as_reader(owner("globex")))
+        );
+    }
+
+    #[test]
+    fn equivalent_scopes_normalize_to_one_id() {
+        let mut s = SnapshotHasher::new();
+        s.insert_entity("ev.ns.a.1", &event("A")).unwrap();
+        assert_eq!(only(&["b", "a", "b"]), only(&["a", "b"]));
+        assert_eq!(
+            s.finish(&scope(&["b", "a", "b"])),
+            s.finish(&scope(&["a", "b"]))
+        );
+        assert_eq!(only(&[]), NamespaceSelection::Readable);
+        assert_eq!(only(&["b", "a"]).names(), ["a", "b"]);
+    }
+
+    #[test]
+    fn scope_framing_resists_separator_injection() {
+        let empty = SnapshotHasher::new();
+        assert_ne!(
+            empty.finish(&scope(&["a1"])),
+            empty.finish(&scope(&["a", "1"]))
+        );
+    }
+
+    #[test]
+    fn scope_rejects_names_that_are_not_namespaces() {
+        assert!(NamespaceSelection::from_requested(&[""]).is_err());
+        assert!(NamespaceSelection::from_requested(&["a b"]).is_err());
     }
 
     #[test]
@@ -631,7 +832,7 @@ mod tests {
         let h = entity_content_hash(&event("A")).unwrap();
         let mut s = SnapshotHasher::new();
         s.insert("ev.ns.a.1", h).unwrap();
-        assert_ne!(s.finish(), h);
+        assert_ne!(s.finish(&readable()), h);
     }
 
     // -----------------------------------------------------------------
@@ -723,7 +924,7 @@ mod tests {
             for (k, e) in keyed.iter().rev() {
                 reversed.insert_entity(k.clone(), e).unwrap();
             }
-            prop_assert_eq!(forward.finish(), reversed.finish());
+            prop_assert_eq!(forward.finish(&readable()), reversed.finish(&readable()));
         }
     }
 }
