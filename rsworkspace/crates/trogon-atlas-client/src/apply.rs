@@ -344,6 +344,51 @@ pub struct ApplyOutcome {
     /// or the server omitted it (for example operation_id replay). Never
     /// invent coverage client-side.
     pub coverage: Option<pb::ValidationCoverage>,
+    /// How a dry run would move the model's findings. Present only for a
+    /// dry run that reached validation.
+    pub consequence_delta: Option<pb::ConsequenceDelta>,
+}
+
+/// Adds a server-reported consequence delta to a JSON object. An absent
+/// delta stays absent: no delta is not the same as no change.
+pub fn insert_consequence_delta(body: &mut Value, delta: Option<&pb::ConsequenceDelta>) {
+    if let (Some(fields), Some(delta)) = (body.as_object_mut(), delta) {
+        fields.insert("consequence_delta".into(), consequence_delta_to_json(delta));
+    }
+}
+
+/// JSON shape for [`pb::ConsequenceDelta`], for CLI/MCP structured output.
+#[must_use]
+pub fn consequence_delta_to_json(delta: &pb::ConsequenceDelta) -> Value {
+    let finding = |issue: Option<&pb::ValidationIssue>| {
+        issue.map(|issue| {
+            let mut body = issue_to_json(issue);
+            if let Some(fields) = body.as_object_mut() {
+                fields.insert("subject_field".into(), issue.subject_field.clone().into());
+            }
+            body
+        })
+    };
+    json!({
+        "complete": delta.complete,
+        "unchanged_count": delta.unchanged_count,
+        "before_snapshot_id": delta.before_snapshot_id,
+        "after_snapshot_id": delta.after_snapshot_id,
+        "before_coverage": delta.before_coverage.as_ref().map(coverage_to_json),
+        "after_coverage": delta.after_coverage.as_ref().map(coverage_to_json),
+        "changes": delta.changes.iter().map(|c| json!({
+            "kind": pb::finding_change::Kind::try_from(c.kind)
+                .map_or("KIND_UNSPECIFIED", |k| k.as_str_name()),
+            "check_id": c.check_id,
+            "origin": ref_string(c.origin.as_ref()),
+            "before": finding(c.before.as_ref()),
+            "after": finding(c.after.as_ref()),
+            "occurrences": c.occurrences,
+            "occurrences_before": c.occurrences_before,
+            "occurrences_after": c.occurrences_after,
+            "reason": c.reason,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// Adds server-reported coverage to a JSON object. Absent coverage stays
@@ -436,6 +481,7 @@ pub async fn apply(
     let mut op_issues = Vec::new();
     let mut operation_receipt = None;
     let mut coverage = None;
+    let mut consequence_delta = None;
     if !changed.is_empty() {
         let ops = changed
             .iter()
@@ -507,6 +553,7 @@ pub async fn apply(
             .flat_map(|o| o.issues.iter().cloned())
             .collect();
         coverage = resp.coverage;
+        consequence_delta = resp.consequence_delta;
     }
 
     let lines = plan
@@ -519,6 +566,7 @@ pub async fn apply(
         op_issues,
         operation_receipt,
         coverage,
+        consequence_delta,
     })
 }
 

@@ -923,6 +923,42 @@ impl Default for ChangesetsLostObservable {
         Self::new(&super::meter::Meter::default(), |_| {})
     }
 }
+/// Time spent scanning both worlds and comparing their findings for a consequence delta.
+#[derive(Clone)]
+pub struct ConsequenceDeltaDuration {
+    instrument: ::opentelemetry::metrics::Histogram<f64>,
+}
+
+impl ConsequenceDeltaDuration {
+    pub const NAME: &'static str = "trogon_atlas.consequence_delta.duration";
+    pub const UNIT: &'static str = "s";
+    pub const DESCRIPTION: &'static str =
+        "Time spent scanning both worlds and comparing their findings for a consequence delta.";
+
+    pub fn new(meter: &super::meter::Meter) -> Self {
+        let instrument = meter
+            .inner()
+            .f64_histogram(Self::NAME)
+            .with_description(Self::DESCRIPTION)
+            .with_unit(Self::UNIT)
+            .with_boundaries(vec![
+                0.001_f64, 0.005_f64, 0.01_f64, 0.025_f64, 0.05_f64, 0.1_f64, 0.25_f64, 0.5_f64,
+                1_f64, 2.5_f64, 5_f64, 10_f64,
+            ])
+            .build();
+        Self { instrument }
+    }
+    pub fn record(&self, value: f64) {
+        let attributes = [];
+        self.instrument.record(value, &attributes);
+    }
+}
+
+impl Default for ConsequenceDeltaDuration {
+    fn default() -> Self {
+        Self::new(&super::meter::Meter::default())
+    }
+}
 /// Git mirror apply calls that failed.
 #[derive(Clone)]
 pub struct GitMirrorFailures {

@@ -4,6 +4,7 @@ pub mod auth;
 pub mod batch_recovery;
 pub mod change_cursor;
 pub mod changeset_receipt;
+pub mod consequence;
 pub mod conv;
 mod data_product_resources;
 mod decision_document_resources;

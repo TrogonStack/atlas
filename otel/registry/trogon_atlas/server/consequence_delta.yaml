@@ -1,0 +1,15 @@
+file_format: definition/2
+metrics:
+  - name: trogon_atlas.consequence_delta.duration
+    requirement_level: recommended
+    instrument: histogram
+    unit: s
+    stability: stable
+    brief: Time spent scanning both worlds and comparing their findings for a consequence delta.
+    annotations:
+      code_generation:
+        metric_value_type: double
+      aggregation:
+        method: explicithistogram
+        parameters:
+          boundaries: [0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10]
