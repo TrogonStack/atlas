@@ -76,6 +76,15 @@ pub struct BatchGetParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct EntitySchemaParams {
+    #[schemars(
+        description = "Entity kind in snake_case, e.g. event, read_model or event_model. Call list_entity_kinds for every kind."
+    )]
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListVersionsParams {
     pub kind: String,
     pub namespace: String,
