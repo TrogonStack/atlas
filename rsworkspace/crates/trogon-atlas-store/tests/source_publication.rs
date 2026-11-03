@@ -724,7 +724,7 @@ async fn prepared_identity_survives_restart_and_matching_resume_uses_applying_re
     assert!(interrupted.source_prepare(&publication).await.is_err());
     drop(interrupted);
     drop(store);
-    let store = reopen(configuration).await;
+    let store = Box::pin(reopen(configuration)).await;
     store.source_prepare(&publication).await.unwrap();
     let applying = store
         .source_compare_and_swap(
@@ -1091,7 +1091,7 @@ async fn mixed_case(branch: Option<&str>, point: SourcePublicationPoint) {
     assert!(faulty.source_publish(&publication).await.is_err());
     drop(faulty);
     drop(store);
-    let store = reopen(configuration).await;
+    let store = Box::pin(reopen(configuration)).await;
     let outcome = store
         .source_recover(
             &publication.registration,
@@ -1681,7 +1681,7 @@ async fn source_store_review_publish_replay_finalizes_durable_commit_and_preserv
         drop(faulty);
         let store = if restart {
             drop(store);
-            let reopened = reopen(configuration).await;
+            let reopened = Box::pin(reopen(configuration)).await;
             assert!(reopened.writer_status().epoch.get() > epoch.get());
             reopened
         } else {

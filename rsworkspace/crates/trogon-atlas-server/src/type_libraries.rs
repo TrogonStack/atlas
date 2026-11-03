@@ -779,6 +779,7 @@ async fn load(
     let stored = store
         .list(
             ListFilter {
+                slug: None,
                 kinds: &[pb::EntityKind::TypeLibrary],
                 namespaces: &namespaces,
                 latest_versions_only: false,
