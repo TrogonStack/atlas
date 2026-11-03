@@ -64,8 +64,13 @@ assessment carries a binding:
 A reader that holds an assessment can compare the baseline snapshot id
 with [`GetSnapshotId`](snapshot-identity.md) and the pinned etags with the
 live entities. If either moved, the verdict describes a world that no
-longer exists and the dry run should be repeated. A different catalogue
-revision means the rules changed and the verdict may differ today.
+longer exists and the dry run should be repeated. Neither covers a later
+write to the branch itself: it changes the world the merge would produce
+while the baseline snapshot id and the pinned etags stay the same. A
+verdict therefore holds only while the branch is unchanged, and a repeated
+dry run whose `landed_snapshot_id` differs judged a different landing. A
+different catalogue revision means the rules changed and the verdict may
+differ today.
 
 The assessment is a pure judgement of evidence the dry run already
 gathered. It reads nothing from the store, so it adds no store work to the
