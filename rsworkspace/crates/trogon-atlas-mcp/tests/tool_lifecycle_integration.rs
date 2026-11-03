@@ -795,9 +795,13 @@ async fn mcp_get_entity_schema_returns_a_schema_skeleton_and_rules_for_the_kind(
     let rules = body["rules"].as_array().unwrap();
     assert!(!rules.is_empty(), "{body:?}");
     assert!(
-        rules
-            .iter()
-            .all(|r| r["code"].is_string() && r["default_severity"].is_string()),
+        rules.iter().any(|r| r["code"] == "ORPHAN_DOC_EMPTY"),
+        "rules without a kind must apply to every entity kind: {rules:?}"
+    );
+    assert!(
+        rules.iter().all(|r| r["code"].is_string()
+            && r["default_severity"].is_string()
+            && r["doc"].is_string()),
         "{rules:?}"
     );
 

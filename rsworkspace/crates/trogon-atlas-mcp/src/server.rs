@@ -1238,6 +1238,7 @@ fn rule_json(rule: &pb::ValidationRule) -> serde_json::Value {
         "code": rule.code,
         "default_severity": severity,
         "title": rule.title,
+        "doc": rule.doc,
         "category": rule.category,
         "field": (!rule.subject_field.is_empty()).then_some(rule.subject_field.as_str()),
     })
@@ -4503,7 +4504,10 @@ impl McpServer {
             .into_inner()
             .rules
             .iter()
-            .filter(|rule| rule.subject_kind == kind as i32)
+            .filter(|rule| {
+                rule.subject_kind == kind as i32
+                    || rule.subject_kind == pb::EntityKind::Unspecified as i32
+            })
             .map(rule_json)
             .collect();
         let placeholders: Vec<serde_json::Value> = manifest_schema::SKELETON_PLACEHOLDERS
