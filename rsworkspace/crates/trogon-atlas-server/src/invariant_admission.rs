@@ -126,8 +126,9 @@ pub(super) enum InvariantTicket {
         generations: Generations,
         verdict: Result<Option<pb::InvariantCheck>, Status>,
     },
-    /// The preview that would have judged the write failed for another
-    /// reason; a write that gets past its own admission is refused as stale.
+    /// The preview that would have judged the write failed or stopped
+    /// before judging it; a write that gets past its own admission is
+    /// refused as stale.
     Unjudged,
 }
 
@@ -358,13 +359,14 @@ impl EventModelServiceImpl {
     }
 
     /// Judges a write whose change set only the route itself computes, by
-    /// running the route's own dry run as `preview` first.
+    /// running the route's own dry run as `preview` first. `check_of` is
+    /// `None` when the preview answered without reaching the invariant check.
     pub(super) async fn ticket_by_preview<T, R, Fut>(
         &self,
         scope: InvariantScope<'_>,
         preview: Request<T>,
         run: impl FnOnce(Request<T>) -> Fut,
-        check_of: impl FnOnce(&R) -> Option<pb::InvariantCheck>,
+        check_of: impl FnOnce(&R) -> Option<Option<pb::InvariantCheck>>,
     ) -> Result<InvariantTicket, Status>
     where
         Fut: Future<Output = Result<Response<R>, Status>>,
@@ -374,9 +376,12 @@ impl EventModelServiceImpl {
             return Ok(ticket);
         }
         Ok(match run(preview).await {
-            Ok(response) => InvariantTicket::Judged {
-                generations,
-                verdict: Ok(check_of(response.get_ref())),
+            Ok(response) => match check_of(response.get_ref()) {
+                Some(check) => InvariantTicket::Judged {
+                    generations,
+                    verdict: Ok(check),
+                },
+                None => InvariantTicket::Unjudged,
             },
             Err(status) if conv::is_invariant_refusal(&status) => InvariantTicket::Judged {
                 generations,
@@ -602,5 +607,60 @@ mod tests {
     async fn an_unjudged_write_is_always_stale() {
         let service = service().await;
         assert_stale(service.invariant_gate(InvariantScope::Baseline, &InvariantTicket::Unjudged));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_preview_that_stops_before_the_check_leaves_the_write_unjudged() {
+        use prost::Message as _;
+        use tonic::{Request, Response};
+
+        use super::pb::{self, event_model_service_server::EventModelService as _};
+
+        let service = service().await;
+        let model = pb::Entity {
+            kind: Some(pb::entity::Kind::EventModel(pb::EventModel {
+                id: Some(pb::Id {
+                    namespace: "ia-preview".into(),
+                    slug: "checkout".into(),
+                    version: 1,
+                }),
+                title: "ia-preview/checkout".into(),
+                metadata: vec![prost_types::Any {
+                    type_url:
+                        "type.googleapis.com/trogonatlas.eventmodel.v1alpha1.InvariantAnnotation"
+                            .into(),
+                    value: pb::InvariantAnnotation {
+                        name: "no-dangling".into(),
+                        forbidden_codes: vec!["MEMBER_NOT_FOUND".into()],
+                        ..Default::default()
+                    }
+                    .encode_to_vec(),
+                }],
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        service
+            .put_entity(Request::new(pb::PutEntityRequest {
+                entity: Some(model),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+
+        let preview = |reached: bool| {
+            service.ticket_by_preview(
+                InvariantScope::Baseline,
+                Request::new(()),
+                move |_| async move { Ok(Response::new(reached)) },
+                |reached: &bool| reached.then_some(None),
+            )
+        };
+        let stopped = preview(false).await.unwrap();
+        assert_stale(service.invariant_gate(InvariantScope::Baseline, &stopped));
+        let judged = preview(true).await.unwrap();
+        assert!(service
+            .invariant_gate(InvariantScope::Baseline, &judged)
+            .is_ok());
     }
 }

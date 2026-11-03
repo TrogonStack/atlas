@@ -5482,7 +5482,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     invariant_scope,
                     preview,
                     |preview| self.retarget_references(preview),
-                    |response: &pb::RetargetReferencesResponse| response.invariant_check.clone(),
+                    |response: &pb::RetargetReferencesResponse| {
+                        Some(response.invariant_check.clone())
+                    },
                 )
                 .await?,
             )
@@ -9391,7 +9393,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     invariant_scope,
                     preview,
                     |preview| self.delete_by_query(preview),
-                    |response: &pb::DeleteByQueryResponse| response.invariant_check.clone(),
+                    |response: &pb::DeleteByQueryResponse| Some(response.invariant_check.clone()),
                 )
                 .await?,
             )
@@ -9948,7 +9950,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     invariant_scope,
                     preview,
                     |preview| self.merge_branch(preview),
-                    |response: &pb::MergeBranchResponse| response.invariant_check.clone(),
+                    // Only a validated preview reached the invariant check.
+                    |response: &pb::MergeBranchResponse| {
+                        (response.status == pb::merge_branch_response::Status::Validated as i32)
+                            .then(|| response.invariant_check.clone())
+                    },
                 )
                 .await?,
             )
