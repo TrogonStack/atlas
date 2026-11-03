@@ -51,7 +51,8 @@ deleting one of them would look like a fix.
 Severity is deliberately outside identity, so a rule that is promoted from
 warning to error shows up as one finding whose severity changed rather than
 one resolved and one introduced. The rule title, category and default
-severity are copies of catalogue data and are excluded too.
+severity are copies of catalogue data and are excluded too. So is each
+evidence entry's `detail`, which is prose like the message.
 
 "Every remaining structured field" is computed from the issue message itself
 rather than from a fixed list. When `ValidationIssue` gains structured
@@ -69,7 +70,10 @@ Findings are grouped by identity on each side and then matched:
   severity change.
 - A finding that appears on a newer version of its subject or producing
   entity, when the same finding existed on an older version, is carried to
-  the successor rather than introduced.
+  the successor rather than introduced. The entity versions its evidence
+  pins count the same way, so a slice that cites itself still carries its
+  finding to its next version, and evidence that moved to an older version
+  is not a successor.
 - A finding whose subject or producing entity existed before and is gone
   after left with that entity, which is not the same as being fixed.
 - Anything else that appears is introduced, and anything else that

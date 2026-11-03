@@ -107,6 +107,11 @@ struct FindingIdentity {
     subject: Option<Subject>,
     field: String,
     structure: Vec<u8>,
+    /// `structure` with every entity version its evidence pins erased,
+    /// which a finding shares with the same finding on a successor.
+    unversioned: Vec<u8>,
+    /// The evidence versions `unversioned` erased, in encoding order.
+    evidence_versions: Vec<u64>,
 }
 
 impl FindingIdentity {
@@ -125,14 +130,37 @@ impl FindingIdentity {
         structure.rule_title.clear();
         structure.rule_category.clear();
         structure.rule_default_severity = 0;
-        let structure = structure.encode_to_vec();
+        // Evidence detail is presentation only, like the message.
+        for evidence in &mut structure.evidence {
+            evidence.detail.clear();
+        }
+        let mut unversioned = structure.clone();
+        let mut evidence_versions = Vec::new();
+        for evidence in &mut unversioned.evidence {
+            let pinned = [&mut evidence.entity, &mut evidence.target]
+                .into_iter()
+                .flatten()
+                .filter_map(|entity| entity.id.as_mut())
+                .chain(
+                    evidence
+                        .occurrence
+                        .as_mut()
+                        .and_then(|occurrence| occurrence.storyboard.as_mut()),
+                );
+            for id in pinned {
+                evidence_versions.push(id.version);
+                id.version = 0;
+            }
+        }
         Self {
             suite,
             origin: origin.clone(),
             code: issue.code.clone(),
             subject: issue.subject.as_ref().map(Subject::of),
             field: issue.subject_field.clone(),
-            structure,
+            structure: structure.encode_to_vec(),
+            unversioned: unversioned.encode_to_vec(),
+            evidence_versions,
         }
     }
 
@@ -142,8 +170,11 @@ impl FindingIdentity {
         let versions = Versions {
             origin: version(&self.origin),
             subject: version(&self.subject),
+            evidence: self.evidence_versions.clone(),
         };
         let mut lineage = self.clone();
+        lineage.structure.clone_from(&self.unversioned);
+        lineage.evidence_versions.clear();
         for s in [&mut lineage.origin, &mut lineage.subject]
             .into_iter()
             .flatten()
@@ -161,17 +192,27 @@ impl FindingIdentity {
     }
 }
 
-/// Entity versions a finding is pinned to. One identity succeeds another
-/// when no version went down and at least one went up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+/// Entity versions a finding is pinned to, its evidence's included. One
+/// identity succeeds another when no version went down and at least one
+/// went up.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct Versions {
     origin: u64,
     subject: u64,
+    evidence: Vec<u64>,
 }
 
 impl Versions {
-    fn precedes(self, other: Self) -> bool {
-        self != other && self.origin <= other.origin && self.subject <= other.subject
+    fn precedes(&self, other: &Self) -> bool {
+        self != other
+            && self.origin <= other.origin
+            && self.subject <= other.subject
+            && self.evidence.len() == other.evidence.len()
+            && self
+                .evidence
+                .iter()
+                .zip(&other.evidence)
+                .all(|(before, after)| before <= after)
     }
 }
 
@@ -488,8 +529,8 @@ pub fn compare(
         let predecessor = predecessors.get(&lineage).and_then(|candidates| {
             candidates
                 .iter()
-                .filter(|(v, _)| v.precedes(versions))
-                .max_by_key(|(v, _)| *v)
+                .filter(|(v, _)| v.precedes(&versions))
+                .max_by(|(a, _), (b, _)| a.cmp(b))
                 .map(|(_, identity)| *identity)
         });
         let identity = &pending.identity;
@@ -869,6 +910,101 @@ mod tests {
             kinds(&delta(&before, &after)),
             vec![(Kind::CarriedToSuccessor as i32, 1)]
         );
+    }
+
+    fn citing(
+        mut issue: pb::ValidationIssue,
+        entity: pb::EntityRef,
+        detail: &str,
+    ) -> pb::ValidationIssue {
+        issue.evidence.push(pb::ValidationEvidence {
+            role: pb::validation_evidence::Role::Issuer as i32,
+            entity: Some(entity),
+            field: "slices[0]".into(),
+            detail: detail.into(),
+            ..Default::default()
+        });
+        issue
+    }
+
+    #[test]
+    fn evidence_pinned_to_the_subject_is_carried_to_its_successor() {
+        let v1 = subject("checkout", 1);
+        let v2 = subject("checkout", 2);
+        let before = scan(
+            vec![citing(
+                issue("A", v1.clone(), Severity::Error),
+                v1.clone(),
+                "",
+            )],
+            &[v1],
+            complete,
+        );
+        let after = scan(
+            vec![citing(
+                issue("A", v2.clone(), Severity::Error),
+                v2.clone(),
+                "",
+            )],
+            &[v2],
+            complete,
+        );
+        assert_eq!(
+            kinds(&delta(&before, &after)),
+            vec![(Kind::CarriedToSuccessor as i32, 1)]
+        );
+    }
+
+    #[test]
+    fn evidence_pinned_to_an_older_version_is_not_a_successor() {
+        let v1 = subject("checkout", 1);
+        let v2 = subject("checkout", 2);
+        let before = scan(
+            vec![citing(
+                issue("A", v1.clone(), Severity::Error),
+                v2.clone(),
+                "",
+            )],
+            &[v1.clone(), v2.clone()],
+            complete,
+        );
+        let after = scan(
+            vec![citing(
+                issue("A", v2.clone(), Severity::Error),
+                v1.clone(),
+                "",
+            )],
+            &[v1, v2],
+            complete,
+        );
+        assert_eq!(
+            kinds(&delta(&before, &after)),
+            vec![(Kind::Resolved as i32, 1), (Kind::Introduced as i32, 1)]
+        );
+    }
+
+    #[test]
+    fn evidence_detail_does_not_change_identity() {
+        let m = subject("checkout", 1);
+        let before = scan(
+            vec![citing(
+                issue("A", m.clone(), Severity::Error),
+                m.clone(),
+                "first words",
+            )],
+            std::slice::from_ref(&m),
+            complete,
+        );
+        let after = scan(
+            vec![citing(
+                issue("A", m.clone(), Severity::Error),
+                m.clone(),
+                "other words",
+            )],
+            &[m],
+            complete,
+        );
+        assert_eq!(delta(&before, &after).changes, Vec::new());
     }
 
     fn originating(mut scan: Scan, origins: &[pb::EntityRef]) -> Scan {
