@@ -629,6 +629,47 @@ async fn a_merge_preview_reports_the_check_of_the_landed_world() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_merge_with_nothing_to_land_still_reports_the_check() {
+    const BRANCH: &str = "ig-merge-empty";
+    let service = service().await;
+    guarded_checkout(&service, "ig-merge-empty").await;
+    service
+        .create_branch(Request::new(pb::CreateBranchRequest {
+            name: BRANCH.into(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap();
+
+    let merge = |dry_run| {
+        Request::new(pb::MergeBranchRequest {
+            name: BRANCH.into(),
+            dry_run,
+            ..Default::default()
+        })
+    };
+    let previewed = service
+        .merge_branch(merge(true))
+        .await
+        .unwrap()
+        .into_inner();
+    let landed = service
+        .merge_branch(merge(false))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let check = previewed
+        .invariant_check
+        .expect("the landing scope declares one");
+    assert_eq!(
+        statuses(&check),
+        vec![("no-dangling".into(), Verdict::Holds)]
+    );
+    assert_eq!(landed.invariant_check, Some(check));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_delete_by_query_is_refused_and_its_dry_run_agrees() {
     let service = service().await;
     guarded_checkout(&service, "ig-dbq").await;

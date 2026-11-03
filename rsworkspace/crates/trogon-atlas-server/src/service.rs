@@ -10317,6 +10317,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if ops.is_empty() {
             // Nothing to land (everything was CONVERGED). Still a
             // successful merge: clean up the branch per keep_branch.
+            // Nothing moves, so there is nothing to be stale against, but
+            // the preview's verdict still decides, as it does for a dry run.
+            let invariant_check = match invariant_ticket
+                .as_ref()
+                .map_or(Ok(None), invariant_admission::InvariantTicket::preview)
+            {
+                Ok(check) => check,
+                Err(status) => {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
+                }
+            };
             if req.keep_branch {
                 self.catch_up_kept_branch(&req.name, None).await?;
             } else {
@@ -10331,6 +10345,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 operation_receipts::settle_applied(&*self.store, key, "").await;
             }
             return Ok(Response::new(pb::MergeBranchResponse {
+                invariant_check,
                 status: pb::merge_branch_response::Status::Applied as i32,
                 operation_receipt: claim_key
                     .as_ref()
