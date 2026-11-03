@@ -112,18 +112,25 @@ fn worsens(change: &pb::FindingChange) -> bool {
 
 /// Binds a verdict to the branch entries it judged, the worlds the delta
 /// compared, the caller's read scope and the rules in force.
+/// `baseline_etag` is the etag the entry's baseline counterpart had when the
+/// verdict was judged, `None` when baseline lacks it.
 #[must_use]
 pub fn binding<'a>(
     branch: &str,
     entries: impl IntoIterator<Item = &'a pb::BranchDiffEntry>,
+    baseline_etag: impl Fn(&pb::EntityRef) -> Option<String>,
     delta: Option<&pb::ConsequenceDelta>,
     vis: &Visibility,
 ) -> pb::AssessmentBinding {
     let mut entries: Vec<pb::AssessmentPin> = entries
         .into_iter()
         .map(|entry| pb::AssessmentPin {
+            baseline_etag: entry
+                .r#ref
+                .as_ref()
+                .and_then(&baseline_etag)
+                .unwrap_or_default(),
             r#ref: entry.r#ref.clone(),
-            baseline_etag: entry.base_etag.clone(),
         })
         .collect();
     entries.sort_by_key(|pin| {

@@ -197,6 +197,26 @@ async fn a_conflicting_branch_is_rejected() {
         judged(&response),
         (Verdict::Reject, vec![Reason::Conflicts])
     );
+    let live = service
+        .get_entity(Request::new(pb::GetEntityRequest {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(id("ca-conflict", "placed")),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .etag;
+    let binding = response.change_assessment.unwrap().binding.unwrap();
+    let pinned: Vec<_> = binding
+        .entries
+        .iter()
+        .map(|pin| pin.baseline_etag.as_str())
+        .collect();
+    assert_eq!(
+        pinned,
+        vec![live.as_str()],
+        "a conflict pins the baseline it judged, not the fork point"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
