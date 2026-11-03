@@ -18,6 +18,7 @@ path = "src/main.rs"
 trogon-atlas-proto = { workspace = true }
 trogon-atlas-core = { workspace = true }
 trogon-atlas-store = { workspace = true }
+futures = { workspace = true }
 trogon-atlas-types = { workspace = true }
 trogon-atlas-authzed = { workspace = true }
 trogon-atlas-client = { workspace = true }

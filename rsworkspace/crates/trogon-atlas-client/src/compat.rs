@@ -16,6 +16,7 @@ pub enum Capability {
     StatePreconditions,
     WhoAmI,
     TypeLibraries,
+    EntityProtection,
 }
 
 impl Capability {
@@ -27,6 +28,7 @@ impl Capability {
             Capability::StatePreconditions => features.state_preconditions,
             Capability::WhoAmI => features.who_am_i,
             Capability::TypeLibraries => features.type_libraries,
+            Capability::EntityProtection => features.entity_protection,
         }
     }
 
@@ -39,6 +41,7 @@ impl Capability {
             Capability::StatePreconditions => "state_preconditions",
             Capability::WhoAmI => "who_am_i",
             Capability::TypeLibraries => "type_libraries",
+            Capability::EntityProtection => "entity_protection",
         }
     }
 }
@@ -118,6 +121,16 @@ pub fn check(
     info: &pb::GetServerInfoResponse,
     intent: MutationIntent,
 ) -> Result<(), CompatibilityError> {
+    check_requiring(info, intent, &[])
+}
+
+/// [`check`], plus capabilities the specific RPC needs beyond what the
+/// intent implies.
+pub fn check_requiring(
+    info: &pb::GetServerInfoResponse,
+    intent: MutationIntent,
+    also: &[Capability],
+) -> Result<(), CompatibilityError> {
     if info.schema_version != pb::SCHEMA_VERSION {
         return Err(CompatibilityError::SchemaMismatch {
             server: info.schema_version.clone(),
@@ -136,6 +149,7 @@ pub fn check(
     match intent
         .required_capabilities()
         .into_iter()
+        .chain(also.iter().copied())
         .find(|capability| !capability.advertised_by(features))
     {
         Some(missing) => Err(CompatibilityError::MissingCapability(missing)),
@@ -167,12 +181,22 @@ pub async fn ensure_can_mutate(
     client: &mut Client,
     intent: MutationIntent,
 ) -> Result<(), CompatibilityError> {
+    ensure_can_mutate_requiring(client, intent, &[]).await
+}
+
+/// [`ensure_can_mutate`] for an RPC that needs capabilities beyond what the
+/// intent implies, answered from the same discovery call.
+pub async fn ensure_can_mutate_requiring(
+    client: &mut Client,
+    intent: MutationIntent,
+    also: &[Capability],
+) -> Result<(), CompatibilityError> {
     let info = client
         .get_server_info(pb::GetServerInfoRequest {})
         .await
         .map_err(|status| CompatibilityError::Discovery(Box::new(status)))?
         .into_inner();
-    check(&info, intent)
+    check_requiring(&info, intent, also)
 }
 
 /// Whether the server advertises `capability`. A server too old to know the
@@ -259,6 +283,24 @@ mod tests {
     }
 
     #[test]
+    fn a_server_without_entity_protection_refuses_protection_writes() {
+        assert_eq!(
+            Capability::EntityProtection.feature_flag(),
+            "entity_protection"
+        );
+        let also = [Capability::EntityProtection];
+        assert!(matches!(
+            check_requiring(&current_server(), MutationIntent::default(), &also),
+            Err(CompatibilityError::MissingCapability(
+                Capability::EntityProtection
+            ))
+        ));
+        let mut server = current_server();
+        server.features.as_mut().unwrap().entity_protection = true;
+        check_requiring(&server, MutationIntent::default(), &also).unwrap();
+    }
+
+    #[test]
     fn current_server_accepts_every_mutation_intent() {
         for intent in every_intent() {
             check(&current_server(), intent).unwrap();
@@ -295,21 +337,21 @@ mod tests {
 
     #[test]
     fn revision_20_refuses_an_older_writer_before_mutation() {
-        assert_eq!(pb::CONTRACT_REVISION, 20);
-        assert_eq!(pb::MIN_SERVER_CONTRACT_REVISION, 20);
-        assert_eq!(pb::MIN_CLIENT_CONTRACT_REVISION, 20);
+        const {
+            assert!(pb::CONTRACT_REVISION >= 20);
+            assert!(pb::MIN_SERVER_CONTRACT_REVISION == 20);
+            assert!(pb::MIN_CLIENT_CONTRACT_REVISION == 20);
+        }
         let server_requires_newer_writer = pb::GetServerInfoResponse {
-            contract_revision: 20,
-            min_client_contract_revision: 21,
+            contract_revision: pb::CONTRACT_REVISION,
+            min_client_contract_revision: pb::CONTRACT_REVISION + 1,
             ..current_server()
         };
         let writer = check(&server_requires_newer_writer, MutationIntent::default()).unwrap_err();
         assert!(matches!(
             writer,
-            CompatibilityError::ClientTooOld {
-                client: 20,
-                minimum: 21
-            }
+            CompatibilityError::ClientTooOld { client, minimum }
+                if client == pb::CONTRACT_REVISION && minimum == pb::CONTRACT_REVISION + 1
         ));
         assert!(
             writer
@@ -394,7 +436,7 @@ mod tests {
     #[test]
     fn writer_below_revision_20_is_refused_before_any_mutation() {
         let advertised = current_server();
-        assert_eq!(advertised.contract_revision, 20);
+        assert_eq!(advertised.contract_revision, pb::CONTRACT_REVISION);
         assert_eq!(advertised.min_client_contract_revision, 20);
         for intent in every_intent() {
             check(&advertised, intent).unwrap();
@@ -415,16 +457,14 @@ mod tests {
             "{refused}"
         );
         let raised = pb::GetServerInfoResponse {
-            min_client_contract_revision: advertised.min_client_contract_revision + 1,
+            min_client_contract_revision: pb::CONTRACT_REVISION + 1,
             ..advertised
         };
         let live = check(&raised, MutationIntent::default()).unwrap_err();
         assert!(matches!(
             live,
-            CompatibilityError::ClientTooOld {
-                client: 20,
-                minimum: 21
-            }
+            CompatibilityError::ClientTooOld { client, minimum }
+                if client == pb::CONTRACT_REVISION && minimum == pb::CONTRACT_REVISION + 1
         ));
         assert!(
             live.to_string()

@@ -494,9 +494,28 @@ pub async fn import_entities(
         };
         let mut ops = Vec::new();
         for entity in chunk {
+            // An import has no authenticated admin behind it, so a protection
+            // annotation in the mirror is dropped rather than honored.
+            let mut entity = entity.clone();
+            crate::protection::take_request(&mut entity);
+            let entity = &entity;
             let (Some(kind), Some(id)) = (entity_kind(entity), entity_id(entity)) else {
                 continue;
             };
+            if let Some(identity) = trogon_atlas_store::EntityIdentity::of(kind, id) {
+                let state = match store.get_protection(&identity).await {
+                    Ok(state) => state,
+                    Err(e) => trogon_atlas_store::ProtectionState::unreadable(identity.clone(), &e),
+                };
+                if !state.is_unprotected() {
+                    tracing::warn!(
+                        %identity,
+                        "skipping entity whose identity is protected or whose protection is unknown"
+                    );
+                    report.skipped += 1;
+                    continue;
+                }
+            }
             match store.create(kind, entity, ctx()).await {
                 Ok(_) => {
                     report.imported += 1;
