@@ -3889,9 +3889,10 @@ pub struct AttestedState {
     #[prost(string, tag="4")]
     pub closure_id: ::prost::alloc::string::String,
     /// Current exports: the newest baseline changeset recorded before the
-    /// snapshot was read. A complete bundle also saw it unchanged once the
-    /// export finished, and confirmed every exported entry against the
-    /// store. Historical exports: the requested changeset. Empty when the
+    /// snapshot was read. A complete bundle saw no visible changeset land
+    /// while the snapshot was read, none after it touch an exported entry,
+    /// and confirmed every exported entry against the store. Historical
+    /// exports: the requested changeset. Empty when the
     /// baseline has recorded no changeset. Writes that record no changeset
     /// do not move it, so `snapshot_id` remains the identity of record.
     #[prost(string, tag="5")]

@@ -49,8 +49,11 @@ partial answer says so in a field, not in silence.
 - **The boundary is compared, not locked.** The export reads the newest
   baseline changeset, and on a branch the branch's identity, before and
   after. A newer changeset that touched anything the export read or looked
-  for, a moved branch, a deleted branch or changed namespace visibility
-  marks the bundle with `REASON_CONCURRENT_WRITE`. A baseline write to a
+  for, a visible changeset that landed while the snapshot was read, a moved
+  branch, a deleted branch or changed namespace visibility marks the bundle
+  with `REASON_CONCURRENT_WRITE`. The snapshot may already hold a write
+  that landed during the read, and the bundle names the changeset before
+  it, so any visible entity it touched counts, even one outside the board. A baseline write to a
   key the branch holds its own copy of does not change the branch's view,
   so it does not mark a branch export. Default chosen for
   review: a concurrent write makes the export incomplete. The server refuses

@@ -1348,11 +1348,15 @@ impl EventModelServiceImpl {
 
     /// Whether a baseline changeset newer than `since` touched an entity
     /// the export read or looked for, or a type library of a namespace it
-    /// rendered, unless the export's branch overlays that key. A changeset
-    /// log it cannot walk counts as touched.
+    /// rendered, unless the export's branch overlays that key. Through
+    /// `view_through`, a changeset that landed while the snapshot was read,
+    /// any visible key counts: the snapshot may hold it, and the bundle
+    /// names `since`. A changeset log it cannot walk counts as touched.
+    #[allow(clippy::too_many_arguments)]
     async fn baseline_moved_under(
         &self,
         since: &str,
+        view_through: Option<&str>,
         lens: &Lens,
         read: &std::collections::HashSet<pb::EntityKey>,
         versionless_root: Option<&pb::EntityKey>,
@@ -1362,26 +1366,30 @@ impl EventModelServiceImpl {
         let Ok(newer) = self.baseline_changesets_after(since, lens).await else {
             return true;
         };
-        newer.iter().flat_map(|(_, ops)| ops).any(|op| {
-            let Some(id) = op.entity_ref.id.as_ref() else {
-                return true;
-            };
-            let Ok(kind) = pb::EntityKind::try_from(op.entity_ref.kind) else {
-                return true;
-            };
-            let key = pb::EntityKey::new(kind, id);
-            if overlaid.contains(&key) {
-                return false;
-            }
-            read.contains(&key)
-                || versionless_root.is_some_and(|root| {
-                    root.kind == key.kind
-                        && root.namespace == key.namespace
-                        && root.slug == key.slug
-                })
-                || (kind == pb::EntityKind::TypeLibrary
-                    && namespaces.contains(id.namespace.as_str()))
-        })
+        newer
+            .iter()
+            .flat_map(|(changeset, ops)| ops.iter().map(move |op| (changeset, op)))
+            .any(|(changeset, op)| {
+                let Some(id) = op.entity_ref.id.as_ref() else {
+                    return true;
+                };
+                let Ok(kind) = pb::EntityKind::try_from(op.entity_ref.kind) else {
+                    return true;
+                };
+                let key = pb::EntityKey::new(kind, id);
+                if overlaid.contains(&key) {
+                    return false;
+                }
+                view_through.is_some_and(|through| changeset.as_str() <= through)
+                    || read.contains(&key)
+                    || versionless_root.is_some_and(|root| {
+                        root.kind == key.kind
+                            && root.namespace == key.namespace
+                            && root.slug == key.slug
+                    })
+                    || (kind == pb::EntityKind::TypeLibrary
+                        && namespaces.contains(id.namespace.as_str()))
+            })
     }
 
     async fn lock_mutations(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -6211,6 +6219,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             None => None,
         };
         let baseline_before = self.newest_changeset(ChangesetScope::Baseline).await?;
+        let mut baseline_read = None;
 
         let (root, all, snapshot_truncated, history_incomplete, baseline_changeset_id) =
             if historical {
@@ -6239,6 +6248,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 let (all, truncated, boundary_verified) = self
                     .snapshot_for_attestation(branch.as_deref(), &vis)
                     .await?;
+                baseline_read = Some(self.newest_changeset(ChangesetScope::Baseline).await?);
                 let root = if let Some(root) = event_model_in(&all, &requested_id) {
                     root
                 } else {
@@ -6424,6 +6434,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if self
                 .baseline_moved_under(
                     &baseline_before,
+                    baseline_read
+                        .as_deref()
+                        .filter(|read| *read != baseline_before),
                     &lens,
                     &read,
                     (requested_id.version == 0).then_some(&root_key),
