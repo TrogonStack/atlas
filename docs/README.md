@@ -20,6 +20,7 @@ Solve a specific problem:
 - [Issue an API key to a client](how-to/issue-an-api-key.md)
 - [Migrate legacy entity fields into `schema`](how-to/migrate-legacy-entity-fields.md)
 - [Model runtime code as an Event Model](how-to/model-runtime-code-as-an-event-model.md)
+- [Protect a published entity](how-to/protect-a-published-entity.md)
 - [Register a type library](how-to/register-a-type-library.md)
 - [Repair a validation finding](how-to/repair-validation-findings.md)
 - [Replan after a stale refusal](how-to/replan-after-a-stale-refusal.md)
@@ -38,6 +39,7 @@ Look up exact behavior:
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
 - [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)
+- [Entity protection commands](reference/entity-protection-commands.md)
 
 Resource contracts and acceptance:
 
@@ -79,6 +81,7 @@ Understand how Atlas works and why:
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)
 - [Changesets](explanation/changesets.md)
+- [Entity protection](explanation/entity-protection.md)
 - [Reliability overlays](explanation/reliability-overlays.md)
 - [Single-writer fencing](explanation/single-writer.md)
 - [Snapshot identity](explanation/snapshot-identity.md)

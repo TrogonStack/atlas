@@ -4467,6 +4467,7 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "clap",
+ "futures",
  "http",
  "http-body",
  "opentelemetry",
@@ -4541,6 +4542,8 @@ dependencies = [
 name = "trogon-atlas-testsupport"
 version = "0.1.0"
 dependencies = [
+ "async-nats",
+ "futures",
  "libc",
  "testcontainers",
  "testcontainers-modules",
