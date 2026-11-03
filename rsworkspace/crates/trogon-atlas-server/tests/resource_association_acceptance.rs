@@ -1525,7 +1525,7 @@ async fn advertised_writer_floor_is_revision_20_and_get_sends_no_mutation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(info.contract_revision, 20);
+    assert_eq!(info.contract_revision, pb::CONTRACT_REVISION);
     assert_eq!(info.min_client_contract_revision, 20);
     compat::check(&info, MutationIntent::default()).unwrap();
     let refused =

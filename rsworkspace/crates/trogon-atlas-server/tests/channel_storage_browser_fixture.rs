@@ -603,6 +603,7 @@ async fn serve_channel_storage_fixture() {
         Some(Duration::from_secs(30)),
         36 * 1024 * 1024,
         "127.0.0.1".parse().unwrap(),
+        None,
     )
     .unwrap();
     let seconds = std::env::var("ATLAS_CHANNEL_STORAGE_SECONDS")

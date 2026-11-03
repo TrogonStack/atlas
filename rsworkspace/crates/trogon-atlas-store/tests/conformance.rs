@@ -274,10 +274,10 @@ async fn list_kind_namespace_filters_with_limit() {
     let kinds = vec![pb::EntityKind::Persona];
     let namespaces = vec!["shop".to_string()];
     let filter = ListFilter {
+        slug: None,
         kinds: &kinds,
         namespaces: &namespaces,
         latest_versions_only: false,
-        ..Default::default()
     };
 
     let result = store.list(filter, Some(2), None).await.unwrap();
@@ -343,10 +343,10 @@ async fn list_limit_with_latest_versions_considers_all_versions_before_cap() {
     let kinds = vec![pb::EntityKind::Persona];
     let namespaces = vec![ns.to_string()];
     let filter = ListFilter {
+        slug: None,
         kinds: &kinds,
         namespaces: &namespaces,
         latest_versions_only: true,
-        ..Default::default()
     };
 
     let limited = store.list(filter, Some(2), None).await.unwrap();

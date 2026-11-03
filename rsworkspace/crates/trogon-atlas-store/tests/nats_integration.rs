@@ -130,10 +130,10 @@ async fn list_filters_by_kind_and_namespace() {
     let filtered = store
         .list(
             ListFilter {
+                slug: None,
                 kinds: &[pb::EntityKind::Event],
                 namespaces: &namespaces,
                 latest_versions_only: false,
-                ..Default::default()
             },
             None,
             None,
@@ -349,10 +349,10 @@ async fn list_latest_versions_only() {
     let latest = store
         .list(
             trogon_atlas_store::store::ListFilter {
+                slug: None,
                 kinds: &[kind],
                 namespaces: &[],
                 latest_versions_only: true,
-                ..Default::default()
             },
             None,
             None,
@@ -362,6 +362,167 @@ async fn list_latest_versions_only() {
     assert_eq!(latest.len(), 1, "only the latest version must be returned");
     match &latest[0].entity.kind {
         Some(pb::entity::Kind::Event(e)) => assert_eq!(e.title, "v2"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+/// A slug filter pins one identity: its versions are the whole answer, a
+/// result limit cannot push it out behind other identities, and the same
+/// slug in another namespace or an unrelated slug never leaks in.
+#[tokio::test(flavor = "multi_thread")]
+async fn list_slug_filter_pins_one_identity() {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let kind = pb::EntityKind::Event;
+    for (ns, slug, version) in [
+        ("shop", "a", 1),
+        ("shop", "b", 1),
+        ("shop", "b", 2),
+        ("shop", "b-2", 1),
+        ("other", "b", 1),
+    ] {
+        store
+            .create(
+                kind,
+                &event(ns, slug, version, "title"),
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+    }
+    let namespaces = ["shop".to_string()];
+    let ids = |found: Vec<trogon_atlas_store::store::StoredEntity>| -> Vec<(String, String, u64)> {
+        found
+            .iter()
+            .map(|s| match &s.entity.kind {
+                Some(pb::entity::Kind::Event(e)) => {
+                    let id = e.id.as_ref().unwrap();
+                    (id.namespace.clone(), id.slug.clone(), id.version)
+                }
+                other => panic!("unexpected: {other:?}"),
+            })
+            .collect()
+    };
+
+    let latest = store
+        .list(
+            ListFilter {
+                kinds: &[kind],
+                namespaces: &namespaces,
+                slug: Some("b"),
+                latest_versions_only: true,
+            },
+            Some(1),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(latest), [("shop".into(), "b".into(), 2)]);
+
+    let versions = store
+        .list(
+            ListFilter {
+                kinds: &[kind],
+                namespaces: &namespaces,
+                slug: Some("b"),
+                latest_versions_only: false,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(versions),
+        [
+            ("shop".into(), "b".into(), 1),
+            ("shop".into(), "b".into(), 2)
+        ]
+    );
+
+    let absent = store
+        .list(
+            ListFilter {
+                kinds: &[kind],
+                namespaces: &namespaces,
+                slug: Some("never-written"),
+                latest_versions_only: true,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(absent.is_empty());
+
+    // Without a kind and namespace the key prefix cannot pin the slug, so
+    // the slug is read from each key instead.
+    let across = store
+        .list(
+            ListFilter {
+                kinds: &[],
+                namespaces: &[],
+                slug: Some("b"),
+                latest_versions_only: true,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(across),
+        [
+            ("other".into(), "b".into(), 1),
+            ("shop".into(), "b".into(), 2)
+        ]
+    );
+}
+
+/// The slug filter applies to the branch overlay as well as to baseline.
+#[tokio::test(flavor = "multi_thread")]
+async fn list_slug_filter_applies_to_branch_deltas() {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let kind = pb::EntityKind::Event;
+    store
+        .create(
+            kind,
+            &event("shop", "wanted", 1, "v1"),
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    store.create_branch("slug-filter", "doc").await.unwrap();
+    for slug in ["wanted", "unrelated"] {
+        store
+            .put(
+                kind,
+                &event("shop", slug, 2, "on branch"),
+                true,
+                WriteContext::branch("slug-filter"),
+            )
+            .await
+            .unwrap();
+    }
+
+    let found = store
+        .list(
+            ListFilter {
+                kinds: &[kind],
+                namespaces: &["shop".to_string()],
+                slug: Some("wanted"),
+                latest_versions_only: true,
+            },
+            None,
+            Some("slug-filter"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    match &found[0].entity.kind {
+        Some(pb::entity::Kind::Event(e)) => {
+            let id = e.id.as_ref().unwrap();
+            assert_eq!((id.slug.as_str(), id.version), ("wanted", 2));
+        }
         other => panic!("unexpected: {other:?}"),
     }
 }

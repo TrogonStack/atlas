@@ -1,5 +1,7 @@
 pub mod caller;
 pub mod error;
+pub mod profile;
+pub mod reference;
 pub mod server;
 pub mod tools;
 

@@ -12,6 +12,7 @@ use trogon_atlas_client::{
     client::{client_for_transport, Client, ConnectOptions, Transport},
     compat::{self, MutationIntent},
     precondition::{BranchEntryState, StalePlan},
+    protection,
     tenant_types::{self, TypeScope},
 };
 use trogon_atlas_core::transcode::TranscodePool;
@@ -20,23 +21,28 @@ use trogon_atlas_proto as pb;
 use crate::{
     caller::{Caller, CallerToken},
     error::{attach_operation_id, tool_err, McpError},
+    profile::ToolProfile,
     tools::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
         BatchMutateParams, CatalogQueryParams, CompileTypeLibraryParams, CreateBranchParams,
         DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams, DiffBranchParams,
-        DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySpec,
+        DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySchemaParams, EntitySpec,
         EventModelProjectionParams, ExportNamespaceParams, ExportOpensloParams,
-        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
-        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
-        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams,
-        MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
-        PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
-        ResolveTypeParams, ResponsibilityQueryParams, RetargetReferencesParams,
-        RevertChangesetParams, SearchParams, SliceProjectionParams, SourceRequestParams,
-        SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
-        ValidateProjectParams,
+        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
+        GetEntityProtectionParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
+        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
+        ListEntitiesByDomainParams, ListEntitiesParams, ListEntityProtectionsParams,
+        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
+        ProtectEntityParams, PutEntityJsonParams, PutEntityParams, ReferencesParams,
+        RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
+        ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
+        SliceProjectionParams, SourceRequestParams, SupersessionChainParams, UnprotectEntityParams,
+        UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
     },
 };
+
+/// The `initialize` result `_meta` key naming the active tool profile.
+pub const PROFILE_META_KEY: &str = "trogon-atlas/tool-profile";
 
 pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 
@@ -227,6 +233,30 @@ pub enum ToolRole {
     Admin,
 }
 
+impl ToolRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolRole::Reader => "reader",
+            ToolRole::Writer => "writer",
+            ToolRole::Admin => "admin",
+        }
+    }
+}
+
+/// The part of the service a tool works on. Tool profiles are derived from
+/// a tool's area and its effect, so this is what places a new tool in them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolArea {
+    /// Server identity, catalogues and type resolution every task needs.
+    Discovery,
+    /// Entities, their references, projections, validation and history.
+    Model,
+    Branch,
+    Source,
+    /// Bulk or cross-namespace operations no task profile offers.
+    Administration,
+}
+
 impl From<pb::Role> for ToolRole {
     fn from(role: pb::Role) -> Self {
         match role {
@@ -252,6 +282,7 @@ pub struct ToolPolicy {
     pub tool: &'static str,
     pub rpcs: &'static [&'static str],
     pub min_role: ToolRole,
+    pub area: ToolArea,
 }
 
 pub const TOOL_POLICIES: &[ToolPolicy] = &[
@@ -259,206 +290,247 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "list_source_run_operations",
         rpcs: &["ListSourceRunOperations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "create_source_registration",
         rpcs: &["CreateSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "update_source_registration",
         rpcs: &["UpdateSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_registration",
         rpcs: &["GetSourceRegistration"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_registrations",
         rpcs: &["ListSourceRegistrations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "delete_source_registration",
         rpcs: &["DeleteSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "accept_source_snapshot",
         rpcs: &["AcceptSourceSnapshot"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_snapshot",
         rpcs: &["GetSourceSnapshot"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_snapshots",
         rpcs: &["ListSourceSnapshots"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "create_source_mapping",
         rpcs: &["CreateSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "update_source_mapping",
         rpcs: &["UpdateSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_mapping",
         rpcs: &["GetSourceMapping"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_mappings",
         rpcs: &["ListSourceMappings"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "delete_source_mapping",
         rpcs: &["DeleteSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_overlay",
         rpcs: &["GetSourceOverlay"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "preview_source_run",
         rpcs: &["PreviewSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "apply_source_run",
         rpcs: &["ApplySourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "cancel_source_run",
         rpcs: &["CancelSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_run",
         rpcs: &["GetSourceRun"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_runs",
         rpcs: &["ListSourceRuns"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "recover_source_run",
         rpcs: &["RecoverSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_run_results",
         rpcs: &["ListSourceRunResults"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_decision_amendments",
         rpcs: &["ListDecisionAmendments"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_decisions",
         rpcs: &["ListSubjectDecisions"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_documents",
         rpcs: &["ListSubjectDocuments"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_decision_detail",
         rpcs: &["GetDecisionDetail"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_document_detail",
         rpcs: &["GetDocumentDetail"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_incoming_decision_declarations",
         rpcs: &["ListIncomingDecisionDeclarations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_term_domain_declarations",
         rpcs: &["ListTermDomainDeclarations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_incoming_document_declarations",
         rpcs: &["ListIncomingDocumentDeclarations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "inspect_human_interaction",
         rpcs: &["InspectHumanInteraction"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_channel_messages",
         rpcs: &["ListChannelMessages"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_design_graph_detail",
         rpcs: &["GetDesignGraphDetail"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_design_graphs",
         rpcs: &["ListSubjectDesignGraphs"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "traverse_design_graph_topology",
         rpcs: &["TraverseDesignGraphTopology"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_incoming_design_graph_subflows",
         rpcs: &["ListIncomingDesignGraphSubflows"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_assignments",
         rpcs: &["ListSubjectAssignments"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_assignee_responsibilities",
         rpcs: &["ListAssigneeResponsibilities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_team_members",
         rpcs: &["ListTeamMembers"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_person_teams",
         rpcs: &["ListPersonTeams"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_team_contacts",
         rpcs: &["GetTeamContacts"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "inspect_data_product",
@@ -468,221 +540,289 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
             "GetTypeLibraryDescriptorSet",
         ],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_server_info",
         rpcs: &["GetServerInfo"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "who_am_i",
         rpcs: &["WhoAmI"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "compile_type_library",
         rpcs: &["CompileTypeLibrary"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "resolve_type",
         rpcs: &["ResolveType"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "list_namespaces",
         rpcs: &["ListNamespaces"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "register_namespace",
         rpcs: &["RegisterNamespace"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "move_namespace",
         rpcs: &["MoveNamespace"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
+    },
+    ToolPolicy {
+        tool: "protect_entity",
+        rpcs: &["ProtectEntity"],
+        min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
+    },
+    ToolPolicy {
+        tool: "unprotect_entity",
+        rpcs: &["UnprotectEntity"],
+        min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
+    },
+    ToolPolicy {
+        tool: "get_entity_protection",
+        rpcs: &["GetEntityProtection"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "list_entity_protections",
+        rpcs: &["ListEntityProtections"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_snapshot_id",
         rpcs: &["GetSnapshotId"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_entities",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity",
         rpcs: &["GetEntity"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_get_entities",
         rpcs: &["BatchGetEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "search_entities",
         rpcs: &["SearchEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_versions",
         rpcs: &["ListVersions"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_latest_version",
         rpcs: &["GetLatestVersion"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_supersession_chain",
         rpcs: &["GetSupersessionChain"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_incoming_references",
         rpcs: &["GetIncomingReferences"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_outgoing_references",
         rpcs: &["GetOutgoingReferences"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_impact",
         rpcs: &["GetImpact"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "retarget_references",
         rpcs: &["RetargetReferences"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_slice_projection",
         rpcs: &["GetSliceProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_storyboard_projection",
         rpcs: &["GetStoryboardProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_event_model_projection",
         rpcs: &["GetEventModelProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "extract_subgraph",
         rpcs: &["ExtractSubgraph"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "diff_entities",
         rpcs: &["DiffEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "put_entity",
         rpcs: &["PutEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity_json",
         rpcs: &["GetEntity"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "put_entity_json",
         rpcs: &["PutEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_mutate_json",
         rpcs: &["BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "delete_entity",
         rpcs: &["DeleteEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_mutate",
         rpcs: &["BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_changes",
         rpcs: &["ListChanges"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_changesets",
         rpcs: &["ListChangesets"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_changeset",
         rpcs: &["GetChangeset"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity_history",
         rpcs: &["GetEntityHistory"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "revert_changeset",
         rpcs: &["RevertChangeset"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "validate_event_model",
         rpcs: &["ValidateEventModel"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_validation_rules",
         rpcs: &["ListValidationRules"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "validate_project",
         rpcs: &["ValidateProject"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "delete_by_query",
         rpcs: &["DeleteByQuery"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
     },
     ToolPolicy {
         tool: "list_entity_kinds",
         rpcs: &["ListEntityKinds"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "list_entities_by_domain",
         rpcs: &["ListEntitiesByDomain"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "infer_data_flow",
         rpcs: &["InferDataFlow"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "check_information_completeness",
         rpcs: &["CheckInformationCompleteness"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     // apply_manifests plans with BatchGetEntities, then writes through
     // BatchMutate (trogon_atlas_client::apply::plan / apply).
@@ -690,6 +830,7 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "apply_manifests",
         rpcs: &["BatchGetEntities", "BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     // diff_manifests only plans (trogon_atlas_client::apply::plan); it
     // never calls apply, so it never reaches BatchMutate.
@@ -697,60 +838,77 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "diff_manifests",
         rpcs: &["BatchGetEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "export_namespace",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "export_openslo",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "create_branch",
         rpcs: &["CreateBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "list_branches",
         rpcs: &["ListBranches"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "delete_branch",
         rpcs: &["DeleteBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "diff_branch",
         rpcs: &["DiffBranch"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "merge_branch",
         rpcs: &["MergeBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "update_branch",
         rpcs: &["UpdateBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "resolve_branch_entry",
         rpcs: &["ResolveBranchEntry"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
+    },
+    ToolPolicy {
+        tool: "get_entity_schema",
+        rpcs: &["ListValidationRules"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "get_operation",
         rpcs: &["GetOperation"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Discovery,
     },
 ];
 
-fn policy_for(tool: &str) -> Option<&'static ToolPolicy> {
+pub(crate) fn policy_for(tool: &str) -> Option<&'static ToolPolicy> {
     TOOL_POLICIES.iter().find(|p| p.tool == tool)
 }
 
@@ -783,6 +941,9 @@ pub struct McpServer {
     /// Whether every request carries `x-trogon-atlas-branch`, which a server
     /// must honor before this adapter lets an agent mutate through it.
     branch_scoped: bool,
+    /// The operator's profile on the shared instance; on a per-request copy,
+    /// the profile that request runs under.
+    profile: Option<ToolProfile>,
     // Required for `#[tool_router]` codegen; the macro reads this field
     // off `self` at dispatch time but the compiler can't prove the read
     // because the dispatch flows through trait-object indirection. The
@@ -802,13 +963,53 @@ impl McpServer {
             branch_scoped: options.branch.is_some(),
             options,
             client,
+            profile: None,
             tool_router: Self::tool_router(),
         })
+    }
+
+    /// Fix every session to `profile`. A request may still name a profile,
+    /// but only this one: a request cannot widen or swap the operator's
+    /// choice.
+    #[must_use]
+    pub fn with_profile(self, profile: Option<ToolProfile>) -> Self {
+        Self { profile, ..self }
+    }
+
+    pub fn profile(&self) -> Option<ToolProfile> {
+        self.profile
+    }
+
+    fn profile_for(
+        &self,
+        requested: Option<ToolProfile>,
+    ) -> Result<Option<ToolProfile>, rmcp::ErrorData> {
+        match (self.profile, requested) {
+            (Some(configured), Some(requested)) if configured != requested => {
+                Err(rmcp::ErrorData::invalid_request(
+                    format!(
+                        "this server runs the `{configured}` tool profile; a request cannot select `{requested}`"
+                    ),
+                    None,
+                ))
+            }
+            (configured, requested) => Ok(configured.or(requested)),
+        }
+    }
+
+    fn offers(&self, tool: &rmcp::model::Tool) -> bool {
+        self.profile.is_none_or(|profile| profile.admits(tool))
+    }
+
+    /// Every tool this adapter registers, whatever any caller's role.
+    pub fn registered_tools() -> Vec<rmcp::model::Tool> {
+        Self::tool_router().list_all()
     }
 
     /// A copy of this server whose every gRPC call carries `caller`'s token
     /// and branch.
     fn for_caller(&self, caller: Caller) -> Result<Self, rmcp::ErrorData> {
+        let profile = self.profile_for(caller.profile)?;
         let options = ConnectOptions {
             branch: caller.branch.or_else(|| self.options.branch.clone()),
             ..self.options.clone()
@@ -823,6 +1024,7 @@ impl McpServer {
             client,
             branch_scoped: options.branch.is_some(),
             options,
+            profile,
             ..self.clone()
         })
     }
@@ -970,6 +1172,33 @@ impl McpServer {
         .await
     }
 
+    /// Protection is not branch-scoped and the server refuses a branch
+    /// header on its writes, so refuse here before any request is sent.
+    async fn protection_admin_client(
+        &self,
+        validate_only: bool,
+    ) -> Result<Client, rmcp::ErrorData> {
+        if let Some(branch) = self.options.branch.as_deref() {
+            return Err(mcp_error_data(trogon_atlas_client::failure::invalid_input(
+                format!(
+                    "protection applies to an identity on every branch; call this without branch {branch}"
+                ),
+            )));
+        }
+        let mut client = self.client();
+        compat::ensure_can_mutate_requiring(
+            &mut client,
+            MutationIntent {
+                validate_only,
+                ..Default::default()
+            },
+            &[compat::Capability::EntityProtection],
+        )
+        .await
+        .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        Ok(client)
+    }
+
     async fn ensure_intent(
         &self,
         client: &mut Client,
@@ -1028,6 +1257,23 @@ fn role_name(role: pb::Role) -> &'static str {
         pb::Role::Writer => "writer",
         pb::Role::Admin => "admin",
     }
+}
+
+fn mcp_error_data(e: anyhow::Error) -> rmcp::ErrorData {
+    McpError::from(e).into()
+}
+
+fn json_result(body: &serde_json::Value) -> CallToolResult {
+    CallToolResult::success(vec![ContentBlock::text(body.to_string())])
+}
+
+fn protected_identity(
+    kind: &str,
+    namespace: &str,
+    slug: &str,
+) -> Result<protection::ProtectedIdentity, rmcp::ErrorData> {
+    let kind = parse_kind(kind).map_err(rmcp::ErrorData::from)?;
+    protection::ProtectedIdentity::new(kind, namespace, slug).map_err(mcp_error_data)
 }
 
 fn parse_kind(s: &str) -> Result<pb::EntityKind, McpError> {
@@ -1207,6 +1453,36 @@ fn ok_envelope<M: Message>(msg: &M) -> CallToolResult {
 /// `{severity, code, subject, field, message}`. `severity` is
 /// `error`/`warning`/`info`; `subject` is the canonical entity id string or
 /// `null`; `field` is the structural path inside the subject or `null`.
+fn rule_json(rule: &pb::ValidationRule) -> serde_json::Value {
+    let severity = match pb::validation_issue::Severity::try_from(rule.default_severity) {
+        Ok(pb::validation_issue::Severity::Error) => "error",
+        Ok(pb::validation_issue::Severity::Warning) => "warning",
+        Ok(pb::validation_issue::Severity::Info) => "info",
+        _ => "unspecified",
+    };
+    serde_json::json!({
+        "code": rule.code,
+        "default_severity": severity,
+        "title": rule.title,
+        "doc": rule.doc,
+        "category": rule.category,
+        "field": (!rule.subject_field.is_empty()).then_some(rule.subject_field.as_str()),
+    })
+}
+
+/// Hex SHA-256 of the schema's serialized form. `serde_json` keeps object
+/// keys sorted here, so the digest is stable for an unchanged schema.
+fn schema_sha256(schema: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(schema.to_string().as_bytes()).iter().fold(
+        String::with_capacity(64),
+        |mut hex, byte| {
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+            hex
+        },
+    )
+}
+
 fn issue_json(issue: &pb::ValidationIssue) -> serde_json::Value {
     let mut value = trogon_atlas_client::apply::issue_to_json(issue);
     if let serde_json::Value::Object(fields) = &mut value {
@@ -1509,6 +1785,114 @@ impl McpServer {
             .map_err(tool_err("move_namespace"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "Freeze every version of an identity (kind, namespace, slug), including versions not written yet, so every write route refuses it with ENTITY_PROTECTED until an admin lifts it. Admin only, baseline only, and the identity must already have a stored version. changed=false means it was already protected; protection then holds the existing row, whose reason may differ.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn protect_entity(
+        &self,
+        Parameters(p): Parameters<ProtectEntityParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let reason = protection::ProtectionReason::new(&p.reason).map_err(mcp_error_data)?;
+        let mut client = self.protection_admin_client(p.validate_only).await?;
+        let outcome = protection::protect(
+            &mut client,
+            &identity,
+            &reason,
+            protection::Effect::from_validate_only(p.validate_only),
+        )
+        .await
+        .map_err(mcp_error_data)?;
+        Ok(json_result(&outcome.to_json()))
+    }
+
+    #[tool(
+        description = "Lift protection from an identity (kind, namespace, slug) so writes to it are accepted again. Admin only, baseline only. Pass if_match with the row revision get_entity_protection or list_entity_protections reported to lift only that row; that is also how an unreadable (unknown) row is removed. changed=false means it was not protected.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn unprotect_entity(
+        &self,
+        Parameters(p): Parameters<UnprotectEntityParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let if_match = match p.if_match {
+            None => None,
+            Some(revision) => Some(protection::RowRevision::new(revision).ok_or_else(|| {
+                mcp_error_data(trogon_atlas_client::failure::invalid_input(
+                    "if_match must be a positive row revision; omit it to lift whatever is current",
+                ))
+            })?),
+        };
+        let mut client = self.protection_admin_client(p.validate_only).await?;
+        let outcome = protection::unprotect(
+            &mut client,
+            &identity,
+            if_match,
+            protection::Effect::from_validate_only(p.validate_only),
+        )
+        .await
+        .map_err(mcp_error_data)?;
+        Ok(json_result(&outcome.to_json()))
+    }
+
+    #[tool(
+        description = "Whether an identity (kind, namespace, slug) is protected, unprotected, or unknown. state=unknown means the protection row could not be read: writes to the identity are refused, and an admin can lift the row with unprotect_entity if_match=unknown.revision when unknown.liftable is true.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_entity_protection(
+        &self,
+        Parameters(p): Parameters<GetEntityProtectionParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let mut client = self.client();
+        let lookup = protection::get_protection(&mut client, &identity)
+            .await
+            .map_err(mcp_error_data)?;
+        Ok(json_result(&lookup.to_json()))
+    }
+
+    #[tool(
+        description = "List protected identities and unreadable protection rows. verdict=partial (complete=false, or any entry in unknown) means the listing is not the whole registry: an identity missing from it may still be protected, so do not treat absence as permission to write.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_entity_protections(
+        &self,
+        Parameters(p): Parameters<ListEntityProtectionsParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let namespace = p
+            .namespace
+            .as_deref()
+            .map(protection::NamespaceFilter::new)
+            .transpose()
+            .map_err(mcp_error_data)?;
+        let mut client = self.client();
+        let listing = protection::list_protections(&mut client, namespace.as_ref())
+            .await
+            .map_err(mcp_error_data)?;
+        Ok(json_result(&listing.to_json()))
     }
 
     #[tool(
@@ -4429,6 +4813,64 @@ impl McpServer {
     }
 
     #[tool(
+        description = "JSON Schema (draft 2020-12) for one entity kind's manifest document, cut from the same generator as `trogon-atlas schema`, with schema_sha256 identifying it. Also returns a minimal skeleton, the placeholders in it, and the validation rules whose subject is that kind. The skeleton satisfies the schema only: replace every placeholder and add the references and context the kind needs before apply_manifests accepts it. Tenant types are not included; resolve them with resolve_type. An unknown kind is invalid_params; list_entity_kinds names every kind.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_entity_schema(
+        &self,
+        Parameters(p): Parameters<EntitySchemaParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        use trogon_atlas_client::manifest_schema;
+
+        let kind = parse_kind(&p.kind)?;
+        let schema = manifest_schema::generate_for_kind(kind)
+            .map_err(|e| McpError::Internal(format!("{e:#}")))?;
+        let mut client = self.client();
+        let rules: Vec<serde_json::Value> = client
+            .list_validation_rules(pb::ListValidationRulesRequest {})
+            .await
+            .map_err(tool_err("get_entity_schema"))?
+            .into_inner()
+            .rules
+            .iter()
+            .filter(|rule| {
+                rule.subject_kind == kind as i32
+                    || rule.subject_kind == pb::EntityKind::Unspecified as i32
+            })
+            .map(rule_json)
+            .collect();
+        let placeholders: Vec<serde_json::Value> = manifest_schema::SKELETON_PLACEHOLDERS
+            .iter()
+            .map(|placeholder| {
+                serde_json::json!({
+                    "pointer": placeholder.pointer(),
+                    "marker": placeholder.marker,
+                    "meaning": placeholder.meaning,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "kind": pb::canonical::kind_short(kind),
+            "api_version": trogon_atlas_client::manifest::API_VERSION,
+            "dialect": schema["$schema"],
+            "schema_sha256": schema_sha256(&schema),
+            "skeleton": manifest_schema::skeleton(kind),
+            "skeleton_validity": "schema_only",
+            "placeholders": placeholders,
+            "rules": rules,
+            "schema": schema,
+        });
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
+    }
+
+    #[tool(
         description = "Static catalog of every EntityKind the system stores: numeric enum, proto enum name, JSON discriminator (the field in the Entity oneof), human title, plural, and doc. Avoids hardcoding the three-name map in clients.",
         annotations(
             read_only_hint = true,
@@ -4946,8 +5388,31 @@ impl McpServer {
 #[tool_handler]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(SERVER_INSTRUCTIONS)
+        let config = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
+        match self.profile {
+            None => config.with_instructions(SERVER_INSTRUCTIONS),
+            Some(profile) => {
+                let mut config = config.with_instructions(format!(
+                    "{SERVER_INSTRUCTIONS}\n\nActive tool profile: {profile}. Tools outside it are neither listed nor callable."
+                ));
+                let mut meta = serde_json::Map::new();
+                meta.insert(PROFILE_META_KEY.to_owned(), profile.as_str().into());
+                config.meta = Some(rmcp::model::MetaObject(meta));
+                config
+            }
+        }
+    }
+
+    /// Reports the profile this request runs under, which a header may name,
+    /// so the answer reflects the request rather than the shared instance.
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::InitializeResult, rmcp::ErrorData> {
+        let session = self.for_request(&context)?;
+        context.peer.set_peer_info(request.clone());
+        session.negotiate_initialize(&request)
     }
 
     /// Runs the tool as the caller who sent this request, never as the
@@ -4958,6 +5423,21 @@ impl ServerHandler for McpServer {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let caller = self.for_request(&context)?;
+        if let Some(profile) = caller.profile {
+            let offered = self
+                .tool_router
+                .get(&request.name)
+                .is_some_and(|tool| profile.admits(tool));
+            if !offered {
+                return Err(rmcp::ErrorData::invalid_params(
+                    format!(
+                        "tool `{}` is not in the `{profile}` tool profile",
+                        request.name
+                    ),
+                    None,
+                ));
+            }
+        }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(&caller, request, context);
         self.tool_router.call(tcc).await
     }
@@ -4973,8 +5453,14 @@ impl ServerHandler for McpServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
-        let role = self.for_request(&context)?.learn_role().await;
-        let tools = self.tool_router.list_all();
+        let session = self.for_request(&context)?;
+        let role = session.learn_role().await;
+        let tools: Vec<_> = self
+            .tool_router
+            .list_all()
+            .into_iter()
+            .filter(|tool| session.offers(tool))
+            .collect();
         let tools = match role {
             None => tools,
             Some(role) => tools
@@ -5555,6 +6041,18 @@ mod tests {
     /// crates/trogon-atlas-server/src/auth.rs:246-249). The tool itself
     /// only reads, so it is deliberately annotated read_only_hint = true.
     const READ_ONLY_ROLE_EXEMPT: &[&str] = &["get_operation"];
+
+    #[test]
+    fn tool_policy_names_are_unique() {
+        let mut names = HashSet::new();
+        for policy in TOOL_POLICIES {
+            assert!(
+                names.insert(policy.tool),
+                "duplicate TOOL_POLICIES row for {}",
+                policy.tool
+            );
+        }
+    }
 
     #[test]
     fn every_tool_has_annotations_matching_the_role_map() {

@@ -76,6 +76,15 @@ pub struct BatchGetParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct EntitySchemaParams {
+    #[schemars(
+        description = "Entity kind in snake_case, e.g. event, read_model or event_model. Call list_entity_kinds for every kind."
+    )]
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListVersionsParams {
     pub kind: String,
     pub namespace: String,
@@ -1309,4 +1318,52 @@ pub struct SourceRequestParams {
         description = "Exact source RPC proto3 JSON request. Supply complete native owners explicitly; preserve typed selectors, adoption, field ownership, guards and branch. Source pointers are inert; no source fetch or execution."
     )]
     pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectEntityParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+    #[schemars(description = "Why the identity is frozen; every refused writer is shown it.")]
+    pub reason: String,
+    #[serde(default)]
+    #[schemars(description = "Check the request without protecting anything.")]
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnprotectEntityParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+    #[serde(default)]
+    #[schemars(
+        description = "Lift only the row at this revision, as get_entity_protection or list_entity_protections report it; refused with STALE_PRECONDITION once the row has moved. Also how an unreadable row is lifted. Omit to lift whatever is current."
+    )]
+    pub if_match: Option<u64>,
+    #[serde(default)]
+    #[schemars(description = "Check the request without lifting anything.")]
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetEntityProtectionParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListEntityProtectionsParams {
+    #[serde(default)]
+    #[schemars(description = "Only identities in this namespace. Omit for every visible one.")]
+    pub namespace: Option<String>,
 }
