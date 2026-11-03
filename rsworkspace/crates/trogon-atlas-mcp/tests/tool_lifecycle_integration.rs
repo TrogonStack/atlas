@@ -783,7 +783,17 @@ async fn mcp_get_entity_schema_returns_a_schema_skeleton_and_rules_for_the_kind(
         "{body:?}"
     );
     assert!(body["schema"]["properties"]["spec"].is_object(), "{body:?}");
-    assert_eq!(body["schema_sha256"].as_str().unwrap().len(), 64);
+    let schema_digest = {
+        use sha2::{Digest, Sha256};
+        Sha256::digest(body["schema"].to_string().as_bytes())
+            .iter()
+            .fold(String::with_capacity(64), |mut output, byte| {
+                use std::fmt::Write;
+                write!(output, "{byte:02x}").unwrap();
+                output
+            })
+    };
+    assert_eq!(body["schema_sha256"].as_str().unwrap(), schema_digest);
     assert_eq!(body["skeleton_validity"], "schema_only");
     let pointers: Vec<&str> = body["placeholders"]
         .as_array()
