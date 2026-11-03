@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   getDecisionDetail,
+  listDecisionAmendments,
   getDocumentDetail,
   listIncomingDecisionDeclarations,
   listIncomingDocumentDeclarations,
@@ -71,4 +72,21 @@ describe('typed native catalog HTTP requests', () => {
     );
     await expect(getDocumentDetail(document)).rejects.toThrow('budget exhausted');
   });
+});
+
+it('preserves amendment direction, opaque page context and branch', async () => {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify({ nextPageToken: 'next', incomplete: false }), { status: 200 }));
+  vi.stubGlobal('fetch', fetch);
+  await listDecisionAmendments({ id }, 'DECISION_AMENDMENT_DIRECTION_INCOMING', 'opaque-page', { branch: 'review' });
+  const url = new URL(fetch.mock.calls[0][0], 'http://localhost');
+  expect(url.pathname).toBe('/api/catalog/decision-amendments');
+  expect(JSON.parse(url.searchParams.get('request') ?? '')).toEqual({
+    decision: { id },
+    direction: 'DECISION_AMENDMENT_DIRECTION_INCOMING',
+    pageSize: 100,
+    pageToken: 'opaque-page',
+  });
+  expect(url.searchParams.get('branch')).toBe('review');
 });

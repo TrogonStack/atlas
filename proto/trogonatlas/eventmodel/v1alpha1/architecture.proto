@@ -8,6 +8,7 @@ import "trogonatlas/type/v1alpha1/connection_id.proto";
 import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/connections.proto";
 import "trogonatlas/eventmodel/v1alpha1/reliability.proto";
+import "trogonatlas/eventmodel/v1alpha1/catalog_values.proto";
 
 message ProtocolName { string value = 1; }
 message TechnologyName { string value = 1; }
@@ -38,6 +39,20 @@ message ChannelBinding {
   string doc = 4;
 }
 
+enum ChannelLinkKind {
+  CHANNEL_LINK_KIND_UNSPECIFIED = 0;
+  CHANNEL_LINK_KIND_COMPOSES = 1;
+  CHANNEL_LINK_KIND_ROUTES_TO = 2;
+}
+
+message ChannelLink {
+  trogonatlas.type.v1alpha1.ConnectionId connection_id = 1;
+  ChannelLinkKind kind = 2;
+  ChannelRef target = 3;
+  map<string, string> parameter_values = 4;
+  CatalogText doc = 5;
+}
+
 message Channel {
   trogonatlas.type.v1alpha1.Id id = 1;
   string title = 2;
@@ -58,6 +73,7 @@ message Channel {
     ExternalSystemRef external_system = 10;
   }
   repeated ChannelBinding bindings = 11;
+  repeated ChannelLink links = 12;
 }
 
 message StoreClass {

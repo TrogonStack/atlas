@@ -178,6 +178,43 @@ pub struct NamespaceClaim {
 pub enum ChangeKind {
     Put,
     Delete,
+    /// Protection set on the entity's identity. Only ever a changeset op; the
+    /// change feed never carries it.
+    Protect,
+    /// Protection lifted. Same changeset-only rule as [`ChangeKind::Protect`].
+    Unprotect,
+}
+
+impl ChangeKind {
+    #[must_use]
+    pub fn to_proto(self) -> i32 {
+        use trogon_atlas_proto::change_event::Kind;
+        match self {
+            Self::Put => Kind::Put as i32,
+            Self::Delete => Kind::Deleted as i32,
+            Self::Protect => Kind::Protected as i32,
+            Self::Unprotect => Kind::Unprotected as i32,
+        }
+    }
+
+    #[must_use]
+    pub fn from_proto(raw: i32) -> Option<Self> {
+        use trogon_atlas_proto::change_event::Kind;
+        match Kind::try_from(raw).ok()? {
+            Kind::Put => Some(Self::Put),
+            Kind::Deleted => Some(Self::Delete),
+            Kind::Protected => Some(Self::Protect),
+            Kind::Unprotected => Some(Self::Unprotect),
+            Kind::Unspecified => None,
+        }
+    }
+
+    /// Whether this kind changes entity content, as opposed to the
+    /// protection registry.
+    #[must_use]
+    pub fn is_content(self) -> bool {
+        matches!(self, Self::Put | Self::Delete)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +277,7 @@ pub struct WriteContext<'a> {
     branch: Option<&'a str>,
     changeset: Option<ChangesetRef<'a>>,
     operation_key: Option<&'a str>,
+    settlement_deferred: bool,
     connection_admission: ConnectionAdmission<'a>,
 }
 
@@ -257,6 +295,7 @@ impl<'a> WriteContext<'a> {
             branch: Some(name),
             changeset: None,
             operation_key: None,
+            settlement_deferred: false,
             connection_admission: ConnectionAdmission::Active,
         }
     }
@@ -269,6 +308,7 @@ impl<'a> WriteContext<'a> {
             branch,
             changeset: None,
             operation_key: None,
+            settlement_deferred: false,
             connection_admission: ConnectionAdmission::Active,
         }
     }
@@ -300,6 +340,20 @@ impl<'a> WriteContext<'a> {
         self
     }
 
+    /// Mark the claimed receipt as settled by the caller only after work
+    /// that follows this write, so a recovery pass that finds the write
+    /// durable does not settle it applied on the caller's behalf.
+    #[must_use]
+    pub fn with_deferred_settlement(mut self) -> Self {
+        self.settlement_deferred = true;
+        self
+    }
+
+    #[must_use]
+    pub fn settlement_deferred(self) -> bool {
+        self.settlement_deferred
+    }
+
     #[must_use]
     pub fn branch_name(self) -> Option<&'a str> {
         self.branch
@@ -322,6 +376,123 @@ impl<'a> WriteContext<'a> {
 pub struct ChangesetOp {
     pub kind: ChangeKind,
     pub entity_ref: EntityRef,
+}
+
+/// What validation backed a changeset when it was written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangesetValidation {
+    /// Recorded before receipts existed. Nothing is known, which is not the
+    /// same as a clean result.
+    NotRecorded,
+    /// No validation coverage was declared for the write, so no issue
+    /// counts are recorded.
+    Unvalidated(UnvalidatedReason),
+    Validated(ValidationReceipt),
+}
+
+impl ChangesetValidation {
+    /// The wire receipt. `None` for [`ChangesetValidation::NotRecorded`], so
+    /// an old changeset keeps reading as "nothing known".
+    #[must_use]
+    pub fn to_proto(&self) -> Option<trogon_atlas_proto::ChangesetValidation> {
+        use trogon_atlas_proto::changeset_validation::Outcome;
+        let outcome = match self {
+            Self::NotRecorded => return None,
+            Self::Unvalidated(reason) => {
+                Outcome::Unvalidated(trogon_atlas_proto::ChangesetUnvalidated {
+                    reason: reason.as_str().to_owned(),
+                })
+            }
+            Self::Validated(receipt) => {
+                Outcome::Validated(trogon_atlas_proto::ChangesetValidated {
+                    coverage_complete: receipt.coverage == ReceiptCoverage::Complete,
+                    incomplete_checks: match &receipt.coverage {
+                        ReceiptCoverage::Complete => Vec::new(),
+                        ReceiptCoverage::Incomplete(checks) => checks.clone(),
+                    },
+                    error_count: receipt.issues.errors,
+                    warning_count: receipt.issues.warnings,
+                    info_count: receipt.issues.infos,
+                    rule_catalog_digest: receipt.rule_catalog.as_str().to_owned(),
+                })
+            }
+        };
+        Some(trogon_atlas_proto::ChangesetValidation {
+            outcome: Some(outcome),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnvalidatedReason {
+    /// The write path reports no validation coverage.
+    NoDeclaredCoverage,
+    /// Reconstructed by crash recovery, which cannot know what ran.
+    Recovered,
+    /// A reason written by a newer server. Kept verbatim rather than mapped
+    /// onto a known one.
+    Unrecognized(String),
+}
+
+impl UnvalidatedReason {
+    const NO_DECLARED_COVERAGE: &'static str = "no_declared_coverage";
+    const RECOVERED: &'static str = "recovered";
+
+    #[must_use]
+    pub fn parse(token: &str) -> Self {
+        match token {
+            Self::NO_DECLARED_COVERAGE => Self::NoDeclaredCoverage,
+            Self::RECOVERED => Self::Recovered,
+            other => Self::Unrecognized(other.to_owned()),
+        }
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::NoDeclaredCoverage => Self::NO_DECLARED_COVERAGE,
+            Self::Recovered => Self::RECOVERED,
+            Self::Unrecognized(token) => token,
+        }
+    }
+}
+
+/// The result of the suites a write path ran before its changeset landed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationReceipt {
+    pub coverage: ReceiptCoverage,
+    pub issues: IssueCounts,
+    pub rule_catalog: RuleCatalogDigest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReceiptCoverage {
+    Complete,
+    /// Check ids that applied but did not complete, sorted.
+    Incomplete(Vec<String>),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct IssueCounts {
+    pub errors: u32,
+    pub warnings: u32,
+    pub infos: u32,
+}
+
+/// Identity of the rule catalogue a validation ran with, as lowercase hex.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuleCatalogDigest(String);
+
+impl RuleCatalogDigest {
+    #[must_use]
+    pub fn new(hex: String) -> Self {
+        Self(hex)
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 /// Durable record of one mutation RPC: what landed together, who did it,
@@ -349,6 +520,7 @@ pub struct ChangesetRecord {
     /// The `operation_id` the mutation carried, if any. See
     /// `ChangesetRef::operation_id`.
     pub operation_id: Option<String>,
+    pub validation: ChangesetValidation,
 }
 
 /// One entity as it stood on either side of one changeset's write.
@@ -1042,6 +1214,41 @@ pub trait Store: Send + Sync {
     /// Look up one row by id. `None` when no such namespace is registered.
     async fn get_namespace(&self, id: &NamespaceId) -> StoreResult<Option<NamespaceRecord>>;
 
+    // ---- Entity protection registry ---------------------------------------
+    //
+    // Protection is keyed by identity rather than stored on the entity, so no
+    // write, merge, or revert of the entity can carry it away. Rows are never
+    // versioned and never branch-scoped: a branch cannot see a different
+    // answer than baseline, which is what keeps an old branch from merging
+    // over a protected identity.
+
+    /// One identity's protection. A row that exists but cannot be decoded is
+    /// [`ProtectionState::Unknown`](crate::protection::ProtectionState::Unknown);
+    /// `Err` means the registry did not answer.
+    async fn get_protection(
+        &self,
+        identity: &crate::protection::EntityIdentity,
+    ) -> StoreResult<crate::protection::ProtectionState>;
+
+    /// Write a row. Fails with `AlreadyExists` when a row is already there, so
+    /// two concurrent protects cannot both claim to have set it.
+    async fn put_protection(
+        &self,
+        record: &crate::protection::ProtectionRecord,
+    ) -> StoreResult<crate::protection::ProtectionRevision>;
+
+    /// Remove the row only if it is still at `expected`. `EtagMismatch` when
+    /// it moved or is gone.
+    async fn delete_protection(
+        &self,
+        identity: &crate::protection::EntityIdentity,
+        expected: crate::protection::ProtectionRevision,
+    ) -> StoreResult<()>;
+
+    /// Every row the registry can enumerate, for listing only; the write path
+    /// looks identities up one at a time.
+    async fn list_protections(&self) -> StoreResult<crate::protection::ProtectionListing>;
+
     /// Resolve a human name to its id *within one owner*. `None` when that
     /// owner has no namespace by that name, even if another owner does.
     ///
@@ -1126,6 +1333,16 @@ pub trait Store: Send + Sync {
     async fn settle_operation_not_applied(&self, key: &str) -> StoreResult<()> {
         let _ = key;
         Ok(())
+    }
+
+    /// Settle a claim as not-applied although changeset `changeset_id`
+    /// already landed its content: a later step of the same operation
+    /// failed, so a retry is free to claim again and can recognise that
+    /// content as its own instead of tripping its own precondition. A
+    /// backend that cannot record the changeset settles plain not-applied.
+    async fn settle_operation_unfinished(&self, key: &str, changeset_id: &str) -> StoreResult<()> {
+        let _ = changeset_id;
+        self.settle_operation_not_applied(key).await
     }
 
     /// Look up a claim by key, for `GetOperation`. `None` means no record:
@@ -1249,7 +1466,9 @@ pub struct OperationRecord {
     /// Branch the mutation applied to. `None` = baseline.
     pub branch: Option<String>,
     pub status: OperationStatus,
-    /// Set when `status == Applied`.
+    /// Set when `status == Applied`, and on a `NotApplied` claim whose
+    /// content landed before a later step failed (see
+    /// [`Store::settle_operation_unfinished`]).
     pub changeset_id: String,
     /// Set when `status == Rejected`.
     pub rejection_code: String,
@@ -1341,6 +1560,12 @@ pub struct Written {
 pub struct ListFilter<'a> {
     pub kinds: &'a [EntityKind],
     pub namespaces: &'a [String],
+    /// Restrict the listing to one slug. With one kind and one namespace this
+    /// names a single identity, so the answer is every stored version of it
+    /// (or just the latest with `latest_versions_only`) no matter how many
+    /// other identities the store holds, and a result cap can never push the
+    /// identity out of the listing.
+    pub slug: Option<&'a str>,
     pub latest_versions_only: bool,
 }
 
@@ -1379,6 +1604,7 @@ mod tests {
             branch: None,
             ops,
             operation_id: None,
+            validation: ChangesetValidation::NotRecorded,
         }
     }
 

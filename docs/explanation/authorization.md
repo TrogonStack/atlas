@@ -148,7 +148,7 @@ Three ordered roles:
 | -------- | ------------------------------------------------------------------- |
 | `reader` | Read-only RPCs: `Get*`, `List*` (including `ListBranches`), `Search*`, `Diff*`, `BatchGet`, projections, references, impact |
 | `writer` | Everything `reader` has, plus `PutEntity`, `BatchMutate`, and LLM-backed inference RPCs (they spend tokens) |
-| `admin`  | Everything `writer` has, plus `DeleteByQuery`, `MoveNamespace`, and any future destructive RPC |
+| `admin`  | Everything `writer` has, plus `DeleteByQuery`, `MoveNamespace`, `ProtectEntity`, `UnprotectEntity`, and any future destructive RPC |
 
 `RegisterNamespace` requires `writer`: claiming a namespace is ordinary setup
 for anyone who can write. `MoveNamespace` requires `admin` because it
@@ -161,6 +161,15 @@ agents hold the `writer` and `admin` keys through the CLI and MCP. The Studio
 gateway refuses every mutating request and RPC on its own, but that check
 lives in the gateway; the `reader` role is what makes the server refuse the
 same key when someone sends it straight to the gRPC port.
+
+Protecting an entity is an `admin` decision because it overrides every
+writer's access to one identity, the admin's own included, until an admin
+lifts it. The role check alone is not enough for it: a server with no token
+registry runs every caller unauthenticated, and protection set by nobody
+could be lifted by anybody, so the handlers also require an authenticated
+admin principal. Reading the marks (`GetEntityProtection`,
+`ListEntityProtections`) is a `reader` RPC. See
+[entity protection](entity-protection.md).
 
 ### The method map (code, maintained by developers)
 

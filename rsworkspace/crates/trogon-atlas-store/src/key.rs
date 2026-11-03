@@ -35,10 +35,8 @@ pub fn entity_key(kind: EntityKind, id: &Id) -> String {
     )
 }
 
-// Kept test-only: nothing in the production paths consumes this prefix
-// today, and the kind/namespace/slug layout is an internal key-layout
-// concern. Promote to `pub(crate)` / `pub` if a real consumer appears.
-#[cfg(test)]
+/// Prefix matching every stored version of one identity:
+/// `"<kind_short>.<namespace>.<slug>."`.
 pub(crate) fn slug_prefix(kind: EntityKind, namespace: &str, slug: &str) -> String {
     format!(
         "{}.{}.{}.",
@@ -55,6 +53,28 @@ pub fn namespace_prefix(kind: EntityKind, namespace: &str) -> String {
         trogon_atlas_proto::canonical::kind_short(kind),
         encode_component(namespace)
     )
+}
+
+/// Protection registry row for one identity:
+/// `"<kind_short>.<namespace>.<slug>"`, the entity key without its version.
+#[must_use]
+pub fn protection_key(identity: &crate::protection::EntityIdentity) -> String {
+    format!(
+        "{}.{}.{}",
+        trogon_atlas_proto::canonical::kind_short(identity.kind()),
+        encode_component(identity.namespace()),
+        encode_component(identity.slug())
+    )
+}
+
+/// Inverse of [`protection_key`]. `None` for a key no identity encodes to.
+#[must_use]
+pub fn parse_protection_key(key: &str) -> Option<crate::protection::EntityIdentity> {
+    let mut parts = key.splitn(3, '.');
+    let kind = kind_from_short(parts.next()?)?;
+    let namespace = decode_component(parts.next()?)?;
+    let slug = decode_component(parts.next()?)?;
+    crate::protection::EntityIdentity::new(kind, namespace, slug).ok()
 }
 
 #[must_use]
@@ -333,6 +353,7 @@ fn kind_from_short(s: &str) -> Option<EntityKind> {
         "tracker" => EntityKind::Tracker,
         "bounded_context" => EntityKind::BoundedContext,
         "domain" => EntityKind::Domain,
+        "system_group" => EntityKind::SystemGroup,
         "subdomain" => EntityKind::Subdomain,
         "schema" => EntityKind::Schema,
         "project" => EntityKind::Project,
@@ -352,6 +373,7 @@ fn kind_from_short(s: &str) -> Option<EntityKind> {
         "person" => EntityKind::Person,
         "decision" => EntityKind::Decision,
         "document" => EntityKind::Document,
+        "design_graph" => EntityKind::DesignGraph,
         _ => return None,
     })
 }
@@ -373,6 +395,7 @@ mod tests {
     #[test]
     fn resource_keys_roundtrip_through_baseline_and_branch_keys() {
         for kind in [
+            EntityKind::SystemGroup,
             EntityKind::Channel,
             EntityKind::DataStore,
             EntityKind::DataProduct,
@@ -381,6 +404,7 @@ mod tests {
             EntityKind::Person,
             EntityKind::Decision,
             EntityKind::Document,
+            EntityKind::DesignGraph,
         ] {
             let id = id("shop", "order-feed", 2);
             assert_eq!(

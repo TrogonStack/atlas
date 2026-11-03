@@ -956,6 +956,9 @@ impl NatsStore {
             rpc: "ApplySourceRun".into(),
             branch: transaction.branch.clone(),
             operation_id: None,
+            validation: crate::ChangesetValidation::Unvalidated(
+                crate::UnvalidatedReason::NoDeclaredCoverage,
+            ),
             ops,
         })
         .await?;

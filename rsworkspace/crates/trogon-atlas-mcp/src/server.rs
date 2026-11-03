@@ -12,6 +12,7 @@ use trogon_atlas_client::{
     client::{client_for_transport, Client, ConnectOptions, Transport},
     compat::{self, MutationIntent},
     precondition::{BranchEntryState, StalePlan},
+    protection,
     tenant_types::{self, TypeScope},
 };
 use trogon_atlas_core::transcode::TranscodePool;
@@ -27,15 +28,16 @@ use crate::{
         DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams, DiffBranchParams,
         DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySchemaParams, EntitySpec,
         EventModelProjectionParams, ExportNamespaceParams, ExportOpensloParams,
-        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
-        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
-        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams,
-        MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
-        PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
-        ResolveTypeParams, ResponsibilityQueryParams, RetargetReferencesParams,
-        RevertChangesetParams, SearchParams, SliceProjectionParams, SourceRequestParams,
-        SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
-        ValidateProjectParams,
+        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
+        GetEntityProtectionParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
+        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
+        ListEntitiesByDomainParams, ListEntitiesParams, ListEntityProtectionsParams,
+        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
+        ProtectEntityParams, PutEntityJsonParams, PutEntityParams, ReferencesParams,
+        RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
+        ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
+        SliceProjectionParams, SourceRequestParams, SupersessionChainParams, UnprotectEntityParams,
+        UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
     },
 };
 
@@ -417,6 +419,12 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         area: ToolArea::Source,
     },
     ToolPolicy {
+        tool: "list_decision_amendments",
+        rpcs: &["ListDecisionAmendments"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
         tool: "list_subject_decisions",
         rpcs: &["ListSubjectDecisions"],
         min_role: ToolRole::Reader,
@@ -447,8 +455,50 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         area: ToolArea::Model,
     },
     ToolPolicy {
+        tool: "list_term_domain_declarations",
+        rpcs: &["ListTermDomainDeclarations"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
         tool: "list_incoming_document_declarations",
         rpcs: &["ListIncomingDocumentDeclarations"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "inspect_human_interaction",
+        rpcs: &["InspectHumanInteraction"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "list_channel_messages",
+        rpcs: &["ListChannelMessages"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "get_design_graph_detail",
+        rpcs: &["GetDesignGraphDetail"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "list_subject_design_graphs",
+        rpcs: &["ListSubjectDesignGraphs"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "traverse_design_graph_topology",
+        rpcs: &["TraverseDesignGraphTopology"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "list_incoming_design_graph_subflows",
+        rpcs: &["ListIncomingDesignGraphSubflows"],
         min_role: ToolRole::Reader,
         area: ToolArea::Model,
     },
@@ -533,6 +583,30 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         rpcs: &["MoveNamespace"],
         min_role: ToolRole::Admin,
         area: ToolArea::Administration,
+    },
+    ToolPolicy {
+        tool: "protect_entity",
+        rpcs: &["ProtectEntity"],
+        min_role: ToolRole::Admin,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "unprotect_entity",
+        rpcs: &["UnprotectEntity"],
+        min_role: ToolRole::Admin,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "get_entity_protection",
+        rpcs: &["GetEntityProtection"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "list_entity_protections",
+        rpcs: &["ListEntityProtections"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_snapshot_id",
@@ -1098,6 +1172,33 @@ impl McpServer {
         .await
     }
 
+    /// Protection is not branch-scoped and the server refuses a branch
+    /// header on its writes, so refuse here before any request is sent.
+    async fn protection_admin_client(
+        &self,
+        validate_only: bool,
+    ) -> Result<Client, rmcp::ErrorData> {
+        if let Some(branch) = self.options.branch.as_deref() {
+            return Err(mcp_error_data(trogon_atlas_client::failure::invalid_input(
+                format!(
+                    "protection applies to an identity on every branch; call this without branch {branch}"
+                ),
+            )));
+        }
+        let mut client = self.client();
+        compat::ensure_can_mutate_requiring(
+            &mut client,
+            MutationIntent {
+                validate_only,
+                ..Default::default()
+            },
+            &[compat::Capability::EntityProtection],
+        )
+        .await
+        .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        Ok(client)
+    }
+
     async fn ensure_intent(
         &self,
         client: &mut Client,
@@ -1156,6 +1257,23 @@ fn role_name(role: pb::Role) -> &'static str {
         pb::Role::Writer => "writer",
         pb::Role::Admin => "admin",
     }
+}
+
+fn mcp_error_data(e: anyhow::Error) -> rmcp::ErrorData {
+    McpError::from(e).into()
+}
+
+fn json_result(body: &serde_json::Value) -> CallToolResult {
+    CallToolResult::success(vec![ContentBlock::text(body.to_string())])
+}
+
+fn protected_identity(
+    kind: &str,
+    namespace: &str,
+    slug: &str,
+) -> Result<protection::ProtectedIdentity, rmcp::ErrorData> {
+    let kind = parse_kind(kind).map_err(rmcp::ErrorData::from)?;
+    protection::ProtectedIdentity::new(kind, namespace, slug).map_err(mcp_error_data)
 }
 
 fn parse_kind(s: &str) -> Result<pb::EntityKind, McpError> {
@@ -1346,6 +1464,7 @@ fn rule_json(rule: &pb::ValidationRule) -> serde_json::Value {
         "code": rule.code,
         "default_severity": severity,
         "title": rule.title,
+        "doc": rule.doc,
         "category": rule.category,
         "field": (!rule.subject_field.is_empty()).then_some(rule.subject_field.as_str()),
     })
@@ -1666,6 +1785,114 @@ impl McpServer {
             .map_err(tool_err("move_namespace"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "Freeze every version of an identity (kind, namespace, slug), including versions not written yet, so every write route refuses it with ENTITY_PROTECTED until an admin lifts it. Admin only, baseline only, and the identity must already have a stored version. changed=false means it was already protected; protection then holds the existing row, whose reason may differ.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn protect_entity(
+        &self,
+        Parameters(p): Parameters<ProtectEntityParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let reason = protection::ProtectionReason::new(&p.reason).map_err(mcp_error_data)?;
+        let mut client = self.protection_admin_client(p.validate_only).await?;
+        let outcome = protection::protect(
+            &mut client,
+            &identity,
+            &reason,
+            protection::Effect::from_validate_only(p.validate_only),
+        )
+        .await
+        .map_err(mcp_error_data)?;
+        Ok(json_result(&outcome.to_json()))
+    }
+
+    #[tool(
+        description = "Lift protection from an identity (kind, namespace, slug) so writes to it are accepted again. Admin only, baseline only. Pass if_match with the row revision get_entity_protection or list_entity_protections reported to lift only that row; that is also how an unreadable (unknown) row is removed. changed=false means it was not protected.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn unprotect_entity(
+        &self,
+        Parameters(p): Parameters<UnprotectEntityParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let if_match = match p.if_match {
+            None => None,
+            Some(revision) => Some(protection::RowRevision::new(revision).ok_or_else(|| {
+                mcp_error_data(trogon_atlas_client::failure::invalid_input(
+                    "if_match must be a positive row revision; omit it to lift whatever is current",
+                ))
+            })?),
+        };
+        let mut client = self.protection_admin_client(p.validate_only).await?;
+        let outcome = protection::unprotect(
+            &mut client,
+            &identity,
+            if_match,
+            protection::Effect::from_validate_only(p.validate_only),
+        )
+        .await
+        .map_err(mcp_error_data)?;
+        Ok(json_result(&outcome.to_json()))
+    }
+
+    #[tool(
+        description = "Whether an identity (kind, namespace, slug) is protected, unprotected, or unknown. state=unknown means the protection row could not be read: writes to the identity are refused, and an admin can lift the row with unprotect_entity if_match=unknown.revision when unknown.liftable is true.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_entity_protection(
+        &self,
+        Parameters(p): Parameters<GetEntityProtectionParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let mut client = self.client();
+        let lookup = protection::get_protection(&mut client, &identity)
+            .await
+            .map_err(mcp_error_data)?;
+        Ok(json_result(&lookup.to_json()))
+    }
+
+    #[tool(
+        description = "List protected identities and unreadable protection rows. verdict=partial (complete=false, or any entry in unknown) means the listing is not the whole registry: an identity missing from it may still be protected, so do not treat absence as permission to write.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_entity_protections(
+        &self,
+        Parameters(p): Parameters<ListEntityProtectionsParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let namespace = p
+            .namespace
+            .as_deref()
+            .map(protection::NamespaceFilter::new)
+            .transpose()
+            .map_err(mcp_error_data)?;
+        let mut client = self.client();
+        let listing = protection::list_protections(&mut client, namespace.as_ref())
+            .await
+            .map_err(mcp_error_data)?;
+        Ok(json_result(&listing.to_json()))
     }
 
     #[tool(
@@ -2630,6 +2857,201 @@ impl McpServer {
     }
 
     #[tool(
+        description = "GetDesignGraphDetail: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_design_graph_detail(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "GetDesignGraphDetailRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::get_design_graph_detail(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListSubjectDesignGraphs: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_subject_design_graphs(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "ListSubjectDesignGraphsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::list_subject_design_graphs(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "TraverseDesignGraphTopology: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn traverse_design_graph_topology(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "TraverseDesignGraphTopologyRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::traverse_design_graph_topology(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListIncomingDesignGraphSubflows: inspect native design topology with exact hydrated targets, hidden and missing endpoints sharing one generic state, and explicit incomplete boundaries. Incomplete or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_incoming_design_graph_subflows(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::design_topology::parse_request(
+            "ListIncomingDesignGraphSubflowsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::design_topology::list_incoming_design_graph_subflows(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListDecisionAmendments: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_decision_amendments(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "ListDecisionAmendmentsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::decision_document::list_decision_amendments(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
         description = "ListSubjectDecisions: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
         annotations(
             read_only_hint = true,
@@ -2825,6 +3247,45 @@ impl McpServer {
     }
 
     #[tool(
+        description = "ListTermDomainDeclarations: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_term_domain_declarations(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::decision_document::parse_request(
+            "ListTermDomainDeclarationsRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::term_domains::list_term_domain_declarations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
         description = "ListIncomingDocumentDeclarations: inspect native catalog declarations with exact selectors and backend checked scope. Incomplete or unavailable results do not prove absence; no approval or implementation evidence is inferred.",
         annotations(
             read_only_hint = true,
@@ -2853,6 +3314,84 @@ impl McpServer {
         )
         .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
         let result = trogon_atlas_client::decision_document::list_incoming_document_declarations(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "InspectHumanInteraction: check one exact hosting occurrence and a complete authored human issuance or display tuple. Return unchanged selectors, endpoint receipts, checked scope and per-owner read-set consistency. Owners may be read at different instants; refresh stale receipts. Unavailable selections do not prove absence or runtime permission.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn inspect_human_interaction(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::human_interaction::parse_request(
+            "InspectHumanInteractionRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::human_interaction::inspect_human_interaction(
+            &mut self.client(),
+            request,
+        )
+        .await
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "ListChannelMessages: list messages declared on an exact channel version. Preserve returned authority, owner UID, occurrence selectors, parameter values, delivery mode, and doc presence. A page token continues the same caller and scope. Incomplete, hidden, or unavailable results do not prove absence.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_channel_messages(
+        &self,
+        Parameters(p): Parameters<CatalogQueryParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let text = p.request_json.to_json_text();
+        if text.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                "request_json exceeds the 4 MiB limit",
+                None,
+            ));
+        }
+        let json = serde_json::from_str(&text).map_err(|error| {
+            rmcp::ErrorData::invalid_params(format!("invalid request JSON: {error}"), None)
+        })?;
+        let request = trogon_atlas_client::channel_messages::parse_request(
+            "ListChannelMessagesRequest",
+            &json,
+        )
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        let result = trogon_atlas_client::channel_messages::list_channel_messages(
             &mut self.client(),
             request,
         )
@@ -4299,7 +4838,10 @@ impl McpServer {
             .into_inner()
             .rules
             .iter()
-            .filter(|rule| rule.subject_kind == kind as i32)
+            .filter(|rule| {
+                rule.subject_kind == kind as i32
+                    || rule.subject_kind == pb::EntityKind::Unspecified as i32
+            })
             .map(rule_json)
             .collect();
         let placeholders: Vec<serde_json::Value> = manifest_schema::SKELETON_PLACEHOLDERS
@@ -5200,6 +5742,60 @@ mod tests {
         let bare = issue_json(&pb::ValidationIssue::default());
         assert!(bare["field"].is_null(), "{bare}");
         assert!(bare["subject"].is_null(), "{bare}");
+    }
+
+    fn issue_with_evidence() -> pb::ValidationIssue {
+        pb::ValidationIssue {
+            code: "SLICE_STALE_REF".into(),
+            evidence: vec![pb::ValidationEvidence {
+                role: pb::validation_evidence::Role::StalePin as i32,
+                entity: Some(pb::EntityRef {
+                    kind: pb::EntityKind::CommandSlice as i32,
+                    id: Some(id_from("shop", "place", 1)),
+                }),
+                field: "command".into(),
+                target: Some(pb::EntityRef {
+                    kind: pb::EntityKind::Command as i32,
+                    id: Some(id_from("shop", "place", 1)),
+                }),
+                occurrence: Some(pb::StoryboardOccurrence {
+                    storyboard: Some(id_from("shop", "checkout", 1)),
+                    position: 2,
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn issue_json_carries_evidence() {
+        let value = issue_json(&issue_with_evidence());
+        let evidence = &value["evidence"][0];
+        assert_eq!(evidence["role"], "stale_pin", "{value}");
+        assert_eq!(evidence["entity"], "command_slice:shop/place@1");
+        assert_eq!(evidence["field"], "command");
+        assert_eq!(evidence["target"], "command:shop/place@1");
+        assert_eq!(evidence["occurrence"]["position"], 2);
+    }
+
+    #[test]
+    fn validate_json_response_carries_evidence() {
+        let resp = pb::ValidateEventModelResponse {
+            issues: vec![issue_with_evidence()],
+            ..Default::default()
+        };
+        let json = message_to_json(
+            "trogonatlas.api.eventmodel.v1alpha1.ValidateEventModelResponse",
+            &resp,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let evidence = &value["issues"][0]["evidence"][0];
+        assert_eq!(evidence["role"], "ROLE_STALE_PIN", "{value}");
+        assert_eq!(evidence["field"], "command");
+        assert_eq!(evidence["occurrence"]["position"], 2);
+        assert_eq!(evidence["target"]["id"]["slug"], "place");
     }
 
     #[test]

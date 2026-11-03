@@ -130,6 +130,7 @@ async fn list_filters_by_kind_and_namespace() {
     let filtered = store
         .list(
             ListFilter {
+                slug: None,
                 kinds: &[pb::EntityKind::Event],
                 namespaces: &namespaces,
                 latest_versions_only: false,
@@ -348,6 +349,7 @@ async fn list_latest_versions_only() {
     let latest = store
         .list(
             trogon_atlas_store::store::ListFilter {
+                slug: None,
                 kinds: &[kind],
                 namespaces: &[],
                 latest_versions_only: true,
@@ -360,6 +362,167 @@ async fn list_latest_versions_only() {
     assert_eq!(latest.len(), 1, "only the latest version must be returned");
     match &latest[0].entity.kind {
         Some(pb::entity::Kind::Event(e)) => assert_eq!(e.title, "v2"),
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+/// A slug filter pins one identity: its versions are the whole answer, a
+/// result limit cannot push it out behind other identities, and the same
+/// slug in another namespace or an unrelated slug never leaks in.
+#[tokio::test(flavor = "multi_thread")]
+async fn list_slug_filter_pins_one_identity() {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let kind = pb::EntityKind::Event;
+    for (ns, slug, version) in [
+        ("shop", "a", 1),
+        ("shop", "b", 1),
+        ("shop", "b", 2),
+        ("shop", "b-2", 1),
+        ("other", "b", 1),
+    ] {
+        store
+            .create(
+                kind,
+                &event(ns, slug, version, "title"),
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+    }
+    let namespaces = ["shop".to_string()];
+    let ids = |found: Vec<trogon_atlas_store::store::StoredEntity>| -> Vec<(String, String, u64)> {
+        found
+            .iter()
+            .map(|s| match &s.entity.kind {
+                Some(pb::entity::Kind::Event(e)) => {
+                    let id = e.id.as_ref().unwrap();
+                    (id.namespace.clone(), id.slug.clone(), id.version)
+                }
+                other => panic!("unexpected: {other:?}"),
+            })
+            .collect()
+    };
+
+    let latest = store
+        .list(
+            ListFilter {
+                kinds: &[kind],
+                namespaces: &namespaces,
+                slug: Some("b"),
+                latest_versions_only: true,
+            },
+            Some(1),
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(ids(latest), [("shop".into(), "b".into(), 2)]);
+
+    let versions = store
+        .list(
+            ListFilter {
+                kinds: &[kind],
+                namespaces: &namespaces,
+                slug: Some("b"),
+                latest_versions_only: false,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(versions),
+        [
+            ("shop".into(), "b".into(), 1),
+            ("shop".into(), "b".into(), 2)
+        ]
+    );
+
+    let absent = store
+        .list(
+            ListFilter {
+                kinds: &[kind],
+                namespaces: &namespaces,
+                slug: Some("never-written"),
+                latest_versions_only: true,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(absent.is_empty());
+
+    // Without a kind and namespace the key prefix cannot pin the slug, so
+    // the slug is read from each key instead.
+    let across = store
+        .list(
+            ListFilter {
+                kinds: &[],
+                namespaces: &[],
+                slug: Some("b"),
+                latest_versions_only: true,
+            },
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(across),
+        [
+            ("other".into(), "b".into(), 1),
+            ("shop".into(), "b".into(), 2)
+        ]
+    );
+}
+
+/// The slug filter applies to the branch overlay as well as to baseline.
+#[tokio::test(flavor = "multi_thread")]
+async fn list_slug_filter_applies_to_branch_deltas() {
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let kind = pb::EntityKind::Event;
+    store
+        .create(
+            kind,
+            &event("shop", "wanted", 1, "v1"),
+            WriteContext::baseline(),
+        )
+        .await
+        .unwrap();
+    store.create_branch("slug-filter", "doc").await.unwrap();
+    for slug in ["wanted", "unrelated"] {
+        store
+            .put(
+                kind,
+                &event("shop", slug, 2, "on branch"),
+                true,
+                WriteContext::branch("slug-filter"),
+            )
+            .await
+            .unwrap();
+    }
+
+    let found = store
+        .list(
+            ListFilter {
+                kinds: &[kind],
+                namespaces: &["shop".to_string()],
+                slug: Some("wanted"),
+                latest_versions_only: true,
+            },
+            None,
+            Some("slug-filter"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(found.len(), 1);
+    match &found[0].entity.kind {
+        Some(pb::entity::Kind::Event(e)) => {
+            let id = e.id.as_ref().unwrap();
+            assert_eq!((id.slug.as_str(), id.version), ("wanted", 2));
+        }
         other => panic!("unexpected: {other:?}"),
     }
 }
@@ -1163,4 +1326,90 @@ async fn read_changes_skips_undecodable_payload_and_continues() {
         vec![s1, s2],
         "undecodable payload must be skipped; both flanking good records must be returned"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn exact_mebibyte_entity_survives_write_read_reapply() {
+    use prost::Message;
+    let store = trogon_atlas_testsupport::shared().await.store().await;
+    let kind = pb::EntityKind::Document;
+    let mut owner = pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::Document(pb::Document {
+            id: Some(id("capacity", "exact", 1)),
+            title: Some(pb::CatalogTitle {
+                value: "Owner".into(),
+            }),
+            doc: Some("x".repeat(1_048_576 - 128)),
+            body: Some(pb::document::Body::Link(pb::ExternalDocumentLink {
+                value: "https://example.com/document".into(),
+            })),
+            ..Default::default()
+        })),
+    };
+    loop {
+        let size = trogon_atlas_core::stamp_system(None, &owner).encoded_len();
+        if size == 1_048_576 {
+            break;
+        }
+        if let Some(pb::entity::Kind::Document(ref mut document)) = owner.kind {
+            let doc = document.doc.as_mut().unwrap();
+            if size < 1_048_576 {
+                doc.push_str(&"x".repeat(1_048_576 - size));
+            } else {
+                doc.truncate(doc.len() - (size - 1_048_576));
+            }
+        }
+    }
+    assert_eq!(
+        trogon_atlas_core::stamp_system(None, &owner).encoded_len(),
+        1_048_576
+    );
+    let receipt = store
+        .create(kind, &owner, WriteContext::baseline())
+        .await
+        .unwrap();
+    let stored = store
+        .get(kind, &id("capacity", "exact", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(stored.entity.encoded_len(), 1_048_576);
+    assert_eq!(stored.etag, receipt.etag);
+    assert_eq!(stored.entity.kind, owner.kind);
+    store
+        .update(kind, &owner, &stored.etag, true, WriteContext::baseline())
+        .await
+        .unwrap();
+    let reapplied = store
+        .get(kind, &id("capacity", "exact", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(reapplied.entity.kind, owner.kind);
+    if let Some(pb::entity::Kind::Document(ref mut document)) = owner.kind {
+        document.doc.as_mut().unwrap().push('x');
+    }
+    assert_eq!(
+        trogon_atlas_core::stamp_system(Some(&reapplied.entity), &owner).encoded_len(),
+        1_048_577
+    );
+    let sequence = store.current_change_seq().await.unwrap();
+    assert!(matches!(
+        store
+            .update(
+                kind,
+                &owner,
+                &reapplied.etag,
+                true,
+                WriteContext::baseline()
+            )
+            .await,
+        Err(StoreError::InvalidArgument(_))
+    ));
+    assert_eq!(store.current_change_seq().await.unwrap(), sequence);
+    let unchanged = store
+        .get(kind, &id("capacity", "exact", 1), None)
+        .await
+        .unwrap();
+    assert_eq!(unchanged.etag, reapplied.etag);
+    assert_eq!(unchanged.entity, reapplied.entity);
 }

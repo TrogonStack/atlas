@@ -1,0 +1,8 @@
+syntax = "proto3";
+
+package trogonatlas.eventmodel.v1alpha1;
+
+// Shared catalog strings. They live in their own file so Schema business
+// declarations can use them without importing the decision-document graph.
+message CatalogTitle { string value = 1; }
+message CatalogText { string value = 1; }

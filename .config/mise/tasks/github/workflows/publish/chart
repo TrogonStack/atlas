@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-#MISE description="Package the named chart and push it unless the OCI registry already has that version; with a version and app version, stamp them on the chart and its file:// subcharts first, otherwise publish the committed chart as is"
+#MISE description="Package the named chart, annotated with the commit it was built from, and push it unless the OCI registry already has that version; with a version and app version, stamp them on the chart and its file:// subcharts first, otherwise publish the committed chart as is"
 set -euo pipefail
 
 : "${CHARTS_REGISTRY:?set CHARTS_REGISTRY, e.g. oci://ghcr.io/trogonstack/charts/atlas}"
@@ -52,6 +52,10 @@ if "$stamped"; then
     yq -i '(.dependencies[] | select(.repository == "file://*") | .version) = strenv(CHART_VERSION)' "$chart/Chart.yaml"
   fi
 fi
+
+CHART_REVISION="$(git -C "$MISE_PROJECT_ROOT" rev-parse HEAD)"
+export CHART_REVISION
+yq -i '.annotations["org.opencontainers.image.revision"] = strenv(CHART_REVISION)' "$chart/Chart.yaml"
 
 if yq -e '.dependencies' "$chart/Chart.yaml" >/dev/null 2>&1; then
   helm dependency build "$chart" >/dev/null

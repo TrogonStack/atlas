@@ -51,6 +51,10 @@ pub mod change_event {
         Put = 1,
         /// entity removed
         Deleted = 2,
+        /// Protection set or lifted on the entity's identity. Recorded only in
+        /// the changeset log; the change feed never carries these kinds.
+        Protected = 3,
+        Unprotected = 4,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -62,6 +66,8 @@ pub mod change_event {
                 Self::Unspecified => "KIND_UNSPECIFIED",
                 Self::Put => "KIND_PUT",
                 Self::Deleted => "KIND_DELETED",
+                Self::Protected => "KIND_PROTECTED",
+                Self::Unprotected => "KIND_UNPROTECTED",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -70,6 +76,8 @@ pub mod change_event {
                 "KIND_UNSPECIFIED" => Some(Self::Unspecified),
                 "KIND_PUT" => Some(Self::Put),
                 "KIND_DELETED" => Some(Self::Deleted),
+                "KIND_PROTECTED" => Some(Self::Protected),
+                "KIND_UNPROTECTED" => Some(Self::Unprotected),
                 _ => None,
             }
         }
@@ -119,6 +127,66 @@ pub struct Changeset {
     /// or non-idempotent writes.
     #[prost(string, tag="8")]
     pub operation_id: ::prost::alloc::string::String,
+    /// What validation backed this changeset when it was written. Unset on
+    /// changesets recorded before receipts existed: nothing is known about
+    /// them, which is not the same as a clean result.
+    #[prost(message, optional, tag="9")]
+    pub validation: ::core::option::Option<ChangesetValidation>,
+}
+/// The validation receipt of one changeset. Exactly one outcome is set on
+/// every changeset written since receipts existed.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChangesetValidation {
+    #[prost(oneof="changeset_validation::Outcome", tags="1, 2")]
+    pub outcome: ::core::option::Option<changeset_validation::Outcome>,
+}
+/// Nested message and enum types in `ChangesetValidation`.
+pub mod changeset_validation {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="1")]
+        Unvalidated(super::ChangesetUnvalidated),
+        #[prost(message, tag="2")]
+        Validated(super::ChangesetValidated),
+    }
+}
+/// No validation coverage was declared for this write, so no issue counts
+/// are recorded: counts without coverage would read as a clean result.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChangesetUnvalidated {
+    /// Stable reason token: `no_declared_coverage` for paths that report no
+    /// coverage (delete, revert, retarget, delete by query, import, source
+    /// reconciliation), `recovered` for a changeset reconstructed by crash
+    /// recovery, which cannot know what ran. Treat an unknown token like
+    /// either: nothing is claimed.
+    #[prost(string, tag="1")]
+    pub reason: ::prost::alloc::string::String,
+}
+/// The write path ran validation suites before the changeset landed.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ChangesetValidated {
+    /// True when every suite that applied to this path completed over an
+    /// untruncated snapshot. Suites skipped by design on this path do not
+    /// make it incomplete.
+    #[prost(bool, tag="1")]
+    pub coverage_complete: bool,
+    /// Check ids that applied but did not complete, sorted. Empty exactly when
+    /// `coverage_complete` is true.
+    #[prost(string, repeated, tag="2")]
+    pub incomplete_checks: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Findings the suites that ran reported, by severity. Only meaningful
+    /// together with the coverage above: zero errors over incomplete coverage
+    /// is not a clean result.
+    #[prost(uint32, tag="3")]
+    pub error_count: u32,
+    #[prost(uint32, tag="4")]
+    pub warning_count: u32,
+    #[prost(uint32, tag="5")]
+    pub info_count: u32,
+    /// Lowercase hex SHA-256 identifying the rule catalogue the suites ran
+    /// with. Counts from two different catalogues are not comparable.
+    #[prost(string, tag="6")]
+    pub rule_catalog_digest: ::prost::alloc::string::String,
 }
 /// ---------- Entity revision log (per-entity history and revert) -------------
 ///
@@ -319,6 +387,95 @@ pub struct NamespaceRecord {
     /// reserve a namespace name globally and forever.
     #[prost(string, tag="6")]
     pub provisional_branch: ::prost::alloc::string::String,
+}
+/// ---------- Entity protection registry ---------------------------------------
+///
+/// Protection belongs to an identity (kind, namespace, slug), not to one
+/// stored version: it covers every version that exists and every version a
+/// writer might try to add. Keeping it in its own registry rather than on the
+/// entity body means no write to the entity, and no merge or revert of one,
+/// can carry the protection away with it, and a delete cannot reset it.
+///
+/// Only an authenticated admin sets or lifts a row. Every route that changes
+/// an entity looks up the row of each identity it touches and refuses with
+/// `ENTITY_PROTECTED`, or with `PROTECTION_STATE_UNKNOWN` when the row cannot
+/// be read. See docs/explanation/entity-protection.md.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EntityProtection {
+    #[prost(enumeration="super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
+    pub kind: i32,
+    #[prost(string, tag="2")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub slug: ::prost::alloc::string::String,
+    /// Why the identity is protected, as the admin stated it.
+    #[prost(string, tag="4")]
+    pub reason: ::prost::alloc::string::String,
+    /// Authenticated principal that set the protection. Never caller-supplied.
+    #[prost(string, tag="5")]
+    pub protected_by: ::prost::alloc::string::String,
+    /// RFC 3339 timestamp.
+    #[prost(string, tag="6")]
+    pub protected_at: ::prost::alloc::string::String,
+    /// Changeset that recorded the protection, for the durable audit trail.
+    #[prost(string, tag="7")]
+    pub changeset_id: ::prost::alloc::string::String,
+    /// Revision of the stored row. Pass it as `UnprotectEntityRequest.if_match`
+    /// to lift exactly the protection that was read.
+    #[prost(uint64, tag="8")]
+    pub revision: u64,
+}
+/// An identity whose protection state could not be read.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EntityProtectionUnknown {
+    #[prost(enumeration="super::super::eventmodel::v1alpha1::EntityKind", tag="1")]
+    pub kind: i32,
+    #[prost(string, tag="2")]
+    pub namespace: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub slug: ::prost::alloc::string::String,
+    /// Why the state is unknown, for an operator.
+    #[prost(string, tag="4")]
+    pub cause: ::prost::alloc::string::String,
+    /// Revision of the unreadable row; an admin lifts it at this revision to
+    /// repair the identity. Zero when the registry itself could not be read.
+    #[prost(uint64, tag="5")]
+    pub revision: u64,
+}
+/// What a lookup learned about one identity's protection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ProtectionState {
+    Unspecified = 0,
+    Unprotected = 1,
+    Protected = 2,
+    /// The row exists but cannot be decoded, or the registry did not answer.
+    /// Writes treat the identity as protected until the state is known again.
+    Unknown = 3,
+}
+impl ProtectionState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "PROTECTION_STATE_UNSPECIFIED",
+            Self::Unprotected => "PROTECTION_STATE_UNPROTECTED",
+            Self::Protected => "PROTECTION_STATE_PROTECTED",
+            Self::Unknown => "PROTECTION_STATE_UNKNOWN",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PROTECTION_STATE_UNSPECIFIED" => Some(Self::Unspecified),
+            "PROTECTION_STATE_UNPROTECTED" => Some(Self::Unprotected),
+            "PROTECTION_STATE_PROTECTED" => Some(Self::Protected),
+            "PROTECTION_STATE_UNKNOWN" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
 }
 /// One row of a content-addressable snapshot of the model. See
 /// trogonatlas.api.eventmodel.v1alpha1 GetSnapshotIdRequest / GetSnapshotIdResponse

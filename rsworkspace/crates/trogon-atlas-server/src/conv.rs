@@ -155,6 +155,66 @@ pub mod reason {
     pub const NOT_WRITER: &str = "NOT_WRITER";
     pub const CURSOR_REJECTED: &str = "CURSOR_REJECTED";
     pub const BREAKING_CHANGE: &str = "BREAKING_CHANGE";
+    pub const ENTITY_PROTECTED: &str = "ENTITY_PROTECTED";
+    pub const PROTECTION_STATE_UNKNOWN: &str = "PROTECTION_STATE_UNKNOWN";
+}
+
+/// `FAILED_PRECONDITION`: the write would change an identity an admin has
+/// protected. Nothing was applied. `ErrorInfo` names the first identity and
+/// its reason; a `PreconditionFailure` violation names every one, so a
+/// refused batch reports all of them at once.
+pub fn entity_protected(records: &[trogon_atlas_store::ProtectionRecord]) -> Status {
+    let Some(first) = records.first() else {
+        return Status::internal("entity_protected called without a protected identity");
+    };
+    let message = format!(
+        "{} is protected ({}); an admin must call UnprotectEntity before it can change",
+        first.identity, first.reason
+    );
+    let mut details = ErrorDetails::with_error_info(
+        reason::ENTITY_PROTECTED,
+        ERROR_DOMAIN,
+        HashMap::from([
+            ("identity".to_string(), first.identity.to_string()),
+            ("protection_reason".to_string(), first.reason.to_string()),
+            ("protected_by".to_string(), first.protected_by.clone()),
+        ]),
+    );
+    for record in records {
+        details.add_precondition_failure_violation(
+            reason::ENTITY_PROTECTED,
+            record.identity.to_string(),
+            record.reason.to_string(),
+        );
+    }
+    Status::with_error_details(Code::FailedPrecondition, message, details)
+}
+
+/// `UNAVAILABLE`: a write would touch an identity whose protection could not
+/// be read, so it is refused as if protected. Distinct from
+/// `ENTITY_PROTECTED` so a caller retries instead of asking for a lift.
+pub fn protection_state_unknown(unknown: &[trogon_atlas_store::ProtectionUnknown]) -> Status {
+    let Some(first) = unknown.first() else {
+        return Status::internal("protection_state_unknown called without an identity");
+    };
+    let message = format!(
+        "protection state of {} is unknown ({}); the write is refused. Retry; if it persists, an admin inspects GetEntityProtection and lifts the unreadable row with UnprotectEntity",
+        first.identity, first.cause
+    );
+    let mut metadata = HashMap::from([("identity".to_string(), first.identity.to_string())]);
+    if let Some(revision) = first.revision {
+        metadata.insert("row_revision".to_string(), revision.to_string());
+    }
+    let mut details =
+        ErrorDetails::with_error_info(reason::PROTECTION_STATE_UNKNOWN, ERROR_DOMAIN, metadata);
+    for u in unknown {
+        details.add_precondition_failure_violation(
+            reason::PROTECTION_STATE_UNKNOWN,
+            u.identity.to_string(),
+            u.cause.to_string(),
+        );
+    }
+    Status::with_error_details(Code::Unavailable, message, details)
 }
 
 /// `UNAVAILABLE`: another call already owns this `operation_id` and has not
@@ -379,6 +439,8 @@ pub fn entity_kind(entity: &pb::Entity) -> Result<pb::EntityKind, Status> {
         Some(K::Person(_)) => Ok(pb::EntityKind::Person),
         Some(K::Decision(_)) => Ok(pb::EntityKind::Decision),
         Some(K::Document(_)) => Ok(pb::EntityKind::Document),
+        Some(K::DesignGraph(_)) => Ok(pb::EntityKind::DesignGraph),
+        Some(K::SystemGroup(_)) => Ok(pb::EntityKind::SystemGroup),
         None => Err(Status::invalid_argument("entity.kind oneof is required")),
     }
 }
@@ -423,6 +485,8 @@ pub fn entity_id(entity: &pb::Entity) -> Result<&pb::Id, Status> {
         Some(K::Person(x)) => x.id.as_ref(),
         Some(K::Decision(x)) => x.id.as_ref(),
         Some(K::Document(x)) => x.id.as_ref(),
+        Some(K::DesignGraph(x)) => x.id.as_ref(),
+        Some(K::SystemGroup(x)) => x.id.as_ref(),
         None => return Err(Status::invalid_argument("entity.kind oneof is required")),
     };
     let id = id.ok_or_else(|| Status::invalid_argument("entity.id is required"))?;
@@ -448,12 +512,25 @@ pub fn entity_to_ref(entity: &pb::Entity) -> Result<pb::EntityRef, Status> {
 pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
     use pb::entity::Kind as K;
 
+    trogon_atlas_core::agent_metadata::validate(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+
     trogon_atlas_core::connections::validate_connection_ids(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
 
     trogon_atlas_core::architectural_relationships::validate_values(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::ui_hosting::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
     trogon_atlas_core::communication_intent::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::system_group::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::business_data::validate_entity(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::channel_links::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    trogon_atlas_core::storage_claims::validate_values(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
     let (title, doc, fields_len, metadata_len) = match entity.kind.as_ref() {
         Some(K::Event(x)) => (
@@ -539,6 +616,13 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
             x.metadata.len(),
         ),
         Some(K::Document(x)) => (
+            x.title.as_ref().map_or("", |v| v.value.as_str()),
+            x.doc.as_deref().unwrap_or_default(),
+            0,
+            x.metadata.len(),
+        ),
+        Some(K::SystemGroup(x)) => (x.title.as_str(), x.doc.as_str(), 0, x.metadata.len()),
+        Some(K::DesignGraph(x)) => (
             x.title.as_ref().map_or("", |v| v.value.as_str()),
             x.doc.as_deref().unwrap_or_default(),
             0,

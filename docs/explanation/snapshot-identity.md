@@ -105,6 +105,12 @@ compare a truncated id against anything. This is reported rather than
 silently tolerated because the whole value of an id is that it stands in
 for a complete state.
 
+Namespace exports also require complete enumeration. `ListEntities` has no
+partial-result flag, so it refuses a capped snapshot with `RESOURCE_EXHAUSTED`
+instead of turning omitted owners into an apparently complete manifest set.
+Both native namespace export layouts preserve that refusal. Unrenderable
+entities remain a separate concern reported through the export's skipped list.
+
 ## Failure mode: an entity with no content identity
 
 An entity that cannot render as JSON (an `Any` packed under a type url that

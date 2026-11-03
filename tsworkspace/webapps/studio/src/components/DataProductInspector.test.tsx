@@ -43,6 +43,19 @@ const product = {
     { portId: portId('output-b'), name: { value: 'Empty' }, derivedFrom: {} },
     { portId: portId('output-c'), name: { value: 'Unknown' } },
   ],
+  resourceAssociations: [
+    {
+      connectionId: portId('assoc-a'),
+      direction: 'DATA_PORT_DIRECTION_OUTPUT',
+      event: { id: { namespace: 'shop', slug: 'fact', version: '3' } },
+      doc: 'authored',
+    },
+    {
+      connectionId: portId('assoc-b'),
+      direction: 'DATA_PORT_DIRECTION_OUTPUT',
+      event: { id: { namespace: 'shop', slug: 'fact', version: '3' } },
+    },
+  ],
 };
 const inspection: api.DataProductInspection = {
   product,
@@ -92,6 +105,17 @@ describe('DataProduct backend inspection', () => {
     expect(screen.getByText(/emission-id/)).toBeDefined();
     expect(screen.getByText(/producing-edge/)).toBeDefined();
     expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.getByText('assoc-a')).toBeDefined();
+    expect(screen.getByText('assoc-b')).toBeDefined();
+    expect(screen.getByText(/Descriptive associations/)).toBeDefined();
+    expect(screen.getByText('authored')).toBeDefined();
+  });
+  it('does not crash when the product record has no associations', async () => {
+    vi.spyOn(api, 'inspectDataProduct').mockResolvedValue({ ...inspection, product: {} });
+    const bare = entity();
+    bare.raw = {};
+    render(<DataProductInspector entity={bare} />);
+    expect(screen.getByText('None declared')).toBeDefined();
   });
   it('keeps backend failures unknown and does not infer mapped data from raw CRUD', async () => {
     vi.spyOn(api, 'inspectDataProduct').mockRejectedValue(new Error('permission denied'));

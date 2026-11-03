@@ -53,12 +53,21 @@ message Changeset {
   string branch = 5;             // empty = baseline
   repeated ChangesetOp ops = 6;  // every entity this RPC actually wrote
   string rpc = 7;                // "PutEntity", "BatchMutate", "MergeBranch", ...
+  string operation_id = 8;
+  ChangesetValidation validation = 9;  // what was checked when it landed
 }
 ```
 
 One mutation RPC, one changeset. `PutEntity` records one op; `BatchMutate`,
 `DeleteByQuery`, `RetargetReferences` and `MergeBranch` record one op per
 entity that actually moved.
+
+`ProtectEntity` and `UnprotectEntity` record one op of kind `KIND_PROTECTED` or
+`KIND_UNPROTECTED`. They change no content, so as-of reads skip them, and
+`RevertChangeset` refuses a changeset that contains one: the inverse of
+protecting is `UnprotectEntity`, an admin decision, not an undo. A `PutEntity`
+from an admin that carries a `ProtectionAnnotation` records its `KIND_PUT` and
+`KIND_PROTECTED` ops in one changeset. See [entity protection](entity-protection.md).
 
 ## Why UUIDv7
 
@@ -77,11 +86,37 @@ wildcard.
 The author is `Principal.name` from the auth stack, resolved from the
 bearer token. The `x-trogon-atlas-author-name` header is accepted only when
 no principal is present, which is the un-authenticated development path. A
-write that reaches the store outside a mutation RPC (`trogon-atlas-server
-import`, a direct `Store` user, a test) mints no changeset at all, and its
+write that reaches the store outside a mutation RPC (a direct `Store` user,
+`migrate-legacy-fields`, a test) mints no changeset at all, and its
 change events carry an empty `changeset_id` and `author`. That is the
 documented unattributed case, not a bug: inventing an author would be
 worse than admitting there isn't one.
+
+## Imports
+
+`trogon-atlas-server import-git` is the one bulk route that writes entities
+outside an RPC, and it records changesets so a restore can be inspected and
+undone. Each run records baseline changesets with `rpc: "ImportGit"`, at
+most 1,024 entities each, and every imported entity gets a revision row.
+`seed` already goes through `BatchMutate`, and `trogon-atlas apply` through
+the ordinary write RPCs, so both were attributed before.
+
+- **Author.** `unauthenticated`. The command runs outside the auth stack,
+  so no principal vouched for it; the `rpc` says where the write came from.
+- **What is attributed.** Only entities the import created. An entity
+  already in the store is skipped and stays out of the changeset, so
+  reverting the import never removes something it did not write.
+- **Retries.** A rerun skips everything the first run landed, so it records
+  changesets only for what is still missing, and nothing when nothing is.
+- **Partial failure.** An entity that fails to import is skipped and named
+  in the log. What did land is still recorded, so the changeset describes
+  the writes that actually happened.
+- **Lost append.** If a changeset cannot be appended after its entities
+  landed, the command exits non-zero and names it. Those entities carry
+  revision rows that no changeset points to, so they behave as
+  unattributed writes until the run is investigated.
+- **Namespace registry.** `--restore-namespaces` writes registry rows, not
+  entities, and records no changeset.
 
 ## What is deliberately not recorded
 
@@ -90,6 +125,56 @@ worse than admitting there isn't one.
   trail.
 - **`validate_only` calls.** Nothing was written.
 - **Nothing about reads.** The log is a write log.
+
+## What was checked when it landed
+
+A changeset records the validation its write declared, so a reviewer
+reading history can tell a change that passed every check from one that
+landed while a check was skipped or never ran. Recomputing validation
+later answers a different question: it judges the change against today's
+rules and today's model, not the ones it was written against.
+
+`validation` holds one of two outcomes:
+
+- **`validated`**: the write reported validation coverage. The receipt
+  carries the finding counts by severity, whether coverage was complete,
+  the checks that were not, and `rule_catalog_digest`, the identity of the
+  rule catalogue that ran. `PutEntity`, `BatchMutate` and `MergeBranch`
+  record this.
+- **`unvalidated`**: the write declared no coverage, and the receipt says
+  so with a reason token instead of claiming zero findings. Deletes,
+  bulk rewrites, reverts, branch resolutions, imports and source
+  publication record `no_declared_coverage`. A changeset reconstructed
+  from a write journal during recovery records `recovered`, because the
+  original findings were not journalled.
+
+A changeset written before receipts existed has no `validation` at all.
+Readers must treat that as unknown, never as clean.
+
+A check counts as complete only when it completed, or was skipped for a
+by-design reason such as not applying to the entity kind. A check skipped
+because another suite blocked it, or for any reason the server does not
+recognise counts as incomplete, so an unfamiliar state can never read as
+a pass.
+
+The rule catalogue digest is a SHA-256 over every rule, prose included,
+sorted by code. Any edit to the catalogue, even rewording a description,
+yields a new digest. That is deliberately strict: two receipts with the
+same digest ran exactly the same catalogue, and nothing weaker is
+promised.
+
+Default chosen: writes that declare no coverage record `unvalidated`
+rather than zero counts, and unrecognised skip reasons count as
+incomplete. Both keep a receipt from overstating what was checked.
+
+### Why the receipt has no snapshot id
+
+A receipt does not name the [snapshot](snapshot-identity.md) the write
+produced. Computing one hashes the whole projection, which would put an
+O(model) cost on every write. The changeset id already orders the
+transition, and an [as-of read](#as-of-reads-the-board-after-a-past-changeset)
+followed by `GetSnapshotId` recovers the state on demand when it is
+needed.
 
 ## Ordering: the writes commit first
 
@@ -190,7 +275,7 @@ the way `ListChangesets` does.
 **Why both images, rather than a chain.** Storing only `after` and
 reconstructing `before` from the previous row assumes the chain is
 complete. It is not: revisions exist only for attributed writes, so an
-`trogon-atlas-server import-git` in the middle of an entity's life breaks the
+unattributed write in the middle of an entity's life breaks the
 chain silently and every `before` after it would be a lie. Each row
 carries its own pre-image and is true on its own.
 
@@ -295,7 +380,7 @@ changesets in the caller's namespaces with `FAILED_PRECONDITION`, so an old targ
 of holding the request open.
 
 **Gap: unattributed writes.** A write that minted no changeset
-(`trogon-atlas-server import`, direct `Store` use) left no revision row and
+(direct `Store` use, `migrate-legacy-fields`) left no revision row and
 no place in the log. It cannot be rewound, so its effect shows through in
 every as-of view. A newer changeset with a missing revision row (for
 example one whose batch recovery reported the key as `superseded`) makes

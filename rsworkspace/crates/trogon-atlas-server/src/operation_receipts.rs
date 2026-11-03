@@ -15,7 +15,7 @@ use prost::Message;
 use tonic::{Code, Status};
 use trogon_atlas_core::{
     operation_id::{operation_claim_key, operation_digest, validate_operation_id},
-    transcode::message_json_value,
+    transcode::TranscodePool,
 };
 use trogon_atlas_proto as pb;
 use trogon_atlas_store::{
@@ -46,8 +46,33 @@ impl OperationAttempt {
         full_name: &str,
         request_without_operation_id: &M,
     ) -> Result<Self, Status> {
+        let pool = TranscodePool::builtin()
+            .map_err(|e| Status::internal(format!("failed to compute operation digest: {e}")))?;
+        Self::in_pool(
+            &pool,
+            principal_name,
+            operation_id,
+            rpc,
+            branch,
+            full_name,
+            request_without_operation_id,
+        )
+    }
+
+    /// [`Self::new`] for a request whose payloads name types `pool` resolves,
+    /// such as tenant annotations on an entity the request writes.
+    pub fn in_pool<M: Message>(
+        pool: &TranscodePool,
+        principal_name: &str,
+        operation_id: &str,
+        rpc: &str,
+        branch: Option<&str>,
+        full_name: &str,
+        request_without_operation_id: &M,
+    ) -> Result<Self, Status> {
         validate_operation_id(operation_id).map_err(|e| Status::invalid_argument(e.to_string()))?;
-        let json = message_json_value(full_name, request_without_operation_id)
+        let json = pool
+            .message_json_value(full_name, request_without_operation_id)
             .map_err(|e| Status::internal(format!("failed to compute operation digest: {e}")))?;
         let digest = operation_digest(rpc, branch, &json)
             .map_err(|e| Status::internal(format!("failed to compute operation digest: {e}")))?;
@@ -91,6 +116,28 @@ pub async fn claim(
             "operation_id was already used for a request with a different digest",
         )),
         Err(e) => Err(store_err(e)),
+    }
+}
+
+/// The settled outcome a retry of `attempt` would replay, read without
+/// claiming, so a handler can answer it before the checks that only guard
+/// a fresh write. A failed read is `None`; the claim still decides.
+pub async fn settled(
+    store: &dyn Store,
+    attempt: Option<&OperationAttempt>,
+) -> Option<OperationRecord> {
+    let attempt = attempt?;
+    match store.get_operation(&attempt.claim_key).await {
+        Ok(Some(record))
+            if record.digest == attempt.digest
+                && matches!(
+                    record.status,
+                    OperationStatus::Applied | OperationStatus::Rejected
+                ) =>
+        {
+            Some(record)
+        }
+        _ => None,
     }
 }
 
@@ -145,14 +192,44 @@ pub async fn settle_not_applied(store: &dyn Store, claim_key: &str) {
 /// code is a deterministic business rejection and settles rejected, so a
 /// replay returns the same failure instead of a generic one.
 pub async fn settle_for_status(store: &dyn Store, claim_key: &str, status: &Status) {
-    let code = status.code();
-    if matches!(
-        code,
-        Code::Unavailable | Code::Internal | Code::Unknown | Code::DeadlineExceeded
-    ) {
+    if is_operational(status) {
         settle_not_applied(store, claim_key).await;
         return;
     }
+    settle_rejected(store, claim_key, status).await;
+}
+
+/// [`settle_for_status`] for an attempt whose content already landed in
+/// `changeset_id` before a later step failed with `status`. An operational
+/// failure keeps that changeset on the not-applied claim, so a retry can
+/// recognise the content as its own and finish only the step that failed.
+pub async fn settle_unfinished_for_status(
+    store: &dyn Store,
+    claim_key: &str,
+    status: &Status,
+    changeset_id: &str,
+) {
+    if !is_operational(status) {
+        settle_rejected(store, claim_key, status).await;
+        return;
+    }
+    if let Err(e) = store
+        .settle_operation_unfinished(claim_key, changeset_id)
+        .await
+    {
+        tracing::warn!(error = %e, claim_key, "failed to settle operation receipt as unfinished");
+    }
+}
+
+fn is_operational(status: &Status) -> bool {
+    matches!(
+        status.code(),
+        Code::Unavailable | Code::Internal | Code::Unknown | Code::DeadlineExceeded
+    )
+}
+
+async fn settle_rejected(store: &dyn Store, claim_key: &str, status: &Status) {
+    let code = status.code();
     if let Err(e) = store
         .settle_operation_rejected(claim_key, grpc_code_name(code), status.message())
         .await
