@@ -130,6 +130,13 @@ rendered canonically, it has no snapshot id; the delta still reports its
 findings but leaves both ids empty and calls itself incomplete, because a
 comparison that cannot name its worlds cannot be checked for staleness.
 
+The ids cover only the two compared worlds. When the snapshot is truncated,
+architecture validation also loads the targets a resource references from
+the store, and a target outside both worlds can shape a finding without
+being hashed into either id. Such a delta already calls itself incomplete,
+so a matching before id does not prove those findings current. Binding that
+context into the ids would change the id format and is a separate change.
+
 The comparison runs after the dry run releases the mutation lock. The lock
 only covers the same admission checks a real write would make; the scans
 read worlds already held in memory, so a slow delta never delays other
