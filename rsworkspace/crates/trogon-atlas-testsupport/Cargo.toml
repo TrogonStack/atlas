@@ -8,6 +8,8 @@ repository.workspace = true
 description = "Test helpers: ephemeral NATS JetStream instances via testcontainers."
 
 [dependencies]
+async-nats = { workspace = true }
+futures = { workspace = true }
 trogon-atlas-store = { path = "../trogon-atlas-store" }
 trogon-atlas-proto = { workspace = true }
 tonic = { workspace = true }
