@@ -901,12 +901,6 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         area: ToolArea::Discovery,
     },
     ToolPolicy {
-        tool: "get_entity_schema",
-        rpcs: &["ListValidationRules"],
-        min_role: ToolRole::Reader,
-        area: ToolArea::Model,
-    },
-    ToolPolicy {
         tool: "get_operation",
         rpcs: &["GetOperation"],
         min_role: ToolRole::Writer,
@@ -6047,6 +6041,18 @@ mod tests {
     /// crates/trogon-atlas-server/src/auth.rs:246-249). The tool itself
     /// only reads, so it is deliberately annotated read_only_hint = true.
     const READ_ONLY_ROLE_EXEMPT: &[&str] = &["get_operation"];
+
+    #[test]
+    fn tool_policy_names_are_unique() {
+        let mut names = HashSet::new();
+        for policy in TOOL_POLICIES {
+            assert!(
+                names.insert(policy.tool),
+                "duplicate TOOL_POLICIES row for {}",
+                policy.tool
+            );
+        }
+    }
 
     #[test]
     fn every_tool_has_annotations_matching_the_role_map() {
