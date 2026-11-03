@@ -588,13 +588,13 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "protect_entity",
         rpcs: &["ProtectEntity"],
         min_role: ToolRole::Admin,
-        area: ToolArea::Model,
+        area: ToolArea::Administration,
     },
     ToolPolicy {
         tool: "unprotect_entity",
         rpcs: &["UnprotectEntity"],
         min_role: ToolRole::Admin,
-        area: ToolArea::Model,
+        area: ToolArea::Administration,
     },
     ToolPolicy {
         tool: "get_entity_protection",
