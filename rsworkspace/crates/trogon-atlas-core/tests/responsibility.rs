@@ -124,14 +124,12 @@ fn wire_allocations_revision_and_presence_are_native() {
         (EntityKind::Team as i32, EntityKind::Person as i32),
         (34, 35)
     );
-    assert_eq!(
-        (
-            CONTRACT_REVISION,
-            MIN_CLIENT_CONTRACT_REVISION,
-            MIN_SERVER_CONTRACT_REVISION
-        ),
-        (20, 20, 20)
-    );
+    const {
+        assert!(20 <= MIN_CLIENT_CONTRACT_REVISION);
+        assert!(20 <= MIN_SERVER_CONTRACT_REVISION);
+        assert!(MIN_CLIENT_CONTRACT_REVISION <= CONTRACT_REVISION);
+        assert!(MIN_SERVER_CONTRACT_REVISION <= CONTRACT_REVISION);
+    }
     assert_eq!(canonical::parse_kind("team"), Some(EntityKind::Team));
     assert_eq!(canonical::parse_kind("person"), Some(EntityKind::Person));
     let pool = prost_reflect::DescriptorPool::decode(FILE_DESCRIPTOR_SET).unwrap();

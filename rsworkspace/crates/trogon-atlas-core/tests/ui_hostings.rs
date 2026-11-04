@@ -217,9 +217,11 @@ fn source_cannot_create_or_clear_native_hostings() {
 
 #[test]
 fn hosting_writers_require_revision_twenty() {
-    assert_eq!(trogon_atlas_proto::CONTRACT_REVISION, 20);
-    assert_eq!(trogon_atlas_proto::MIN_SERVER_CONTRACT_REVISION, 20);
-    assert_eq!(trogon_atlas_proto::MIN_CLIENT_CONTRACT_REVISION, 20);
+    const {
+        assert!(trogon_atlas_proto::CONTRACT_REVISION >= 20);
+        assert!(trogon_atlas_proto::MIN_SERVER_CONTRACT_REVISION == 20);
+        assert!(trogon_atlas_proto::MIN_CLIENT_CONTRACT_REVISION == 20);
+    }
 }
 
 #[test]

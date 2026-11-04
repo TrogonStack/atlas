@@ -20,6 +20,31 @@ client's role can call. A request without the header is refused unless the
 server allows anonymous callers; a header that is not a bearer token is
 rejected.
 
+The [MCP tool reference](../../../docs/reference/mcp-tools.md) lists every
+tool with its minimum role, effect, gRPC methods and parameters. It is
+generated from the tool registry; regenerate it with
+`mise run rust:mcp-reference` after adding, removing or changing a tool.
+
+## Discovering a manifest schema
+
+`get_entity_schema` returns the JSON Schema for one entity kind's manifest,
+cut from the same generator as `trogon-atlas schema`, so the tool and the
+CLI never describe different shapes. `schema_sha256` identifies the schema
+so a client can cache it. The response also carries a minimal skeleton, the
+JSON pointers of the placeholders in it, and the validation rules whose
+subject is that kind.
+
+The skeleton satisfies the schema only (`skeleton_validity: "schema_only"`).
+Replace every placeholder and add the references and context the kind
+needs; apply_manifests refuses a manifest that still holds a placeholder.
+Tenant types from a registered type library are not inlined; resolve them
+with `resolve_type`. An unknown kind is `invalid_params`; `list_entity_kinds`
+names every kind.
+
+Send `x-trogon-atlas-profile: <profile>` to narrow a session to one task's
+tools, or fix every session to one with the server's `--mcp-profile`. See
+[MCP tool profiles](../../../docs/reference/mcp-tool-profiles.md).
+
 Send `x-trogon-atlas-branch: <name>` on a request to scope its tool calls
 to that branch. Omit it for baseline.
 
@@ -51,6 +76,14 @@ the write landed in, because a branch write keeps no durable receipt:
 ```
 
 `scope` is `baseline` and `branch` is `null` when no branch applies.
+
+The entity protection tools (`protect_entity`, `unprotect_entity`,
+`get_entity_protection`, `list_entity_protections`) return plain JSON instead
+of `binpb_base64` and carry no `scope`, because protection is baseline-only
+and the same on every branch. `protect_entity` and `unprotect_entity` refuse
+to run while a branch is set. A listing reports `verdict: "partial"` when the
+server could not read every row or enumerate the whole registry. See
+[the entity protection command reference](../../../docs/reference/entity-protection-commands.md).
 
 `put_entity`, `put_entity_json`, `delete_entity`, `batch_mutate` and
 `batch_mutate_json` also return the server's validation findings as a JSON

@@ -854,6 +854,55 @@ async fn signing_key_that_cannot_be_loaded_fails_the_export_closed() {
     }
 }
 
+/// A write the export never reads still enters the snapshot it binds, so
+/// a complete bundle must not hold one newer than the changeset it names.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_complete_export_holds_no_write_after_its_changeset() {
+    let endpoint = start_server(None).await;
+    let mut c = client(&endpoint).await;
+    let ns = "attested-race-unread";
+    put(&mut c, event(ns, "placed")).await;
+    put(&mut c, event_model(ns, "checkout", "Checkout", &["placed"])).await;
+    let base = export(&mut c, export_req(ns, "checkout"))
+        .await
+        .state
+        .unwrap()
+        .snapshot_entity_count;
+    let mut req = export_req(ns, "checkout");
+    req.allow_incomplete = true;
+
+    let writer = {
+        let mut c = client(&endpoint).await;
+        tokio::spawn(async move {
+            let mut landed = Vec::new();
+            for i in 1..=63 {
+                put(&mut c, event(ns, &format!("unread{i}"))).await;
+                landed.push(newest_changeset(&mut c, ns).await);
+            }
+            landed
+        })
+    };
+    let mut bundles = Vec::new();
+    while !writer.is_finished() {
+        bundles.push(export(&mut c, req.clone()).await);
+    }
+    let landed = writer.await.unwrap();
+
+    for bundle in bundles.iter().filter(|b| reasons_of(b).is_empty()) {
+        let state = bundle.state.as_ref().unwrap();
+        let through = landed
+            .iter()
+            .filter(|id| id.as_str() <= state.baseline_changeset_id.as_str())
+            .count();
+        assert!(
+            state.snapshot_entity_count as usize <= base as usize + through,
+            "a complete bundle named {} but read {} entities",
+            state.baseline_changeset_id,
+            state.snapshot_entity_count
+        );
+    }
+}
+
 /// Races `writes` revisions of `slug` in `ns` on the baseline against
 /// repeated exports sent by `request`, and returns every bundle.
 async fn export_while_writing(

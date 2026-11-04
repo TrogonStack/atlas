@@ -730,10 +730,10 @@ async fn list_branch_merged_latest_versions_only_keeps_highest_version() {
     let latest = store
         .list(
             ListFilter {
+                slug: None,
                 kinds: &[pb::EntityKind::Event],
                 namespaces: &[],
                 latest_versions_only: true,
-                ..Default::default()
             },
             None,
             Some("latest-branch"),
