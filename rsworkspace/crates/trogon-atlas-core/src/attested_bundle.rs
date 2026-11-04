@@ -373,6 +373,11 @@ pub fn bundle_to_json(bundle: &pb::AttestedModelBundle) -> Result<String, Bundle
     transcode::message_to_json(BUNDLE_MESSAGE, bundle).map_err(BundleError::Parse)
 }
 
+/// Byte length of [`bundle_to_json`]'s output, without rendering it.
+pub fn bundle_json_len(bundle: &pb::AttestedModelBundle) -> Result<usize, BundleError> {
+    transcode::message_json_len(BUNDLE_MESSAGE, bundle).map_err(BundleError::Parse)
+}
+
 /// Check the digest, then that the bundle is consistent with what it says
 /// about itself. A bundle that passes and is [`Completeness::Complete`] is
 /// a clean attestation of integrity; an incomplete one passes only as what
