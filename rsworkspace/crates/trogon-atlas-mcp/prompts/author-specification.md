@@ -1,8 +1,9 @@
 # Author a specification
 
 Call get_entity_schema with the specification kind for its manifest schema and
-a skeleton, then write the entity with put_entity_json. Fetch an existing one
-with get_entity_json before editing it.
+a skeleton. For a new Specification, replace every placeholder and create it
+with apply_manifests. For an existing Specification, fetch it with
+get_entity_json before editing it and write it with put_entity_json.
 
 Use the native specification entity for retained contract artifacts, schemas,
 messages, operations, provider exposures and usages. API classification is

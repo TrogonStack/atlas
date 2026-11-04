@@ -40,14 +40,19 @@ pub const TASK_PROMPTS: &[TaskPrompt] = &[
         title: "Author a specification",
         description: "How to record contract artifacts in the native specification entity.",
         body: include_str!("../prompts/author-specification.md"),
-        tools: &["get_entity_json", "get_entity_schema", "put_entity_json"],
+        tools: &[
+            "apply_manifests",
+            "get_entity_json",
+            "get_entity_schema",
+            "put_entity_json",
+        ],
     },
     TaskPrompt {
         name: "declare-reliability",
         title: "Declare reliability",
         description: "How service level indicators, objectives and alert policies point into the model.",
         body: include_str!("../prompts/declare-reliability.md"),
-        tools: &["put_entity_json", "validate_event_model"],
+        tools: &["put_entity_json", "validate_project"],
     },
     TaskPrompt {
         name: "repair-validation-finding",
@@ -92,8 +97,15 @@ pub(crate) fn mentioned_tools(text: &str) -> std::collections::BTreeSet<String> 
             .into_iter()
             .map(|tool| tool.name.to_string())
             .collect();
+    let tool_prefixes: std::collections::BTreeSet<&str> = registered
+        .iter()
+        .filter_map(|name| name.split_once('_').map(|(prefix, _)| prefix))
+        .collect();
     text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-        .filter(|word| registered.contains(*word))
+        .filter(|word| {
+            word.split_once('_')
+                .is_some_and(|(prefix, _)| !word.ends_with("_id") && tool_prefixes.contains(prefix))
+        })
         .map(str::to_owned)
         .collect()
 }
@@ -127,6 +139,36 @@ mod tests {
                     tool(name).is_some(),
                     "{} lists unknown tool {name}",
                     prompt.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn tool_name_scan_keeps_unregistered_tool_shaped_words() {
+        let named = mentioned_tools("get_entity_json get_enttiy_json");
+        assert!(named.contains("get_entity_json"));
+        assert!(named.contains("get_enttiy_json"));
+    }
+
+    #[test]
+    fn prompt_bodies_and_server_instructions_name_only_registered_tools() {
+        let registered: BTreeSet<String> = McpServer::registered_tools()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        for (name, body) in TASK_PROMPTS
+            .iter()
+            .map(|prompt| (prompt.name, prompt.body))
+            .chain(std::iter::once((
+                "SERVER_INSTRUCTIONS",
+                crate::server::SERVER_INSTRUCTIONS,
+            )))
+        {
+            for tool in mentioned_tools(body) {
+                assert!(
+                    registered.contains(&tool),
+                    "{name} names unknown tool {tool}"
                 );
             }
         }
@@ -192,6 +234,10 @@ mod tests {
         let prompt = TaskPrompt::find("author-storyboard").unwrap();
         let result = prompt.result();
         assert_eq!(result.messages.len(), 1);
+        assert_eq!(
+            result.messages[0].content.as_text().unwrap().text,
+            prompt.body
+        );
         assert_eq!(
             prompt.listing().title.as_deref(),
             Some("Author a storyboard")

@@ -14,10 +14,11 @@ Discover the dependency context before choosing a change: get_outgoing_reference
 for what the subject points at, get_incoming_references for consumers,
 emitters, containing storyboards and memberships, and get_impact for the
 neighborhood of a proposed change. These return the first page only: decode
-the response and follow a nonempty `nextPageToken` before treating it as
-complete. Fetch each definition at its exact pinned version. For temporal
-findings, fetch every containing storyboard with its complete ordered slice
-list and keep repeated occurrences.
+the bounded response and treat the dependency context as incomplete beyond
+that page because these MCP tools expose no continuation argument. Fetch each
+definition at its exact pinned version. For temporal findings, fetch every
+containing storyboard with its complete ordered slice list and keep repeated
+occurrences.
 
 Choose a behavior-preserving repair. Write down the intended behavior, the
 causal chain and the evidence, and which contracts and scenarios must stay

@@ -1,8 +1,10 @@
 # Declare reliability
 
-Declare reliability overlays with put_entity_json, then run
-validate_event_model on the model the indicators point into and fix all Errors
-and Warnings.
+Declare reliability overlays with put_entity_json and read the mutation's
+`issues` array. Reliability overlays are not EventModel members, so
+single-model validation does not cover them. Run validate_project for the
+namespace that contains the connected EventModel, then fix all Errors and
+Warnings in its reports.
 
 - Reliability overlays point outward like Tracker, never as event model
   members: a ServiceLevelIndicator names a Connection (CommandHandling,

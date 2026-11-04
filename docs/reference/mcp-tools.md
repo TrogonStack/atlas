@@ -136,6 +136,6 @@ tool the prompt names.
 | --- | --- | --- | --- |
 | `author-storyboard` | The storyboard authoring rules validation enforces, and the follow-up after each mutation. | `get_entity_json`, `list_entities`, `put_entity_json`, `validate_event_model` | `authoring`, `repair` |
 | `design-strategic-layout` | Where bounded contexts, the problem space and their language live, and how contexts relate. | `put_entity_json`, `validate_project` | `authoring`, `repair` |
-| `author-specification` | How to record contract artifacts in the native specification entity. | `get_entity_json`, `get_entity_schema`, `put_entity_json` | `authoring`, `repair` |
-| `declare-reliability` | How service level indicators, objectives and alert policies point into the model. | `put_entity_json`, `validate_event_model` | `authoring`, `repair` |
+| `author-specification` | How to record contract artifacts in the native specification entity. | `apply_manifests`, `get_entity_json`, `get_entity_schema`, `put_entity_json` | `authoring`, `repair` |
+| `declare-reliability` | How service level indicators, objectives and alert policies point into the model. | `put_entity_json`, `validate_project` | `authoring`, `repair` |
 | `repair-validation-finding` | Scope a finding, gather its dependencies, apply a guarded repair and verify it. | `batch_mutate_json`, `delete_entity`, `get_entity_json`, `get_impact`, `get_incoming_references`, `get_outgoing_references`, `list_validation_rules`, `retarget_references`, `validate_event_model`, `validate_project` | `repair` |
