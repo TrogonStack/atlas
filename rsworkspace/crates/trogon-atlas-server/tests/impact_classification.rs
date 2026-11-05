@@ -1111,6 +1111,22 @@ async fn a_branch_classifies_against_its_own_merged_view() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_missing_branch_is_rejected_before_classification() {
+    let mut c = client().await;
+    c.put(event("placed", 1, fields(&["order_id", "amount"])))
+        .await;
+    c.put(event("placed", 2, fields(&["order_id"]))).await;
+    c.on_branch(Some("missing"));
+
+    let status = c
+        .classify_page(placed(1), placed(2), 0, 0, String::new())
+        .await
+        .expect_err("the requested branch does not exist");
+
+    assert_eq!(status.code(), Code::NotFound);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn rejects_a_candidate_of_another_kind() {
     let mut c = client().await;
     c.put(event("placed", 1, fields(&["order_id"]))).await;
