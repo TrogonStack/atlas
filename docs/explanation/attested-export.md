@@ -61,7 +61,8 @@ partial answer says so in a field, not in silence.
 - **A replica says what it cannot confirm.** A reader or standby replica's
   snapshot cache is not refreshed by the writer's commits, so its snapshot
   may be older than the boundary it names. Default chosen for review: a
-  replica export is incomplete with `REASON_BOUNDARY_UNVERIFIED`. The server
+  replica export, current or historical, is incomplete with
+  `REASON_BOUNDARY_UNVERIFIED`. The server
   refuses it by default; `allow_incomplete` returns the marked bundle instead
   of refusing with `NOT_WRITER`.
 

@@ -562,6 +562,66 @@ async fn a_model_changed_underneath_a_cached_snapshot_is_marked_not_mixed() {
     assert!(!marked.manifests.contains("After"));
 }
 
+/// A replica's cache is not refreshed by the writer's commits, so a
+/// historical export rewound from it cannot show the cache holds the
+/// changeset it names. It is marked rather than sealed as complete.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replica_historical_export_is_marked_boundary_unverified() {
+    let config = trogon_atlas_testsupport::shared().await.store_config();
+    let mut replica_config = config.clone();
+    replica_config.role = trogon_atlas_core::WriterRole::Standby;
+    let writer_store = trogon_atlas_store::NatsStore::connect_with(config)
+        .await
+        .unwrap();
+    let replica_store = trogon_atlas_store::NatsStore::connect_with(replica_config)
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if trogon_atlas_store::Store::is_writer(&writer_store) {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(trogon_atlas_store::Store::is_writer(&writer_store));
+    assert!(!trogon_atlas_store::Store::is_writer(&replica_store));
+    let writer = serve(
+        EventModelServiceImpl::try_new(Arc::new(writer_store), ServerMetrics::default()).unwrap(),
+    )
+    .await;
+    let replica = serve(
+        EventModelServiceImpl::try_new(Arc::new(replica_store), ServerMetrics::default()).unwrap(),
+    )
+    .await;
+    let mut w = client(&writer).await;
+    let mut r = client(&replica).await;
+    let ns = "attested-replica-history";
+    put(&mut w, event(ns, "placed")).await;
+    put(&mut w, event_model(ns, "checkout", "Before", &["placed"])).await;
+    let mut primed = export_req(ns, "checkout");
+    primed.allow_incomplete = true;
+    export(&mut r, primed).await;
+
+    put(&mut w, event_model(ns, "checkout", "After", &["placed"])).await;
+    let mut req = export_req(ns, "checkout");
+    req.as_of_changeset = newest_changeset(&mut w, ns).await;
+
+    let refused = r.export_attested_model(req.clone()).await.unwrap_err();
+    let failure = trogon_atlas_client::failure::Failure::from_status(&refused);
+    assert_eq!(failure.code.unwrap().as_str(), "EXPORT_INCOMPLETE");
+    assert!(
+        failure.message.contains("REASON_BOUNDARY_UNVERIFIED"),
+        "{refused:?}"
+    );
+
+    req.allow_incomplete = true;
+    let marked = export(&mut r, req).await;
+    assert!(
+        reasons_of(&marked).contains(&IncompleteReason::BoundaryUnverified),
+        "{:?}",
+        reasons_of(&marked)
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_newer_model_version_underneath_a_cached_snapshot_is_marked() {
     let endpoint = start_server(None).await;
