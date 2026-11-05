@@ -3799,7 +3799,7 @@ async fn prepare_order_fixture(client: &mut BusinessClient) -> OrderFixture {
 #[tokio::test(flavor = "multi_thread")]
 async fn authenticated_order_fixture_keeps_business_declarations_explicit() {
     let mut client = authenticated_business_server().await;
-    let mut fixture = prepare_order_fixture(&mut client).await;
+    let mut fixture = Box::pin(prepare_order_fixture(&mut client)).await;
 
     let mut flagged = fixture.product.entity.clone();
     match &mut flagged.kind {
@@ -5139,6 +5139,34 @@ impl Store for BusinessReadFailure {
         id: &trogon_atlas_core::NamespaceId,
     ) -> trogon_atlas_store::StoreResult<Option<trogon_atlas_store::NamespaceRecord>> {
         self.inner.get_namespace(id).await
+    }
+
+    async fn get_protection(
+        &self,
+        identity: &trogon_atlas_store::EntityIdentity,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionState> {
+        self.inner.get_protection(identity).await
+    }
+
+    async fn put_protection(
+        &self,
+        record: &trogon_atlas_store::ProtectionRecord,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionRevision> {
+        self.inner.put_protection(record).await
+    }
+
+    async fn delete_protection(
+        &self,
+        identity: &trogon_atlas_store::EntityIdentity,
+        expected: trogon_atlas_store::ProtectionRevision,
+    ) -> trogon_atlas_store::StoreResult<()> {
+        self.inner.delete_protection(identity, expected).await
+    }
+
+    async fn list_protections(
+        &self,
+    ) -> trogon_atlas_store::StoreResult<trogon_atlas_store::ProtectionListing> {
+        self.inner.list_protections().await
     }
 
     async fn resolve_namespace(

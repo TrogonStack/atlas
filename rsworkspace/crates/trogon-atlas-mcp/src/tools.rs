@@ -76,6 +76,15 @@ pub struct BatchGetParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct EntitySchemaParams {
+    #[schemars(
+        description = "Entity kind in snake_case, e.g. event, read_model or event_model. Call list_entity_kinds for every kind."
+    )]
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListVersionsParams {
     pub kind: String,
     pub namespace: String,
@@ -1323,4 +1332,85 @@ pub struct SourceRequestParams {
         description = "Exact source RPC proto3 JSON request. Supply complete native owners explicitly; preserve typed selectors, adoption, field ownership, guards and branch. Source pointers are inert; no source fetch or execution."
     )]
     pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExportAttestedModelParams {
+    pub namespace: String,
+    pub slug: String,
+    #[schemars(description = "EventModel version (>0). Call get_latest_version for the newest.")]
+    pub version: u64,
+    #[schemars(
+        description = "Changeset id from list_changesets. Describes baseline as it stood right after that changeset landed instead of its current state. Not allowed with a branch."
+    )]
+    #[serde(default)]
+    pub as_of_changeset: Option<String>,
+    #[schemars(
+        description = "Return a bundle that does not cover its whole scope, marked incomplete with its reasons and unresolved entities, instead of refusing with EXPORT_INCOMPLETE. Defaults to false."
+    )]
+    #[serde(default)]
+    pub allow_incomplete: bool,
+    #[schemars(
+        description = "Include the sealed bundle as proto3 JSON in bundle_json, the input verify_attested_bundle takes. Off by default because a bundle carries every manifest and finding; a bundle over 4 MiB is left out and bundle_omitted says so."
+    )]
+    #[serde(default)]
+    pub include_bundle: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectEntityParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+    #[schemars(description = "Why the identity is frozen; every refused writer is shown it.")]
+    pub reason: String,
+    #[serde(default)]
+    #[schemars(description = "Check the request without protecting anything.")]
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VerifyAttestedBundleParams {
+    #[schemars(
+        description = "The bundle's proto3 JSON, as export_attested_model returns in bundle_json or trogon-atlas export-attested saves. At most 4 MiB."
+    )]
+    pub bundle_json: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UnprotectEntityParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+    #[serde(default)]
+    #[schemars(
+        description = "Lift only the row at this revision, as get_entity_protection or list_entity_protections report it; refused with STALE_PRECONDITION once the row has moved. Also how an unreadable row is lifted. Omit to lift whatever is current."
+    )]
+    pub if_match: Option<u64>,
+    #[serde(default)]
+    #[schemars(description = "Check the request without lifting anything.")]
+    pub validate_only: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct GetEntityProtectionParams {
+    #[schemars(description = "Entity kind in snake_case, e.g. event or read_model.")]
+    pub kind: String,
+    pub namespace: String,
+    pub slug: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ListEntityProtectionsParams {
+    #[serde(default)]
+    #[schemars(description = "Only identities in this namespace. Omit for every visible one.")]
+    pub namespace: Option<String>,
 }

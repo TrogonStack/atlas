@@ -16,6 +16,9 @@ mod business_reference_identity_test;
 mod data_product_events;
 #[path = "data_product_inspection.rs"]
 mod data_product_inspection;
+#[path = "invariant_admission.rs"]
+mod invariant_admission;
+use invariant_admission::InvariantScope;
 #[path = "decision_document_queries.rs"]
 mod decision_document_queries;
 #[path = "design_topology_queries.rs"]
@@ -29,7 +32,7 @@ mod responsibility_queries;
 mod source_business_bypass_test;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -40,20 +43,25 @@ use std::{
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tonic::{Request, Response, Status};
 use trogon_atlas_core::{
+    attested_bundle::{self, UnresolvedCause},
     operation_id::{operation_claim_key, validate_operation_id},
     NamespaceId, NamespaceName, OwnerId, WriterRole,
 };
 use trogon_atlas_proto as pb;
 use trogon_atlas_semconv::semconv::attribute;
 use trogon_atlas_store::{
-    store::{ChangeRecord, ListFilter, MutationOp, MutationOutcome, OperationStatus, WriterStatus},
+    store::{
+        ChangeRecord, ListFilter, MutationOp, MutationOutcome, OperationRecord, OperationStatus,
+        WriterStatus,
+    },
     ChangeKind, ChangesetOp, ChangesetPage, ChangesetRecord, ChangesetRef, ChangesetScope,
-    ChangesetValidation, EntityRevisionRecord, NamespaceTenure, RevisionPage, Store, StoredEntity,
-    UnvalidatedReason, WriteContext,
+    ChangesetValidation, EntityIdentity, EntityRevisionRecord, NamespaceTenure, ProtectionReason,
+    ProtectionRecord, ProtectionRevision, ProtectionState, ProtectionUnknown, RevisionPage, Store,
+    StoredEntity, StoredProtection, UnvalidatedReason, WriteContext,
 };
 
 use crate::{
-    analysis, as_of,
+    analysis, as_of, consequence,
     conv::{
         entity_id, entity_kind, kind_from_i32, require_id, store_err, validate_branch_name,
         validate_entity_content,
@@ -165,6 +173,10 @@ pub const MAX_PROJECTION_ENTITIES: usize = 5000;
 /// handed to `store.list`, never `""` (every tenant's). Otherwise another
 /// tenant's entities can exhaust the cap before the caller's own entity is
 /// ever reached, and visibility would be consulted too late to matter.
+///
+/// The store is also asked for `slug` alone, so the cap bounds how many
+/// namespaces' identities of that one slug may be listed, never whether an
+/// identity named exactly is found among its namespace's other identities.
 pub async fn get_latest_version_with_cap(
     store: &Arc<dyn Store>,
     lens: &Lens,
@@ -196,6 +208,7 @@ pub async fn get_latest_version_with_cap(
             ListFilter {
                 kinds: &kinds,
                 namespaces: &namespaces,
+                slug: Some(slug),
                 latest_versions_only: true,
             },
             Some(cap),
@@ -217,6 +230,9 @@ pub async fn get_latest_version_with_cap(
 /// request starves every other writer. 1024 is well above the largest seed
 /// fixture (~150 ops) and small enough to bound worst-case latency.
 pub const MAX_BATCH_OPS: usize = 1024;
+
+/// How many protection lookups one write keeps in flight at once.
+const PROTECTION_LOOKUP_CONCURRENCY: usize = 32;
 
 /// Limits advertised in `GetServerInfo`. Defining them as consts ensures the
 /// values in the response and the enforcement in each handler cannot drift.
@@ -290,6 +306,9 @@ struct PendingChangeset {
     /// pass a way to find and settle the claim it left pending.
     operation_key: Option<String>,
     validation: ChangesetValidation,
+    /// The receipt settles only after work that follows the store write;
+    /// see `WriteContext::with_deferred_settlement`.
+    settlement_deferred: bool,
 }
 
 impl PendingChangeset {
@@ -303,6 +322,7 @@ impl PendingChangeset {
             operation_id: None,
             operation_key: None,
             validation: ChangesetValidation::Unvalidated(UnvalidatedReason::NoDeclaredCoverage),
+            settlement_deferred: false,
         }
     }
 
@@ -333,6 +353,12 @@ impl PendingChangeset {
         self
     }
 
+    #[must_use]
+    fn deferring_settlement(mut self, deferred: bool) -> Self {
+        self.settlement_deferred = deferred;
+        self
+    }
+
     /// Write context for every store call this RPC makes: the branch scope
     /// plus the attribution.
     fn write_ctx(&self) -> WriteContext<'_> {
@@ -342,9 +368,14 @@ impl PendingChangeset {
             rpc: self.rpc,
             operation_id: self.operation_id.as_deref(),
         });
-        match self.operation_key.as_deref() {
+        let ctx = match self.operation_key.as_deref() {
             Some(key) => ctx.with_operation_key(key),
             None => ctx,
+        };
+        if self.settlement_deferred {
+            ctx.with_deferred_settlement()
+        } else {
+            ctx
         }
     }
 
@@ -379,6 +410,15 @@ impl PendingChangeset {
         }
     }
 
+    fn record_protection(&mut self, change: ChangeKind, identity: &EntityIdentity, version: u64) {
+        let id = pb::Id {
+            namespace: identity.namespace().to_owned(),
+            slug: identity.slug().to_owned(),
+            version,
+        };
+        self.record(change, identity.kind(), &id);
+    }
+
     fn into_record(self, message: String) -> ChangesetRecord {
         ChangesetRecord {
             id: self.id,
@@ -401,6 +441,7 @@ impl PendingChangeset {
 struct BaselineSnapshot {
     entities: Arc<Vec<StoredEntity>>,
     truncated: bool,
+    boundary_writer: Option<WriterStatus>,
 }
 
 /// One owner's filtered view, remembered together with the lens that
@@ -428,6 +469,33 @@ impl OwnerView {
 }
 
 type OwnerSnapshotCache = tokio::sync::RwLock<HashMap<OwnerId, OwnerView>>;
+
+/// The caller's view of baseline as of an older changeset. `truncated` is
+/// the cap flag of the baseline load the rewind started from; `incomplete`
+/// is set when keys the rewind needed were left unfetched.
+struct AsOfView {
+    entities: Arc<Vec<StoredEntity>>,
+    truncated: bool,
+    incomplete: bool,
+    /// Whether the baseline load holds every changeset up to the target,
+    /// as [`cached_boundary_verified`] decides it for the load.
+    boundary_verified: bool,
+}
+
+/// The identity a protection RPC names. A kind, namespace and slug the
+/// store would never accept for an entity cannot be protected either.
+fn identity_from_request(kind: i32, namespace: &str, slug: &str) -> Result<EntityIdentity, Status> {
+    let kind = kind_from_i32(kind, "kind")?;
+    let id = pb::Id {
+        namespace: namespace.to_owned(),
+        slug: slug.to_owned(),
+        version: 0,
+    };
+    crate::conv::validate_id_component("namespace", &id.namespace)?;
+    crate::conv::validate_id_component("slug", &id.slug)?;
+    EntityIdentity::of(kind, &id)
+        .ok_or_else(|| Status::invalid_argument("kind, namespace and slug are required"))
+}
 
 pub struct EventModelServiceImpl {
     pub store: Arc<dyn Store>,
@@ -499,6 +567,9 @@ pub struct EventModelServiceImpl {
     /// records a bound caller cannot see. See `change_cursor` for why a raw
     /// sequence number cannot be handed back in that case.
     change_cursor_seal: Arc<crate::change_cursor::ChangeCursorSeal>,
+    /// The key `ExportAttestedModel` signs bundles with. `None` seals them
+    /// unsigned.
+    attested_signing_key: Option<crate::attested_signing::SigningKeySource>,
     /// Which namespaces refuse direct baseline writes. Mutating RPCs
     /// (`PutEntity`, `DeleteEntity`, `BatchMutate`, `RetargetReferences`,
     /// `DeleteByQuery`) reject a request that carries no
@@ -523,6 +594,7 @@ pub struct EventModelServiceImpl {
     /// SpiceDB and changes nothing else.
     authorizer: Arc<dyn NamespaceAuthorizer>,
     type_libraries: crate::type_libraries::TypeLibraryGate,
+    invariants: invariant_admission::InvariantState,
     /// Per-owner projections of the baseline snapshot.
     ///
     /// Filtering is O(entities) and would otherwise run on every request of
@@ -661,10 +733,12 @@ impl EventModelServiceImpl {
             change_cursor_seal: Arc::new(crate::change_cursor::ChangeCursorSeal::new(
                 &crate::change_cursor::ChangeCursorKey::generate(),
             )),
+            attested_signing_key: None,
             baseline_protection: BaselineProtection::Off,
             directory: directory.clone(),
             authorizer: Arc::new(RegistryAuthorizer::new(directory, store_for_authorizer)),
             type_libraries: crate::type_libraries::TypeLibraryGate::default(),
+            invariants: invariant_admission::InvariantState::default(),
             owner_snapshot_cache: tokio::sync::RwLock::new(HashMap::new()),
             owner_reverse_index_cache: tokio::sync::RwLock::new(HashMap::new()),
             metrics,
@@ -704,15 +778,22 @@ impl EventModelServiceImpl {
         // Instrument the async load with a span. Using `.instrument()` keeps
         // the span active across the await without holding an `EnteredSpan`
         // guard (which is `!Send`) across the suspension point.
+        let writer_before = self.store.writer_status();
         let result = {
             use tracing::Instrument as _;
             graph::load_all_with_cap(&self.store, self.snapshot_cap, None)
                 .instrument(tracing::info_span!("snapshot_rebuild"))
                 .await?
         };
+        let writer_after = self.store.writer_status();
         let snap = BaselineSnapshot {
             entities: Arc::new(result.entities),
             truncated: result.truncated,
+            boundary_writer: snapshot_boundary_writer(
+                &writer_before,
+                &writer_after,
+                self.store.is_writer(),
+            ),
         };
         *self.snapshot_cache.write().await = Some(snap.clone());
         Ok(snap)
@@ -935,15 +1016,20 @@ impl EventModelServiceImpl {
     ///
     /// Every newer baseline changeset is undone from its revision rows. A
     /// key a newer changeset touched takes its value from those rows alone,
-    /// so a stale cached snapshot only ever supplies keys that have not
-    /// changed since, and the result does not depend on the cache's age.
+    /// so the cached snapshot only supplies keys that have not changed
+    /// since. That holds only while the cache is at least as new as
+    /// `changeset_id`: a replica's cache can predate it and keep a key's
+    /// older value. `attest` refreshes the cache the way a current
+    /// attested export does, and `boundary_verified` reports whether the
+    /// load can be trusted to hold the target.
     async fn snapshot_as_of(
         &self,
         changeset_id: &str,
         vis: &Visibility,
         principal: Option<&crate::auth::Principal>,
         root: (pb::EntityKind, &pb::Id),
-    ) -> Result<(Arc<Vec<StoredEntity>>, bool), Status> {
+        attest: bool,
+    ) -> Result<AsOfView, Status> {
         // Validates the id and turns an unknown one into NOT_FOUND before
         // any walk starts.
         let target = self
@@ -964,33 +1050,18 @@ impl EventModelServiceImpl {
         }
         // Snapshot before listing: a write that lands in between is then
         // in `newer` and gets rewound, instead of leaking into the view.
-        let mut current = self.baseline_snapshot().await?;
+        let BaselineSnapshot {
+            entities: mut current,
+            truncated,
+            boundary_writer,
+        } = if attest {
+            self.attestation_baseline().await?
+        } else {
+            self.baseline_snapshot_with_truncation().await?
+        };
         let lens = self.lens(vis).await?;
         let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
-
-        let mut pre_images: Vec<as_of::PreImage> = Vec::new();
-        for (record_id, ops) in &newer {
-            for op in ops {
-                let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
-                let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
-                let revision = self
-                    .store
-                    .get_entity_revision(kind, id, record_id, None)
-                    .await
-                    .map_err(|e| match e {
-                        trogon_atlas_store::error::StoreError::NotFound => {
-                            Status::failed_precondition(format!(
-                                "changeset {} recorded no revision for {}/{}: it predates \
-                                 revision recording or was written without changeset \
-                                 attribution, so the model as of an older changeset is not recoverable",
-                                record_id, id.namespace, id.slug
-                            ))
-                        }
-                        other => store_err(other),
-                    })?;
-                pre_images.push((pb::EntityKey::new(kind, id), revision.before));
-            }
-        }
+        let pre_images = self.rewind_pre_images(&newer).await?;
 
         // The snapshot is capped, so it can omit the root and the members and
         // halo the board reaches. Fetch those by key and let the pre-images
@@ -1000,19 +1071,64 @@ impl EventModelServiceImpl {
         // fetches are bounded; keys left unfetched make the view incomplete,
         // which the caller reports as truncated.
         let (root_kind, root_id) = root;
+        let mut fetched = 0usize;
+        let mut incomplete = false;
+        if root_id.version == 0 {
+            let kinds = [root_kind];
+            let namespaces = [root_id.namespace.clone()];
+            let mut candidates = self
+                .store
+                .list(
+                    ListFilter {
+                        kinds: &kinds,
+                        namespaces: &namespaces,
+                        slug: Some(&root_id.slug),
+                        latest_versions_only: false,
+                    },
+                    Some(MAX_PROJECTION_ENTITIES + 1),
+                    None,
+                )
+                .await
+                .map_err(store_err)?;
+            if candidates.len() > MAX_PROJECTION_ENTITIES {
+                candidates.truncate(MAX_PROJECTION_ENTITIES);
+                incomplete = true;
+            }
+            let mut held: std::collections::HashSet<pb::EntityKey> = current
+                .iter()
+                .filter_map(|se| {
+                    trogon_atlas_store::refs::entity_kind(&se.entity)
+                        .zip(trogon_atlas_store::refs::entity_id(&se.entity))
+                        .map(|(kind, id)| pb::EntityKey::new(kind, id))
+                })
+                .collect();
+            let mut with_versions = current.as_ref().clone();
+            for candidate in candidates {
+                let Some(candidate_id) = trogon_atlas_store::refs::entity_id(&candidate.entity)
+                else {
+                    continue;
+                };
+                if candidate_id.slug != root_id.slug {
+                    continue;
+                }
+                if held.insert(pb::EntityKey::new(root_kind, candidate_id)) {
+                    fetched += 1;
+                    with_versions.push(candidate);
+                }
+            }
+            current = Arc::new(with_versions);
+        }
         let touched: std::collections::HashSet<pb::EntityKey> =
             pre_images.iter().map(|(key, _)| key.clone()).collect();
         let mut absent: std::collections::HashSet<pb::EntityKey> = std::collections::HashSet::new();
-        let mut fetched = 0usize;
-        let mut incomplete = false;
-        let rewound = loop {
+        let mut rewound = loop {
             let rewound = as_of::rewind(&current, pre_images.clone());
             let mut wanted: Vec<(pb::EntityKind, pb::Id)> = vec![(root_kind, root_id.clone())];
-            let root_members = rewound.iter().find_map(|se| match se.entity.kind.as_ref() {
-                Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(root_id) => {
-                    Some(em.members.clone())
-                }
-                _ => None,
+            let root_members = event_model_in(&rewound, root_id).and_then(|entity| {
+                let Some(pb::entity::Kind::EventModel(model)) = entity.kind else {
+                    return None;
+                };
+                Some(model.members)
             });
             if let Some(members) = root_members {
                 wanted.extend(
@@ -1055,12 +1171,61 @@ impl EventModelServiceImpl {
                 break as_of::rewind(&current, pre_images.clone());
             }
         };
+        let closing_newer = self.baseline_changesets_after(changeset_id, &lens).await?;
+        if closing_newer
+            .iter()
+            .map(|(id, _)| id)
+            .ne(newer.iter().map(|(id, _)| id))
+        {
+            rewound = as_of::rewind(&current, self.rewind_pre_images(&closing_newer).await?);
+        }
         // Narrow with the lens the walk used: a namespace admitted only by a
         // later lookup was never rewound and would show its current state.
-        if lens.is_unrestricted() {
-            return Ok((Arc::new(rewound), incomplete));
+        let entities = if lens.is_unrestricted() {
+            Arc::new(rewound)
+        } else {
+            Self::apply_lens(&rewound, &lens)
+        };
+        Ok(AsOfView {
+            entities,
+            truncated,
+            incomplete,
+            boundary_verified: cached_boundary_verified(
+                boundary_writer.as_ref(),
+                &self.store.writer_status(),
+                self.store.is_writer(),
+            ),
+        })
+    }
+
+    async fn rewind_pre_images(
+        &self,
+        newer: &[(String, Vec<ChangesetOp>)],
+    ) -> Result<Vec<as_of::PreImage>, Status> {
+        let mut pre_images = Vec::new();
+        for (record_id, ops) in newer {
+            for op in ops {
+                let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
+                let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
+                let revision = self
+                    .store
+                    .get_entity_revision(kind, id, record_id, None)
+                    .await
+                    .map_err(|e| match e {
+                        trogon_atlas_store::error::StoreError::NotFound => {
+                            Status::failed_precondition(format!(
+                                "changeset {} recorded no revision for {}/{}: it predates \
+                                 revision recording or was written without changeset \
+                                 attribution, so the model as of an older changeset is not recoverable",
+                                record_id, id.namespace, id.slug
+                            ))
+                        }
+                        other => store_err(other),
+                    })?;
+                pre_images.push((pb::EntityKey::new(kind, id), revision.before));
+            }
         }
-        Ok((Self::apply_lens(&rewound, &lens), incomplete))
+        Ok(pre_images)
     }
 
     /// Baseline changesets newer than `changeset_id`, newest first, with
@@ -1123,8 +1288,7 @@ impl EventModelServiceImpl {
     /// [`snapshot_for`](Self::snapshot_for) plus whether the view hit the
     /// entity cap.
     ///
-    /// `snapshot_for` drops the branch load's truncation flag (only the
-    /// baseline path persists one, on `snapshot_truncated`). Callers that
+    /// `snapshot_for` drops the truncation flag of the load it read. Callers that
     /// must report completeness rather than merely tolerate it -- the
     /// snapshot id names a *state*, and naming a partial state as if it
     /// were whole is the failure mode -- need both branches to answer.
@@ -1144,6 +1308,240 @@ impl EventModelServiceImpl {
             .await?;
         let entities = self.narrow(Arc::new(result.entities), vis).await?;
         Ok((entities, result.truncated))
+    }
+
+    /// The cached baseline, reloaded first when this process holds the
+    /// writer lease but the cache was loaded under another one, so a newly
+    /// promoted writer never attests a load it did not confirm.
+    async fn attestation_baseline(&self) -> Result<BaselineSnapshot, Status> {
+        let snap = self.baseline_snapshot_with_truncation().await?;
+        let writer = self.store.writer_status();
+        let is_writer = self.store.is_writer();
+        if !cached_boundary_needs_refresh(snap.boundary_writer.as_ref(), &writer, is_writer) {
+            return Ok(snap);
+        }
+        let refresh = self
+            .snapshot_cache
+            .read()
+            .await
+            .as_ref()
+            .is_none_or(|candidate| {
+                cached_boundary_needs_refresh(
+                    candidate.boundary_writer.as_ref(),
+                    &writer,
+                    is_writer,
+                )
+            });
+        if !refresh {
+            return Ok(snap);
+        }
+        self.invalidate_snapshot().await;
+        self.baseline_snapshot_with_truncation().await
+    }
+
+    async fn snapshot_for_attestation(
+        &self,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<(Arc<Vec<StoredEntity>>, bool, bool), Status> {
+        let Some(branch) = branch else {
+            let snap = self.attestation_baseline().await?;
+            let all = self.narrow_baseline(snap.entities, vis).await?;
+            let writer = self.store.writer_status();
+            let boundary_verified = cached_boundary_verified(
+                snap.boundary_writer.as_ref(),
+                &writer,
+                self.store.is_writer(),
+            );
+            return Ok((all, snap.truncated, boundary_verified));
+        };
+        use tracing::Instrument as _;
+        let result = graph::load_all(&self.store, Some(branch))
+            .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
+            .await?;
+        let entities = self.narrow(Arc::new(result.entities), vis).await?;
+        Ok((entities, result.truncated, self.store.is_writer()))
+    }
+
+    /// Id of the newest changeset in `scope`, or empty when it holds none.
+    async fn newest_changeset(&self, scope: ChangesetScope<'_>) -> Result<String, Status> {
+        let page = self
+            .store
+            .list_changesets(ChangesetPage {
+                before: None,
+                limit: 1,
+                scope,
+                namespace: None,
+            })
+            .await
+            .map_err(store_err)?;
+        Ok(page.into_iter().next().map(|r| r.id).unwrap_or_default())
+    }
+
+    /// What identifies a branch's state for an attested export, compared
+    /// before and after the export reads it.
+    async fn branch_boundary(&self, branch: &str) -> Result<BranchBoundary, Status> {
+        let info = self
+            .store
+            .list_branches()
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .find(|b| b.name == branch)
+            .ok_or_else(|| branch_not_found(branch))?;
+        Ok(BranchBoundary {
+            created_at: info.created_at,
+            fork_changeset_id: info.fork_changeset_id,
+            delta_count: info.delta_count,
+            newest_changeset: self
+                .newest_changeset(ChangesetScope::Branch(branch))
+                .await?,
+        })
+    }
+
+    /// Manifests render through the live type libraries, so a historical
+    /// export whose libraries changed since `changeset_id` describes old
+    /// entities with new types. The export marks that instead of hiding it.
+    async fn type_libraries_changed_after(
+        &self,
+        changeset_id: &str,
+        lens: &Lens,
+        rendered_namespaces: &BTreeSet<&str>,
+    ) -> Result<bool, Status> {
+        let newer = self.baseline_changesets_after(changeset_id, lens).await?;
+        for op in newer.iter().flat_map(|(_, ops)| ops) {
+            if op.entity_ref.kind != pb::EntityKind::TypeLibrary as i32 {
+                continue;
+            }
+            let id = op.entity_ref.id.as_ref().ok_or_else(|| {
+                Status::data_loss("type-library changeset operation has no entity id")
+            })?;
+            if rendered_namespaces.contains(id.namespace.as_str()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Keys a branch holds its own delta for. A baseline write to one of
+    /// them does not change what the branch shows.
+    async fn branch_overlaid_keys(
+        &self,
+        branch: &str,
+    ) -> Result<std::collections::HashSet<pb::EntityKey>, Status> {
+        Ok(self
+            .store
+            .list_branch_deltas(branch)
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .map(|delta| pb::EntityKey::new(delta.kind, &delta.id))
+            .collect())
+    }
+
+    /// Whether a baseline changeset newer than `since` touched an entity
+    /// the export read or looked for, or a type library of a namespace it
+    /// rendered, unless the export's branch overlays that key. Through
+    /// `view_through`, a changeset that landed while the snapshot was read,
+    /// any visible key counts: the snapshot may hold it, and the bundle
+    /// names `since`. A changeset log it cannot walk counts as touched.
+    #[allow(clippy::too_many_arguments)]
+    async fn baseline_moved_under(
+        &self,
+        since: &str,
+        view_through: Option<&str>,
+        lens: &Lens,
+        read: &std::collections::HashSet<pb::EntityKey>,
+        versionless_root: Option<&pb::EntityKey>,
+        namespaces: &BTreeSet<&str>,
+        overlaid: &std::collections::HashSet<pb::EntityKey>,
+    ) -> bool {
+        let Ok(newer) = self.baseline_changesets_after(since, lens).await else {
+            return true;
+        };
+        newer
+            .iter()
+            .flat_map(|(changeset, ops)| ops.iter().map(move |op| (changeset, op)))
+            .any(|(changeset, op)| {
+                let Some(id) = op.entity_ref.id.as_ref() else {
+                    return true;
+                };
+                let Ok(kind) = pb::EntityKind::try_from(op.entity_ref.kind) else {
+                    return true;
+                };
+                let key = pb::EntityKey::new(kind, id);
+                if overlaid.contains(&key) {
+                    return false;
+                }
+                view_through.is_some_and(|through| changeset.as_str() <= through)
+                    || read.contains(&key)
+                    || versionless_root.is_some_and(|root| {
+                        root.kind == key.kind
+                            && root.namespace == key.namespace
+                            && root.slug == key.slug
+                    })
+                    || (kind == pb::EntityKind::TypeLibrary
+                        && namespaces.contains(id.namespace.as_str()))
+            })
+    }
+
+    /// How replacing `before` with `after` moves the findings of every
+    /// compared suite. `truncated` says the `before` view hit the entity
+    /// cap; `after` is derived from it, so it inherits the gap.
+    /// Advisory: a failure to compute the delta never fails the dry run it
+    /// rides on, so this reports `None` instead of an error.
+    async fn consequence_delta(
+        &self,
+        before: &[StoredEntity],
+        after: &[StoredEntity],
+        truncated: bool,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Option<pb::ConsequenceDelta> {
+        let started = std::time::Instant::now();
+        let contexts = async {
+            Ok::<_, Status>((
+                self.architecture_validation_context(before, branch, vis)
+                    .await?,
+                self.architecture_validation_context(after, branch, vis)
+                    .await?,
+            ))
+        };
+        let (before_context, after_context) = match contexts.await {
+            Ok(contexts) => contexts,
+            Err(status) => {
+                tracing::warn!(error = %status, "consequence delta skipped");
+                return None;
+            }
+        };
+        let before_context = consequence::context_outside(before_context, &[before]);
+        let after_context = consequence::context_outside(after_context, &[before, after]);
+        let scope = pb::ValidationScope {
+            branch: branch.unwrap_or_default().to_owned(),
+            ..Default::default()
+        };
+        let all_namespaces = std::collections::BTreeSet::new();
+        let snapshot_id = |world: &[StoredEntity]| {
+            snapshot_digest(world, &all_namespaces, false).map(|digest| digest.snapshot_id)
+        };
+        let mut delta = consequence::compare(
+            &consequence::Scan::of(before, &before_context, truncated, &scope),
+            &consequence::Scan::of(after, &after_context, truncated, &scope),
+            String::new(),
+            String::new(),
+        );
+        match (snapshot_id(before), snapshot_id(after)) {
+            (Ok(before_id), Ok(after_id)) => {
+                delta.before_snapshot_id = before_id;
+                delta.after_snapshot_id = after_id;
+            }
+            (Err(status), _) | (_, Err(status)) => {
+                tracing::debug!(error = %status, "consequence delta has no snapshot binding");
+                delta.complete = false;
+            }
+        }
+        self.metrics.record_consequence_delta(started.elapsed());
+        Some(delta)
     }
 
     async fn lock_mutations(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -1363,6 +1761,14 @@ impl EventModelServiceImpl {
         self
     }
 
+    /// Bound how many invariant declarations one write is judged against
+    /// before the rest are reported as unevaluable.
+    #[must_use]
+    pub fn with_invariant_budget(mut self, budget: usize) -> Self {
+        self.invariants = invariant_admission::InvariantState::with_budget(budget);
+        self
+    }
+
     /// Enable baseline write protection for every namespace
     /// (`--protect-baseline` / `TROGON_ATLAS_PROTECT_BASELINE`). See
     /// `authorize_write`.
@@ -1394,6 +1800,34 @@ impl EventModelServiceImpl {
     pub fn with_change_cursor_key(mut self, key: &crate::change_cursor::ChangeCursorKey) -> Self {
         self.change_cursor_seal = Arc::new(crate::change_cursor::ChangeCursorSeal::new(key));
         self
+    }
+
+    /// Sign every attested bundle with the key `source` names
+    /// (`--attested-signing-key-file` / `--attested-signing-key-env`). The
+    /// key is read on each export; an export whose key cannot be read is
+    /// refused with `SIGNING_KEY_UNAVAILABLE`, never sealed unsigned.
+    #[must_use]
+    pub fn with_attested_signing_key(
+        mut self,
+        source: crate::attested_signing::SigningKeySource,
+    ) -> Self {
+        self.attested_signing_key = Some(source);
+        self
+    }
+
+    fn attested_signer(
+        &self,
+    ) -> Result<Option<trogon_atlas_core::attested_signing::SigningKey>, Status> {
+        let Some(source) = self.attested_signing_key.as_ref() else {
+            return Ok(None);
+        };
+        source.load().map(Some).map_err(|e| {
+            tracing::error!(error = %e, "attested export refused: signing key unavailable");
+            crate::conv::signing_key_unavailable(
+                "this server signs attested bundles and could not load its signing key",
+                source.kind(),
+            )
+        })
     }
 
     fn author_from_metadata<T>(req: &Request<T>) -> MirrorAuthor {
@@ -2081,6 +2515,7 @@ impl EventModelServiceImpl {
                 .await
                 .map_err(store_err)?;
         }
+        self.note_write(Some(name), true);
         Ok(())
     }
 
@@ -2450,6 +2885,12 @@ impl EventModelServiceImpl {
         if changeset.ops.is_empty() {
             return;
         }
+        let touches_models = changeset
+            .ops
+            .iter()
+            .any(|op| op.entity_ref.kind == pb::EntityKind::EventModel as i32);
+        self.note_entity_write(changeset.branch.as_deref(), touches_models)
+            .await;
         let record = changeset.into_record(message);
         if let Err(err) = self.store.append_changeset(&record).await {
             self.metrics.record_changeset_lost();
@@ -2462,6 +2903,390 @@ impl EventModelServiceImpl {
                  those changes have no durable attribution"
             );
         }
+    }
+
+    /// One identity's protection, with a failed lookup folded into
+    /// `Unknown` so every caller fails closed the same way.
+    async fn protection_state(&self, identity: &EntityIdentity) -> ProtectionState {
+        match self.store.get_protection(identity).await {
+            Ok(state) => state,
+            Err(e) => ProtectionState::unreadable(identity.clone(), &e),
+        }
+    }
+
+    /// Refuse a write that would change any protected identity among
+    /// `refs`, looking each one up on its own; nothing scans the registry.
+    /// Every write route calls this inside its existing mutation-lock
+    /// section, so a concurrent `ProtectEntity` either lands first and is
+    /// seen here or lands after the write completes. An identity whose state
+    /// cannot be read is refused too, with its own reason, so a caller can
+    /// tell "protected" from "could not check". It applies to admins as
+    /// well, because lifting protection is a separate, audited act.
+    async fn refuse_protected<'a, I>(&self, refs: I) -> Result<(), Status>
+    where
+        I: IntoIterator<Item = (pb::EntityKind, &'a pb::Id)>,
+    {
+        let wanted: Vec<EntityIdentity> = refs
+            .into_iter()
+            .filter_map(|(kind, id)| EntityIdentity::of(kind, id))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let mut protected = Vec::new();
+        let mut unknown = Vec::new();
+        for chunk in wanted.chunks(PROTECTION_LOOKUP_CONCURRENCY) {
+            let lookups: Vec<_> = chunk.iter().map(|i| self.protection_state(i)).collect();
+            for state in futures::future::join_all(lookups).await {
+                match state {
+                    ProtectionState::Unprotected => {}
+                    ProtectionState::Protected(stored) => protected.push(stored.record),
+                    ProtectionState::Unknown(u) => unknown.push(u),
+                }
+            }
+        }
+        if !protected.is_empty() {
+            protected.sort_by(|a, b| a.identity.cmp(&b.identity));
+            return Err(crate::conv::entity_protected(&protected));
+        }
+        if !unknown.is_empty() {
+            unknown.sort_by(|a, b| a.identity.cmp(&b.identity));
+            return Err(crate::conv::protection_state_unknown(&unknown));
+        }
+        Ok(())
+    }
+
+    /// Strip any `ProtectionAnnotation` from a proposed entity and decide
+    /// whether to act on it. Only an authenticated admin writing baseline is
+    /// heard; anyone else's annotation is dropped, so an imported model
+    /// cannot grant itself protection.
+    fn honored_protection(
+        entity: &mut pb::Entity,
+        principal: Option<&crate::auth::Principal>,
+        branch: Option<&str>,
+    ) -> Result<Option<ProtectionReason>, Status> {
+        let Some(request) = crate::protection::take_request(entity) else {
+            return Ok(None);
+        };
+        if branch.is_some() || !crate::protection::is_authenticated_admin(principal) {
+            return Ok(None);
+        }
+        ProtectionReason::parse(&request.reason)
+            .map(Some)
+            .map_err(store_err)
+    }
+
+    /// Who may set or lift protection: an authenticated, non-anonymous
+    /// admin, acting on baseline. Without an auth stack there is no one to
+    /// attribute the change to, so this fails closed.
+    fn require_protection_admin<'p>(
+        principal: Option<&'p crate::auth::Principal>,
+        branch: Option<&str>,
+    ) -> Result<&'p crate::auth::Principal, Status> {
+        if branch.is_some() {
+            return Err(Status::failed_precondition(
+                "protection applies to an identity on every branch; send it without \
+                 x-trogon-atlas-branch",
+            ));
+        }
+        match principal {
+            Some(p) if crate::protection::is_authenticated_admin(Some(p)) => Ok(p),
+            _ => Err(Status::permission_denied(
+                "only an authenticated admin may set or lift entity protection",
+            )),
+        }
+    }
+
+    /// Register protection for `identity` inside `changeset`, so the audit
+    /// record and whatever write accompanies it share one changeset. Call
+    /// under the mutation lock, on baseline. `None` when it was already
+    /// protected.
+    async fn protect_identity(
+        &self,
+        identity: EntityIdentity,
+        reason: ProtectionReason,
+        version: u64,
+        changeset: &mut PendingChangeset,
+    ) -> Result<Option<StoredProtection>, Status> {
+        let record = ProtectionRecord {
+            identity,
+            reason,
+            protected_by: changeset.author.clone(),
+            protected_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            changeset_id: changeset.id.clone(),
+        };
+        let revision = match self.store.put_protection(&record).await {
+            Ok(revision) => revision,
+            Err(trogon_atlas_store::error::StoreError::AlreadyExists) => return Ok(None),
+            Err(e) => match self.protection_state(&record.identity).await {
+                // The registry write timed out or failed after landing.
+                ProtectionState::Protected(stored)
+                    if stored.record.changeset_id == changeset.id =>
+                {
+                    stored.revision
+                }
+                _ => return Err(store_err(e)),
+            },
+        };
+        changeset.record_protection(ChangeKind::Protect, &record.identity, version);
+        Ok(Some(StoredProtection { record, revision }))
+    }
+
+    /// Identities among `requested` that an earlier attempt of this same
+    /// operation protected, each with the changeset that attempt recorded.
+    /// The claim's digest proves the retry carries the very same writes, so
+    /// they change nothing on these identities. A `NotApplied` attempt
+    /// landed its content and then failed or could not confirm a protection
+    /// step, so the retry may run to finish the job; an `Applied` one is
+    /// replayed rather than refused by its own protection. Each lookup is
+    /// per identity.
+    async fn protections_resumed_by(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        rpc: &str,
+        operation_id: &str,
+        author: &str,
+        requested: &[&EntityIdentity],
+    ) -> std::collections::BTreeMap<EntityIdentity, String> {
+        let mut resumed = std::collections::BTreeMap::new();
+        let Some(attempt) = attempt.filter(|_| !requested.is_empty()) else {
+            return resumed;
+        };
+        let claimed_changeset_id = match self.store.get_operation(&attempt.claim_key).await {
+            Ok(Some(record))
+                if matches!(
+                    record.status,
+                    OperationStatus::NotApplied | OperationStatus::Applied
+                ) && record.digest == attempt.digest
+                    && record.rpc == rpc
+                    && record.branch.is_none() =>
+            {
+                record.changeset_id
+            }
+            _ => return resumed,
+        };
+        for &identity in requested {
+            let ProtectionState::Protected(stored) = self.protection_state(identity).await else {
+                continue;
+            };
+            // The claim itself names the changeset that set this mark, which
+            // holds even when that changeset's append was lost.
+            if !claimed_changeset_id.is_empty()
+                && stored.record.changeset_id == claimed_changeset_id
+                && stored.record.protected_by == author
+            {
+                resumed.insert(identity.clone(), claimed_changeset_id.clone());
+                continue;
+            }
+            let Ok(changeset) = self.store.get_changeset(&stored.record.changeset_id).await else {
+                continue;
+            };
+            if changeset.rpc == rpc
+                && changeset.branch.is_none()
+                && changeset.author == author
+                && stored.record.protected_by == author
+                && changeset.operation_id.as_deref() == Some(operation_id)
+            {
+                resumed.insert(identity.clone(), changeset.id);
+            }
+        }
+        resumed
+    }
+
+    /// The changeset in which an earlier attempt of this same operation
+    /// landed its content before a later step failed, as its not-applied
+    /// claim records it. The digest proves the retry carries the very same
+    /// writes, and the changeset must carry this operation's own
+    /// attribution. A changeset whose append was lost cannot be checked, so
+    /// the claim stands for it, as in `protections_resumed_by`: callers still
+    /// confirm the revision rows that changeset id wrote.
+    async fn content_landed_by(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        rpc: &str,
+        operation_id: &str,
+        author: &str,
+    ) -> Option<String> {
+        let attempt = attempt?;
+        let record = match self.store.get_operation(&attempt.claim_key).await {
+            Ok(Some(record))
+                if record.status == OperationStatus::NotApplied
+                    && !record.changeset_id.is_empty()
+                    && record.digest == attempt.digest
+                    && record.rpc == rpc
+                    && record.branch.is_none() =>
+            {
+                record
+            }
+            _ => return None,
+        };
+        match self.store.get_changeset(&record.changeset_id).await {
+            Ok(changeset) => (changeset.rpc == rpc
+                && changeset.branch.is_none()
+                && changeset.author == author
+                && changeset.operation_id.as_deref() == Some(operation_id))
+            .then_some(changeset.id),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => Some(record.changeset_id),
+            Err(_) => None,
+        }
+    }
+
+    /// What `changeset_id` left at `kind`/`id` on baseline, when that is
+    /// still what the store holds: `Some(Some(_))` for the entity it wrote,
+    /// `Some(None)` for a key it deleted, `None` once anything moved since.
+    async fn still_as_landed(
+        &self,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        changeset_id: &str,
+    ) -> Option<Option<trogon_atlas_store::store::StoredEntity>> {
+        let revision = self
+            .store
+            .get_entity_revision(kind, id, changeset_id, None)
+            .await
+            .ok()?;
+        let current = match self.store.get(kind, id, None).await {
+            Ok(current) => Some(current),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(_) => return None,
+        };
+        match (revision.after, current) {
+            (Some(after), Some(current)) if after == current.entity => Some(Some(current)),
+            (None, None) => Some(None),
+            _ => None,
+        }
+    }
+
+    /// The content an earlier attempt of this `PutEntity` landed, when it is
+    /// still current, with the changeset that landed it.
+    async fn put_landed_by(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        operation_id: &str,
+        author: &str,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+    ) -> Option<(String, trogon_atlas_store::store::StoredEntity)> {
+        let changeset_id = self
+            .content_landed_by(attempt, "PutEntity", operation_id, author)
+            .await?;
+        let current = self.still_as_landed(kind, id, &changeset_id).await??;
+        Some((changeset_id, current))
+    }
+
+    /// The outcomes an earlier attempt of this `BatchMutate` landed, when
+    /// every op's result is still current, with the changeset that landed
+    /// them.
+    async fn batch_landed_by(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        operation_id: &str,
+        author: &str,
+        metas: &[OpMetaLike],
+    ) -> Option<(String, Vec<MutationOutcome>)> {
+        let changeset_id = self
+            .content_landed_by(attempt, "BatchMutate", operation_id, author)
+            .await?;
+        let mut outcomes = Vec::with_capacity(metas.len());
+        for meta in metas {
+            let outcome = match self
+                .still_as_landed(meta.kind, &meta.id, &changeset_id)
+                .await?
+            {
+                Some(current) if meta.is_put => MutationOutcome::Noop {
+                    etag: current.etag,
+                    entity: current.entity,
+                },
+                None if !meta.is_put => MutationOutcome::Deleted,
+                _ => return None,
+            };
+            outcomes.push(outcome);
+        }
+        Some((changeset_id, outcomes))
+    }
+
+    /// Turns each `Create` that an earlier attempt of this `BatchMutate`
+    /// already landed, and that is still as that attempt left it, into a
+    /// `Put` of the same entity. The store then sees an unchanged write
+    /// instead of failing the whole batch as already existing, while every
+    /// other op still faces its own preconditions.
+    async fn creates_landed_as_puts(
+        &self,
+        attempt: Option<&operation_receipts::OperationAttempt>,
+        operation_id: &str,
+        author: &str,
+        metas: &[OpMetaLike],
+        mutations: &mut [MutationOp],
+    ) {
+        let Some(changeset_id) = self
+            .content_landed_by(attempt, "BatchMutate", operation_id, author)
+            .await
+        else {
+            return;
+        };
+        for (meta, op) in metas.iter().zip(mutations) {
+            let MutationOp::Create { kind, entity } = op else {
+                continue;
+            };
+            if matches!(
+                self.still_as_landed(meta.kind, &meta.id, &changeset_id)
+                    .await,
+                Some(Some(_))
+            ) {
+                *op = MutationOp::Put {
+                    kind: *kind,
+                    entity: entity.clone(),
+                    if_match: None,
+                    force: false,
+                };
+            }
+        }
+    }
+
+    /// Whether applying `op` to `id` on baseline would leave what is stored
+    /// there exactly as it is. Anything that cannot be confirmed counts as a
+    /// change.
+    async fn rewrite_leaves_unchanged(&self, id: &pb::Id, op: &MutationOp) -> bool {
+        let kind = match op {
+            MutationOp::Create { kind, .. }
+            | MutationOp::Put { kind, .. }
+            | MutationOp::Delete { kind, .. } => *kind,
+        };
+        let current = match self.store.get(kind, id, None).await {
+            Ok(current) => Some(current.entity),
+            Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+            Err(_) => return false,
+        };
+        match (op, current) {
+            (MutationOp::Put { force: true, .. } | MutationOp::Create { .. }, _)
+            | (MutationOp::Put { .. }, None) => false,
+            (MutationOp::Put { entity, .. }, Some(current)) => {
+                trogon_atlas_core::connection_persistence::prepare_entity(Some(&current), entity)
+                    .is_ok_and(|prepared| {
+                        trogon_atlas_core::semantically_equal(&current, &prepared)
+                    })
+            }
+            (MutationOp::Delete { .. }, current) => current.is_none(),
+        }
+    }
+
+    /// The latest stored version of `identity` on baseline, through the
+    /// caller's lens.
+    async fn latest_of(
+        &self,
+        lens: &Lens,
+        identity: &EntityIdentity,
+    ) -> Result<Option<pb::Id>, Status> {
+        let latest = get_latest_version_with_cap(
+            &self.store,
+            lens,
+            identity.kind(),
+            identity.namespace(),
+            identity.slug(),
+            MAX_PROJECTION_ENTITIES,
+            None,
+        )
+        .await?;
+        Ok(latest.and_then(|entity| entity_id(&entity).ok().cloned()))
     }
 
     /// Builds the failure response for a `batch_apply` that rejected an
@@ -2498,6 +3323,7 @@ impl EventModelServiceImpl {
             id: Some(m.id.clone()),
         });
         pb::BatchMutateResponse {
+            invariant_check: None,
             status: pb::batch_mutate_response::Status::Failed as i32,
             results: Vec::new(),
             failed_op_index: i32::try_from(index).unwrap_or(i32::MAX),
@@ -2512,7 +3338,60 @@ impl EventModelServiceImpl {
             precondition_failure: None,
             operation_receipt: None,
             coverage: None,
+            consequence_delta: None,
         }
+    }
+
+    /// A replayed `BatchMutate` is reported Applied with no per-op results
+    /// rather than reconstructing one result per original op: the batch is
+    /// one unit of idempotency, and `changeset_id` is enough for the caller
+    /// to confirm it already landed.
+    fn batch_replay(
+        operation_id: &str,
+        record: &OperationRecord,
+    ) -> Result<Response<pb::BatchMutateResponse>, Status> {
+        if record.status == OperationStatus::Rejected {
+            return Err(operation_receipts::replay_rejected_status(record));
+        }
+        Ok(Response::new(pb::BatchMutateResponse {
+            status: pb::batch_mutate_response::Status::Applied as i32,
+            results: Vec::new(),
+            failed_op_index: 0,
+            failure: Vec::new(),
+            precondition_failure: None,
+            operation_receipt: Some(operation_receipts::replay_receipt(operation_id, record)),
+            invariant_check: None,
+            coverage: None,
+            consequence_delta: None,
+        }))
+    }
+
+    /// A replayed `PutEntity` reconstructs the current state rather than a
+    /// byte-identical response: the entity may have moved on since the
+    /// original call, and GetEntity-shaped data is the only honest answer to
+    /// "what does it look like now". It re-ran no write-path suites.
+    async fn put_replay(
+        &self,
+        kind: pb::EntityKind,
+        id: &pb::Id,
+        branch: Option<&str>,
+        operation_id: &str,
+        record: &OperationRecord,
+    ) -> Result<Response<pb::PutEntityResponse>, Status> {
+        if record.status == OperationStatus::Rejected {
+            return Err(operation_receipts::replay_rejected_status(record));
+        }
+        let current = self.store.get(kind, id, branch).await.map_err(store_err)?;
+        Ok(Response::new(pb::PutEntityResponse {
+            no_op: false,
+            etag: current.etag,
+            entity: Some(current.entity),
+            validation: Vec::new(),
+            operation_receipt: Some(operation_receipts::replay_receipt(operation_id, record)),
+            invariant_check: None,
+            coverage: None,
+            consequence_delta: None,
+        }))
     }
 
     /// The best available `Status` for a `batch_failure_response`, used only
@@ -2563,6 +3442,7 @@ impl EventModelServiceImpl {
             id: Some(m.id.clone()),
         });
         pb::BatchMutateResponse {
+            invariant_check: None,
             status: pb::batch_mutate_response::Status::Failed as i32,
             results: Vec::new(),
             failed_op_index: i32::try_from(index).unwrap_or(i32::MAX),
@@ -2577,6 +3457,7 @@ impl EventModelServiceImpl {
             precondition_failure: None,
             operation_receipt: None,
             coverage: None,
+            consequence_delta: None,
         }
     }
 
@@ -2777,6 +3658,50 @@ fn world_after(
     world.into_iter().flatten().collect()
 }
 
+/// `base` after the overlay `outcomes`, each paired with the key it landed
+/// on. Etags are dropped: the overlay's are not the store's.
+fn world_with_outcomes<'a>(
+    base: &[StoredEntity],
+    keys: impl IntoIterator<Item = (pb::EntityKind, &'a pb::Id)>,
+    outcomes: &[MutationOutcome],
+) -> Vec<StoredEntity> {
+    let changes: Vec<_> = keys
+        .into_iter()
+        .zip(outcomes)
+        .filter_map(|((kind, id), outcome)| match outcome {
+            MutationOutcome::Wrote { entity, .. } => Some((kind, id, Some(entity))),
+            MutationOutcome::Deleted => Some((kind, id, None)),
+            MutationOutcome::Noop { .. } => None,
+        })
+        .collect();
+    world_after(base, &changes)
+}
+
+struct SnapshotDigest {
+    snapshot_id: String,
+    entity_count: u32,
+    entries: Vec<pb::SnapshotEntry>,
+}
+
+/// Content identity of `all`, restricted to `scope` when it is not empty.
+fn snapshot_digest(
+    all: &[StoredEntity],
+    scope: &std::collections::BTreeSet<&str>,
+    include_entries: bool,
+) -> Result<SnapshotDigest, Status> {
+    let in_scope = all.iter().map(|se| &se.entity).filter(|entity| {
+        scope.is_empty()
+            || trogon_atlas_store::refs::entity_id(entity)
+                .is_none_or(|id| scope.contains(id.namespace.as_str()))
+    });
+    let (hasher, entries) = snapshot_identity(in_scope, include_entries)?;
+    Ok(SnapshotDigest {
+        snapshot_id: hasher.finish().to_hex(),
+        entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
+        entries,
+    })
+}
+
 fn runs_scenarios(kind: pb::EntityKind) -> bool {
     matches!(
         kind,
@@ -2827,6 +3752,7 @@ fn build_op_results(
                 pb::BatchMutateOpResult {
                     result: Some(pb::batch_mutate_op_result::Result::Put(
                         pb::PutEntityResponse {
+                            invariant_check: None,
                             entity: stored.or_else(|| m.entity.clone()),
                             etag,
                             validation,
@@ -2835,6 +3761,7 @@ fn build_op_results(
                             // Suite coverage for the batch lives on
                             // BatchMutateResponse.coverage.
                             coverage: None,
+                            consequence_delta: None,
                         },
                     )),
                 }
@@ -2844,6 +3771,7 @@ fn build_op_results(
                 pb::BatchMutateOpResult {
                     result: Some(pb::batch_mutate_op_result::Result::Delete(
                         pb::DeleteEntityResponse {
+                            invariant_check: None,
                             referrers_incomplete,
                             referrers,
                             operation_receipt: None,
@@ -3138,6 +4066,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 who_am_i: true,
                 type_libraries: true,
                 impact_classification: true,
+                entity_protection: true,
             }),
             limits: Some(pb::get_server_info_response::Limits {
                 max_page_size: ADVERTISED_MAX_PAGE_SIZE,
@@ -3408,6 +4337,228 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }))
     }
 
+    async fn protect_entity(
+        &self,
+        req: Request<pb::ProtectEntityRequest>,
+    ) -> Result<Response<pb::ProtectEntityResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let author = Self::author_from_metadata(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        let principal = Self::require_protection_admin(principal.as_ref(), branch.as_deref())?;
+        let msg = req.into_inner();
+        let identity = identity_from_request(msg.kind, &msg.namespace, &msg.slug)?;
+        let reason = ProtectionReason::parse(&msg.reason).map_err(store_err)?;
+        self.require_visible(&vis, identity.namespace()).await?;
+        self.authorize_write_as(
+            Some(principal),
+            None,
+            &WriteTargets::of(identity.namespace()),
+            WriteEffect::of(msg.validate_only),
+        )
+        .await?;
+        let lens = self.lens(&vis).await?;
+        let found = self
+            .latest_of(&lens, &identity)
+            .await?
+            .ok_or_else(|| Status::not_found(format!("{identity} has no stored version")))?;
+
+        let _guard = self.lock_mutations().await;
+        // A delete may have landed between the lookup and the lock; re-read
+        // this one identity so protection never lands on nothing stored.
+        let latest = match self.store.get(identity.kind(), &found, None).await {
+            Ok(_) => found,
+            Err(trogon_atlas_store::error::StoreError::NotFound) => self
+                .latest_of(&lens, &identity)
+                .await?
+                .ok_or_else(|| Status::not_found(format!("{identity} has no stored version")))?,
+            Err(e) => return Err(store_err(e)),
+        };
+        match self.protection_state(&identity).await {
+            ProtectionState::Unprotected => {}
+            ProtectionState::Protected(existing) => {
+                return Ok(Response::new(pb::ProtectEntityResponse {
+                    protection: Some(existing.to_proto()),
+                    changed: false,
+                }));
+            }
+            ProtectionState::Unknown(unknown) => {
+                return Err(crate::conv::protection_state_unknown(&[unknown]));
+            }
+        }
+        let mut changeset = PendingChangeset::mint("ProtectEntity", &author, None);
+        if msg.validate_only {
+            return Ok(Response::new(pb::ProtectEntityResponse {
+                protection: Some(
+                    ProtectionRecord {
+                        identity,
+                        reason,
+                        protected_by: changeset.author,
+                        protected_at: String::new(),
+                        changeset_id: String::new(),
+                    }
+                    .to_proto(),
+                ),
+                changed: true,
+            }));
+        }
+        let message = format!("protect {identity}: {reason}");
+        let Some(stored) = self
+            .protect_identity(identity.clone(), reason, latest.version, &mut changeset)
+            .await?
+        else {
+            return match self.protection_state(&identity).await {
+                ProtectionState::Protected(existing) => {
+                    Ok(Response::new(pb::ProtectEntityResponse {
+                        protection: Some(existing.to_proto()),
+                        changed: false,
+                    }))
+                }
+                ProtectionState::Unknown(unknown) => {
+                    Err(crate::conv::protection_state_unknown(&[unknown]))
+                }
+                ProtectionState::Unprotected => Err(Status::aborted(format!(
+                    "protection of {identity} changed concurrently; retry"
+                ))),
+            };
+        };
+        self.record_changeset(changeset, message).await;
+        Ok(Response::new(pb::ProtectEntityResponse {
+            protection: Some(stored.to_proto()),
+            changed: true,
+        }))
+    }
+
+    async fn unprotect_entity(
+        &self,
+        req: Request<pb::UnprotectEntityRequest>,
+    ) -> Result<Response<pb::UnprotectEntityResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let author = Self::author_from_metadata(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let principal = Self::principal_from_metadata(&req);
+        let principal = Self::require_protection_admin(principal.as_ref(), branch.as_deref())?;
+        let msg = req.into_inner();
+        let identity = identity_from_request(msg.kind, &msg.namespace, &msg.slug)?;
+        let if_match = (msg.if_match != 0).then(|| ProtectionRevision::new(msg.if_match));
+        self.require_visible(&vis, identity.namespace()).await?;
+        self.authorize_write_as(
+            Some(principal),
+            None,
+            &WriteTargets::of(identity.namespace()),
+            WriteEffect::of(msg.validate_only),
+        )
+        .await?;
+        let lens = self.lens(&vis).await?;
+        let version = self
+            .latest_of(&lens, &identity)
+            .await?
+            .map_or(0, |id| id.version);
+
+        let _guard = self.lock_mutations().await;
+        let (revision, was) = match self.protection_state(&identity).await {
+            ProtectionState::Unprotected => {
+                if let Some(expected) = if_match {
+                    return Err(crate::conv::stale_precondition(expected.to_string(), ""));
+                }
+                return Ok(Response::new(pb::UnprotectEntityResponse {
+                    changed: false,
+                    changeset_id: String::new(),
+                }));
+            }
+            ProtectionState::Protected(existing) => {
+                (existing.revision, existing.record.reason.to_string())
+            }
+            ProtectionState::Unknown(unknown) => match unknown.revision {
+                Some(revision) => (revision, unknown.cause.to_string()),
+                None => return Err(crate::conv::protection_state_unknown(&[unknown])),
+            },
+        };
+        if let Some(expected) = if_match.filter(|expected| *expected != revision) {
+            return Err(crate::conv::stale_precondition(
+                expected.to_string(),
+                revision.to_string(),
+            ));
+        }
+        if msg.validate_only {
+            return Ok(Response::new(pb::UnprotectEntityResponse {
+                changed: true,
+                changeset_id: String::new(),
+            }));
+        }
+        match self.store.delete_protection(&identity, revision).await {
+            Ok(()) => {}
+            Err(e) => return Err(store_err(e)),
+        }
+        let mut changeset = PendingChangeset::mint("UnprotectEntity", &author, None);
+        changeset.record_protection(ChangeKind::Unprotect, &identity, version);
+        let changeset_id = changeset.id.clone();
+        self.record_changeset(changeset, format!("unprotect {identity} (was: {was})"))
+            .await;
+        Ok(Response::new(pb::UnprotectEntityResponse {
+            changed: true,
+            changeset_id,
+        }))
+    }
+
+    async fn get_entity_protection(
+        &self,
+        req: Request<pb::GetEntityProtectionRequest>,
+    ) -> Result<Response<pb::GetEntityProtectionResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let msg = req.into_inner();
+        let identity = identity_from_request(msg.kind, &msg.namespace, &msg.slug)?;
+        self.require_visible(&vis, identity.namespace()).await?;
+        let response = match self.protection_state(&identity).await {
+            ProtectionState::Unprotected => pb::GetEntityProtectionResponse {
+                state: pb::ProtectionState::Unprotected as i32,
+                ..Default::default()
+            },
+            ProtectionState::Protected(stored) => pb::GetEntityProtectionResponse {
+                protection: Some(stored.to_proto()),
+                state: pb::ProtectionState::Protected as i32,
+                unknown: None,
+            },
+            ProtectionState::Unknown(unknown) => pb::GetEntityProtectionResponse {
+                protection: None,
+                state: pb::ProtectionState::Unknown as i32,
+                unknown: Some(unknown.to_proto()),
+            },
+        };
+        Ok(Response::new(response))
+    }
+
+    async fn list_entity_protections(
+        &self,
+        req: Request<pb::ListEntityProtectionsRequest>,
+    ) -> Result<Response<pb::ListEntityProtectionsResponse>, Status> {
+        let vis = Self::visibility_of(&req);
+        let msg = req.into_inner();
+        let lens = self.lens(&vis).await?;
+        let wanted = |identity: &EntityIdentity| {
+            lens.admits(identity.namespace())
+                && (msg.namespace.is_empty() || identity.namespace() == msg.namespace)
+        };
+        let listing = self.store.list_protections().await.map_err(store_err)?;
+        let mut protected: Vec<StoredProtection> = listing
+            .protected
+            .into_iter()
+            .filter(|stored| wanted(&stored.record.identity))
+            .collect();
+        protected.sort_by(|a, b| a.record.identity.cmp(&b.record.identity));
+        let mut unknown: Vec<ProtectionUnknown> = listing
+            .unknown
+            .into_iter()
+            .filter(|u| wanted(&u.identity))
+            .collect();
+        unknown.sort_by(|a, b| a.identity.cmp(&b.identity));
+        Ok(Response::new(pb::ListEntityProtectionsResponse {
+            protections: protected.iter().map(StoredProtection::to_proto).collect(),
+            unknown: unknown.iter().map(ProtectionUnknown::to_proto).collect(),
+            complete: listing.complete,
+        }))
+    }
+
     async fn get_snapshot_id(
         &self,
         req: Request<pb::GetSnapshotIdRequest>,
@@ -3424,36 +4575,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let scope: std::collections::BTreeSet<&str> =
             req.namespaces.iter().map(String::as_str).collect();
 
-        let mut hasher = trogon_atlas_core::SnapshotHasher::new();
-        let mut entries = Vec::new();
-        for se in all.iter() {
-            let id = entity_id(&se.entity)?;
-            if !scope.is_empty() && !scope.contains(id.namespace.as_str()) {
-                continue;
-            }
-            let kind = entity_kind(&se.entity)?;
-            let (key, hash) = snapshot_entry(&se.entity, kind, id)?;
-            if req.include_entries {
-                entries.push(pb::SnapshotEntry {
-                    key: key.clone(),
-                    entity: Some(pb::EntityRef {
-                        kind: kind as i32,
-                        id: Some(id.clone()),
-                    }),
-                    content_hash: hash.to_hex(),
-                });
-            }
-            insert_snapshot_entry(&mut hasher, key, hash)?;
-        }
-        // `SnapshotHasher` keeps its own sorted order; sort the response
-        // entries to match, since the proto promises key order.
-        entries.sort_by(|a, b| a.key.cmp(&b.key));
-
+        let digest = snapshot_digest(&all, &scope, req.include_entries)?;
         Ok(Response::new(pb::GetSnapshotIdResponse {
-            snapshot_id: hasher.finish().to_hex(),
-            entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
+            snapshot_id: digest.snapshot_id,
+            entity_count: digest.entity_count,
             truncated,
-            entries,
+            entries: digest.entries,
         }))
     }
 
@@ -4628,6 +5755,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         use crate::impact_classification::{self as ic, Incompleteness};
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
+        if let Some(name) = branch.as_deref() {
+            self.require_branch(name).await?;
+        }
         let req = req.into_inner();
         let current = req
             .current
@@ -4788,6 +5918,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             &WriteTargets::Unbounded,
         )
         .await?;
+        let preview = invariant_admission::preview_request(
+            &req,
+            pb::RetargetReferencesRequest {
+                dry_run: true,
+                ..req.get_ref().clone()
+            },
+        );
         let req = req.into_inner();
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
@@ -4826,8 +5963,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await
             .map_err(store_err)?;
 
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_ticket = if req.dry_run {
+            None
+        } else {
+            Some(
+                self.ticket_by_preview(
+                    invariant_scope,
+                    preview,
+                    |preview| self.retarget_references(preview),
+                    |response: &pb::RetargetReferencesResponse| {
+                        Some(response.invariant_check.clone())
+                    },
+                )
+                .await?,
+            )
+        };
+
         // Acquire the mutation lock; concurrent batches must not interleave.
-        let _guard = self.lock_mutations().await;
+        let guard = self.lock_mutations().await;
         if branch.is_none() {
             self.invalidate_snapshot().await;
         }
@@ -4988,6 +6142,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             })
             .collect();
 
+        self.refuse_protected(metas.iter().map(|m| (m.kind, &m.id)))
+            .await?;
         self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
             .await?;
         self.validate_business_writes(&metas, branch.as_deref(), &vis)
@@ -4995,13 +6151,40 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
         let staged_count = u32::try_from(staged.len()).unwrap_or(u32::MAX);
 
-        if req.dry_run || staged.is_empty() {
+        if req.dry_run {
+            drop(guard);
+            let changes: Vec<invariant_admission::Change> = metas
+                .iter()
+                .map(|m| (m.kind, m.id.clone(), m.entity.clone()))
+                .collect();
+            let invariant_check = self
+                .check_invariants(invariant_scope, &changes, &vis)
+                .await?;
             return Ok(Response::new(pb::RetargetReferencesResponse {
+                invariant_check,
                 rewritten: staged_count,
                 failed: load_fail_count,
                 results,
             }));
         }
+        if staged.is_empty() {
+            // Nothing applies, so there is nothing for the verdict to go
+            // stale against; report it as the dry run does.
+            let invariant_check = invariant_ticket
+                .as_ref()
+                .map_or(Ok(None), invariant_admission::InvariantTicket::preview)?;
+            return Ok(Response::new(pb::RetargetReferencesResponse {
+                invariant_check,
+                rewritten: staged_count,
+                failed: load_fail_count,
+                results,
+            }));
+        }
+
+        let invariant_check = match invariant_ticket.as_ref() {
+            Some(ticket) => self.invariant_gate(invariant_scope, ticket)?,
+            None => None,
+        };
 
         // Apply staged writes through the existing batch machinery.
         use trogon_atlas_store::store::MutationOp;
@@ -5032,12 +6215,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     self.invalidate_snapshot().await;
                 }
                 Ok(Response::new(pb::RetargetReferencesResponse {
+                    invariant_check,
                     rewritten: u32::try_from(outcomes.len()).unwrap_or(u32::MAX),
                     failed: load_fail_count,
                     results,
                 }))
             }
             Err(e) => {
+                if e.is_partial_apply() {
+                    self.note_entity_write(branch.as_deref(), true).await;
+                }
                 tracing::warn!(error = %e, "retarget_references batch_apply failed");
                 for r in &mut results {
                     if r.error.is_empty() && !r.fields.is_empty() {
@@ -5045,6 +6232,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     }
                 }
                 Ok(Response::new(pb::RetargetReferencesResponse {
+                    invariant_check: None,
                     rewritten: 0,
                     failed: load_fail_count + staged_count,
                     results,
@@ -5201,12 +6389,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             };
             (em, self.snapshot_for(branch.as_deref(), &vis).await?, false)
         } else {
-            let (all, incomplete) = self
+            let AsOfView {
+                entities: all,
+                incomplete,
+                ..
+            } = self
                 .snapshot_as_of(
                     &req.as_of_changeset,
                     &vis,
                     principal.as_ref(),
                     (pb::EntityKind::EventModel, id),
+                    false,
                 )
                 .await?;
             // The live row may be gone or newer, so the root comes from the
@@ -5405,6 +6598,385 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }))
     }
 
+    async fn export_attested_model(
+        &self,
+        req: Request<pb::ExportAttestedModelRequest>,
+    ) -> Result<Response<pb::ExportAttestedModelResponse>, Status> {
+        use pb::attested_completeness::Reason;
+        let vis = Self::visibility_of(&req);
+        let principal = Self::principal_from_metadata(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let req = req.into_inner();
+        let requested_id = require_id(req.id.as_ref(), "id")?.clone();
+        let historical = !req.as_of_changeset.is_empty();
+        if historical && branch.is_some() {
+            return Err(Status::invalid_argument(
+                "as_of_changeset reads baseline history only; send it without a branch header",
+            ));
+        }
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.require_visible(&vis, &requested_id.namespace).await?;
+        let signer = self.attested_signer()?;
+
+        // Nothing holds writes off: the export reads one snapshot, binds the
+        // bundle to it, and marks whatever moved or could not be resolved.
+        let lens = self.lens(&vis).await?;
+        let mut reasons = BTreeSet::new();
+        let mut unresolved = Unresolved::default();
+        let branch_before = match branch.as_deref() {
+            Some(name) => Some(self.branch_boundary(name).await?),
+            None => None,
+        };
+        let baseline_before = self.newest_changeset(ChangesetScope::Baseline).await?;
+        let mut baseline_read = None;
+
+        let (root, all, snapshot_truncated, history_incomplete, baseline_changeset_id) =
+            if historical {
+                let AsOfView {
+                    entities: all,
+                    truncated,
+                    incomplete,
+                    boundary_verified,
+                } = self
+                    .snapshot_as_of(
+                        &req.as_of_changeset,
+                        &vis,
+                        principal.as_ref(),
+                        (pb::EntityKind::EventModel, &requested_id),
+                        true,
+                    )
+                    .await?;
+                if !boundary_verified {
+                    reasons.insert(Reason::BoundaryUnverified);
+                }
+                let root = event_model_in(&all, &requested_id)
+                    .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
+                (
+                    root,
+                    all,
+                    truncated,
+                    incomplete,
+                    req.as_of_changeset.clone(),
+                )
+            } else {
+                let (all, truncated, boundary_verified) = self
+                    .snapshot_for_attestation(branch.as_deref(), &vis)
+                    .await?;
+                // A mutation commits its entities before it records its
+                // changeset, both under the mutation lock. Waiting for the
+                // lock lets one the snapshot caught midway record first, so
+                // the changeset read next covers everything the snapshot holds.
+                drop(self.lock_mutations().await);
+                baseline_read = Some(self.newest_changeset(ChangesetScope::Baseline).await?);
+                let root = if let Some(root) = event_model_in(&all, &requested_id) {
+                    root
+                } else {
+                    // Not in the snapshot it was read from: carry the live
+                    // copy, marked, rather than attest it as part of it.
+                    let stored = if requested_id.version == 0 {
+                        let lens = self.lens(&vis).await?;
+                        get_latest_version_with_cap(
+                            &self.store,
+                            &lens,
+                            pb::EntityKind::EventModel,
+                            &requested_id.namespace,
+                            &requested_id.slug,
+                            MAX_PROJECTION_ENTITIES,
+                            branch.as_deref(),
+                        )
+                        .await?
+                        .map(|entity| StoredEntity {
+                            entity,
+                            etag: String::new(),
+                        })
+                        .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?
+                    } else {
+                        self.store
+                            .get(pb::EntityKind::EventModel, &requested_id, branch.as_deref())
+                            .await
+                            .map_err(store_err)?
+                    };
+                    let outside_id = entity_id(&stored.entity)?.clone();
+                    unresolved.mark(
+                        &pb::EntityKey::new(pb::EntityKind::EventModel, &outside_id),
+                        UnresolvedCause::OutsideSnapshot,
+                    );
+                    if !truncated {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    stored.entity
+                };
+                if !boundary_verified {
+                    reasons.insert(Reason::BoundaryUnverified);
+                }
+                // The newest baseline changeset dates every owner's writes,
+                // so only an unrestricted caller may learn it.
+                let boundary = if vis.is_unrestricted() {
+                    baseline_before.clone()
+                } else {
+                    String::new()
+                };
+                (root, all, truncated, false, boundary)
+            };
+        let id = entity_id(&root)?.clone();
+        let root_key = pb::EntityKey::new(pb::EntityKind::EventModel, &id);
+        let Some(pb::entity::Kind::EventModel(model)) = root.kind.as_ref() else {
+            return Err(Status::internal("stored entity is not an EventModel"));
+        };
+
+        let root_types = self
+            .transcode_pool(&id.namespace, branch.as_deref())
+            .await?;
+        let board = graph::board_closure(
+            &all,
+            &root,
+            MAX_PROJECTION_ENTITIES,
+            &self.metrics,
+            &root_types,
+        )?;
+        let namespaces: std::collections::BTreeSet<&str> = board
+            .own
+            .iter()
+            .chain(&board.external)
+            .filter_map(|e| trogon_atlas_store::refs::entity_id(e).map(|i| i.namespace.as_str()))
+            .collect();
+        let mut types = BTreeMap::from([(id.namespace.as_str(), root_types)]);
+        for namespace in namespaces {
+            if namespace != id.namespace {
+                types.insert(
+                    namespace,
+                    self.transcode_pool(namespace, branch.as_deref()).await?,
+                );
+            }
+        }
+        let rendered = trogon_atlas_client::export::render_board_scoped(
+            &board.own,
+            &board.external,
+            |namespace| types.get(namespace),
+        )
+        .map_err(|e| Status::internal(format!("rendering manifests: {e:#}")))?;
+        let (closure, entries) = snapshot_identity(board.own.iter().chain(&board.external), true)?;
+        let (view, _) = snapshot_identity(all.iter().map(|se| &se.entity), false)?;
+
+        for key in &board.missing {
+            let cause = if lens.admits(&key.namespace) {
+                UnresolvedCause::Missing
+            } else {
+                UnresolvedCause::Hidden
+            };
+            unresolved.mark(key, cause);
+        }
+        let mut read: std::collections::HashSet<pb::EntityKey> =
+            board.missing.iter().cloned().collect();
+        read.insert(root_key.clone());
+        let snapshot_etags: HashMap<pb::EntityKey, &str> = all
+            .iter()
+            .filter_map(|se| {
+                let kind = trogon_atlas_store::refs::entity_kind(&se.entity)?;
+                let id = trogon_atlas_store::refs::entity_id(&se.entity)?;
+                Some((pb::EntityKey::new(kind, id), se.etag.as_str()))
+            })
+            .collect();
+        let mut checked = Vec::new();
+        for entity in board.own.iter().chain(&board.external) {
+            let key = pb::EntityKey::new(entity_kind(entity)?, entity_id(entity)?);
+            read.insert(key.clone());
+            if historical {
+                continue;
+            }
+            // The bundle carries the snapshot's copy; a live etag that
+            // differs means a write landed after the snapshot was read.
+            let Some(&etag) = snapshot_etags.get(&key) else {
+                continue;
+            };
+            checked.push((key, etag.to_string()));
+        }
+        for chunk in checked.chunks(ADVERTISED_MAX_BATCH_GET_KEYS) {
+            let keys: Vec<_> = chunk.iter().map(|(key, _)| (key.kind, key.id())).collect();
+            let live = self
+                .store
+                .batch_get(&keys, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+            for ((key, etag), live) in chunk.iter().zip(live) {
+                match live {
+                    Some(live) if live.etag == *etag => {}
+                    Some(_) => {
+                        unresolved.mark(key, UnresolvedCause::Changed);
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    None => {
+                        unresolved.mark(key, UnresolvedCause::Deleted);
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                }
+            }
+        }
+        let view_truncated = snapshot_truncated || history_incomplete;
+        let issues = validation::validate_model(model, &all);
+        let checks = vec![
+            validation::ran_against_snapshot(validation::CHECK_MODEL, 1, view_truncated),
+            validation::ran_against_snapshot(validation::CHECK_STRATEGIC, 1, view_truncated),
+        ];
+        let model_scope = pb::ValidationScope {
+            branch: branch.clone().unwrap_or_default(),
+            project_id: None,
+            domain_id: None,
+            namespace: id.namespace.clone(),
+            event_model_id: Some(id.clone()),
+        };
+        let coverage = validation::validation_coverage(
+            checks,
+            model_scope.clone(),
+            model_scope,
+            view_truncated,
+        );
+        let rule_catalog = attested_bundle::rule_catalog_digest(&validation::rule_catalog())
+            .map_err(|e| Status::internal(format!("digesting the rule catalog: {e}")))?;
+
+        let rendered_namespaces: BTreeSet<&str> = types.keys().copied().collect();
+        if historical {
+            // A historical view is rewound from history, so later writes do
+            // not move it. Only the live type libraries it rendered through
+            // can, checked after rendering so a change mid-export counts.
+            if self
+                .type_libraries_changed_after(&req.as_of_changeset, &lens, &rendered_namespaces)
+                .await?
+            {
+                reasons.insert(Reason::TypeLibrariesChanged);
+            }
+        } else if self.newest_changeset(ChangesetScope::Baseline).await? != baseline_before {
+            let overlaid = match branch.as_deref() {
+                Some(name) => self.branch_overlaid_keys(name).await?,
+                None => std::collections::HashSet::new(),
+            };
+            if self
+                .baseline_moved_under(
+                    &baseline_before,
+                    baseline_read
+                        .as_deref()
+                        .filter(|read| *read != baseline_before),
+                    &lens,
+                    &read,
+                    (requested_id.version == 0).then_some(&root_key),
+                    &rendered_namespaces,
+                    &overlaid,
+                )
+                .await
+            {
+                reasons.insert(Reason::ConcurrentWrite);
+            }
+        }
+        let branch_changeset_id = match (branch.as_deref(), branch_before) {
+            (Some(name), Some(before)) => {
+                match self.branch_boundary(name).await {
+                    Ok(after) if after == before => {}
+                    Ok(_) => {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    Err(status) if status.code() == tonic::Code::NotFound => {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    Err(status) => return Err(status),
+                }
+                before.newest_changeset
+            }
+            _ => String::new(),
+        };
+        if self.lens(&vis).await? != lens {
+            reasons.insert(Reason::ConcurrentWrite);
+        }
+        if !unresolved.is_empty() {
+            reasons.insert(Reason::UnresolvedEntities);
+        }
+
+        if snapshot_truncated {
+            reasons.insert(Reason::SnapshotTruncated);
+        }
+        if history_incomplete {
+            reasons.insert(Reason::HistoryIncomplete);
+        }
+        if board.truncated {
+            reasons.insert(Reason::ClosureTruncated);
+        }
+        if !rendered.skipped.is_empty() {
+            reasons.insert(Reason::EntitiesSkipped);
+        }
+        if coverage
+            .checks
+            .iter()
+            .any(|c| c.state() != pb::validation_check_result::State::Completed)
+        {
+            reasons.insert(Reason::ValidationIncomplete);
+        }
+        if !reasons.is_empty() && !req.allow_incomplete {
+            let names: Vec<&str> = reasons
+                .iter()
+                .map(pb::attested_completeness::Reason::as_str_name)
+                .collect();
+            return Err(crate::conv::export_incomplete(
+                format!(
+                    "the export does not cover its whole scope ({}); pass allow_incomplete to \
+                     receive a bundle marked incomplete",
+                    names.join(", ")
+                ),
+                names.join(","),
+            ));
+        }
+
+        let mode = if historical {
+            pb::attested_state::Mode::Historical
+        } else {
+            pb::attested_state::Mode::Current
+        };
+        let mut bundle = pb::AttestedModelBundle {
+            format: attested_bundle::BUNDLE_FORMAT.to_string(),
+            scope: Some(pb::AttestedScope {
+                event_model_id: Some(id.clone()),
+                branch: branch.unwrap_or_default(),
+                lens: Some(attested_lens(&lens)),
+            }),
+            state: Some(pb::AttestedState {
+                mode: mode as i32,
+                snapshot_id: view.finish().to_hex(),
+                snapshot_entity_count: u32::try_from(view.len()).unwrap_or(u32::MAX),
+                closure_id: closure.finish().to_hex(),
+                baseline_changeset_id,
+                branch_changeset_id,
+                closure_truncated: board.truncated,
+            }),
+            manifests: rendered.manifests,
+            external_manifests: rendered.external_manifests,
+            entries,
+            skipped: rendered.skipped,
+            validation: Some(pb::AttestedValidation {
+                issues,
+                coverage: Some(coverage),
+                rule_catalog: Some(pb::RuleCatalogIdentity {
+                    digest: rule_catalog.to_hex(),
+                    server_version: env!("CARGO_PKG_VERSION").to_string(),
+                }),
+            }),
+            completeness: Some(attested_bundle::Completeness::from_reasons(reasons).to_proto()),
+            bundle_digest: String::new(),
+            unresolved: unresolved.into_rows(),
+            signature: None,
+        };
+        match signer.as_ref() {
+            Some(key) => attested_bundle::seal_signed(&mut bundle, key),
+            None => attested_bundle::seal(&mut bundle),
+        }
+        .map_err(|e| Status::internal(format!("sealing the bundle: {e}")))?;
+        Ok(Response::new(pb::ExportAttestedModelResponse {
+            bundle: Some(bundle),
+        }))
+    }
+
     async fn diff_entities(
         &self,
         req: Request<pb::DiffEntitiesRequest>,
@@ -5452,9 +7024,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let principal = Self::principal_from_metadata(&req);
         let req = req.into_inner();
         operation_receipts::reject_operation_id_with_dry_run(&req.operation_id, req.validate_only)?;
-        let entity = req
+        let mut entity = req
             .entity
             .ok_or_else(|| Status::invalid_argument("entity is required"))?;
+        let requested_entity = entity.clone();
         let kind = entity_kind(&entity)?;
         let id = entity_id(&entity)?.clone();
         // A hidden branch must not override a namespace denial or claim a new namespace.
@@ -5475,6 +7048,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
         let branch = branch?;
+        let protect_reason =
+            Self::honored_protection(&mut entity, principal.as_ref(), branch.as_deref())?;
         self.authorize_write_as(
             principal.as_ref(),
             branch.as_deref(),
@@ -5485,6 +7060,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
         }
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_pins = self.invariant_pins(invariant_scope);
         validate_entity_content(&entity)?;
         check_project_namespace_conflict(&entity)?;
         check_context_slug(&entity)?;
@@ -5549,11 +7126,102 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             },
         );
 
+        let invariant_ticket = if let Some(ticket) = self
+            .unguarded(
+                invariant_scope,
+                invariant_pins,
+                crate::invariants::declares_invariants(&entity),
+            )
+            .await?
+        {
+            ticket
+        } else {
+            let previous = match self.store.get(kind, &id, branch.as_deref()).await {
+                Ok(stored) => Some(stored.entity),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => None,
+                Err(error) => return Err(store_err(error)),
+            };
+            let prepared = trogon_atlas_core::connection_persistence::prepare_entity(
+                previous.as_ref(),
+                &entity,
+            )
+            .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            self.ticket_for_changes(
+                invariant_scope,
+                invariant_pins,
+                &[(kind, id.clone(), Some(prepared))],
+                &vis,
+            )
+            .await?
+        };
+
         // Dry runs share the mutation lock with apply so `create_only` /
         // `if_match` see a stable view and report the same typed refusal as a
         // real write. The lock is released when this call returns; a preview
         // is never a reservation.
-        let _guard = self.lock_mutations().await;
+        let attempt = if req.operation_id.is_empty() {
+            None
+        } else {
+            let principal_name = principal
+                .as_ref()
+                .map_or(UNAUTHENTICATED_PRINCIPAL, |p| p.name.as_ref());
+            let digest_req = pb::PutEntityRequest {
+                entity: Some(requested_entity),
+                create_only: req.create_only,
+                if_match: req.if_match.clone(),
+                validate_only: false,
+                force: req.force,
+                operation_id: String::new(),
+            };
+            let pool = self
+                .digest_pool(digest_req.entity.iter(), branch.as_deref())
+                .await?;
+            Some(operation_receipts::OperationAttempt::in_pool(
+                &pool,
+                principal_name,
+                &req.operation_id,
+                "PutEntity",
+                branch.as_deref(),
+                "trogonatlas.api.eventmodel.v1alpha1.PutEntityRequest",
+                &digest_req,
+            )?)
+        };
+
+        let guard = self.lock_mutations().await;
+        let settled = operation_receipts::settled(&*self.store, attempt.as_ref()).await;
+        let resumed = match (&protect_reason, EntityIdentity::of(kind, &id)) {
+            (Some(_), Some(identity)) => self
+                .protections_resumed_by(
+                    attempt.as_ref(),
+                    "PutEntity",
+                    &req.operation_id,
+                    &author.name,
+                    &[&identity],
+                )
+                .await
+                .into_values()
+                .next(),
+            _ => None,
+        };
+        if resumed.is_none() {
+            self.refuse_protected([(kind, &id)]).await?;
+        }
+        if let Some(record) = settled {
+            return self
+                .put_replay(kind, &id, branch.as_deref(), &req.operation_id, &record)
+                .await;
+        }
+        // An earlier attempt landed this content and then failed to protect
+        // it. Writing again would only trip its own `create_only` or
+        // `if_match`, so a retry finds that content still current and
+        // resumes at the protection step.
+        let landed = match (&protect_reason, &resumed) {
+            (Some(_), None) => {
+                self.put_landed_by(attempt.as_ref(), &req.operation_id, &author.name, kind, &id)
+                    .await
+            }
+            _ => None,
+        };
 
         if req.validate_only {
             self.validate_architecture_write(&entity, branch.as_deref(), &vis)
@@ -5569,6 +7237,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 &vis,
             )
             .await?;
+            let invariant_check = invariant_ticket.preview()?;
             let stored = match self.store.get(kind, &id, branch.as_deref()).await {
                 Ok(stored) => Some(stored),
                 Err(trogon_atlas_store::error::StoreError::NotFound) => None,
@@ -5597,13 +7266,26 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let prepared =
                 trogon_atlas_core::connection_persistence::prepare_entity(previous, &entity)
                     .map_err(|error| Status::invalid_argument(error.to_string()))?;
+            if branch.is_none() {
+                self.invalidate_snapshot().await;
+            }
+            let (before, truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
+            let after = world_after(&before, &[(kind, &id, Some(&prepared))]);
+            drop(guard);
+            let consequence_delta = self
+                .consequence_delta(&before, &after, truncated, branch.as_deref(), &vis)
+                .await;
             return Ok(Response::new(pb::PutEntityResponse {
+                invariant_check,
                 entity: Some(prepared),
                 etag: String::new(),
                 validation: scenario_issues,
                 no_op: false,
                 operation_receipt: None,
                 coverage: Some(put_coverage),
+                consequence_delta,
             }));
         }
 
@@ -5612,34 +7294,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .confirm(&*self.store, admission, branch.as_deref())
                 .await?;
         }
-
-        let attempt = if req.operation_id.is_empty() {
-            None
-        } else {
-            let principal_name = principal
-                .as_ref()
-                .map_or(UNAUTHENTICATED_PRINCIPAL, |p| p.name.as_ref());
-            let digest_req = pb::PutEntityRequest {
-                entity: Some(entity.clone()),
-                create_only: req.create_only,
-                if_match: req.if_match.clone(),
-                validate_only: false,
-                force: req.force,
-                operation_id: String::new(),
-            };
-            let pool = self
-                .digest_pool(digest_req.entity.iter(), branch.as_deref())
-                .await?;
-            Some(operation_receipts::OperationAttempt::in_pool(
-                &pool,
-                principal_name,
-                &req.operation_id,
-                "PutEntity",
-                branch.as_deref(),
-                "trogonatlas.api.eventmodel.v1alpha1.PutEntityRequest",
-                &digest_req,
-            )?)
-        };
 
         let claim_key = match &attempt {
             None => None,
@@ -5654,70 +7308,93 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 {
                     operation_receipts::Claim::Proceed => Some(attempt.claim_key.clone()),
                     operation_receipts::Claim::Replay(record) => {
-                        if record.status == OperationStatus::Rejected {
-                            return Err(operation_receipts::replay_rejected_status(&record));
-                        }
-                        // Applied: the replay reconstructs the current state
-                        // rather than replaying a byte-identical response --
-                        // the entity may have moved on since the original
-                        // call, and GetEntity-shaped data is the only honest
-                        // answer to "what does it look like now".
-                        let current = self
-                            .store
-                            .get(kind, &id, branch.as_deref())
-                            .await
-                            .map_err(store_err)?;
-                        return Ok(Response::new(pb::PutEntityResponse {
-                            no_op: false,
-                            etag: current.etag,
-                            entity: Some(current.entity),
-                            validation: Vec::new(),
-                            operation_receipt: Some(operation_receipts::replay_receipt(
-                                &req.operation_id,
-                                &record,
-                            )),
-                            // Replay reconstructs current state; it did not
-                            // re-run write-path suites for this call.
-                            coverage: None,
-                        }));
+                        return self
+                            .put_replay(kind, &id, branch.as_deref(), &req.operation_id, &record)
+                            .await;
                     }
                 }
             }
         };
 
-        if let Err(status) = self
-            .validate_architecture_write(&entity, branch.as_deref(), &vis)
-            .await
-        {
-            if let Some(key) = &claim_key {
-                operation_receipts::settle_for_status(&*self.store, key, &status).await;
-            }
-            return Err(status);
+        // An earlier attempt of this operation wrote the content and
+        // protected the identity, then could not confirm the protection and
+        // settled not-applied. Writing again would only trip its own
+        // `create_only` or `if_match`, so finish by settling what landed.
+        if let (Some(key), Some(changeset_id)) = (&claim_key, &resumed) {
+            operation_receipts::settle_applied(&*self.store, key, changeset_id).await;
+            let current = self
+                .store
+                .get(kind, &id, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+            return Ok(Response::new(pb::PutEntityResponse {
+                no_op: false,
+                etag: current.etag,
+                entity: Some(current.entity),
+                validation: scenario_issues,
+                operation_receipt: Some(operation_receipts::fresh_receipt(
+                    &req.operation_id,
+                    changeset_id,
+                )),
+                invariant_check: None,
+                coverage: Some(put_coverage),
+                consequence_delta: None,
+            }));
         }
-        if let Err(status) = self
-            .validate_business_writes(
-                &[OpMetaLike {
-                    kind,
-                    id: id.clone(),
-                    is_put: true,
-                    entity: Some(entity.clone()),
-                }],
-                branch.as_deref(),
-                &vis,
-            )
-            .await
-        {
-            if let Some(key) = &claim_key {
-                operation_receipts::settle_for_status(&*self.store, key, &status).await;
+
+        if landed.is_none() {
+            if let Err(status) = self
+                .validate_architecture_write(&entity, branch.as_deref(), &vis)
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
             }
-            return Err(status);
         }
+        if landed.is_none() {
+            if let Err(status) = self
+                .validate_business_writes(
+                    &[OpMetaLike {
+                        kind,
+                        id: id.clone(),
+                        is_put: true,
+                        entity: Some(entity.clone()),
+                    }],
+                    branch.as_deref(),
+                    &vis,
+                )
+                .await
+            {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        }
+        let invariant_check = match self.invariant_gate(invariant_scope, &invariant_ticket) {
+            Ok(check) => check,
+            Err(status) => {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        };
 
         let mut changeset = PendingChangeset::mint("PutEntity", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
             .with_operation_key(claim_key.as_deref());
         let create_only = req.create_only;
-        let write_result = if create_only {
+        let (landed_changeset_id, landed) = landed.unzip();
+        let write_result = if let Some(current) = landed {
+            Ok(trogon_atlas_store::store::Written {
+                etag: current.etag,
+                wrote: false,
+                entity: current.entity,
+            })
+        } else if create_only {
             self.store
                 .create(kind, &entity, changeset.write_ctx())
                 .await
@@ -5786,18 +7463,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 return Err(status);
             }
         };
-        // A no-op write (e.g. `put` with content identical to what is
-        // already stored) never gets recorded as a changeset, so a receipt
-        // for it must not point at a changeset id nothing ever persisted.
-        let receipt_changeset_id = if written.wrote {
-            changeset.id.clone()
-        } else {
-            String::new()
-        };
-        if let Some(key) = &claim_key {
-            operation_receipts::settle_applied(&*self.store, key, &receipt_changeset_id).await;
-        }
-
         // A skipped write changed nothing: no side effects, no mirror
         // commit. When it did write, every side effect sees the entity AS
         // STORED (system stamp included) so the git mirror stays
@@ -5817,6 +7482,32 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if written.wrote {
             changeset.record_put(kind, &id);
             changeset.validated_by(&put_coverage, &scenario_issues);
+        }
+        // The operation settles only once protection has landed too, so a
+        // registry failure leaves the id free for a retry to finish the job.
+        let protected = match (protect_reason, EntityIdentity::of(kind, &id)) {
+            (Some(reason), Some(identity)) => self
+                .protect_identity(identity, reason, id.version, &mut changeset)
+                .await
+                .map(|stored| stored.is_some()),
+            _ => Ok(false),
+        };
+        let content_changeset_id = if written.wrote {
+            Some(changeset.id.clone())
+        } else {
+            landed_changeset_id
+        };
+        let changed = written.wrote || matches!(protected, Ok(true));
+        // A no-op write (e.g. `put` with content identical to what is
+        // already stored, and no new protection) never gets recorded as a
+        // changeset, so a receipt for it must not point at a changeset id
+        // nothing ever persisted.
+        let receipt_changeset_id = if changed {
+            changeset.id.clone()
+        } else {
+            String::new()
+        };
+        if !changeset.ops.is_empty() {
             self.record_changeset(
                 changeset,
                 git_mirror::commit_message(kind, &id.namespace, &id.slug, id.version, verb),
@@ -5842,8 +7533,32 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await;
         }
 
+        if let Err(status) = protected {
+            if let Some(key) = &claim_key {
+                match &content_changeset_id {
+                    Some(changeset_id) => {
+                        operation_receipts::settle_unfinished_for_status(
+                            &*self.store,
+                            key,
+                            &status,
+                            changeset_id,
+                        )
+                        .await;
+                    }
+                    None => {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                }
+            }
+            return Err(status);
+        }
+        if let Some(key) = &claim_key {
+            operation_receipts::settle_applied(&*self.store, key, &receipt_changeset_id).await;
+        }
+
         Ok(Response::new(pb::PutEntityResponse {
-            no_op: !written.wrote,
+            invariant_check,
+            no_op: !changed,
             etag: written.etag,
             entity: Some(written.entity),
             validation: scenario_issues,
@@ -5851,6 +7566,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 operation_receipts::fresh_receipt(&req.operation_id, &receipt_changeset_id)
             }),
             coverage: Some(put_coverage),
+            consequence_delta: None,
         }))
     }
 
@@ -5895,6 +7611,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         } else {
             Some(req.if_match.as_str())
         };
+
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_ticket = self
+            .ticket_for_changes(
+                invariant_scope,
+                self.invariant_pins(invariant_scope),
+                &[(kind, id.clone(), None)],
+                &vis,
+            )
+            .await?;
 
         let _guard = self.lock_mutations().await;
         // Drop any snapshot cached from before we acquired the mutation lock:
@@ -5960,6 +7686,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         // current to report; an empty list is the honest
                         // answer, not a stale one.
                         return Ok(Response::new(pb::DeleteEntityResponse {
+                            invariant_check: None,
                             referrers_incomplete: true,
                             referrers: Vec::new(),
                             operation_receipt: Some(operation_receipts::replay_receipt(
@@ -5993,6 +7720,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 }
                 return Err(status);
             }
+        }
+        // Protection can be lifted, so refusing on it is not a final answer
+        // for this id: release the claim, as `PutEntity` and `BatchMutate`
+        // refuse before they claim.
+        if let Err(status) = self.refuse_protected([(kind, &id)]).await {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_not_applied(&*self.store, key).await;
+            }
+            return Err(status);
         }
 
         if kind == pb::EntityKind::TypeLibrary
@@ -6062,10 +7798,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             pb::delete_entity_request::Mode::DryRun => {
                 // operation_id and dry-run never coexist (rejected above),
                 // so claim_key is always None here.
+                let invariant_check = invariant_ticket.preview()?;
                 let validation = self
                     .delete_strategic_findings(kind, &id, branch.as_deref(), &vis)
                     .await?;
                 return Ok(Response::new(pb::DeleteEntityResponse {
+                    invariant_check,
                     referrers_incomplete,
                     referrers,
                     operation_receipt: None,
@@ -6093,6 +7831,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await
         {
             Ok(findings) => findings,
+            Err(status) => {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        };
+        let invariant_check = match self.invariant_gate(invariant_scope, &invariant_ticket) {
+            Ok(check) => check,
             Err(status) => {
                 if let Some(key) = &claim_key {
                     operation_receipts::settle_for_status(&*self.store, key, &status).await;
@@ -6144,6 +7891,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .await;
         }
         Ok(Response::new(pb::DeleteEntityResponse {
+            invariant_check,
             referrers_incomplete,
             referrers,
             operation_receipt: claim_key.as_ref().map(|_| {
@@ -6218,6 +7966,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
         }
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_pins = self.invariant_pins(invariant_scope);
 
         // Validate every op up front and translate to store-level mutations.
         // Build per-op metadata so we can map outcomes back to per-op responses.
@@ -6234,16 +7984,34 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let mut has_scenario_puts = false;
         let mut has_strategic_puts = false;
         let mut has_strategic_deletes = false;
+        let mut protect_requests: Vec<(EntityIdentity, ProtectionReason, u64)> = Vec::new();
 
         for (i, op) in req.ops.iter().enumerate() {
             match &op.op {
                 Some(pb::batch_mutate_op::Op::Put(p)) => {
                     operation_receipts::reject_nested_operation_id(&p.operation_id, i)?;
-                    let entity = p.entity.clone().ok_or_else(|| {
+                    let mut entity = p.entity.clone().ok_or_else(|| {
                         Status::invalid_argument(format!("ops[{i}].put.entity is required"))
                     })?;
                     let kind = entity_kind(&entity)?;
                     let id = entity_id(&entity)?.clone();
+                    if source_execution.is_some()
+                        && crate::protection::take_request(&mut entity.clone()).is_some()
+                    {
+                        return Err(Status::invalid_argument(format!(
+                            "ops[{i}]: a source run cannot carry a ProtectionAnnotation; an \
+                             admin protects the entity with ProtectEntity after the run lands"
+                        )));
+                    }
+                    if let Some(reason) = Self::honored_protection(
+                        &mut entity,
+                        principal.as_ref(),
+                        branch.as_deref(),
+                    )? {
+                        if let Some(identity) = EntityIdentity::of(kind, &id) {
+                            protect_requests.push((identity, reason, id.version));
+                        }
+                    }
                     validate_entity_content(&entity)?;
                     check_project_namespace_conflict(&entity)?;
                     check_context_slug(&entity)?;
@@ -6360,10 +8128,108 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
         }
 
+        let invariant_changes: Vec<invariant_admission::Change> = metas
+            .iter()
+            .map(|m| (m.kind, m.id.clone(), m.entity.clone().filter(|_| m.is_put)))
+            .collect();
+        let invariant_ticket = self
+            .ticket_for_changes(invariant_scope, invariant_pins, &invariant_changes, &vis)
+            .await?;
+
         // Serialize against every other writer: dry-run applies and rolls
         // back, so nothing may interleave with it, and concurrent batches
         // must not interleave with each other.
-        let _guard = self.lock_mutations().await;
+        let attempt = if req.operation_id.is_empty() {
+            None
+        } else {
+            let principal_name = principal
+                .as_ref()
+                .map_or(UNAUTHENTICATED_PRINCIPAL, |p| p.name.as_ref());
+            let digest_req = pb::BatchMutateRequest {
+                ops: req.ops.clone(),
+                validate_only: false,
+                operation_id: String::new(),
+            };
+            let pool = self
+                .digest_pool(
+                    digest_req.ops.iter().filter_map(|op| match &op.op {
+                        Some(pb::batch_mutate_op::Op::Put(put)) => put.entity.as_ref(),
+                        _ => None,
+                    }),
+                    branch.as_deref(),
+                )
+                .await?;
+            Some(operation_receipts::OperationAttempt::in_pool(
+                &pool,
+                principal_name,
+                &req.operation_id,
+                "BatchMutate",
+                branch.as_deref(),
+                "trogonatlas.api.eventmodel.v1alpha1.BatchMutateRequest",
+                &digest_req,
+            )?)
+        };
+
+        let guard = self.lock_mutations().await;
+        let settled = operation_receipts::settled(&*self.store, attempt.as_ref()).await;
+        let resumed = self
+            .protections_resumed_by(
+                attempt.as_ref(),
+                "BatchMutate",
+                &req.operation_id,
+                &author.name,
+                &protect_requests
+                    .iter()
+                    .map(|(identity, _, _)| identity)
+                    .collect::<Vec<_>>(),
+            )
+            .await;
+        self.refuse_protected(
+            metas
+                .iter()
+                .filter(|m| {
+                    EntityIdentity::of(m.kind, &m.id).is_none_or(|i| !resumed.contains_key(&i))
+                })
+                .map(|m| (m.kind, &m.id)),
+        )
+        .await?;
+        if let Some(record) = settled {
+            return Self::batch_replay(&req.operation_id, &record);
+        }
+        // See `put_entity`: a retry whose content already landed resumes at
+        // the protection step instead of tripping its own preconditions.
+        let landed = if protect_requests.is_empty() || dry_run {
+            None
+        } else {
+            self.batch_landed_by(attempt.as_ref(), &req.operation_id, &author.name, &metas)
+                .await
+        };
+        // Falling back to a full rewrite must not create again what the
+        // first attempt created, nor change an identity this operation
+        // already protected, so those ops face the protection again unless
+        // rewriting them leaves the store as it is.
+        if landed.is_none() && !protect_requests.is_empty() && !dry_run {
+            self.creates_landed_as_puts(
+                attempt.as_ref(),
+                &req.operation_id,
+                &author.name,
+                &metas,
+                &mut mutations,
+            )
+            .await;
+        }
+        if landed.is_none() && !resumed.is_empty() {
+            let mut rewritten = Vec::new();
+            for (m, op) in metas.iter().zip(&mutations) {
+                if EntityIdentity::of(m.kind, &m.id).is_some_and(|i| resumed.contains_key(&i))
+                    && !self.rewrite_leaves_unchanged(&m.id, op).await
+                {
+                    rewritten.push((m.kind, &m.id));
+                }
+            }
+            self.refuse_protected(rewritten).await?;
+        }
+        let mut invariant_check = None;
         if dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
@@ -6374,6 +8240,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 source_business_bypass,
             )
             .await?;
+            invariant_check = invariant_ticket.preview()?;
         }
         for admission in &type_library_admissions {
             self.type_libraries
@@ -6537,6 +8404,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         validation::SuiteRun::NotReached(validation::REASON_BLOCKED_BY_SCENARIOS);
                 }
                 return Ok(Response::new(pb::BatchMutateResponse {
+                    invariant_check: None,
                     status: pb::batch_mutate_response::Status::Failed as i32,
                     results: Vec::new(),
                     failed_op_index: i32::try_from(failed_op_index).unwrap_or(i32::MAX),
@@ -6548,6 +8416,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         subject_count(metas.len()),
                         reached,
                     )),
+                    consequence_delta: None,
                 }));
             }
         }
@@ -6652,7 +8521,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             if branch.is_none() {
                 self.invalidate_snapshot().await;
             }
-            let snapshot = self.snapshot_for(branch.as_deref(), &vis).await?;
+            let (snapshot, snapshot_truncated) = self
+                .snapshot_with_truncation(branch.as_deref(), &vis)
+                .await?;
             let mut exact: HashMap<_, _> = snapshot
                 .iter()
                 .filter_map(|stored| {
@@ -6782,7 +8653,23 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         &per_op_referrers,
                         referrers_incomplete,
                     );
+                    let after = world_with_outcomes(
+                        &pre_all_arc,
+                        metas.iter().map(|meta| (meta.kind, &meta.id)),
+                        &outcomes,
+                    );
+                    drop(guard);
+                    let consequence_delta = self
+                        .consequence_delta(
+                            &pre_all_arc,
+                            &after,
+                            snapshot_truncated,
+                            branch.as_deref(),
+                            &vis,
+                        )
+                        .await;
                     Ok(Response::new(pb::BatchMutateResponse {
+                        invariant_check,
                         status: pb::batch_mutate_response::Status::Validated as i32,
                         results,
                         failed_op_index: 0,
@@ -6790,6 +8677,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         precondition_failure: None,
                         operation_receipt: None,
                         coverage: Some(batch_coverage.clone()),
+                        consequence_delta,
                     }))
                 }
                 Err(err) => Ok(Response::new(
@@ -6798,37 +8686,6 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 )),
             }
         } else {
-            let attempt = if req.operation_id.is_empty() {
-                None
-            } else {
-                let principal_name = principal
-                    .as_ref()
-                    .map_or(UNAUTHENTICATED_PRINCIPAL, |p| p.name.as_ref());
-                let digest_req = pb::BatchMutateRequest {
-                    ops: req.ops.clone(),
-                    validate_only: false,
-                    operation_id: String::new(),
-                };
-                let pool = self
-                    .digest_pool(
-                        digest_req.ops.iter().filter_map(|op| match &op.op {
-                            Some(pb::batch_mutate_op::Op::Put(put)) => put.entity.as_ref(),
-                            _ => None,
-                        }),
-                        branch.as_deref(),
-                    )
-                    .await?;
-                Some(operation_receipts::OperationAttempt::in_pool(
-                    &pool,
-                    principal_name,
-                    &req.operation_id,
-                    "BatchMutate",
-                    branch.as_deref(),
-                    "trogonatlas.api.eventmodel.v1alpha1.BatchMutateRequest",
-                    &digest_req,
-                )?)
-            };
-
             let claim_key = match &attempt {
                 None => None,
                 Some(attempt) => {
@@ -6842,55 +8699,48 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     {
                         operation_receipts::Claim::Proceed => Some(attempt.claim_key.clone()),
                         operation_receipts::Claim::Replay(record) => {
-                            if record.status == OperationStatus::Rejected {
-                                return Err(operation_receipts::replay_rejected_status(&record));
-                            }
-                            // Applied: a replayed batch is reported Applied
-                            // with no per-op results rather than
-                            // reconstructing one result per original op --
-                            // the batch is one unit of idempotency, and
-                            // `changeset_id` is enough for the caller to
-                            // confirm it already landed.
-                            return Ok(Response::new(pb::BatchMutateResponse {
-                                status: pb::batch_mutate_response::Status::Applied as i32,
-                                results: Vec::new(),
-                                failed_op_index: 0,
-                                failure: Vec::new(),
-                                precondition_failure: None,
-                                operation_receipt: Some(operation_receipts::replay_receipt(
-                                    &req.operation_id,
-                                    &record,
-                                )),
-                                coverage: None,
-                            }));
+                            return Self::batch_replay(&req.operation_id, &record);
                         }
                     }
                 }
             };
 
-            if let Err(status) = self
-                .validate_architecture_writes(&metas, branch.as_deref(), &vis)
-                .await
-            {
-                if let Some(key) = &claim_key {
-                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            if landed.is_none() {
+                if let Err(status) = self
+                    .validate_architecture_writes(&metas, branch.as_deref(), &vis)
+                    .await
+                {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
                 }
-                return Err(status);
             }
-            if let Err(status) = self
-                .validate_batch_business_writes(
-                    &metas,
-                    branch.as_deref(),
-                    &vis,
-                    source_business_bypass,
-                )
-                .await
-            {
-                if let Some(key) = &claim_key {
-                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+            if landed.is_none() {
+                if let Err(status) = self
+                    .validate_batch_business_writes(
+                        &metas,
+                        branch.as_deref(),
+                        &vis,
+                        source_business_bypass,
+                    )
+                    .await
+                {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
                 }
-                return Err(status);
             }
+            let invariant_check = match self.invariant_gate(invariant_scope, &invariant_ticket) {
+                Ok(check) => check,
+                Err(status) => {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
+                }
+            };
 
             if let Some(execution) = source_execution {
                 let outcome = self
@@ -6909,6 +8759,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     Some(outcome);
                 if applied {
                     self.invalidate_snapshot().await;
+                    self.note_write(branch.as_deref(), true);
                     self.search_ready.store(false, Ordering::Release);
                 }
                 return Ok(Response::new(pb::BatchMutateResponse {
@@ -6923,12 +8774,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
 
             let mut changeset = PendingChangeset::mint("BatchMutate", &author, branch.as_deref())
                 .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
-                .with_operation_key(claim_key.as_deref());
-            match self
-                .store
-                .batch_apply(&mutations, changeset.write_ctx())
-                .await
-            {
+                .with_operation_key(claim_key.as_deref())
+                .deferring_settlement(!protect_requests.is_empty());
+            let (landed_changeset_id, landed_outcomes) = landed.unzip();
+            let resuming = landed_changeset_id.is_some();
+            let applied = match landed_outcomes {
+                Some(outcomes) => Ok(outcomes),
+                None => {
+                    self.store
+                        .batch_apply(&mutations, changeset.write_ctx())
+                        .await
+                }
+            };
+            match applied {
                 Ok(outcomes) => {
                     let results = build_op_results(
                         &metas,
@@ -6938,17 +8796,35 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                         &per_op_referrers,
                         referrers_incomplete,
                     );
-                    let receipt_changeset_id = changeset.id.clone();
-                    if let Some(key) = &claim_key {
-                        operation_receipts::settle_applied(
-                            &*self.store,
-                            key,
-                            &receipt_changeset_id,
-                        )
-                        .await;
+                    let content_changeset_id = landed_changeset_id.or_else(|| {
+                        changeset.record_batch(&metas, &outcomes);
+                        changeset.validated_by(&batch_coverage, per_op_validation.iter().flatten());
+                        (!changeset.ops.is_empty()).then(|| changeset.id.clone())
+                    });
+                    let mut protected = Ok(());
+                    for (identity, reason, version) in protect_requests {
+                        if let Err(status) = self
+                            .protect_identity(identity, reason, version, &mut changeset)
+                            .await
+                        {
+                            protected = Err(status);
+                            break;
+                        }
                     }
-                    changeset.record_batch(&metas, &outcomes);
-                    changeset.validated_by(&batch_coverage, per_op_validation.iter().flatten());
+                    // A resumed retry that only finds its protections already
+                    // landed records nothing, so its receipt names the
+                    // changeset that landed the content instead.
+                    let receipt_changeset_id = match &content_changeset_id {
+                        Some(landed) if resuming && changeset.ops.is_empty() => landed.clone(),
+                        _ => changeset.id.clone(),
+                    };
+                    // A batch whose content was all unchanged may still have
+                    // set some marks before one failed. The claim must name
+                    // the changeset that set them, which a retry needs when
+                    // that changeset's append was lost.
+                    let unfinished_changeset_id = content_changeset_id
+                        .clone()
+                        .or_else(|| (!changeset.ops.is_empty()).then(|| changeset.id.clone()));
                     self.record_changeset(
                         changeset,
                         git_mirror::batch_commit_message(outcomes.len()),
@@ -6960,11 +8836,48 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     // the first place (see the "Branch overlays" note on
                     // `put_entity`/`delete_entity`).
                     if branch.is_none() {
-                        self.apply_batch_side_effects(&metas, &outcomes, author)
-                            .await;
+                        if !resuming {
+                            self.apply_batch_side_effects(&metas, &outcomes, author)
+                                .await;
+                        }
                         self.invalidate_snapshot().await;
                     }
+                    // Settled only after every requested protection landed,
+                    // so a registry failure leaves the id free for a retry.
+                    if let Some(key) = &claim_key {
+                        match &protected {
+                            Ok(()) => {
+                                operation_receipts::settle_applied(
+                                    &*self.store,
+                                    key,
+                                    &receipt_changeset_id,
+                                )
+                                .await;
+                            }
+                            Err(status) => match &unfinished_changeset_id {
+                                Some(changeset_id) => {
+                                    operation_receipts::settle_unfinished_for_status(
+                                        &*self.store,
+                                        key,
+                                        status,
+                                        changeset_id,
+                                    )
+                                    .await;
+                                }
+                                None => {
+                                    operation_receipts::settle_for_status(
+                                        &*self.store,
+                                        key,
+                                        status,
+                                    )
+                                    .await;
+                                }
+                            },
+                        }
+                    }
+                    protected?;
                     Ok(Response::new(pb::BatchMutateResponse {
+                        invariant_check,
                         status: pb::batch_mutate_response::Status::Applied as i32,
                         results,
                         failed_op_index: 0,
@@ -6977,6 +8890,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             )
                         }),
                         coverage: Some(batch_coverage),
+                        consequence_delta: None,
                     }))
                 }
                 // A partial apply leaves the claim deliberately unsettled:
@@ -6984,7 +8898,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 // `operation_key` on this changeset's `WriteContext`) once it
                 // resolves what actually landed, which this handler cannot
                 // know yet.
-                Err(err) if err.is_partial_apply() => Err(store_err(err)),
+                Err(err) if err.is_partial_apply() => {
+                    self.note_entity_write(branch.as_deref(), true).await;
+                    Err(store_err(err))
+                }
                 Err(err) => {
                     let resp = self
                         .batch_failure(&metas, &mutations, err, branch.as_deref(), &batch_coverage)
@@ -7418,6 +9335,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(name) = branch.as_deref() {
             self.require_branch(name).await?;
         }
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_pins = self.invariant_pins(invariant_scope);
         let record = self.store.get_changeset(&req.id).await.map_err(store_err)?;
         let origin = record.branch.clone();
 
@@ -7427,6 +9346,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // restore the same pre-image twice.
         let mut seen: std::collections::HashSet<pb::EntityKey> = std::collections::HashSet::new();
         let mut inverse: Vec<(pb::EntityKind, pb::Id, Option<pb::Entity>)> = Vec::new();
+        if record.ops.iter().any(|op| !op.kind.is_content()) {
+            return Err(Status::failed_precondition(format!(
+                "changeset {} changed entity protection, which a revert cannot undo; \
+                 an admin calls ProtectEntity or UnprotectEntity instead",
+                record.id
+            )));
+        }
         for op in record.ops.iter().rev() {
             let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
             let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?.clone();
@@ -7480,6 +9406,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             WriteEffect::of(req.dry_run),
         )
         .await?;
+        self.refuse_protected(inverse.iter().map(|(kind, id, _)| (*kind, id)))
+            .await?;
 
         let ops: Vec<MutationOp> = inverse
             .iter()
@@ -7521,11 +9449,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             })
             .collect();
 
+        let invariant_ticket = self
+            .ticket_for_changes(invariant_scope, invariant_pins, &inverse, &vis)
+            .await?;
+        let mut invariant_check = None;
         if req.dry_run {
             self.validate_architecture_writes(&metas, branch.as_deref(), &vis)
                 .await?;
             self.validate_business_writes(&metas, branch.as_deref(), &vis)
                 .await?;
+            invariant_check = invariant_ticket.preview()?;
         }
 
         let attempt = if req.operation_id.is_empty() {
@@ -7570,6 +9503,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                             return Err(operation_receipts::replay_rejected_status(&record));
                         }
                         return Ok(Response::new(pb::RevertChangesetResponse {
+                            invariant_check: None,
                             ops: reverted_ops,
                             dry_run: record.changeset_id.is_empty(),
                             changeset_id: record.changeset_id.clone(),
@@ -7588,6 +9522,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 operation_receipts::settle_applied(&*self.store, key, "").await;
             }
             return Ok(Response::new(pb::RevertChangesetResponse {
+                invariant_check,
                 ops: reverted_ops,
                 changeset_id: String::new(),
                 dry_run: true,
@@ -7598,6 +9533,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         }
 
         let _guard = self.lock_mutations().await;
+        // Protection can be lifted, so refusing on it is not a final answer
+        // for this id: release the claim, as `DeleteEntity` does.
+        if let Err(status) = self
+            .refuse_protected(inverse.iter().map(|(kind, id, _)| (*kind, id)))
+            .await
+        {
+            if let Some(key) = &claim_key {
+                operation_receipts::settle_not_applied(&*self.store, key).await;
+            }
+            return Err(status);
+        }
         if let Err(status) = self
             .validate_architecture_writes(&metas, branch.as_deref(), &vis)
             .await
@@ -7616,6 +9562,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }
             return Err(status);
         }
+        let invariant_check = match self.invariant_gate(invariant_scope, &invariant_ticket) {
+            Ok(check) => check,
+            Err(status) => {
+                if let Some(key) = &claim_key {
+                    operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                }
+                return Err(status);
+            }
+        };
         let mut changeset = PendingChangeset::mint("RevertChangeset", &author, branch.as_deref())
             .with_operation_id(claim_key.as_deref().map(|_| req.operation_id.as_str()))
             .with_operation_key(claim_key.as_deref());
@@ -7625,7 +9580,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // Same partial-apply exception as `batch_mutate`: leave the
             // claim Pending and let `nats_journal`'s crash-recovery pass
             // settle it once it knows what actually landed.
-            Err(err) if err.is_partial_apply() => return Err(store_err(err)),
+            Err(err) if err.is_partial_apply() => {
+                self.note_entity_write(branch.as_deref(), true).await;
+                return Err(store_err(err));
+            }
             Err(err) => {
                 let status = store_err(err);
                 if let Some(key) = &claim_key {
@@ -7646,6 +9604,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             self.invalidate_snapshot().await;
         }
         Ok(Response::new(pb::RevertChangesetResponse {
+            invariant_check,
             ops: reverted_ops,
             changeset_id: changeset_id.clone(),
             dry_run: false,
@@ -8211,6 +10170,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // cleanup becomes a reviewable change set like any other.
         let branch = Self::branch_from_metadata(&req)?;
         let principal = Self::principal_from_metadata(&req);
+        let preview = invariant_admission::preview_request(
+            &req,
+            pb::DeleteByQueryRequest {
+                mode: pb::delete_entity_request::Mode::DryRun as i32,
+                ..req.get_ref().clone()
+            },
+        );
         let req = req.into_inner();
 
         if !req.project.is_empty() && !req.namespace.is_empty() && req.project != req.namespace {
@@ -8284,12 +10250,40 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             ));
         }
 
+        // Same default as DeleteEntity: MODE_UNSPECIFIED (protobuf 0) means
+        // FAIL_IF_REFERENCED. Without this remap, mode=0 skips the referrer
+        // gate and force-deletes (DeleteByQueryRequest.mode documents the
+        // shared DeleteEntityRequest.Mode semantics).
+        let mode = pb::delete_entity_request::Mode::try_from(req.mode)
+            .unwrap_or(pb::delete_entity_request::Mode::FailIfReferenced);
+        let mode = if matches!(mode, pb::delete_entity_request::Mode::Unspecified) {
+            pb::delete_entity_request::Mode::FailIfReferenced
+        } else {
+            mode
+        };
+        let dry_run = mode == pb::delete_entity_request::Mode::DryRun;
+
+        let invariant_scope = InvariantScope::of(branch.as_deref());
+        let invariant_ticket = if dry_run {
+            None
+        } else {
+            Some(
+                self.ticket_by_preview(
+                    invariant_scope,
+                    preview,
+                    |preview| self.delete_by_query(preview),
+                    |response: &pb::DeleteByQueryResponse| Some(response.invariant_check.clone()),
+                )
+                .await?,
+            )
+        };
+
         // Hold the mutation lock for the entire query->delete sequence so a
         // concurrent put cannot create entities matching the query mid-loop
         // (which would escape the max_deletes cap) or delete entities that
         // are already on our victim list (which would surface as NotFound).
         // Drop the snapshot first so the victim scan reads post-lock state.
-        let _guard = self.lock_mutations().await;
+        let guard = self.lock_mutations().await;
         if branch.is_none() {
             self.invalidate_snapshot().await;
         }
@@ -8354,19 +10348,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 req.max_deletes,
             )));
         }
-
-        // Same default as DeleteEntity: MODE_UNSPECIFIED (protobuf 0) means
-        // FAIL_IF_REFERENCED. Without this remap, mode=0 skips the referrer
-        // gate and force-deletes (DeleteByQueryRequest.mode documents the
-        // shared DeleteEntityRequest.Mode semantics).
-        let mode = pb::delete_entity_request::Mode::try_from(req.mode)
-            .unwrap_or(pb::delete_entity_request::Mode::FailIfReferenced);
-        let mode = if matches!(mode, pb::delete_entity_request::Mode::Unspecified) {
-            pb::delete_entity_request::Mode::FailIfReferenced
-        } else {
-            mode
-        };
-        let dry_run = mode == pb::delete_entity_request::Mode::DryRun;
+        self.refuse_protected(victims.iter().map(|(kind, id)| (*kind, id)))
+            .await?;
 
         // For FAIL_IF_REFERENCED mode, find any entities outside the victim
         // set that hold references into it. Intra-set references are
@@ -8412,6 +10395,26 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             })
             .collect();
 
+        let mut invariant_check = None;
+        if dry_run {
+            drop(guard);
+            let changes: Vec<invariant_admission::Change> = victims
+                .iter()
+                .map(|(k, id)| (*k, id.clone(), None))
+                .collect();
+            invariant_check = self
+                .check_invariants(invariant_scope, &changes, &vis)
+                .await?;
+        } else if let Some(ticket) = invariant_ticket.as_ref() {
+            // Nothing applies when nothing matched, so there is nothing for
+            // the verdict to go stale against; report it as the dry run does.
+            invariant_check = if victims.is_empty() {
+                ticket.preview()?
+            } else {
+                self.invariant_gate(invariant_scope, ticket)?
+            };
+        }
+
         if !dry_run && !victims.is_empty() {
             let ops: Vec<MutationOp> = victims
                 .iter()
@@ -8431,10 +10434,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 })
                 .collect();
             let mut changeset = PendingChangeset::mint("DeleteByQuery", &author, branch.as_deref());
-            self.store
-                .batch_apply(&ops, changeset.write_ctx())
-                .await
-                .map_err(store_err)?;
+            if let Err(error) = self.store.batch_apply(&ops, changeset.write_ctx()).await {
+                if error.is_partial_apply() {
+                    self.note_entity_write(branch.as_deref(), true).await;
+                }
+                return Err(store_err(error));
+            }
             let outcomes: Vec<MutationOutcome> =
                 victims.iter().map(|_| MutationOutcome::Deleted).collect();
             changeset.record_batch(&metas, &outcomes);
@@ -8455,6 +10460,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         // proto count cannot wrap into a negative number.
         let count = i32::try_from(deleted.len()).unwrap_or(i32::MAX);
         Ok(Response::new(pb::DeleteByQueryResponse {
+            invariant_check,
             deleted,
             deleted_count: count,
             dry_run,
@@ -8749,6 +10755,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .create_branch(&req.name, &req.doc)
             .await
             .map_err(store_err)?;
+        self.note_write(Some(&req.name), true);
         Ok(Response::new(pb::CreateBranchResponse {
             branch: Some(branch_info_to_pb(info)),
         }))
@@ -8791,6 +10798,14 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let vis = Self::visibility_of(&req);
         let author = Self::author_from_metadata(&req);
         let principal = Self::principal_from_metadata(&req);
+        let preview = invariant_admission::preview_request(
+            &req,
+            pb::MergeBranchRequest {
+                dry_run: true,
+                operation_id: String::new(),
+                ..req.get_ref().clone()
+            },
+        );
         let req = req.into_inner();
         validate_branch_name(&req.name)?;
         // Clears only the ownership-delegation gate: every namespace the
@@ -8808,8 +10823,26 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         {
             return Err(branch_not_found(&req.name));
         }
+        let invariant_scope = InvariantScope::Landing(&req.name);
+        let invariant_ticket = if req.dry_run {
+            None
+        } else {
+            Some(
+                self.ticket_by_preview(
+                    invariant_scope,
+                    preview,
+                    |preview| self.merge_branch(preview),
+                    // Only a validated preview reached the invariant check.
+                    |response: &pb::MergeBranchResponse| {
+                        (response.status == pb::merge_branch_response::Status::Validated as i32)
+                            .then(|| response.invariant_check.clone())
+                    },
+                )
+                .await?,
+            )
+        };
 
-        let _guard = self.lock_mutations().await;
+        let guard = self.lock_mutations().await;
 
         let deltas = self
             .store
@@ -8818,17 +10851,25 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .map_err(store_err)?;
         let mut classified = Vec::with_capacity(deltas.len());
         let mut fork_bases = std::collections::HashMap::with_capacity(deltas.len());
+        // An assessment pins the baseline as classification read it, not the
+        // fork-time `base_etag` a conflicting entry still carries.
+        let mut baseline_etags = std::collections::HashMap::with_capacity(deltas.len());
         for delta in deltas {
-            fork_bases.insert(
-                pb::EntityKey::new(delta.kind, &delta.id),
-                delta.base.clone(),
-            );
+            let key = pb::EntityKey::new(delta.kind, &delta.id);
+            fork_bases.insert(key.clone(), delta.base.clone());
             let (mut entry, theirs_etag) = self.classify_branch_delta(delta).await?;
             if req.auto_merge {
                 accept_structural_merge(&mut entry, theirs_etag.as_deref());
             }
+            baseline_etags.insert(key, theirs_etag.unwrap_or_default());
             classified.push(entry);
         }
+        let baseline_etag = |entity_ref: &pb::EntityRef| {
+            let kind = pb::EntityKind::try_from(entity_ref.kind).ok()?;
+            baseline_etags
+                .get(&pb::EntityKey::new(kind, entity_ref.id.as_ref()?))
+                .cloned()
+        };
 
         let conflicts: Vec<pb::BranchDiffEntry> = classified
             .iter()
@@ -8836,9 +10877,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .cloned()
             .collect();
         if !conflicts.is_empty() {
+            let change_assessment = req.dry_run.then(|| {
+                crate::assessment::assess(
+                    &crate::assessment::Evidence::Conflicts,
+                    crate::assessment::binding(&req.name, &classified, baseline_etag, None, &vis),
+                )
+            });
             return Ok(Response::new(pb::MergeBranchResponse {
                 status: pb::merge_branch_response::Status::Conflicts as i32,
                 conflicts,
+                change_assessment,
                 ..Default::default()
             }));
         }
@@ -8925,6 +10973,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             WriteEffect::of(req.dry_run),
         )
         .await?;
+        self.refuse_protected(op_metas.iter().map(|m| (m.kind, &m.id)))
+            .await?;
 
         let mut type_library_changes = crate::type_libraries::TypeLibraryChanges::default();
         for meta in &op_metas {
@@ -8986,69 +11036,67 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // Full detection already ran above; validate the post-merge
             // world via an in-memory overlay without persisting anything.
             let (pre_all, snapshot_truncated) = self.snapshot_with_truncation(None, &vis).await?;
-            let post_world: Vec<StoredEntity> = match dry_run::apply_landing(&pre_all, &ops) {
-                Ok(outcomes) => {
-                    let mut world: Vec<StoredEntity> = (*pre_all).clone();
-                    let mut by_key: std::collections::HashMap<pb::EntityKey, usize> =
-                        std::collections::HashMap::new();
-                    for (i, se) in world.iter().enumerate() {
-                        if let (Some(k), Some(id)) = (
-                            trogon_atlas_store::refs::entity_kind(&se.entity),
-                            trogon_atlas_store::refs::entity_id(&se.entity),
-                        ) {
-                            by_key.insert(pb::EntityKey::new(k, id), i);
-                        }
-                    }
-                    for (meta, oc) in op_metas.iter().zip(outcomes.iter()) {
-                        let key = pb::EntityKey::new(meta.kind, &meta.id);
-                        match oc {
-                            MutationOutcome::Wrote { entity, etag } => {
-                                let se = StoredEntity {
-                                    entity: entity.clone(),
-                                    etag: etag.clone(),
-                                };
-                                if let Some(&i) = by_key.get(&key) {
-                                    world[i] = se;
-                                } else {
-                                    by_key.insert(key, world.len());
-                                    world.push(se);
-                                }
-                            }
-                            MutationOutcome::Noop { .. } => {}
-                            MutationOutcome::Deleted => {
-                                if let Some(&i) = by_key.get(&key) {
-                                    world.remove(i);
-                                    by_key.remove(&key);
-                                    for v in by_key.values_mut() {
-                                        if *v > i {
-                                            *v -= 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    world
-                }
-                Err(error) => return Err(store_err(error)),
-            };
+            let outcomes = dry_run::apply_landing(&pre_all, &ops).map_err(store_err)?;
+            let post_world = world_with_outcomes(
+                &pre_all,
+                op_metas.iter().map(|meta| (meta.kind, &meta.id)),
+                &outcomes,
+            );
             let mut validation_issues = validation::validate_store_hygiene(&post_world);
             let has_error = validation_issues
                 .iter()
                 .any(|i| i.severity == pb::validation_issue::Severity::Error as i32);
+            drop(guard);
+            let consequence_delta = self
+                .consequence_delta(&pre_all, &post_world, snapshot_truncated, None, &vis)
+                .await;
+            let assessment_binding = || {
+                crate::assessment::binding(
+                    &req.name,
+                    landable.iter().copied(),
+                    baseline_etag,
+                    consequence_delta.as_ref(),
+                    &vis,
+                )
+            };
             if has_error {
+                let change_assessment = crate::assessment::assess(
+                    &crate::assessment::Evidence::Blocked {
+                        delta: consequence_delta.as_ref(),
+                    },
+                    assessment_binding(),
+                );
                 return Ok(Response::new(pb::MergeBranchResponse {
                     status: pb::merge_branch_response::Status::Invalid as i32,
                     validation: validation_issues,
                     coverage: Some(merge_coverage(snapshot_truncated, false)),
+                    change_assessment: Some(change_assessment),
+                    consequence_delta,
                     ..landed.into_response()
                 }));
             }
+            let landing = invariant_admission::changes_of(
+                op_metas.iter().map(|meta| (meta.kind, meta.id.clone())),
+                &outcomes,
+            );
+            let invariant_check = self
+                .check_invariants(invariant_scope, &landing, &vis)
+                .await?;
             validation_issues.extend(merge_strategic_findings(&op_metas, &pre_all, &post_world));
+            let change_assessment = crate::assessment::assess(
+                &crate::assessment::Evidence::Admissible {
+                    delta: consequence_delta.as_ref(),
+                    invariants: invariant_check.as_ref(),
+                },
+                assessment_binding(),
+            );
             return Ok(Response::new(pb::MergeBranchResponse {
+                change_assessment: Some(change_assessment),
+                invariant_check,
                 status: pb::merge_branch_response::Status::Validated as i32,
                 validation: validation_issues,
                 coverage: Some(merge_coverage(snapshot_truncated, true)),
+                consequence_delta,
                 ..landed.into_response()
             }));
         }
@@ -9181,6 +11229,20 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if ops.is_empty() {
             // Nothing to land (everything was CONVERGED). Still a
             // successful merge: clean up the branch per keep_branch.
+            // Nothing moves, so there is nothing to be stale against, but
+            // the preview's verdict still decides, as it does for a dry run.
+            let invariant_check = match invariant_ticket
+                .as_ref()
+                .map_or(Ok(None), invariant_admission::InvariantTicket::preview)
+            {
+                Ok(check) => check,
+                Err(status) => {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
+                }
+            };
             if req.keep_branch {
                 self.catch_up_kept_branch(&req.name, None).await?;
             } else {
@@ -9189,11 +11251,13 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     .await
                     .map_err(store_err)?;
             }
+            self.note_write(Some(&req.name), true);
             self.settle_provisional_namespaces(&req.name).await?;
             if let Some(key) = &claim_key {
                 operation_receipts::settle_applied(&*self.store, key, "").await;
             }
             return Ok(Response::new(pb::MergeBranchResponse {
+                invariant_check,
                 status: pb::merge_branch_response::Status::Applied as i32,
                 operation_receipt: claim_key
                     .as_ref()
@@ -9202,6 +11266,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 ..Default::default()
             }));
         }
+
+        let invariant_check = match invariant_ticket.as_ref() {
+            Some(ticket) => match self.invariant_gate(invariant_scope, ticket) {
+                Ok(check) => check,
+                Err(status) => {
+                    if let Some(key) = &claim_key {
+                        operation_receipts::settle_for_status(&*self.store, key, &status).await;
+                    }
+                    return Err(status);
+                }
+            },
+            None => None,
+        };
 
         // The merge lands on the baseline, so the changeset is a baseline
         // changeset: `branch` stays empty and the ops are the entities that
@@ -9219,7 +11296,10 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             // Same partial-apply exception as `batch_mutate`: leave the
             // claim Pending and let `nats_journal`'s crash-recovery pass
             // settle it once it knows what actually landed.
-            Err(err) if err.is_partial_apply() => return Err(store_err(err)),
+            Err(err) if err.is_partial_apply() => {
+                self.note_entity_write(None, true).await;
+                return Err(store_err(err));
+            }
             Err(err) => {
                 let status = store_err(err);
                 if let Some(key) = &claim_key {
@@ -9258,9 +11338,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 .await
                 .map_err(store_err)?;
         }
+        self.note_write(Some(&req.name), true);
         self.settle_provisional_namespaces(&req.name).await?;
 
         Ok(Response::new(pb::MergeBranchResponse {
+            invariant_check,
             status: pb::merge_branch_response::Status::Applied as i32,
             validation: merge_findings,
             operation_receipt: claim_key
@@ -9393,6 +11475,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             _ => info.fork_changeset_id.unwrap_or_default(),
         };
 
+        self.note_write(Some(&req.name), true);
         Ok(Response::new(pb::UpdateBranchResponse {
             rebased_count,
             conflicts,
@@ -9463,6 +11546,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         );
 
         let _guard = self.lock_mutations().await;
+        if !take_theirs {
+            self.refuse_protected([(kind, &id)]).await?;
+        }
 
         if let Some(expected) = req.expected_state.as_ref() {
             self.require_branch_entry_state(&req.name, kind, &id, expected)
@@ -9681,6 +11767,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         if let Some(key) = &claim_key {
             operation_receipts::settle_applied(&*self.store, key, &receipt_changeset_id).await;
         }
+        self.note_write(Some(&req.name), true);
         Ok(Response::new(pb::ResolveBranchEntryResponse {
             operation_receipt: claim_key.as_ref().map(|_| {
                 operation_receipts::fresh_receipt(&req.operation_id, &receipt_changeset_id)
@@ -9779,6 +11866,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             .delete_branch(&req.name)
             .await
             .map_err(store_err)?;
+        self.note_write(Some(&req.name), true);
         self.settle_provisional_namespaces(&req.name).await?;
         Ok(Response::new(pb::DeleteBranchResponse {}))
     }
@@ -9847,6 +11935,201 @@ fn branch_entry_state_label(state: &pb::BranchEntryState) -> String {
         side(&state.ours_etag),
         side(&state.theirs_etag)
     )
+}
+
+/// Content identity of `entities` by the rules `GetSnapshotId` documents,
+/// plus their entries in key order when `with_entries` is set.
+fn snapshot_identity<'a>(
+    entities: impl IntoIterator<Item = &'a pb::Entity>,
+    with_entries: bool,
+) -> Result<(trogon_atlas_core::SnapshotHasher, Vec<pb::SnapshotEntry>), Status> {
+    let mut hasher = trogon_atlas_core::SnapshotHasher::new();
+    let mut entries = Vec::new();
+    for entity in entities {
+        let id = entity_id(entity)?;
+        let kind = entity_kind(entity)?;
+        let key = trogon_atlas_store::key::entity_key(kind, id);
+        let hash = trogon_atlas_core::entity_content_hash(entity).map_err(|e| {
+            // An entity that cannot render as canonical JSON has no
+            // content identity, so the snapshot has none either. Failing
+            // is the honest answer: silently skipping it would produce an
+            // id for a model that is missing an entity.
+            Status::failed_precondition(format!(
+                "entity {key} has no content identity, so no snapshot id can be computed: {e}"
+            ))
+        })?;
+        if with_entries {
+            entries.push(pb::SnapshotEntry {
+                key: key.clone(),
+                entity: Some(pb::EntityRef {
+                    kind: kind as i32,
+                    id: Some(id.clone()),
+                }),
+                content_hash: hash.to_hex(),
+            });
+        }
+        hasher.insert(key, hash).map_err(|e| {
+            // Two rows for one key means the store enumeration is
+            // broken; hashing on would name a state that never existed.
+            Status::internal(format!("snapshot enumeration produced {e}"))
+        })?;
+    }
+    // `SnapshotHasher` keeps its own sorted order; sort the entries to
+    // match, since the proto promises key order.
+    entries.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok((hasher, entries))
+}
+
+fn event_model_in(all: &[StoredEntity], id: &pb::Id) -> Option<pb::Entity> {
+    all.iter()
+        .filter_map(|se| {
+            let Some(pb::entity::Kind::EventModel(em)) = se.entity.kind.as_ref() else {
+                return None;
+            };
+            let candidate = em.id.as_ref()?;
+            (candidate.namespace == id.namespace
+                && candidate.slug == id.slug
+                && (id.version == 0 || candidate.version == id.version))
+                .then_some((candidate.version, se.entity.clone()))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, entity)| entity)
+}
+
+fn snapshot_boundary_writer(
+    writer_before: &WriterStatus,
+    writer_after: &WriterStatus,
+    is_writer: bool,
+) -> Option<WriterStatus> {
+    (is_writer && writer_before == writer_after).then(|| writer_after.clone())
+}
+
+fn cached_boundary_verified(
+    cached_writer: Option<&WriterStatus>,
+    current_writer: &WriterStatus,
+    is_writer: bool,
+) -> bool {
+    is_writer && cached_writer == Some(current_writer)
+}
+
+fn cached_boundary_needs_refresh(
+    cached_writer: Option<&WriterStatus>,
+    current_writer: &WriterStatus,
+    is_writer: bool,
+) -> bool {
+    is_writer && cached_writer != Some(current_writer)
+}
+
+#[cfg(test)]
+mod attested_snapshot_tests {
+    use trogon_atlas_core::{Epoch, WriterRole};
+    use trogon_atlas_store::store::WriterStatus;
+
+    use super::{
+        cached_boundary_needs_refresh, cached_boundary_verified, snapshot_boundary_writer,
+    };
+
+    fn status(epoch: u64, holder: &str) -> WriterStatus {
+        WriterStatus {
+            role: WriterRole::Standby,
+            epoch: Epoch::new(epoch),
+            lease_holder: holder.to_string(),
+        }
+    }
+
+    #[test]
+    fn promotion_during_snapshot_load_does_not_verify_its_boundary() {
+        assert!(snapshot_boundary_writer(
+            &status(1, "old-writer"),
+            &status(2, "promoted-writer"),
+            true,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn stable_writer_snapshot_verifies_its_boundary() {
+        let writer = status(2, "writer");
+        assert_eq!(
+            snapshot_boundary_writer(&writer, &writer, true),
+            Some(writer)
+        );
+    }
+
+    #[test]
+    fn cached_snapshot_is_unverified_after_writer_demotion() {
+        let cached = status(2, "writer");
+        let current = status(3, "new-writer");
+        assert!(!cached_boundary_verified(Some(&cached), &current, false));
+    }
+
+    #[test]
+    fn promoted_writer_refreshes_an_unverified_cached_snapshot() {
+        let current = status(3, "promoted-writer");
+        assert!(cached_boundary_needs_refresh(None, &current, true));
+        assert!(cached_boundary_needs_refresh(
+            Some(&status(2, "old-writer")),
+            &current,
+            true,
+        ));
+        assert!(!cached_boundary_needs_refresh(
+            Some(&current),
+            &current,
+            true,
+        ));
+        assert!(!cached_boundary_needs_refresh(None, &current, false));
+    }
+}
+
+/// Entities an attested export names but could not attest from its
+/// snapshot, one row per key in key order. The first cause found wins.
+#[derive(Default)]
+struct Unresolved(BTreeMap<String, pb::AttestedUnresolved>);
+
+impl Unresolved {
+    fn mark(&mut self, key: &pb::EntityKey, cause: UnresolvedCause) {
+        let id = key.id();
+        let name = trogon_atlas_store::key::entity_key(key.kind, &id);
+        self.0
+            .entry(name.clone())
+            .or_insert_with(|| pb::AttestedUnresolved {
+                key: name,
+                entity: Some(pb::EntityRef {
+                    kind: key.kind as i32,
+                    id: Some(id),
+                }),
+                cause: cause as i32,
+            });
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn into_rows(self) -> Vec<pb::AttestedUnresolved> {
+        self.0.into_values().collect()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BranchBoundary {
+    created_at: String,
+    fork_changeset_id: Option<String>,
+    delta_count: u32,
+    newest_changeset: String,
+}
+
+fn attested_lens(lens: &Lens) -> pb::AttestedLens {
+    match lens {
+        Lens::Everything => pb::AttestedLens {
+            unrestricted: true,
+            namespaces: Vec::new(),
+        },
+        Lens::Only(namespaces) => pb::AttestedLens {
+            unrestricted: false,
+            namespaces: namespaces.iter().map(ToString::to_string).collect(),
+        },
+    }
 }
 
 fn branch_not_found(name: &str) -> Status {
@@ -10532,10 +12815,7 @@ pub fn resolve_scope_closure(
 }
 
 fn change_kind_to_proto(kind: ChangeKind) -> i32 {
-    match kind {
-        ChangeKind::Put => pb::change_event::Kind::Put as i32,
-        ChangeKind::Delete => pb::change_event::Kind::Deleted as i32,
-    }
+    kind.to_proto()
 }
 
 fn changeset_to_proto(record: ChangesetRecord) -> pb::Changeset {

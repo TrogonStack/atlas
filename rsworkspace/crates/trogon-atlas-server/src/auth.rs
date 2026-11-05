@@ -171,6 +171,14 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/RegisterNamespace" => Role::Writer,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/MoveNamespace" => Role::Admin,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSnapshotId" => Role::Reader,
+        // Protection outranks every writer, so only an admin sets or lifts
+        // it; who protected what is readable by anyone who can read.
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ProtectEntity"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UnprotectEntity" => Role::Admin,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntityProtection"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntityProtections" => {
+            Role::Reader
+        }
 
         // Direct lookup
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntity" => Role::Reader,
@@ -227,6 +235,9 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         }
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExtractSubgraph" => Role::Reader,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExportEventModelManifests" => {
+            Role::Reader
+        }
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExportAttestedModel" => {
             Role::Reader
         }
 
@@ -1252,6 +1263,7 @@ namespaces = ["orders/*"]
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEventModelProjection",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExtractSubgraph",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExportEventModelManifests",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExportAttestedModel",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DiffEntities",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListChanges",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/StreamChanges",
@@ -1265,6 +1277,8 @@ namespaces = ["orders/*"]
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntitiesByDomain",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListBranches",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DiffBranch",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEntityProtection",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListEntityProtections",
         ];
         for path in read_rpcs {
             assert_eq!(
@@ -1300,6 +1314,12 @@ namespaces = ["orders/*"]
             required_role("/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DeleteByQuery"),
             Some(Role::Admin)
         );
+        for path in [
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ProtectEntity",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UnprotectEntity",
+        ] {
+            assert_eq!(required_role(path), Some(Role::Admin), "{path}");
+        }
     }
 
     #[test]

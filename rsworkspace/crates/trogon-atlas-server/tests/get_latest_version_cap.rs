@@ -65,3 +65,41 @@ async fn get_latest_version_does_not_truncate_a_visible_entity_behind_invisible_
         "the caller's own entity must not be truncated away by decoys it cannot see",
     );
 }
+
+/// The cap bounds how many identities a listing may return, not whether one
+/// named identity can be found: the store is asked for that slug alone, so an
+/// identity that sorts behind more same-kind, same-namespace rows than the cap
+/// is still answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn get_latest_version_finds_an_identity_sorting_past_the_cap_in_its_own_namespace() {
+    let nats = trogon_atlas_testsupport::shared().await;
+    let store: Arc<dyn Store> = Arc::new(nats.store().await);
+
+    for slug in ["a", "b", "c", "needle"] {
+        store
+            .create(
+                pb::EntityKind::Event,
+                &event("shared-ns", slug),
+                WriteContext::baseline(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let found = get_latest_version_with_cap(
+        &store,
+        &Lens::Everything,
+        pb::EntityKind::Event,
+        "shared-ns",
+        "needle",
+        1,
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        found.is_some(),
+        "an identity named exactly must be found whatever the listing cap",
+    );
+}

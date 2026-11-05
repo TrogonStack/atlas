@@ -148,7 +148,7 @@ Three ordered roles:
 | -------- | ------------------------------------------------------------------- |
 | `reader` | Read-only RPCs: `Get*`, `List*` (including `ListBranches`), `Search*`, `Diff*`, `BatchGet`, projections, references, impact |
 | `writer` | Everything `reader` has, plus `PutEntity`, `BatchMutate`, and LLM-backed inference RPCs (they spend tokens) |
-| `admin`  | Everything `writer` has, plus `DeleteByQuery`, `MoveNamespace`, and any future destructive RPC |
+| `admin`  | Everything `writer` has, plus `DeleteByQuery`, `MoveNamespace`, `ProtectEntity`, `UnprotectEntity`, and any future destructive RPC |
 
 `RegisterNamespace` requires `writer`: claiming a namespace is ordinary setup
 for anyone who can write. `MoveNamespace` requires `admin` because it
@@ -161,6 +161,15 @@ agents hold the `writer` and `admin` keys through the CLI and MCP. The Studio
 gateway refuses every mutating request and RPC on its own, but that check
 lives in the gateway; the `reader` role is what makes the server refuse the
 same key when someone sends it straight to the gRPC port.
+
+Protecting an entity is an `admin` decision because it overrides every
+writer's access to one identity, the admin's own included, until an admin
+lifts it. The role check alone is not enough for it: a server with no token
+registry runs every caller unauthenticated, and protection set by nobody
+could be lifted by anybody, so the handlers also require an authenticated
+admin principal. Reading the marks (`GetEntityProtection`,
+`ListEntityProtections`) is a `reader` RPC. See
+[entity protection](entity-protection.md).
 
 ### The method map (code, maintained by developers)
 
@@ -565,13 +574,13 @@ The full list of key-shaped reads that carry their own gate:
 `GetEntity`, `BatchGetEntities`, `GetEntityHistory`, `DiffEntities`,
 `GetLatestVersion`, `GetOutgoingReferences`, `GetSliceProjection`,
 `GetStoryboardProjection`, `GetEventModelProjection`,
-`ExportEventModelManifests`, `ValidateEventModel`, and the unscoped
+`ExportEventModelManifests`, `ExportAttestedModel`, `ValidateEventModel`, and the unscoped
 `ListChanges` poll. `DiffEntities` is two key lookups
 wearing a diff for a hat; `GetLatestVersion` accepts an empty namespace
 meaning "any", so its filter runs on the results rather than on the request.
 
 `GetOutgoingReferences`, the projection RPCs, `ExportEventModelManifests`,
-and `ValidateEventModel` read *both* ways. Each fetches a root entity by key
+`ExportAttestedModel` and `ValidateEventModel` read *both* ways. Each fetches a root entity by key
 and then walks its neighbourhood through the lens-filtered snapshot, but
 only the snapshot read was covered.
 The neighbourhood was narrowed correctly, which made the handler look
@@ -583,6 +592,12 @@ validating a model by id loaded that model and reported issues naming its
 members. Taking a lensed snapshot somewhere in a handler says nothing about
 whether the by-key read in the same handler is gated. They are separate
 reads and each needs its own gate.
+
+`ExportAttestedModel` also names changeset boundaries, which carry no
+entity but still describe other owners. A baseline changeset id is a UUIDv7
+over every owner's writes, so a bound caller's current bundle leaves it
+empty. A branch header naming a branch the caller cannot see answers
+NOT_FOUND before the branch is read, as the other branch-scoped reads do.
 
 `GetEntity`, `GetEntityHistory`, and `DiffEntities` answer **NOT_FOUND**, not
 PERMISSION_DENIED, for a namespace the caller cannot see. PERMISSION_DENIED

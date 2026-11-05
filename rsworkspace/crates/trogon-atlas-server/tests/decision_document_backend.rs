@@ -3414,15 +3414,19 @@ struct AmendmentFaultAuthorizer {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn document_authorization_outage_is_not_empty_discovery_or_a_model_error() {
-    assert_document_authorization_fault(Code::Unavailable, "authorized scope outage").await;
+    Box::pin(assert_document_authorization_fault(
+        Code::Unavailable,
+        "authorized scope outage",
+    ))
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn document_authorization_deadline_is_not_empty_discovery_or_a_model_error() {
-    assert_document_authorization_fault(
+    Box::pin(assert_document_authorization_fault(
         Code::DeadlineExceeded,
         "authorized scope deadline exceeded",
-    )
+    ))
     .await;
 }
 

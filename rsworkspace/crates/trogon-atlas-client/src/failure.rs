@@ -163,6 +163,9 @@ pub enum NextAction {
     /// A `ListChanges` cursor failed to open; retry the poll with an empty
     /// `since_token` instead of reusing it.
     RestartListing,
+    /// The target identity is protected; an admin must lift the protection
+    /// with `UnprotectEntity` before any change to it can land.
+    RequestUnprotect,
     /// No retry helps.
     None,
 }
@@ -176,6 +179,7 @@ impl fmt::Display for NextAction {
             NextAction::CheckOperation => "check_operation",
             NextAction::UseNewOperationId => "use_new_operation_id",
             NextAction::RestartListing => "restart_listing",
+            NextAction::RequestUnprotect => "request_unprotect",
             NextAction::None => "none",
         })
     }
@@ -383,6 +387,11 @@ impl Failure {
                 "ALREADY_EXISTS" => (FailureCategory::Precondition, "ALREADY_EXISTS", None),
                 "STALE_PRECONDITION" => (FailureCategory::StaleState, "STALE_PRECONDITION", None),
                 "VALIDATION_FAILED" => (FailureCategory::Validation, "VALIDATION_FAILED", None),
+                "INVARIANT_VIOLATED" => (FailureCategory::Precondition, "INVARIANT_VIOLATED", None),
+                "INVARIANT_UNEVALUABLE" => {
+                    (FailureCategory::Precondition, "INVARIANT_UNEVALUABLE", None)
+                }
+                "INVARIANT_STALE" => (FailureCategory::StaleState, "INVARIANT_STALE", None),
                 "UNAVAILABLE" => (FailureCategory::Unavailable, "UNAVAILABLE", None),
                 "PARTIAL_APPLY" => (FailureCategory::PartialApply, "PARTIAL_APPLY", None),
                 "INTERNAL" => (FailureCategory::Internal, "INTERNAL", None),
@@ -397,10 +406,35 @@ impl Failure {
                     Some(NextAction::UseNewOperationId),
                 ),
                 "NOT_WRITER" => (FailureCategory::Unavailable, "NOT_WRITER", None),
+                "EXPORT_INCOMPLETE" => (
+                    FailureCategory::Precondition,
+                    "EXPORT_INCOMPLETE",
+                    Some(NextAction::None),
+                ),
+                "SIGNING_KEY_UNAVAILABLE" => (
+                    FailureCategory::Precondition,
+                    "SIGNING_KEY_UNAVAILABLE",
+                    Some(NextAction::None),
+                ),
                 "CURSOR_REJECTED" => (
                     FailureCategory::Validation,
                     "CURSOR_REJECTED",
                     Some(NextAction::RestartListing),
+                ),
+                "ENTITY_PROTECTED" => (
+                    FailureCategory::Precondition,
+                    "ENTITY_PROTECTED",
+                    Some(NextAction::RequestUnprotect),
+                ),
+                "PROTECTION_STATE_UNKNOWN" if metadata.contains_key("row_revision") => (
+                    FailureCategory::Unavailable,
+                    "PROTECTION_STATE_UNKNOWN",
+                    Some(NextAction::RequestUnprotect),
+                ),
+                "PROTECTION_STATE_UNKNOWN" => (
+                    FailureCategory::Unavailable,
+                    "PROTECTION_STATE_UNKNOWN",
+                    None,
                 ),
                 _ => return None,
             };
@@ -415,8 +449,31 @@ impl Failure {
                     "expected_etag": revision_detail(expected),
                     "actual_etag": revision_detail(actual),
                 }))
+            } else if code.starts_with("INVARIANT_") {
+                FailureDetails::from_json(json!(metadata))
+            } else if code == "EXPORT_INCOMPLETE" {
+                // Comma-joined by the server, like `did_you_mean`, and named as the
+                // CLI names a bundle's reasons.
+                let reasons: Vec<&str> = metadata
+                    .get("reasons")
+                    .map(|reasons| reasons.split(',').filter(|r| !r.is_empty()).collect())
+                    .unwrap_or_default();
+                FailureDetails::from_json(json!({ "incomplete_reasons": reasons }))
+            } else if let Some(source) = metadata
+                .get("source")
+                .filter(|_| code == "SIGNING_KEY_UNAVAILABLE")
+            {
+                FailureDetails::from_json(json!({ "source": source }))
             } else if let Some(journal) = metadata.get("journal") {
                 FailureDetails::from_json(json!({ "journal": journal }))
+            } else if let Some(identity) = metadata.get("identity") {
+                let mut fields = serde_json::Map::from_iter([("identity".into(), json!(identity))]);
+                for key in ["protection_reason", "protected_by", "row_revision"] {
+                    if let Some(value) = metadata.get(key) {
+                        fields.insert(key.into(), json!(value));
+                    }
+                }
+                FailureDetails::from_json(serde_json::Value::Object(fields))
             } else if let Some(slugs) = metadata.get("did_you_mean") {
                 // ErrorInfo metadata is string-to-string, so the server joins the
                 // slugs with a comma, which a valid slug can never contain.
@@ -545,6 +602,10 @@ mod tests {
             NextAction::Replan,
             NextAction::Retry,
             NextAction::FixInput,
+            NextAction::CheckOperation,
+            NextAction::UseNewOperationId,
+            NextAction::RestartListing,
+            NextAction::RequestUnprotect,
             NextAction::None,
         ] {
             let serialized: String = serde_json::from_value(json!(action)).unwrap();
@@ -689,6 +750,50 @@ mod tests {
     }
 
     #[test]
+    fn signing_key_unavailable_does_not_suggest_replanning() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "SIGNING_KEY_UNAVAILABLE",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([("source".to_string(), "file".to_string())]),
+        );
+        let status =
+            Status::with_error_details(Code::FailedPrecondition, "signing unavailable", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::None);
+        assert_eq!(failure.details.0["source"], json!("file"));
+    }
+
+    #[test]
+    fn incomplete_export_does_not_suggest_replanning() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "EXPORT_INCOMPLETE",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([(
+                "reasons".to_string(),
+                "REASON_CONCURRENT_WRITE,REASON_BOUNDARY_UNVERIFIED".to_string(),
+            )]),
+        );
+        let status =
+            Status::with_error_details(Code::FailedPrecondition, "export incomplete", details);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::None);
+        assert_eq!(
+            failure.details.0["incomplete_reasons"],
+            json!(["REASON_CONCURRENT_WRITE", "REASON_BOUNDARY_UNVERIFIED"])
+        );
+    }
+
+    #[test]
     fn not_found_with_did_you_mean_carries_the_slugs_as_a_list() {
         use std::collections::HashMap;
 
@@ -732,6 +837,30 @@ mod tests {
         assert_eq!(failure.code.unwrap().as_str(), "STALE_PRECONDITION");
         assert_eq!(failure.details.0["expected_etag"], json!("1"));
         assert_eq!(failure.details.0["actual_etag"], json!("2"));
+    }
+
+    #[test]
+    fn invariant_refusals_classify_by_whether_replanning_can_help() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let classify = |reason: &str, code: Code| {
+            let details = ErrorDetails::with_error_info(
+                reason,
+                SERVER_ERROR_DOMAIN,
+                HashMap::from([("invariant".to_string(), "no-dangling".to_string())]),
+            );
+            Failure::from_status(&Status::with_error_details(code, "refused", details))
+        };
+        let violated = classify("INVARIANT_VIOLATED", Code::FailedPrecondition);
+        assert_eq!(violated.category, FailureCategory::Precondition);
+        assert_eq!(violated.details.0["invariant"], json!("no-dangling"));
+        let unevaluable = classify("INVARIANT_UNEVALUABLE", Code::FailedPrecondition);
+        assert_eq!(unevaluable.category, FailureCategory::Precondition);
+        let stale = classify("INVARIANT_STALE", Code::Aborted);
+        assert_eq!(stale.category, FailureCategory::StaleState);
+        assert_eq!(stale.next_action, NextAction::Replan);
     }
 
     #[test]
@@ -802,6 +931,77 @@ mod tests {
         assert_eq!(failure.category, FailureCategory::Unavailable);
         assert_eq!(failure.next_action, NextAction::Retry);
         assert_eq!(failure.code.unwrap().as_str(), "NOT_WRITER");
+    }
+
+    #[test]
+    fn status_with_entity_protected_reason_asks_for_an_unprotect() {
+        use std::collections::HashMap;
+
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "ENTITY_PROTECTED",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([
+                ("identity".to_string(), "event/orders/placed".to_string()),
+                ("protection_reason".to_string(), "published".to_string()),
+                ("protected_by".to_string(), "ops".to_string()),
+            ]),
+        );
+        let status = Status::with_error_details(
+            Code::FailedPrecondition,
+            "event/orders/placed is protected (published)",
+            details,
+        );
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Precondition);
+        assert_eq!(failure.next_action, NextAction::RequestUnprotect);
+        assert_eq!(failure.code.unwrap().as_str(), "ENTITY_PROTECTED");
+        assert_eq!(failure.details.0["identity"], json!("event/orders/placed"));
+        assert_eq!(failure.details.0["protected_by"], json!("ops"));
+    }
+
+    fn protection_state_unknown_status(metadata: &[(&str, &str)]) -> Status {
+        use tonic_types::{ErrorDetails, StatusExt};
+
+        let details = ErrorDetails::with_error_info(
+            "PROTECTION_STATE_UNKNOWN",
+            SERVER_ERROR_DOMAIN,
+            metadata
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+                .collect::<std::collections::HashMap<_, _>>(),
+        );
+        Status::with_error_details(
+            Code::Unavailable,
+            "protection state of event/orders/placed is unknown",
+            details,
+        )
+    }
+
+    #[test]
+    fn status_with_protection_state_unknown_is_retryable_not_a_lift_request() {
+        let status = protection_state_unknown_status(&[("identity", "event/orders/placed")]);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Unavailable);
+        assert_eq!(failure.next_action, NextAction::Retry);
+        assert_eq!(failure.code.unwrap().as_str(), "PROTECTION_STATE_UNKNOWN");
+        assert_eq!(failure.details.0["identity"], json!("event/orders/placed"));
+        assert!(failure.details.0.get("row_revision").is_none());
+        assert!(failure.details.0.get("protected_by").is_none());
+    }
+
+    #[test]
+    fn status_with_an_unreadable_protection_row_asks_for_a_lift_not_a_retry() {
+        let status = protection_state_unknown_status(&[
+            ("identity", "event/orders/placed"),
+            ("row_revision", "7"),
+        ]);
+        let failure = Failure::from_status(&status);
+        assert_eq!(failure.category, FailureCategory::Unavailable);
+        assert_eq!(failure.next_action, NextAction::RequestUnprotect);
+        assert_eq!(failure.code.unwrap().as_str(), "PROTECTION_STATE_UNKNOWN");
+        assert_eq!(failure.details.0["row_revision"], json!("7"));
     }
 
     #[test]

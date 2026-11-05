@@ -15,6 +15,8 @@
 
 pub mod agent_metadata;
 pub mod architectural_relationships;
+pub mod attested_bundle;
+pub mod attested_signing;
 pub mod authored_date;
 pub mod business_data;
 pub mod channel_links;

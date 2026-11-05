@@ -4,8 +4,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 use trogon_atlas_client::{
-    apply, branch, client, compat, export, failure::Failure, fmt, manifest, manifest_schema,
-    openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
+    apply, attested, branch, client, compat, export, failure::Failure, fmt, manifest,
+    manifest_schema, openslo, openslo_bindings::BindingsConfig, outcome::CommandOutcome,
     precondition::BranchEntryState, validate, view,
 };
 use trogon_atlas_proto as pb;
@@ -413,6 +413,43 @@ enum Cmd {
         /// `@version` to validate the latest version.
         model: String,
     },
+    /// Export a stored event model as an attested bundle: its manifests,
+    /// its validation findings and coverage, and the state both were read
+    /// from, bound by one digest that `verify` checks offline. Refuses an
+    /// export that cannot cover its whole scope unless --allow-incomplete
+    /// is given, which saves the bundle marked incomplete and exits 11.
+    /// With --branch, exports the branch's view of the model.
+    ExportAttested {
+        /// `<namespace>/<model>[@version]`, e.g. `shop/checkout`. Omit
+        /// `@version` to export the latest version.
+        model: String,
+        /// File to write the bundle's proto3 JSON into.
+        #[arg(short = 'o', long = "output")]
+        output: PathBuf,
+        /// Describe baseline as it stood right after this changeset landed,
+        /// instead of its current state.
+        #[arg(long)]
+        as_of_changeset: Option<String>,
+        /// Save a bundle that does not cover its whole scope, marked
+        /// incomplete with the reasons, instead of refusing it.
+        #[arg(long)]
+        allow_incomplete: bool,
+    },
+    /// Check an attested bundle offline, without contacting a server: its
+    /// digest, and that what it says about its own completeness holds.
+    /// Exits 0 for a complete bundle, 11 for an intact bundle marked
+    /// incomplete, and 5 for one that is malformed or was altered. Without
+    /// --trusted-key a signature is not checked and nothing is
+    /// authenticated.
+    Verify {
+        /// Bundle file written by `export-attested`.
+        bundle: PathBuf,
+        /// SPKI PEM Ed25519 public key whose signature to accept. Repeat
+        /// for several keys. When given, an unsigned bundle, a signature by
+        /// any other key or a signature that does not verify exits 5.
+        #[arg(long = "trusted-key")]
+        trusted_keys: Vec<PathBuf>,
+    },
     /// Validate every event model in a namespace, domain or project, plus
     /// the strategic findings (BoundedContext, Domain, Subdomain, Project
     /// rules), which print once in a store-level section. Use it after
@@ -469,6 +506,13 @@ enum Cmd {
         #[command(subcommand)]
         cmd: OperationCmd,
     },
+    /// Freeze an identity (every version of `<kind>/<namespace>/<slug>`) so
+    /// no route can change it, lift that freeze, or inspect which
+    /// identities are frozen. Protection is not branch-scoped.
+    Protection {
+        #[command(subcommand)]
+        cmd: ProtectionCmd,
+    },
     Fmt {
         /// Manifest files or directories (directories are walked
         /// recursively for .yaml/.yml).
@@ -492,6 +536,44 @@ enum Cmd {
 enum OperationCmd {
     /// Report the status of one operation_id.
     Get { operation_id: String },
+}
+
+#[derive(Subcommand)]
+enum ProtectionCmd {
+    /// Protect `<kind>/<namespace>/<slug>`. Requires an admin token; the
+    /// identity must already have a stored version.
+    Protect {
+        identity: String,
+        /// Why the identity is frozen; shown to every refused writer.
+        #[arg(long)]
+        reason: String,
+        /// Check the request without protecting anything.
+        #[arg(long)]
+        validate_only: bool,
+    },
+    /// Lift protection from `<kind>/<namespace>/<slug>`. Requires an admin
+    /// token.
+    Unprotect {
+        identity: String,
+        /// Lift only the row at this revision (as `get` or `list` report
+        /// it); refused with exit 3 once the row has moved. Also how an
+        /// unreadable row is lifted.
+        #[arg(long)]
+        if_match: Option<String>,
+        /// Check the request without lifting anything.
+        #[arg(long)]
+        validate_only: bool,
+    },
+    /// Report whether `<kind>/<namespace>/<slug>` is protected,
+    /// unprotected, or unknown. Exits 11 when unknown.
+    Get { identity: String },
+    /// List protected identities and unreadable protection rows. Exits 11
+    /// when the listing is partial.
+    List {
+        /// Only identities in this namespace.
+        #[arg(long)]
+        namespace: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -701,10 +783,12 @@ fn summary_json(counts: branch::SeverityCounts) -> Value {
 /// conflicts. Also used by `trogon-atlas fmt --check`.
 const EXIT_FINDINGS: u8 = 1;
 
-/// Exit code for a `validate` / `validate-project` run with no Error finding
-/// whose coverage shows a suite or the snapshot was not fully examined, so a
-/// gate never mistakes "nothing found in part of the model" for a pass.
-const EXIT_VALIDATION_INCOMPLETE: u8 = 11;
+/// Exit code for an answer the server could not finish: a `validate` /
+/// `validate-project` run with no Error finding whose coverage shows a
+/// suite or the snapshot was not fully examined, or a protection read with
+/// unknown state. A gate never mistakes "nothing found in part of the
+/// model" for a pass.
+const EXIT_INCOMPLETE: u8 = 11;
 
 /// Exit code for a `classify-impact` run where no dependent provably breaks
 /// but at least one could not be proven bump-only, or the result is
@@ -784,8 +868,50 @@ fn exit_code_for_verdict(verdict: validate::ValidationVerdict) -> ExitCode {
     match verdict {
         validate::ValidationVerdict::Clean => ExitCode::SUCCESS,
         validate::ValidationVerdict::Findings => ExitCode::from(EXIT_FINDINGS),
-        validate::ValidationVerdict::Incomplete => ExitCode::from(EXIT_VALIDATION_INCOMPLETE),
+        validate::ValidationVerdict::Incomplete => ExitCode::from(EXIT_INCOMPLETE),
     }
+}
+
+/// Report a bundle that verified. An incomplete one exits 11, the same
+/// code an incomplete `validate` run gets, so a gate that accepts only 0
+/// never takes it for a clean attestation.
+fn attested_outcome(
+    text: bool,
+    bundle: &pb::AttestedModelBundle,
+    verified: &trogon_atlas_core::attested_bundle::VerifiedBundle,
+    written: Option<&std::path::Path>,
+) -> (ExitCode, Option<Value>) {
+    let mut data = attested::outcome_json(bundle, verified);
+    if text {
+        if let Some(path) = written {
+            println!("wrote {}", path.display());
+        }
+        println!("bundle_digest: {}", verified.digest);
+        println!("authenticity: {}", verified.authenticity);
+        let reasons = attested::incomplete_reason_names(verified);
+        if reasons.is_empty() {
+            println!("complete");
+        }
+        for reason in &reasons {
+            println!("incomplete: {reason}");
+        }
+        for entity in &verified.unresolved {
+            println!(
+                "unresolved: {} ({})",
+                entity.key,
+                entity.cause.as_str_name()
+            );
+        }
+    }
+    if let Some(path) = written {
+        data["output"] = json!(path.display().to_string());
+    }
+    let code = if verified.completeness.is_complete() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(EXIT_INCOMPLETE)
+    };
+    (code, Some(data))
 }
 
 fn print_coverage_gaps(completeness: &validate::Completeness) {
@@ -968,6 +1094,115 @@ async fn connect_checked_client(
     Ok(client)
 }
 
+async fn run_protection(
+    cmd: ProtectionCmd,
+    endpoint: &str,
+    auth_token: Option<&str>,
+    rpc_timeout_secs: u64,
+    branch: Option<String>,
+    text: bool,
+) -> Result<(ExitCode, Option<Value>)> {
+    use trogon_atlas_client::protection::{
+        self, Effect, ListingVerdict, NamespaceFilter, ProtectedIdentity, ProtectionReason,
+        RowRevision,
+    };
+    let refuse_branch = || -> Result<()> {
+        if let Some(branch) = &branch {
+            trogon_atlas_client::invalid_input!(
+                "protection applies to an identity on every branch; drop --branch {branch}"
+            );
+        }
+        Ok(())
+    };
+    let connect_admin = |validate_only: bool| async move {
+        let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+        compat::ensure_can_mutate_requiring(
+            &mut client,
+            compat::MutationIntent {
+                validate_only,
+                ..Default::default()
+            },
+            &[compat::Capability::EntityProtection],
+        )
+        .await?;
+        anyhow::Ok(client)
+    };
+    match cmd {
+        ProtectionCmd::Protect {
+            identity,
+            reason,
+            validate_only,
+        } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let reason = ProtectionReason::new(&reason)?;
+            refuse_branch()?;
+            let mut client = connect_admin(validate_only).await?;
+            let outcome = protection::protect(
+                &mut client,
+                &identity,
+                &reason,
+                Effect::from_validate_only(validate_only),
+            )
+            .await?;
+            if text {
+                println!("{}", outcome.render());
+            }
+            Ok((ExitCode::SUCCESS, Some(outcome.to_json())))
+        }
+        ProtectionCmd::Unprotect {
+            identity,
+            if_match,
+            validate_only,
+        } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let if_match = if_match
+                .as_deref()
+                .map(str::parse::<RowRevision>)
+                .transpose()?;
+            refuse_branch()?;
+            let mut client = connect_admin(validate_only).await?;
+            let outcome = protection::unprotect(
+                &mut client,
+                &identity,
+                if_match,
+                Effect::from_validate_only(validate_only),
+            )
+            .await?;
+            if text {
+                println!("{}", outcome.render());
+            }
+            Ok((ExitCode::SUCCESS, Some(outcome.to_json())))
+        }
+        ProtectionCmd::Get { identity } => {
+            let identity = ProtectedIdentity::parse(&identity)?;
+            let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+            let lookup = protection::get_protection(&mut client, &identity).await?;
+            if text {
+                println!("{}", lookup.render());
+            }
+            let code = if lookup.is_unknown() {
+                ExitCode::from(EXIT_INCOMPLETE)
+            } else {
+                ExitCode::SUCCESS
+            };
+            Ok((code, Some(lookup.to_json())))
+        }
+        ProtectionCmd::List { namespace } => {
+            let namespace = namespace.as_deref().map(NamespaceFilter::new).transpose()?;
+            let mut client = connect_client(endpoint, auth_token, rpc_timeout_secs, None).await?;
+            let listing = protection::list_protections(&mut client, namespace.as_ref()).await?;
+            if text {
+                print!("{}", listing.render());
+            }
+            let code = match listing.verdict() {
+                ListingVerdict::Complete => ExitCode::SUCCESS,
+                ListingVerdict::Partial => ExitCode::from(EXIT_INCOMPLETE),
+            };
+            Ok((code, Some(listing.to_json())))
+        }
+    }
+}
+
 struct PreparedNativeOwner {
     key: trogon_atlas_core::source_bundle::ResourceKey,
     bytes: Vec<u8>,
@@ -1133,6 +1368,7 @@ async fn run(
                 "issues": outcome.issues.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
             });
             apply::insert_coverage(&mut data, outcome.coverage.as_ref());
+            apply::insert_consequence_delta(&mut data, outcome.consequence_delta.as_ref());
             Ok((ExitCode::SUCCESS, Some(data)))
         }
         Cmd::Diff { filenames } => {
@@ -2319,6 +2555,33 @@ async fn run(
             validate::insert_verdict(&mut data, resp.coverage.as_ref(), verdict, &completeness);
             Ok((exit_code_for_verdict(verdict), Some(data)))
         }
+        Cmd::ExportAttested {
+            model,
+            output,
+            as_of_changeset,
+            allow_incomplete,
+        } => {
+            let request = attested::ExportRequest {
+                address: validate::parse_model_address(&model)?,
+                as_of_changeset,
+                allow_incomplete,
+            };
+            let mut client =
+                connect_client(&endpoint, auth_token.as_deref(), rpc_timeout_secs, branch).await?;
+            let (bundle, verified) = attested::export_attested_model(&mut client, &request).await?;
+            let json = trogon_atlas_core::attested_bundle::bundle_to_json(&bundle)?;
+            std::fs::write(&output, format!("{json}\n"))
+                .map_err(|e| anyhow::anyhow!("writing {}: {e}", output.display()))?;
+            Ok(attested_outcome(text, &bundle, &verified, Some(&output)))
+        }
+        Cmd::Verify {
+            bundle,
+            trusted_keys,
+        } => {
+            let trusted = attested::read_trusted_keys(&trusted_keys)?;
+            let (bundle, verified) = attested::verify_file(&bundle, trusted.as_ref())?;
+            Ok(attested_outcome(text, &bundle, &verified, None))
+        }
         Cmd::ValidateProject {
             namespace,
             domain,
@@ -2466,6 +2729,17 @@ async fn run(
             });
             Ok((ExitCode::SUCCESS, Some(data)))
         }
+        Cmd::Protection { cmd } => {
+            run_protection(
+                cmd,
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                branch,
+                text,
+            )
+            .await
+        }
         Cmd::Branch { cmd } => match cmd {
             BranchCmd::Create { name, doc } => {
                 branch::validate_branch_name(&name)?;
@@ -2604,6 +2878,7 @@ async fn run(
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
                         apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Validated => {
@@ -2633,6 +2908,8 @@ async fn run(
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
                         apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::SUCCESS, Some(data)))
                     }
                     Status::Conflicts => {
@@ -2641,7 +2918,8 @@ async fn run(
                             eprintln!("{name} has conflicts, nothing merged:");
                             print!("{diff}");
                         }
-                        let data = json!({"status": "conflicts", "diff": diff});
+                        let mut data = json!({"status": "conflicts", "diff": diff});
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Invalid => {
@@ -2668,6 +2946,8 @@ async fn run(
                             "validation": resp.validation.iter().map(apply::issue_to_json).collect::<Vec<_>>(),
                         });
                         apply::insert_coverage(&mut data, resp.coverage.as_ref());
+                        apply::insert_consequence_delta(&mut data, resp.consequence_delta.as_ref());
+                        apply::insert_change_assessment(&mut data, resp.change_assessment.as_ref());
                         Ok((ExitCode::from(EXIT_FINDINGS), Some(data)))
                     }
                     Status::Unspecified => {

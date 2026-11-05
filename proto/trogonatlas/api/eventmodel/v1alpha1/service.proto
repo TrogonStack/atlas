@@ -7,6 +7,7 @@ import "trogonatlas/eventmodel/v1alpha1/identity.proto";
 import "trogonatlas/eventmodel/v1alpha1/event_model.proto";
 import "trogonatlas/catalog/v1alpha1/changesets.proto";
 import "trogonatlas/catalog/v1alpha1/namespaces.proto";
+import "trogonatlas/catalog/v1alpha1/protections.proto";
 import "trogonatlas/catalog/v1alpha1/snapshots.proto";
 import "trogonatlas/catalog/v1alpha1/branches.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/validation.proto";
@@ -23,6 +24,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/responsibility.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/decision_documents.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/design_topology_queries.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/source_integration.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/validation_attestation.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
 
 import "trogonatlas/api/eventmodel/v1alpha1/channel_messages.proto";
@@ -271,6 +273,12 @@ message PutEntityResponse {
   // `validation` means only the suites listed here ran, not a full model
   // check.
   ValidationCoverage coverage = 6;
+  // How the change would move the model's findings. Set only on
+  // `validate_only`; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 7;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 8;
 }
 
 message DeleteEntityRequest {
@@ -324,6 +332,9 @@ message DeleteEntityResponse {
   // current view to judge.
   repeated ValidationIssue validation = 3;
   bool referrers_incomplete = 4;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 5;
 }
 
 // ---------- Batch mutation (atomic multi-entity write) -----------------------
@@ -417,6 +428,12 @@ message BatchMutateResponse {
   // referrer gate). Never invent coverage client-side; empty per-op
   // `validation` is not a full-model clean bill of health.
   ValidationCoverage coverage = 7;
+  // How the batch would move the model's findings. Set only on
+  // STATUS_VALIDATED; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 8;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 9;
 }
 
 // Bulk delete by structural query, replacing the "list every entity then
@@ -456,6 +473,9 @@ message DeleteByQueryResponse {
   // When mode == MODE_DRY_RUN: nothing was deleted, but `deleted`
   // lists what WOULD have been.
   bool dry_run = 3;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 4;
 }
 
 // Static catalog of every EntityKind the system stores. Same shape and
@@ -571,6 +591,9 @@ message RetargetReferencesResponse {
   uint32 rewritten = 2;
   // Count of referrers whose write failed.
   uint32 failed = 3;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 4;
 }
 
 
@@ -671,6 +694,9 @@ message RevertChangesetResponse {
   bool dry_run = 3;
   // Set only when the request carried an operation_id.
   trogonatlas.catalog.v1alpha1.OperationReceipt operation_receipt = 4;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 5;
 }
 
 // See trogonatlas.catalog.v1alpha1 OperationReceipt for the durable receipt
@@ -803,7 +829,8 @@ message GetServerInfoResponse {
     bool owned_branches = 16;                 // "@owner:name" branches are attributed to an owner for delegation and filtering
     bool who_am_i = 17;                       // WhoAmI; MCP tool listing is filtered by the caller's role
     bool type_libraries = 18;                 // CompileTypeLibrary, ResolveType, GetTypeLibraryDescriptorSet
-    bool impact_classification = 19;          // ClassifyImpact
+    bool entity_protection = 19;              // ProtectEntity, UnprotectEntity; writes to a protected identity refuse with ENTITY_PROTECTED, or PROTECTION_STATE_UNKNOWN when its row cannot be read; ProtectionAnnotation is never stored
+    bool impact_classification = 20;          // ClassifyImpact
   }
   Features features = 3;
 
@@ -902,6 +929,79 @@ message MoveNamespaceRequest {
 
 message MoveNamespaceResponse {
   trogonatlas.catalog.v1alpha1.NamespaceRecord namespace = 1;
+}
+
+// ---------- Entity protection -------------------------------------------------
+//
+// Protecting an identity freezes it on every route: no new version, no edit,
+// no delete, whether on baseline or on a branch merging into it. Only an
+// authenticated admin may set or lift it, on baseline, and each call records
+// a changeset attributed to that admin. Protecting or unprotecting an
+// identity already in that state is a no-op that records nothing.
+
+message ProtectEntityRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+  // Why the identity is frozen. Required, so the refusal a writer later
+  // receives can say why.
+  string reason = 4;
+  // Check authorization and existence without protecting anything.
+  bool validate_only = 5;
+}
+
+message ProtectEntityResponse {
+  trogonatlas.catalog.v1alpha1.EntityProtection protection = 1;
+  // False when the identity was already protected, in which case
+  // `protection` is the existing row.
+  bool changed = 2;
+}
+
+message UnprotectEntityRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+  // Check authorization without lifting anything.
+  bool validate_only = 4;
+  // Lift only if the row is still at this revision (`EntityProtection.revision`
+  // or `EntityProtectionUnknown.revision`); otherwise refuse with
+  // `STALE_PRECONDITION`. Zero lifts whatever row is current.
+  uint64 if_match = 5;
+}
+
+message UnprotectEntityResponse {
+  // False when the identity was not protected.
+  bool changed = 1;
+  // Changeset recording the lift. Empty when nothing changed.
+  string changeset_id = 2;
+}
+
+message GetEntityProtectionRequest {
+  trogonatlas.eventmodel.v1alpha1.EntityKind kind = 1;
+  string namespace = 2;
+  string slug = 3;
+}
+
+message GetEntityProtectionResponse {
+  // Set when `state` is PROTECTED.
+  trogonatlas.catalog.v1alpha1.EntityProtection protection = 1;
+  trogonatlas.catalog.v1alpha1.ProtectionState state = 2;
+  // Set when `state` is UNKNOWN.
+  trogonatlas.catalog.v1alpha1.EntityProtectionUnknown unknown = 3;
+}
+
+message ListEntityProtectionsRequest {
+  // Restrict to one namespace. Empty lists every namespace the caller can see.
+  string namespace = 1;
+}
+
+message ListEntityProtectionsResponse {
+  repeated trogonatlas.catalog.v1alpha1.EntityProtection protections = 1;
+  // Rows that exist but could not be read. Writes treat them as protected.
+  repeated trogonatlas.catalog.v1alpha1.EntityProtectionUnknown unknown = 2;
+  // False when the registry could not be enumerated to the end, so an
+  // identity missing from both lists may still be protected.
+  bool complete = 3;
 }
 
 // ---------- Caller identity ---------------------------------------------------
@@ -1090,6 +1190,15 @@ message MergeBranchResponse {
   // not run full `model` or write-path `scenarios`; coverage reports that
   // honestly so empty `validation` is not read as a clean full-model gate.
   ValidationCoverage coverage = 9;
+  // How landing the branch would move baseline's findings. Set only on
+  // `dry_run` once validation was reached; advisory, never a refusal.
+  ConsequenceDelta consequence_delta = 10;
+  // What the invariants declared in scope said about the write. Unset when
+  // the scope declares none. A refused write returns a typed error instead.
+  InvariantCheck invariant_check = 11;
+  // The server's advisory verdict on landing the branch. Set only on
+  // `dry_run`; a real merge never consults it.
+  ChangeAssessment change_assessment = 12;
 }
 
 message UpdateBranchRequest {
@@ -1168,6 +1277,7 @@ message ResolveBranchEntryResponse {
 //     GetEventModelProjection /
 //     ExtractSubgraph                    : denormalized subgraphs
 //   - ExportEventModelManifests          : a board as apply-ready manifests
+//   - ExportAttestedModel                : manifests + validation, digest-bound
 //   - DiffEntities                       : structural comparison
 //   - PutEntity / DeleteEntity /
 //     BatchMutate                        : mutation w/ etag + dry-run
@@ -1236,6 +1346,12 @@ service EventModelService {
   // an existing namespace without touching a single entity.
   rpc RegisterNamespace(RegisterNamespaceRequest) returns (RegisterNamespaceResponse);
   rpc MoveNamespace(MoveNamespaceRequest) returns (MoveNamespaceResponse);
+  // Entity protection. Setting and lifting are admin-only and baseline-only;
+  // reading is open to any reader.
+  rpc ProtectEntity(ProtectEntityRequest) returns (ProtectEntityResponse);
+  rpc UnprotectEntity(UnprotectEntityRequest) returns (UnprotectEntityResponse);
+  rpc GetEntityProtection(GetEntityProtectionRequest) returns (GetEntityProtectionResponse);
+  rpc ListEntityProtections(ListEntityProtectionsRequest) returns (ListEntityProtectionsResponse);
   // Content-addressable identity of the current state. Branch-scoped via
   // the `x-trogon-atlas-branch` header like every other read.
   rpc GetSnapshotId(GetSnapshotIdRequest) returns (GetSnapshotIdResponse);
@@ -1277,6 +1393,9 @@ service EventModelService {
   rpc ExtractSubgraph(ExtractSubgraphRequest) returns (ExtractSubgraphResponse);
   // An event model as apply-ready manifests, for sharing a board.
   rpc ExportEventModelManifests(ExportEventModelManifestsRequest) returns (ExportEventModelManifestsResponse);
+  // Manifests, validation and state identity from one state, bound by one
+  // digest a client can verify offline.
+  rpc ExportAttestedModel(ExportAttestedModelRequest) returns (ExportAttestedModelResponse);
 
   // Structural comparison of two entities (typically two versions).
   rpc DiffEntities(DiffEntitiesRequest) returns (DiffEntitiesResponse);

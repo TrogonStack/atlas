@@ -60,6 +60,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.23"
 chacha20poly1305 = "0.11"
+ed25519-dalek = { version = "2.2", features = ["pem", "pkcs8"] }
 jsonschema = { version = "0.60", default-features = false }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 sha2 = "0.11"

@@ -360,10 +360,10 @@ async fn restoration_renews_only_restored_identities(take_theirs: bool) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn keep_ours_restoration_renews_only_the_restored_step_and_transitions() {
-    restoration_renews_only_restored_identities(false).await;
+    Box::pin(restoration_renews_only_restored_identities(false)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn take_theirs_restoration_renews_only_the_restored_step_and_transitions() {
-    restoration_renews_only_restored_identities(true).await;
+    Box::pin(restoration_renews_only_restored_identities(true)).await;
 }

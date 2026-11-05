@@ -9,7 +9,7 @@ use tonic::service::interceptor::InterceptedService;
 use tower::{timeout::error::Elapsed, BoxError, ServiceBuilder};
 use trogon_atlas_client::client::{ConnectOptions, Transport};
 use trogon_atlas_mcp::server::McpServer;
-pub use trogon_atlas_mcp::{AllowedHosts, MCP_PATH};
+pub use trogon_atlas_mcp::{profile::ToolProfile, AllowedHosts, MCP_PATH};
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
 
 use crate::{
@@ -62,7 +62,8 @@ pub fn mcp_server(
 }
 
 /// The `/mcp` route, for merging into the same `axum::Router` the gRPC
-/// listener serves.
+/// listener serves. `profile` fixes every session to one tool profile; when
+/// `None`, each request may name its own.
 pub fn mcp_router(
     data_plane: DataPlane,
     rpc_metrics: RpcMetricsLayer,
@@ -70,6 +71,7 @@ pub fn mcp_router(
     rpc_timeout: Option<Duration>,
     max_message_bytes: usize,
     allowed_hosts: AllowedHosts,
+    profile: Option<ToolProfile>,
 ) -> anyhow::Result<axum::Router> {
     let server = mcp_server(
         data_plane,
@@ -77,7 +79,8 @@ pub fn mcp_router(
         inflight,
         rpc_timeout,
         max_message_bytes,
-    )?;
+    )?
+    .with_profile(profile);
     Ok(trogon_atlas_mcp::router(server, allowed_hosts))
 }
 

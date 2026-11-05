@@ -152,6 +152,24 @@ to `catalog_values.proto` with unchanged names and field numbers; buf reports th
 move as an acknowledged FILE break. Upgrade clients and server together before
 authoring these associations. Development data may be recreated.
 
+Contract revision 20 adds `Component.ui_hostings`, which records which UIs a
+component hosts, and raises both mutation compatibility floors to 20. An older
+writer would drop those hostings, so it is refused before any mutation.
+
+Contract revision 21 adds entity protection: `ProtectEntity`,
+`UnprotectEntity`, `ListEntityProtections`, and the `entity_protection`
+feature flag. The floors stay at 20. A revision 20 client can still write to a
+revision 21 server, and protection is enforced on its writes. A client that
+relies on protection requires the `entity_protection` feature before it
+sends a protection write, so an older server refuses it rather than ignoring
+the protection request.
+
+Contract revision 22 adds `ClassifyImpact` and the
+`impact_classification` feature flag. The floors stay at 20 because the RPC
+is read-only. A client that relies on impact classification requires the
+feature before it sends the request, so an older server refuses it rather
+than silently substituting a different impact contract.
+
 ## Supported combinations
 
 | Client vs server | Mutations |
@@ -183,8 +201,8 @@ drift.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
 
-The current contract revision is 19, with both mutation compatibility floors
-at 19. Native catalog context writers preserve Decision dates, makers and
+The current contract revision is 22, with both mutation compatibility floors
+at 20. Native catalog context writers preserve Decision dates, makers and
 amendments, Term domain ownership, and Document content and classifications.
 CalendarDate uses the shared type package. It requires no breaking-change
 acknowledgment against the main baseline.

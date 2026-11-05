@@ -104,8 +104,12 @@ The design, whatever it is, must satisfy these:
 
 - Reimplementing git. No rebase, cherry-pick, or branch-off-branch in the
   first design. One level: baseline and branches off it.
-- Locking. Two branches may touch the same entity; the second merge sees a
-  conflict. No reservations, no pessimistic locks.
+- Locking work in progress. Two branches may touch the same entity; the
+  second merge sees a conflict. No reservations, no pessimistic locks.
+  [Entity protection](entity-protection.md) is not that: it freezes an
+  identity that should not change at all, and an admin sets and lifts it.
+  A protected identity refuses branch writes and merges as it refuses
+  baseline writes, so an old branch cannot overwrite it or strip it.
 - Replacing draft-then-land's annotations. `LifecycleAnnotation` remains
   meaningful on the live model (a landed entity can still be marked
   proposed); branches are about *where* work happens, not entity lifecycle.
@@ -346,7 +350,9 @@ atomic batch, then deletes the branch.
   edit/delete and delete/edit: keeping versus dropping a key has no
   field-level reading to combine.
 - **Anyone with write access may resolve and merge.** Review gates are team
-  convention, not mechanism, until proven otherwise.
+  convention, not mechanism, until proven otherwise. The exception is a
+  protected identity, which no merge or resolution may change; see
+  [entity protection](entity-protection.md).
 - **Baseline protection: opt-in server flag; when on, only merges and
   admin principals change baseline.** It is consultable per namespace
   (`--protect-baseline-namespaces=orders,shop-*`), so a context under review

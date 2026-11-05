@@ -155,6 +155,159 @@ pub mod reason {
     pub const NOT_WRITER: &str = "NOT_WRITER";
     pub const CURSOR_REJECTED: &str = "CURSOR_REJECTED";
     pub const BREAKING_CHANGE: &str = "BREAKING_CHANGE";
+    pub const ENTITY_PROTECTED: &str = "ENTITY_PROTECTED";
+    pub const PROTECTION_STATE_UNKNOWN: &str = "PROTECTION_STATE_UNKNOWN";
+    pub const INVARIANT_VIOLATED: &str = "INVARIANT_VIOLATED";
+    pub const INVARIANT_UNEVALUABLE: &str = "INVARIANT_UNEVALUABLE";
+    pub const INVARIANT_STALE: &str = "INVARIANT_STALE";
+    pub const EXPORT_INCOMPLETE: &str = "EXPORT_INCOMPLETE";
+    pub const SIGNING_KEY_UNAVAILABLE: &str = "SIGNING_KEY_UNAVAILABLE";
+}
+
+/// `FAILED_PRECONDITION`: the write would change an identity an admin has
+/// protected. Nothing was applied. `ErrorInfo` names the first identity and
+/// its reason; a `PreconditionFailure` violation names every one, so a
+/// refused batch reports all of them at once.
+pub fn entity_protected(records: &[trogon_atlas_store::ProtectionRecord]) -> Status {
+    let Some(first) = records.first() else {
+        return Status::internal("entity_protected called without a protected identity");
+    };
+    let message = format!(
+        "{} is protected ({}); an admin must call UnprotectEntity before it can change",
+        first.identity, first.reason
+    );
+    let mut details = ErrorDetails::with_error_info(
+        reason::ENTITY_PROTECTED,
+        ERROR_DOMAIN,
+        HashMap::from([
+            ("identity".to_string(), first.identity.to_string()),
+            ("protection_reason".to_string(), first.reason.to_string()),
+            ("protected_by".to_string(), first.protected_by.clone()),
+        ]),
+    );
+    for record in records {
+        details.add_precondition_failure_violation(
+            reason::ENTITY_PROTECTED,
+            record.identity.to_string(),
+            record.reason.to_string(),
+        );
+    }
+    Status::with_error_details(Code::FailedPrecondition, message, details)
+}
+
+/// `FAILED_PRECONDITION`: the write would break, or cannot be checked
+/// against, the invariant `outcome` describes. Each forbidden finding the
+/// write introduces rides as an `INVARIANT` precondition violation.
+pub fn invariant_refused(outcome: &pb::InvariantOutcome, snapshot_id: &str) -> Status {
+    use pb::invariant_outcome::Status as Verdict;
+    let violated = outcome.status() == Verdict::Violated;
+    let carrier = outcome
+        .carrier
+        .as_ref()
+        .and_then(|c| c.id.as_ref())
+        .map(|id| format!("{}/{}@{}", id.namespace, id.slug, id.version))
+        .unwrap_or_default();
+    let label = if outcome.redacted {
+        "an invariant the caller cannot read".to_string()
+    } else {
+        format!("invariant {:?} declared on {carrier}", outcome.name)
+    };
+    let message = if violated {
+        format!("write would violate {label}")
+    } else {
+        format!(
+            "write cannot be checked against {label}: {}",
+            outcome.reason().as_str_name().trim_start_matches("REASON_")
+        )
+    };
+    let metadata = HashMap::from([
+        ("invariant".to_string(), outcome.name.clone()),
+        ("carrier".to_string(), carrier.clone()),
+        (
+            "status".to_string(),
+            outcome
+                .status()
+                .as_str_name()
+                .trim_start_matches("STATUS_")
+                .to_string(),
+        ),
+        (
+            "reason".to_string(),
+            if violated {
+                String::new()
+            } else {
+                outcome
+                    .reason()
+                    .as_str_name()
+                    .trim_start_matches("REASON_")
+                    .to_string()
+            },
+        ),
+        ("snapshot_id".to_string(), snapshot_id.to_string()),
+        ("redacted".to_string(), outcome.redacted.to_string()),
+    ]);
+    let reason = if violated {
+        reason::INVARIANT_VIOLATED
+    } else {
+        reason::INVARIANT_UNEVALUABLE
+    };
+    let mut details = ErrorDetails::with_error_info(reason, ERROR_DOMAIN, metadata);
+    for issue in &outcome.violations {
+        details.add_precondition_failure_violation(
+            "INVARIANT",
+            carrier.clone(),
+            format!("{}: {}", issue.code, issue.message),
+        );
+    }
+    Status::with_error_details(Code::FailedPrecondition, message, details)
+}
+
+/// `ABORTED`: the scope was written after the invariant verdict's snapshot
+/// was read, so the verdict no longer describes the world the write would
+/// land in. Retrying re-evaluates against the current state.
+pub fn invariant_stale() -> Status {
+    with_reason(
+        Code::Aborted,
+        "the scope changed after its invariants were checked; retry the write",
+        reason::INVARIANT_STALE,
+    )
+}
+
+/// True for the refusals `invariant_refused` builds.
+#[must_use]
+pub fn is_invariant_refusal(status: &Status) -> bool {
+    status.get_details_error_info().is_some_and(|info| {
+        info.domain == ERROR_DOMAIN
+            && (info.reason == reason::INVARIANT_VIOLATED
+                || info.reason == reason::INVARIANT_UNEVALUABLE)
+    })
+}
+
+/// `UNAVAILABLE`: a write would touch an identity whose protection could not
+/// be read, so it is refused as if protected. Distinct from
+/// `ENTITY_PROTECTED` so a caller retries instead of asking for a lift.
+pub fn protection_state_unknown(unknown: &[trogon_atlas_store::ProtectionUnknown]) -> Status {
+    let Some(first) = unknown.first() else {
+        return Status::internal("protection_state_unknown called without an identity");
+    };
+    let message = format!(
+        "protection state of {} is unknown ({}); the write is refused. Retry; if it persists, an admin inspects GetEntityProtection and lifts the unreadable row with UnprotectEntity",
+        first.identity, first.cause
+    );
+    let mut metadata = HashMap::from([("identity".to_string(), first.identity.to_string())]);
+    if let Some(revision) = first.revision {
+        metadata.insert("row_revision".to_string(), revision.to_string());
+    }
+    let mut details =
+        ErrorDetails::with_error_info(reason::PROTECTION_STATE_UNKNOWN, ERROR_DOMAIN, metadata);
+    for u in unknown {
+        details.add_precondition_failure_violation(
+            reason::PROTECTION_STATE_UNKNOWN,
+            u.identity.to_string(),
+            u.cause.to_string(),
+        );
+    }
+    Status::with_error_details(Code::Unavailable, message, details)
 }
 
 /// `UNAVAILABLE`: another call already owns this `operation_id` and has not
@@ -162,6 +315,31 @@ pub mod reason {
 /// the mutation as failed.
 pub fn operation_in_progress(message: impl Into<String>) -> Status {
     with_reason(Code::Unavailable, message, reason::OPERATION_IN_PROGRESS)
+}
+
+/// `FAILED_PRECONDITION`: an attested export could not cover its whole
+/// scope. `reasons` lists the bundle's incomplete reasons, comma-joined.
+/// The caller may ask again with `allow_incomplete` to get the bundle
+/// marked as incomplete instead.
+pub fn export_incomplete(message: impl Into<String>, reasons: String) -> Status {
+    with_reason_and_metadata(
+        Code::FailedPrecondition,
+        message,
+        reason::EXPORT_INCOMPLETE,
+        HashMap::from([("reasons".to_string(), reasons)]),
+    )
+}
+
+/// `FAILED_PRECONDITION`: the server is configured to sign attested
+/// bundles and could not load its key, so it refuses rather than return an
+/// unsigned bundle. `source` is the kind of key reference, `file` or `env`.
+pub fn signing_key_unavailable(message: impl Into<String>, source: &str) -> Status {
+    with_reason_and_metadata(
+        Code::FailedPrecondition,
+        message,
+        reason::SIGNING_KEY_UNAVAILABLE,
+        HashMap::from([("source".to_string(), source.to_string())]),
+    )
 }
 
 /// `ALREADY_EXISTS`: `operation_id` was already claimed for a request with a
@@ -471,6 +649,8 @@ pub fn validate_entity_content(entity: &pb::Entity) -> Result<(), Status> {
     trogon_atlas_core::channel_links::validate_values(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
     trogon_atlas_core::storage_claims::validate_values(entity)
+        .map_err(|error| Status::invalid_argument(error.to_string()))?;
+    crate::invariants::check_declarations(entity)
         .map_err(|error| Status::invalid_argument(error.to_string()))?;
     let (title, doc, fields_len, metadata_len) = match entity.kind.as_ref() {
         Some(K::Event(x)) => (

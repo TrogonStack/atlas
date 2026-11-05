@@ -9,6 +9,7 @@
 //! spec IS the proto3-JSON body of the entity message, so the schema stays
 //! derived from the proto, never hand-maintained.
 pub mod apply;
+pub mod attested;
 pub mod branch;
 pub mod channel_messages;
 pub mod client;
@@ -28,6 +29,7 @@ pub mod openslo_bindings;
 pub mod operation;
 pub mod outcome;
 pub mod precondition;
+pub mod protection;
 pub mod responsibility;
 mod source_codec;
 pub mod source_input;

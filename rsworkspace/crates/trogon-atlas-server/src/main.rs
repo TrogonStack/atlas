@@ -113,6 +113,12 @@ struct Args {
         default_value = "localhost,127.0.0.1,::1"
     )]
     mcp_allowed_hosts: trogon_atlas_server::mcp::AllowedHosts,
+    /// Fix every MCP session to one tool profile: authoring, repair,
+    /// review, source-integration or read-only. Unset, a request may pick
+    /// its own with `x-trogon-atlas-profile`; set, a request naming another
+    /// profile is refused.
+    #[arg(long, env = "TROGON_ATLAS_MCP_PROFILE")]
+    mcp_profile: Option<trogon_atlas_server::mcp::ToolProfile>,
     /// Shared bearer token required on every RPC. Deprecated in favor of
     /// `--auth-tokens-file`. When set without a tokens file, the token is
     /// treated as belonging to a synthetic principal named "legacy-admin" with
@@ -318,6 +324,26 @@ struct Args {
     /// Safe to leave unset for a single-process deployment.
     #[arg(long, env = "TROGON_ATLAS_CHANGE_CURSOR_KEY", hide_env_values = true)]
     change_cursor_key: Option<String>,
+    /// PKCS#8 PEM Ed25519 private key file `ExportAttestedModel` signs
+    /// bundles with. Unset with `--attested-signing-key-env` also unset,
+    /// bundles are sealed unsigned. Read on every export; an export whose
+    /// key cannot be read is refused with `SIGNING_KEY_UNAVAILABLE`.
+    #[arg(
+        long,
+        env = "TROGON_ATLAS_ATTESTED_SIGNING_KEY_FILE",
+        hide_env_values = true,
+        conflicts_with = "attested_signing_key_env"
+    )]
+    attested_signing_key_file: Option<PathBuf>,
+    /// Name of an environment variable holding the PKCS#8 PEM Ed25519
+    /// private key, instead of `--attested-signing-key-file`. Names the
+    /// variable; never pass the key itself here.
+    #[arg(
+        long,
+        env = "TROGON_ATLAS_ATTESTED_SIGNING_KEY_ENV",
+        hide_env_values = true
+    )]
+    attested_signing_key_env: Option<trogon_atlas_server::attested_signing::EnvVarName>,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -693,6 +719,29 @@ async fn run(
                  minted by one process will fail to open on another."
             );
         }
+    }
+    let signing_key = match (
+        args.attested_signing_key_file.clone(),
+        args.attested_signing_key_env.clone(),
+    ) {
+        (Some(path), _) => {
+            Some(trogon_atlas_server::attested_signing::SigningKeySource::File(path))
+        }
+        (None, Some(name)) => {
+            Some(trogon_atlas_server::attested_signing::SigningKeySource::EnvVar(name))
+        }
+        (None, None) => None,
+    };
+    if let Some(source) = signing_key {
+        match source.load() {
+            Ok(key) => tracing::info!(key_id = %key.key_id(), "attested bundles will be signed"),
+            Err(e) => tracing::error!(
+                error = %e,
+                "attested bundle signing is configured but the key cannot be loaded; \
+                 ExportAttestedModel will refuse with SIGNING_KEY_UNAVAILABLE until it can"
+            ),
+        }
+        svc = svc.with_attested_signing_key(source);
     }
     if !baseline_protection.is_off() {
         tracing::info!(
@@ -1087,6 +1136,7 @@ async fn run(
             rpc_timeout,
             args.max_message_bytes,
             args.mcp_allowed_hosts.clone(),
+            args.mcp_profile,
         )?;
         let merged = routes.axum_router_mut().clone().merge(mcp_router);
         *routes.axum_router_mut() = merged;

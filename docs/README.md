@@ -15,11 +15,15 @@ Solve a specific problem:
 
 - [Assess the blast radius of a change](how-to/assess-change-impact.md)
 - [Check code against the model](how-to/check-code-drift.md)
+- [Connect an MCP client](how-to/connect-an-mcp-client.md)
 - [Declare an SLO](how-to/declare-an-slo.md)
 - [Draft and land a new entity version](how-to/draft-then-land.md)
+- [Export and verify an attested model](how-to/export-and-verify-an-attested-model.md)
 - [Issue an API key to a client](how-to/issue-an-api-key.md)
+- [Sign attested bundles](how-to/sign-attested-bundles.md)
 - [Migrate legacy entity fields into `schema`](how-to/migrate-legacy-entity-fields.md)
 - [Model runtime code as an Event Model](how-to/model-runtime-code-as-an-event-model.md)
+- [Protect a published entity](how-to/protect-a-published-entity.md)
 - [Register a type library](how-to/register-a-type-library.md)
 - [Repair a validation finding](how-to/repair-validation-findings.md)
 - [Replan after a stale refusal](how-to/replan-after-a-stale-refusal.md)
@@ -32,12 +36,20 @@ Solve a specific problem:
 
 Look up exact behavior:
 
+- [Attested bundle format](reference/attested-bundle-format.md)
+- [Attested export MCP tools](reference/attested-export-mcp-tools.md)
+- [Change assessment](reference/change-assessment.md)
+- [Consequence delta](reference/consequence-delta.md)
 - [Failure reasons](reference/failure-reasons.md)
+- [MCP tool reference](reference/mcp-tools.md)
+- [MCP tool profiles](reference/mcp-tool-profiles.md)
 - [Finding evidence](reference/finding-evidence.md)
+- [Invariant gates](reference/invariant-gates.md)
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
 - [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)
 - [Impact classification](reference/impact-classification.md)
+- [Entity protection commands](reference/entity-protection-commands.md)
 
 Resource contracts and acceptance:
 
@@ -75,10 +87,15 @@ Understand how Atlas works and why:
 
 - [Atlas principles](explanation/principles/README.md)
 - [Architecture resource roadmap](explanation/architecture-resource-roadmap.md)
+- [Attested export](explanation/attested-export.md)
 - [Authorization design](explanation/authorization.md)
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)
+- [Change assessment](explanation/change-assessment.md)
 - [Changesets](explanation/changesets.md)
+- [Consequence deltas](explanation/consequence-delta.md)
+- [Entity protection](explanation/entity-protection.md)
+- [Invariant gates](explanation/invariant-gates.md)
 - [Reliability overlays](explanation/reliability-overlays.md)
 - [Single-writer fencing](explanation/single-writer.md)
 - [Snapshot identity](explanation/snapshot-identity.md)

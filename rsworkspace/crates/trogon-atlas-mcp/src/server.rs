@@ -12,6 +12,7 @@ use trogon_atlas_client::{
     client::{client_for_transport, Client, ConnectOptions, Transport},
     compat::{self, MutationIntent},
     precondition::{BranchEntryState, StalePlan},
+    protection,
     tenant_types::{self, TypeScope},
 };
 use trogon_atlas_core::transcode::TranscodePool;
@@ -20,23 +21,30 @@ use trogon_atlas_proto as pb;
 use crate::{
     caller::{Caller, CallerToken},
     error::{attach_operation_id, tool_err, McpError},
+    profile::ToolProfile,
+    prompts::{TaskPrompt, TASK_PROMPTS},
     tools::{
         AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
         BatchMutateParams, CatalogQueryParams, ClassifyImpactParams, CompileTypeLibraryParams,
         CreateBranchParams, DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams,
-        DiffBranchParams, DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySpec,
-        EventModelProjectionParams, ExportNamespaceParams, ExportOpensloParams,
-        ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams, GetLatestVersionParams,
-        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
-        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams, ListVersionsParams,
-        MergeBranchParams, MoveNamespaceParams, ProjectionParams, PutEntityJsonParams,
-        PutEntityParams, ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams,
-        ResolveTypeParams, ResponsibilityQueryParams, RetargetReferencesParams,
-        RevertChangesetParams, SearchParams, SliceProjectionParams, SourceRequestParams,
-        SupersessionChainParams, UpdateBranchParams, ValidateEventModelParams,
-        ValidateProjectParams,
+        DiffBranchParams, DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySchemaParams,
+        EntitySpec, EventModelProjectionParams, ExportAttestedModelParams, ExportNamespaceParams,
+        ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
+        GetEntityProtectionParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
+        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
+        ListEntitiesByDomainParams, ListEntitiesParams, ListEntityProtectionsParams,
+        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
+        ProtectEntityParams, PutEntityJsonParams, PutEntityParams, ReferencesParams,
+        RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
+        ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
+        SliceProjectionParams, SourceRequestParams, SupersessionChainParams, UnprotectEntityParams,
+        UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
+        VerifyAttestedBundleParams,
     },
 };
+
+/// The `initialize` result `_meta` key naming the active tool profile.
+pub const PROFILE_META_KEY: &str = "trogon-atlas/tool-profile";
 
 pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 
@@ -44,177 +52,38 @@ pub const MAX_JSON_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_SEARCH_QUERY_BYTES: usize = 2048;
 
 /// ServerHandler instructions. Keep in sync with `get_info`.
-pub const SERVER_INSTRUCTIONS: &str = "trogon-atlas MCP: tools for the trogonatlas.api.eventmodel.v1alpha1 gRPC service. \
-             Read tools return a binpb_base64 envelope you can decode (or use *_json companions). Mutations \
-             have two surfaces: JSON (get_entity_json -> edit proto3 JSON -> put_entity_json / \
-             batch_mutate_json; no protobuf tooling required) and binpb (get_entity -> modify \
-             binpb_base64 -> put_entity / batch_mutate). Call who_am_i if you need to confirm \
-             which role, namespaces, or owner you are authenticated as; the tools listed here \
-             are already filtered to what that role can call.\n\
+pub const SERVER_INSTRUCTIONS: &str =
+    "trogon-atlas MCP: tools for the trogonatlas.api.eventmodel.v1alpha1 gRPC service. \
+             Read tools return a binpb_base64 envelope; the *_json companions return and accept \
+             proto3 JSON instead, so no protobuf tooling is required. The tools listed are already \
+             filtered to what your role and tool profile can call; call who_am_i to confirm the \
+             role, namespaces or owner you act as.\n\
              \n\
-             SPECIFICATION AUTHORING: use the native specification entity for retained contract artifacts, \
-             schemas, messages, operations, provider exposures and usages. API classification is derived \
-             from operations and exposures selecting them. Integration messages map only to ReadModels; \
-             request/response/notification roles do not create Commands or Events. Preserve authoritative \
-             member IDs, connection IDs, exact artifact text and SHA-256 digests on edits and manifest \
-             round trips. Add replacement artifact members to change bytes. Opaque selectors remain \
-             unverified; no format importer, remote fetch or semantic validation is implied.\n\
+             Task procedures are MCP prompts: list them and fetch the one for your task (authoring \
+             a storyboard, the strategic layout, a specification or reliability overlays, or \
+             repairing a validation finding) before you start. A prompt is listed only when every \
+             tool it names is offered to you.\n\
              \n\
-             STORYBOARD AUTHORING RULES (validated; violations are rejected or flagged):\n\
-             1. A storyboard is a TEMPORAL sequence: each slice is one moment. A read-model \
-             slice lists only the events that just happened at that moment, never the type's \
-             full source list (the ReadModel entity carries the type-level list).\n\
-             2. Projection adjacency: every event's read-model projections come directly after \
-             the emitting slice, before the next command or automation slice acts. Updates \
-             from divergent branches (e.g. approve vs reject) are separate slices, never merged.\n\
-             3. One processor issues exactly one command; branching outcomes are separate \
-             automation slices with separate processors. Record 'these ship as one worker' \
-             with a Component entity listing them as members, not by sharing entities.\n\
-             4. Split read models by shape, not by consumer: add a read model only when a \
-             consumer needs different fields, key or source events. Consumers that read the \
-             same data share one read model; when several automations observe it, declare a \
-             SharedConsumersAnnotation naming them. A command's decision state comes from its \
-             stream (the given events) and is not a read model. Two read models with the same \
-             source events and fields are a duplicate. External integrations are declared on BOTH seams: the processor \
-             that performs the call lists the ExternalSystem in Processor.calls (outbound), \
-             and the results land in ExternalSource read models pointing at the same system \
-             (inbound); the round trip is structural, never prose-only.\n\
-             5. Sub-workflows are SEPARATE storyboards chained implicitly: storyboard A's \
-             outcome events project into read models that storyboard B's entry observes. \
-             Never build one mega-storyboard; never invent nesting. The EventModel is the \
-             workflow umbrella, and its ordered members list sequences the storyboards.\n\
-             6. Every storyboard declares an honest entry (the read model observed plus the \
-             human persona+ui or automation processor observing it) and an outcome (the \
-             terminal events). Clock/schedule triggers are read models observed by automations.\n\
-             7. Single-use or entitlement constraints (e.g. review-once) get their own \
-             aggregate swimlane; that stream is the consistency boundary.\n\
-             8. Swimlane stream_id placeholders must be followable names: each {placeholder} \
-             references a FieldSpec on that lane's events/commands, or the name of a \
-             Uuidv5IdentityAnnotation registered on the swimlane (composed identities). Never \
-             inline expressions like {uuidv5(...)}; register the identity once under a name \
-             and write e.g. 'review-eligibility-{eligibility_id}'.\n\
-             9. Forks in the road live on the SWIMLANE: declare the stream's lifecycle as \
-             Swimlane.transitions (after <event>, next = [<event> + guard doc, ...]). \
-             Exclusivity comes from the consistency boundary: competing commands append to \
-             the same stream and the aggregate accepts one successor, so alternatives \
-             without a shared stream are parallel fan-out, not a fork. Cycles are legal \
-             (lifecycles loop). Tools derive the storyboard fork graph from the table, and \
-             validation checks every GWT against it: a scenario may only emit a legal \
-             successor of the last given event on that stream.\n\
-             10. TIME ONLY POINTS FORWARD. Every edge goes from an earlier moment to a later \
-             one; recurrence of a type (a screen shown again, a view updated again, a \
-             lifecycle re-entered) is a NEW occurrence, never an arrow into the past; a \
-             backward arrow destroys the ability to read time off the graph. Order slices \
-             so events precede their projections and projections precede their consumers; \
-             write scenario given histories as forward walks of each stream's transitions \
-             (validated both in given order and in emission).\n\
-             11. Bounded contexts touch at exactly ONE seam: an upstream EVENT flowing into \
-             a downstream subscription READ MODEL's source_events (the translation pattern). \
-             A cross-model link is NOT a continuation: no shared stream means no fork, no \
-             guard, no single timeline; it is async pub/sub with fan-out. The DOWNSTREAM \
-             declares the dependency (its consumer-shaped view names the upstream event); \
-             the upstream never knows its consumers. Any other cross-namespace structural \
-             ref is rejected (CROSS_MODEL_BOUNDARY_VIOLATION): translate, don't reference. \
-             A namespace IS a bounded context; its root document is the BoundedContext \
-             entity (slug == namespace, validated) carrying the context charter, links, \
-             and metadata. Event models are free-form curations WITHIN a context (a \
-             feature, a flow, a release), and a namespace may hold many.\n\
-             12. Project management layers ON TOP of the model, never inside it. Delivery \
-             status (todo/in_progress/review/blocked/done) lives in Tracker entities: \
-             denormalized lists of {subject EntityRef, TrackStatus, doc} pointing at any \
-             entity kind. Design entities carry NO status fields; flipping a status never \
-             mutates the model. Several trackers may overlay one model (per team, per \
-             milestone); within one tracker each subject appears once. Trackers are NOT \
-             event model members. 'What needs work?' = list_entities kind=tracker.\n\
-             13. UI.transitions declares PURE navigation only: surface-to-surface links \
-             that carry no command and no event (tab bars, back affordances, menu links, \
-             deep links). Any hop a storyboard command path already explains is DERIVED \
-             from the slices; re-declaring it is managed duplication and warns \
-             (UI_TRANSITION_DERIVABLE). Cycles are legal in the data (a navigation map is \
-             a graph, like the swimlane lifecycle); renderers keep time forward by \
-             unrolling occurrences.\n\
-             14. Model DECISIONS AND DATA, never implementation. In scope: \
-             strategic design (contexts, charters, seams, investment) and the behavioral \
-             contract (facts, order, fields). Out of scope, always: classes, services, \
-             repositories, frameworks, persistence, code structure. Litmus test: would it \
-             survive reimplementing the system in another language?\n\
-             15. The problem space is a knowledge graph: Domain (the \
-             business, usually one) contains Subdomains (problems the business must be \
-             good at, classified CORE/SUPPORTING/GENERIC, a budget document). They live \
-             in a namespace named after the domain, which is NOT a bounded context. A \
-             Subdomain never contains contexts: BoundedContext.realizes maps solution to \
-             problem (cross-namespace, legal: knowledge, not coupling). One context \
-             realizing several subdomains is a monolith confessing; realizing subdomains \
-             of different classifications also warns (REALIZES_MIXED_CLASSIFICATIONS), \
-             because one boundary then carries two investment levels. A Domain declared in \
-             a context's namespace warns (DOMAIN_IN_CONTEXT_NAMESPACE): give it its own \
-             problem-space namespace. Classification goes on the SUBDOMAIN, never the \
-             context. Layout: the Project, the Domain and ALL Subdomains live in ONE \
-             problem-space namespace (Domain and Project slug == that namespace); each \
-             context namespace holds only its BoundedContext, which realizes ONE \
-             subdomain across namespaces. Never create a Project or Domain per context \
-             namespace to silence DOMAIN_MISSING_PROJECT; point the contexts at the one \
-             problem space instead. Declare a relationship intent (rule 16) for every \
-             cross-context seam.\n\
-             16. Seams carry data; relationships carry intent. The DOWNSTREAM \
-             BoundedContext declares relationships: upstream context + intent \
-             (CUSTOMER_SUPPLIER / CONFORMIST / PARTNERSHIP / SEPARATE_WAYS) + doc. Intent \
-             and data must agree: integration intent without a seam warns, SEPARATE_WAYS \
-             with a seam errors, a seam with no declared intent nudges (Info).\n\
-             17. Screen is composition, UI is the moment. Use UI for every \
-             slice and storyboard touchpoint. Use Screen only for URL-addressable \
-             surfaces that compose UI contributions through UI.slot. Put Screen \
-             entities in a non-context application namespace. Required Screen slots \
-             need at least one contributing UI. A Screen with UI contributions from \
-             multiple contexts is expected shared-surface composition, not a \
-             replacement for context seams.\n\
-             18. Terms and Ambiguities are language data. A Term lives in the \
-             bounded context whose language it defines and points outward through \
-             embodied_by to the entities carrying that meaning. An Ambiguity lives \
-             in the problem-space namespace and records a real ruling across two \
-             or more Term refs: HOMONYM or SYNONYM, with DELIBERATE, RENAME, or \
-             MERGE. Do not store unresolved language work as an Ambiguity.\n\
-             19. Disconnects are data when declared. Any model member that no \
-             slice produces, consumes, or feeds is DISCONNECTED. Disconnects are not always \
-             errors: a subscription view may wait for its consumer, an audit log may have no \
-             UI yet, a niche flow may be deferred. Declare the disconnect with OrphanAnnotation \
-             (a canonical Any in the entity's metadata) carrying a non-empty `doc` explaining \
-             WHY. Unflagged disconnects warn (ORPHAN_NOT_FLAGGED); flag-with-empty-doc errors \
-             (ORPHAN_DOC_EMPTY); flag-on-a-wired-entity nudges (ORPHAN_FLAG_OBSOLETE); remove \
-             the annotation once the entity is connected.\n\
-             20. Open questions and assumptions are first-class, not comments. An \
-             OpenQuestionAnnotation names something the model does not yet decide: put it on \
-             the entity or scenario where the gap lives, with `question` and `author`. An \
-             AssumptionAnnotation names something the design already proceeds as if true but \
-             nobody confirmed, with fields `statement`, optional `basis`, and `author`. Both \
-             attach via put_entity_json as a canonical Any (\"@type\": \
-             \"type.googleapis.com/trogonatlas.annotation.v1alpha1.OpenQuestionAnnotation\" or \
-             \"...AssumptionAnnotation\") in the entity's metadata, or a scenario's own metadata. \
-             Both surface as Info findings (OPEN_QUESTION_PRESENT, ASSUMPTION_PRESENT), never an \
-             error or a warning, so recording one never blocks a mutation.\n\
-             21. Reliability overlays point outward like Tracker, never as \
-             event model members: a ServiceLevelIndicator names a Connection \
-             (CommandHandling, Projection, Reaction, Display, Integration, or \
-             Journey) that must resolve to a real slice or edge; a \
-             ServiceLevelObjective points at one indicator, carries the \
-             threshold and target, and lists the AlertPolicy entities that \
-             watch it; an AlertPolicy points at AlertNotificationTarget \
-             entities. Validation checks the connection resolves, a Journey \
-             is structurally reachable, correlation fields are sourced on \
-             both ends, the signal matches the measure kind, and an \
-             objective with no alert policy is flagged (warning when \
-             externally committed, info otherwise).\n\
-             entity.system (uid, created_at) is SERVER-OWNED incarnation identity, Kubernetes \
-             metadata.uid style: assigned on create, preserved across updates, regenerated on \
-             delete+recreate. Anything you send there is ignored; never try to set it.\n\
-             Mutation responses (put_entity, put_entity_json, batch_mutate, batch_mutate_json, merge_branch) \
-             return non-blocking validation findings, strategic ones included, in an `issues` array \
-             beside binpb_base64: read it and fix them. Run validate_event_model after every mutation \
-             batch and fix all Errors and Warnings. After editing only problem-space entities \
-             (Project, Domain, Subdomain) or a BoundedContext there may be no EventModel to validate: \
-             run validate_project with the namespace or project scope instead. Mutations \
-             execute concurrently when pipelined: issue ordered workflows (write -> delete -> \
-             validate) as separate sequential requests.";
+             Mutation responses carry non-blocking validation findings in an `issues` array: read \
+             and fix them. entity.system (uid, created_at) is server-owned incarnation identity, \
+             assigned on create and regenerated on delete and recreate; anything you send there is \
+             ignored. Pipelined mutations execute concurrently: issue ordered work (write, then \
+             delete, then validate) as separate sequential requests.";
+
+/// The most bytes of instructions any session receives, its profile line
+/// included. Instructions reach every session whatever its task, so a
+/// procedure that outgrows this belongs in a task prompt.
+pub const SERVER_INSTRUCTIONS_BUDGET_BYTES: usize = 2048;
+
+/// The instructions a session running `profile` receives.
+pub fn instructions_for(profile: Option<ToolProfile>) -> String {
+    match profile {
+        None => SERVER_INSTRUCTIONS.to_owned(),
+        Some(profile) => format!(
+            "{SERVER_INSTRUCTIONS}\n\nActive tool profile: {profile}. Tools outside it are neither listed nor callable."
+        ),
+    }
+}
 
 /// The MCP crate's own ordering of the server's RBAC roles, so tool
 /// listing can compare a caller's role against a tool's minimum without
@@ -225,6 +94,30 @@ pub enum ToolRole {
     Reader,
     Writer,
     Admin,
+}
+
+impl ToolRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolRole::Reader => "reader",
+            ToolRole::Writer => "writer",
+            ToolRole::Admin => "admin",
+        }
+    }
+}
+
+/// The part of the service a tool works on. Tool profiles are derived from
+/// a tool's area and its effect, so this is what places a new tool in them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolArea {
+    /// Server identity, catalogues and type resolution every task needs.
+    Discovery,
+    /// Entities, their references, projections, validation and history.
+    Model,
+    Branch,
+    Source,
+    /// Bulk or cross-namespace operations no task profile offers.
+    Administration,
 }
 
 impl From<pb::Role> for ToolRole {
@@ -252,6 +145,7 @@ pub struct ToolPolicy {
     pub tool: &'static str,
     pub rpcs: &'static [&'static str],
     pub min_role: ToolRole,
+    pub area: ToolArea,
 }
 
 pub const TOOL_POLICIES: &[ToolPolicy] = &[
@@ -259,206 +153,247 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "list_source_run_operations",
         rpcs: &["ListSourceRunOperations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "create_source_registration",
         rpcs: &["CreateSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "update_source_registration",
         rpcs: &["UpdateSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_registration",
         rpcs: &["GetSourceRegistration"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_registrations",
         rpcs: &["ListSourceRegistrations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "delete_source_registration",
         rpcs: &["DeleteSourceRegistration"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "accept_source_snapshot",
         rpcs: &["AcceptSourceSnapshot"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_snapshot",
         rpcs: &["GetSourceSnapshot"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_snapshots",
         rpcs: &["ListSourceSnapshots"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "create_source_mapping",
         rpcs: &["CreateSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "update_source_mapping",
         rpcs: &["UpdateSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_mapping",
         rpcs: &["GetSourceMapping"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_mappings",
         rpcs: &["ListSourceMappings"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "delete_source_mapping",
         rpcs: &["DeleteSourceMapping"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_overlay",
         rpcs: &["GetSourceOverlay"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "preview_source_run",
         rpcs: &["PreviewSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "apply_source_run",
         rpcs: &["ApplySourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "cancel_source_run",
         rpcs: &["CancelSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "get_source_run",
         rpcs: &["GetSourceRun"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_runs",
         rpcs: &["ListSourceRuns"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "recover_source_run",
         rpcs: &["RecoverSourceRun"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_source_run_results",
         rpcs: &["ListSourceRunResults"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Source,
     },
     ToolPolicy {
         tool: "list_decision_amendments",
         rpcs: &["ListDecisionAmendments"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_decisions",
         rpcs: &["ListSubjectDecisions"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_documents",
         rpcs: &["ListSubjectDocuments"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_decision_detail",
         rpcs: &["GetDecisionDetail"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_document_detail",
         rpcs: &["GetDocumentDetail"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_incoming_decision_declarations",
         rpcs: &["ListIncomingDecisionDeclarations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_term_domain_declarations",
         rpcs: &["ListTermDomainDeclarations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_incoming_document_declarations",
         rpcs: &["ListIncomingDocumentDeclarations"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "inspect_human_interaction",
         rpcs: &["InspectHumanInteraction"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_channel_messages",
         rpcs: &["ListChannelMessages"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_design_graph_detail",
         rpcs: &["GetDesignGraphDetail"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_design_graphs",
         rpcs: &["ListSubjectDesignGraphs"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "traverse_design_graph_topology",
         rpcs: &["TraverseDesignGraphTopology"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_incoming_design_graph_subflows",
         rpcs: &["ListIncomingDesignGraphSubflows"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_subject_assignments",
         rpcs: &["ListSubjectAssignments"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_assignee_responsibilities",
         rpcs: &["ListAssigneeResponsibilities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_team_members",
         rpcs: &["ListTeamMembers"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_person_teams",
         rpcs: &["ListPersonTeams"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_team_contacts",
         rpcs: &["GetTeamContacts"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "inspect_data_product",
@@ -468,226 +403,295 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
             "GetTypeLibraryDescriptorSet",
         ],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_server_info",
         rpcs: &["GetServerInfo"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "who_am_i",
         rpcs: &["WhoAmI"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "compile_type_library",
         rpcs: &["CompileTypeLibrary"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "resolve_type",
         rpcs: &["ResolveType"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "list_namespaces",
         rpcs: &["ListNamespaces"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "register_namespace",
         rpcs: &["RegisterNamespace"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "move_namespace",
         rpcs: &["MoveNamespace"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
+    },
+    ToolPolicy {
+        tool: "protect_entity",
+        rpcs: &["ProtectEntity"],
+        min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
+    },
+    ToolPolicy {
+        tool: "unprotect_entity",
+        rpcs: &["UnprotectEntity"],
+        min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
+    },
+    ToolPolicy {
+        tool: "get_entity_protection",
+        rpcs: &["GetEntityProtection"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "list_entity_protections",
+        rpcs: &["ListEntityProtections"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_snapshot_id",
         rpcs: &["GetSnapshotId"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_entities",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity",
         rpcs: &["GetEntity"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_get_entities",
         rpcs: &["BatchGetEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "search_entities",
         rpcs: &["SearchEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_versions",
         rpcs: &["ListVersions"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_latest_version",
         rpcs: &["GetLatestVersion"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_supersession_chain",
         rpcs: &["GetSupersessionChain"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_incoming_references",
         rpcs: &["GetIncomingReferences"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_outgoing_references",
         rpcs: &["GetOutgoingReferences"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_impact",
         rpcs: &["GetImpact"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "classify_impact",
         rpcs: &["ClassifyImpact", "GetServerInfo"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "retarget_references",
         rpcs: &["RetargetReferences"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_slice_projection",
         rpcs: &["GetSliceProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_storyboard_projection",
         rpcs: &["GetStoryboardProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_event_model_projection",
         rpcs: &["GetEventModelProjection"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "extract_subgraph",
         rpcs: &["ExtractSubgraph"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "diff_entities",
         rpcs: &["DiffEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "put_entity",
         rpcs: &["PutEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity_json",
         rpcs: &["GetEntity"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "put_entity_json",
         rpcs: &["PutEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_mutate_json",
         rpcs: &["BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "delete_entity",
         rpcs: &["DeleteEntity"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "batch_mutate",
         rpcs: &["BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_changes",
         rpcs: &["ListChanges"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_changesets",
         rpcs: &["ListChangesets"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_changeset",
         rpcs: &["GetChangeset"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "get_entity_history",
         rpcs: &["GetEntityHistory"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "revert_changeset",
         rpcs: &["RevertChangeset"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "validate_event_model",
         rpcs: &["ValidateEventModel"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "list_validation_rules",
         rpcs: &["ListValidationRules"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "validate_project",
         rpcs: &["ValidateProject"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "delete_by_query",
         rpcs: &["DeleteByQuery"],
         min_role: ToolRole::Admin,
+        area: ToolArea::Administration,
     },
     ToolPolicy {
         tool: "list_entity_kinds",
         rpcs: &["ListEntityKinds"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "list_entities_by_domain",
         rpcs: &["ListEntitiesByDomain"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "infer_data_flow",
         rpcs: &["InferDataFlow"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "check_information_completeness",
         rpcs: &["CheckInformationCompleteness"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     // apply_manifests plans with BatchGetEntities, then writes through
     // BatchMutate (trogon_atlas_client::apply::plan / apply).
@@ -695,6 +699,7 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "apply_manifests",
         rpcs: &["BatchGetEntities", "BatchMutate"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Model,
     },
     // diff_manifests only plans (trogon_atlas_client::apply::plan); it
     // never calls apply, so it never reaches BatchMutate.
@@ -702,60 +707,91 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
         tool: "diff_manifests",
         rpcs: &["BatchGetEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "export_namespace",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "export_attested_model",
+        rpcs: &["ExportAttestedModel"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    // verify_attested_bundle checks a bundle the caller already holds and
+    // never reaches the server, so any role may use it.
+    ToolPolicy {
+        tool: "verify_attested_bundle",
+        rpcs: &[],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "export_openslo",
         rpcs: &["ListEntities"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Model,
     },
     ToolPolicy {
         tool: "create_branch",
         rpcs: &["CreateBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "list_branches",
         rpcs: &["ListBranches"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "delete_branch",
         rpcs: &["DeleteBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "diff_branch",
         rpcs: &["DiffBranch"],
         min_role: ToolRole::Reader,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "merge_branch",
         rpcs: &["MergeBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "update_branch",
         rpcs: &["UpdateBranch"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
     },
     ToolPolicy {
         tool: "resolve_branch_entry",
         rpcs: &["ResolveBranchEntry"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Branch,
+    },
+    ToolPolicy {
+        tool: "get_entity_schema",
+        rpcs: &["ListValidationRules"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
     },
     ToolPolicy {
         tool: "get_operation",
         rpcs: &["GetOperation"],
         min_role: ToolRole::Writer,
+        area: ToolArea::Discovery,
     },
 ];
 
-fn policy_for(tool: &str) -> Option<&'static ToolPolicy> {
+pub(crate) fn policy_for(tool: &str) -> Option<&'static ToolPolicy> {
     TOOL_POLICIES.iter().find(|p| p.tool == tool)
 }
 
@@ -788,6 +824,9 @@ pub struct McpServer {
     /// Whether every request carries `x-trogon-atlas-branch`, which a server
     /// must honor before this adapter lets an agent mutate through it.
     branch_scoped: bool,
+    /// The operator's profile on the shared instance; on a per-request copy,
+    /// the profile that request runs under.
+    profile: Option<ToolProfile>,
     // Required for `#[tool_router]` codegen; the macro reads this field
     // off `self` at dispatch time but the compiler can't prove the read
     // because the dispatch flows through trait-object indirection. The
@@ -807,13 +846,61 @@ impl McpServer {
             branch_scoped: options.branch.is_some(),
             options,
             client,
+            profile: None,
             tool_router: Self::tool_router(),
         })
+    }
+
+    /// Fix every session to `profile`. A request may still name a profile,
+    /// but only this one: a request cannot widen or swap the operator's
+    /// choice.
+    #[must_use]
+    pub fn with_profile(self, profile: Option<ToolProfile>) -> Self {
+        Self { profile, ..self }
+    }
+
+    pub fn profile(&self) -> Option<ToolProfile> {
+        self.profile
+    }
+
+    fn profile_for(
+        &self,
+        requested: Option<ToolProfile>,
+    ) -> Result<Option<ToolProfile>, rmcp::ErrorData> {
+        match (self.profile, requested) {
+            (Some(configured), Some(requested)) if configured != requested => {
+                Err(rmcp::ErrorData::invalid_request(
+                    format!(
+                        "this server runs the `{configured}` tool profile; a request cannot select `{requested}`"
+                    ),
+                    None,
+                ))
+            }
+            (configured, requested) => Ok(configured.or(requested)),
+        }
+    }
+
+    fn offers(&self, tool: &rmcp::model::Tool) -> bool {
+        self.profile.is_none_or(|profile| profile.admits(tool))
+    }
+
+    fn offers_prompt(&self, prompt: &TaskPrompt) -> bool {
+        prompt.tools.iter().all(|name| {
+            self.tool_router
+                .get(name)
+                .is_some_and(|tool| self.offers(tool))
+        })
+    }
+
+    /// Every tool this adapter registers, whatever any caller's role.
+    pub fn registered_tools() -> Vec<rmcp::model::Tool> {
+        Self::tool_router().list_all()
     }
 
     /// A copy of this server whose every gRPC call carries `caller`'s token
     /// and branch.
     fn for_caller(&self, caller: Caller) -> Result<Self, rmcp::ErrorData> {
+        let profile = self.profile_for(caller.profile)?;
         let options = ConnectOptions {
             branch: caller.branch.or_else(|| self.options.branch.clone()),
             ..self.options.clone()
@@ -828,6 +915,7 @@ impl McpServer {
             client,
             branch_scoped: options.branch.is_some(),
             options,
+            profile,
             ..self.clone()
         })
     }
@@ -975,6 +1063,33 @@ impl McpServer {
         .await
     }
 
+    /// Protection is not branch-scoped and the server refuses a branch
+    /// header on its writes, so refuse here before any request is sent.
+    async fn protection_admin_client(
+        &self,
+        validate_only: bool,
+    ) -> Result<Client, rmcp::ErrorData> {
+        if let Some(branch) = self.options.branch.as_deref() {
+            return Err(mcp_error_data(trogon_atlas_client::failure::invalid_input(
+                format!(
+                    "protection applies to an identity on every branch; call this without branch {branch}"
+                ),
+            )));
+        }
+        let mut client = self.client();
+        compat::ensure_can_mutate_requiring(
+            &mut client,
+            MutationIntent {
+                validate_only,
+                ..Default::default()
+            },
+            &[compat::Capability::EntityProtection],
+        )
+        .await
+        .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        Ok(client)
+    }
+
     async fn ensure_intent(
         &self,
         client: &mut Client,
@@ -1033,6 +1148,23 @@ fn role_name(role: pb::Role) -> &'static str {
         pb::Role::Writer => "writer",
         pb::Role::Admin => "admin",
     }
+}
+
+fn mcp_error_data(e: anyhow::Error) -> rmcp::ErrorData {
+    McpError::from(e).into()
+}
+
+fn json_result(body: &serde_json::Value) -> CallToolResult {
+    CallToolResult::success(vec![ContentBlock::text(body.to_string())])
+}
+
+fn protected_identity(
+    kind: &str,
+    namespace: &str,
+    slug: &str,
+) -> Result<protection::ProtectedIdentity, rmcp::ErrorData> {
+    let kind = parse_kind(kind).map_err(rmcp::ErrorData::from)?;
+    protection::ProtectedIdentity::new(kind, namespace, slug).map_err(mcp_error_data)
 }
 
 fn parse_kind(s: &str) -> Result<pb::EntityKind, McpError> {
@@ -1212,6 +1344,36 @@ fn ok_envelope<M: Message>(msg: &M) -> CallToolResult {
 /// `{severity, code, subject, field, message}`. `severity` is
 /// `error`/`warning`/`info`; `subject` is the canonical entity id string or
 /// `null`; `field` is the structural path inside the subject or `null`.
+fn rule_json(rule: &pb::ValidationRule) -> serde_json::Value {
+    let severity = match pb::validation_issue::Severity::try_from(rule.default_severity) {
+        Ok(pb::validation_issue::Severity::Error) => "error",
+        Ok(pb::validation_issue::Severity::Warning) => "warning",
+        Ok(pb::validation_issue::Severity::Info) => "info",
+        _ => "unspecified",
+    };
+    serde_json::json!({
+        "code": rule.code,
+        "default_severity": severity,
+        "title": rule.title,
+        "doc": rule.doc,
+        "category": rule.category,
+        "field": (!rule.subject_field.is_empty()).then_some(rule.subject_field.as_str()),
+    })
+}
+
+/// Hex SHA-256 of the schema's serialized form. `serde_json` keeps object
+/// keys sorted here, so the digest is stable for an unchanged schema.
+fn schema_sha256(schema: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(schema.to_string().as_bytes()).iter().fold(
+        String::with_capacity(64),
+        |mut hex, byte| {
+            let _ = std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"));
+            hex
+        },
+    )
+}
+
 fn issue_json(issue: &pb::ValidationIssue) -> serde_json::Value {
     let mut value = trogon_atlas_client::apply::issue_to_json(issue);
     if let serde_json::Value::Object(fields) = &mut value {
@@ -1312,6 +1474,42 @@ fn with_coverage(
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok());
     if let (Some(mut body), Some(_)) = (body, coverage) {
         trogon_atlas_client::apply::insert_coverage(&mut body, coverage);
+        result.content[0] = ContentBlock::text(body.to_string());
+    }
+    result
+}
+
+/// Add a server-reported consequence delta to an already-built JSON tool
+/// result body. An absent delta leaves the body untouched.
+fn with_consequence_delta(
+    mut result: CallToolResult,
+    delta: Option<&pb::ConsequenceDelta>,
+) -> CallToolResult {
+    let body = result
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok());
+    if let (Some(mut body), Some(_)) = (body, delta) {
+        trogon_atlas_client::apply::insert_consequence_delta(&mut body, delta);
+        result.content[0] = ContentBlock::text(body.to_string());
+    }
+    result
+}
+
+/// Add the server's advisory change assessment to an already-built JSON tool
+/// result body. An absent assessment leaves the body untouched.
+fn with_change_assessment(
+    mut result: CallToolResult,
+    assessment: Option<&pb::ChangeAssessment>,
+) -> CallToolResult {
+    let body = result
+        .content
+        .first()
+        .and_then(|block| block.as_text())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text.text).ok());
+    if let (Some(mut body), Some(_)) = (body, assessment) {
+        trogon_atlas_client::apply::insert_change_assessment(&mut body, assessment);
         result.content[0] = ContentBlock::text(body.to_string());
     }
     result
@@ -1514,6 +1712,114 @@ impl McpServer {
             .map_err(tool_err("move_namespace"))?
             .into_inner();
         Ok(ok_envelope(&resp))
+    }
+
+    #[tool(
+        description = "Freeze every version of an identity (kind, namespace, slug), including versions not written yet, so every write route refuses it with ENTITY_PROTECTED until an admin lifts it. Admin only, baseline only, and the identity must already have a stored version. changed=false means it was already protected; protection then holds the existing row, whose reason may differ.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn protect_entity(
+        &self,
+        Parameters(p): Parameters<ProtectEntityParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let reason = protection::ProtectionReason::new(&p.reason).map_err(mcp_error_data)?;
+        let mut client = self.protection_admin_client(p.validate_only).await?;
+        let outcome = protection::protect(
+            &mut client,
+            &identity,
+            &reason,
+            protection::Effect::from_validate_only(p.validate_only),
+        )
+        .await
+        .map_err(mcp_error_data)?;
+        Ok(json_result(&outcome.to_json()))
+    }
+
+    #[tool(
+        description = "Lift protection from an identity (kind, namespace, slug) so writes to it are accepted again. Admin only, baseline only. Pass if_match with the row revision get_entity_protection or list_entity_protections reported to lift only that row; that is also how an unreadable (unknown) row is removed. changed=false means it was not protected.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn unprotect_entity(
+        &self,
+        Parameters(p): Parameters<UnprotectEntityParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let if_match = match p.if_match {
+            None => None,
+            Some(revision) => Some(protection::RowRevision::new(revision).ok_or_else(|| {
+                mcp_error_data(trogon_atlas_client::failure::invalid_input(
+                    "if_match must be a positive row revision; omit it to lift whatever is current",
+                ))
+            })?),
+        };
+        let mut client = self.protection_admin_client(p.validate_only).await?;
+        let outcome = protection::unprotect(
+            &mut client,
+            &identity,
+            if_match,
+            protection::Effect::from_validate_only(p.validate_only),
+        )
+        .await
+        .map_err(mcp_error_data)?;
+        Ok(json_result(&outcome.to_json()))
+    }
+
+    #[tool(
+        description = "Whether an identity (kind, namespace, slug) is protected, unprotected, or unknown. state=unknown means the protection row could not be read: writes to the identity are refused, and an admin can lift the row with unprotect_entity if_match=unknown.revision when unknown.liftable is true.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_entity_protection(
+        &self,
+        Parameters(p): Parameters<GetEntityProtectionParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let identity = protected_identity(&p.kind, &p.namespace, &p.slug)?;
+        let mut client = self.client();
+        let lookup = protection::get_protection(&mut client, &identity)
+            .await
+            .map_err(mcp_error_data)?;
+        Ok(json_result(&lookup.to_json()))
+    }
+
+    #[tool(
+        description = "List protected identities and unreadable protection rows. verdict=partial (complete=false, or any entry in unknown) means the listing is not the whole registry: an identity missing from it may still be protected, so do not treat absence as permission to write.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn list_entity_protections(
+        &self,
+        Parameters(p): Parameters<ListEntityProtectionsParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let namespace = p
+            .namespace
+            .as_deref()
+            .map(protection::NamespaceFilter::new)
+            .transpose()
+            .map_err(mcp_error_data)?;
+        let mut client = self.client();
+        let listing = protection::list_protections(&mut client, namespace.as_ref())
+            .await
+            .map_err(mcp_error_data)?;
+        Ok(json_result(&listing.to_json()))
     }
 
     #[tool(
@@ -3813,10 +4119,13 @@ impl McpServer {
             .map_err(tool_err("put_entity"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope_with_issues(
-            &resp,
-            &issues_json(&resp.validation),
-            resp.coverage.as_ref(),
+        Ok(with_consequence_delta(
+            self.scoped_envelope_with_issues(
+                &resp,
+                &issues_json(&resp.validation),
+                resp.coverage.as_ref(),
+            ),
+            resp.consequence_delta.as_ref(),
         ))
     }
 
@@ -3904,10 +4213,13 @@ impl McpServer {
             .map_err(tool_err("put_entity_json"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(self.scoped_envelope_with_issues(
-            &resp,
-            &issues_json(&resp.validation),
-            resp.coverage.as_ref(),
+        Ok(with_consequence_delta(
+            self.scoped_envelope_with_issues(
+                &resp,
+                &issues_json(&resp.validation),
+                resp.coverage.as_ref(),
+            ),
+            resp.consequence_delta.as_ref(),
         ))
     }
 
@@ -3954,10 +4266,13 @@ impl McpServer {
         if resp.status == pb::batch_mutate_response::Status::Failed as i32 {
             return Err(McpError::from(batch_mutate_failure(&resp)).into());
         }
-        Ok(self.scoped_envelope_with_issues(
-            &resp,
-            &batch_issues_json(&op_entities, &resp),
-            resp.coverage.as_ref(),
+        Ok(with_consequence_delta(
+            self.scoped_envelope_with_issues(
+                &resp,
+                &batch_issues_json(&op_entities, &resp),
+                resp.coverage.as_ref(),
+            ),
+            resp.consequence_delta.as_ref(),
         ))
     }
 
@@ -4129,10 +4444,13 @@ impl McpServer {
             let err: rmcp::ErrorData = McpError::from(batch_mutate_failure(&resp)).into();
             return Err(attach_operation_id(err, &operation_id));
         }
-        Ok(self.scoped_envelope_with_issues(
-            &resp,
-            &batch_issues_json(&op_entities, &resp),
-            resp.coverage.as_ref(),
+        Ok(with_consequence_delta(
+            self.scoped_envelope_with_issues(
+                &resp,
+                &batch_issues_json(&op_entities, &resp),
+                resp.coverage.as_ref(),
+            ),
+            resp.consequence_delta.as_ref(),
         ))
     }
 
@@ -4474,6 +4792,64 @@ impl McpServer {
     }
 
     #[tool(
+        description = "JSON Schema (draft 2020-12) for one entity kind's manifest document, cut from the same generator as `trogon-atlas schema`, with schema_sha256 identifying it. Also returns a minimal skeleton, the placeholders in it, and the validation rules whose subject is that kind. The skeleton satisfies the schema only: replace every placeholder and add the references and context the kind needs before apply_manifests accepts it. Tenant types are not included; resolve them with resolve_type. An unknown kind is invalid_params; list_entity_kinds names every kind.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_entity_schema(
+        &self,
+        Parameters(p): Parameters<EntitySchemaParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        use trogon_atlas_client::manifest_schema;
+
+        let kind = parse_kind(&p.kind)?;
+        let schema = manifest_schema::generate_for_kind(kind)
+            .map_err(|e| McpError::Internal(format!("{e:#}")))?;
+        let mut client = self.client();
+        let rules: Vec<serde_json::Value> = client
+            .list_validation_rules(pb::ListValidationRulesRequest {})
+            .await
+            .map_err(tool_err("get_entity_schema"))?
+            .into_inner()
+            .rules
+            .iter()
+            .filter(|rule| {
+                rule.subject_kind == kind as i32
+                    || rule.subject_kind == pb::EntityKind::Unspecified as i32
+            })
+            .map(rule_json)
+            .collect();
+        let placeholders: Vec<serde_json::Value> = manifest_schema::SKELETON_PLACEHOLDERS
+            .iter()
+            .map(|placeholder| {
+                serde_json::json!({
+                    "pointer": placeholder.pointer(),
+                    "marker": placeholder.marker,
+                    "meaning": placeholder.meaning,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({
+            "kind": pb::canonical::kind_short(kind),
+            "api_version": trogon_atlas_client::manifest::API_VERSION,
+            "dialect": schema["$schema"],
+            "schema_sha256": schema_sha256(&schema),
+            "skeleton": manifest_schema::skeleton(kind),
+            "skeleton_validity": "schema_only",
+            "placeholders": placeholders,
+            "rules": rules,
+            "schema": schema,
+        });
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
+    }
+
+    #[tool(
         description = "Static catalog of every EntityKind the system stores: numeric enum, proto enum name, JSON discriminator (the field in the Entity oneof), human title, plural, and doc. Avoids hardcoding the three-name map in clients.",
         annotations(
             read_only_hint = true,
@@ -4600,7 +4976,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Non-blocking validation findings, strategic ones included, come back in the `issues` array as {severity, code, subject, field, message, op_index, op_entity} (op_index is the position among the changed manifests sent, op_entity the manifest's entity id): fix every warning and error. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state.",
+        description = "Apply one or more YAML manifests (same format as trogon-atlas apply): create missing entities, update changed ones, skip unchanged ones, as one atomic batch. Set dry_run to validate without persisting. Non-blocking validation findings, strategic ones included, come back in the `issues` array as {severity, code, subject, field, message, op_index, op_entity} (op_index is the position among the changed manifests sent, op_entity the manifest's entity id): fix every warning and error. Each write is bound to the revision it was planned against: if another writer changed or created an entity in between, nothing is written and the call fails with data.category \"stale_state\" and data.next_action \"replan\", naming the entity with expected_etag and actual_etag (null means absent); call again to plan from fresh state. A dry run that sends a batch and has it validated also returns `consequence_delta`: which findings the change would introduce, resolve or leave unknown (advisory, never a refusal). It is absent when every manifest is unchanged (no batch is sent) or when the server could not compute it; an absent delta never means no findings changed.",
         annotations(
             read_only_hint = false,
             destructive_hint = false,
@@ -4644,6 +5020,10 @@ impl McpServer {
             "operation_id": (!operation_id.is_empty()).then_some(operation_id.as_str()),
         });
         trogon_atlas_client::apply::insert_coverage(&mut body, outcome.coverage.as_ref());
+        trogon_atlas_client::apply::insert_consequence_delta(
+            &mut body,
+            outcome.consequence_delta.as_ref(),
+        );
         Ok(CallToolResult::success(vec![ContentBlock::text(
             body.to_string(),
         )]))
@@ -4737,6 +5117,107 @@ impl McpServer {
         })
         .to_string();
         Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
+    }
+
+    #[tool(
+        description = "Export a stored EventModel as an attested bundle: its manifests, its validation findings and coverage, and the snapshot both were read from, sealed by one digest that verify_attested_bundle checks offline. Reads only what the caller may see. Refuses with EXPORT_INCOMPLETE (data.next_action_detail.incomplete_reasons) when the export cannot cover its whole scope, unless allow_incomplete is set; then complete is false and incomplete_reasons and unresolved say why. Set include_bundle to receive the bundle itself in bundle_json; a bundle over 4 MiB is left out with bundle_omitted exceeds_mcp_limit.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn export_attested_model(
+        &self,
+        Parameters(p): Parameters<ExportAttestedModelParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        validated_id_from(&p.namespace, &p.slug, p.version)?;
+        let request = trogon_atlas_client::attested::ExportRequest {
+            address: trogon_atlas_client::view::EntityAddress {
+                kind: pb::EntityKind::EventModel,
+                namespace: p.namespace,
+                slug: p.slug,
+                version: Some(p.version),
+            },
+            as_of_changeset: p.as_of_changeset.filter(|c| !c.is_empty()),
+            allow_incomplete: p.allow_incomplete,
+        };
+        let mut client = self.client();
+        let (bundle, verified) =
+            trogon_atlas_client::attested::export_attested_model(&mut client, &request)
+                .await
+                .map_err(|e| rmcp::ErrorData::from(McpError::from(e)))?;
+        let rendering = |e: trogon_atlas_core::attested_bundle::BundleError| {
+            rmcp::ErrorData::internal_error(e.to_string(), None)
+        };
+        // Counting the bytes first means a summary, or a bundle too large to
+        // return, never holds a rendered copy of every manifest and finding.
+        let bundle_bytes =
+            trogon_atlas_core::attested_bundle::bundle_json_len(&bundle).map_err(rendering)?;
+        let mut body = trogon_atlas_client::attested::outcome_json(&bundle, &verified);
+        if let Some(state) = &bundle.state {
+            body["state"] = serde_json::json!({
+                "mode": state.mode().as_str_name(),
+                "snapshot_id": state.snapshot_id,
+                "closure_id": state.closure_id,
+                "baseline_changeset_id": state.baseline_changeset_id,
+                "branch_changeset_id": state.branch_changeset_id,
+            });
+        }
+        body["bundle_bytes"] = bundle_bytes.into();
+        if !p.include_bundle {
+            body["bundle_omitted"] = "not_requested".into();
+        } else if bundle_bytes > MAX_JSON_BYTES {
+            body["bundle_omitted"] = "exceeds_mcp_limit".into();
+        } else {
+            body["bundle_json"] = trogon_atlas_core::attested_bundle::bundle_to_json(&bundle)
+                .map_err(rendering)?
+                .into();
+        }
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Check an attested bundle offline, without reading the store: its digest, and that what it says about its own completeness holds. An intact bundle returns verified true with complete, incomplete_reasons and unresolved; a malformed or altered one returns a tool error with verified false and the first check that failed. Proves integrity only, not which server sealed it: authenticity is unsigned or signature_unchecked, never authenticated, because this tool holds no trusted keys.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn verify_attested_bundle(
+        &self,
+        Parameters(p): Parameters<VerifyAttestedBundleParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        if p.bundle_json.len() > MAX_JSON_BYTES {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "bundle_json exceeds the 4 MiB limit ({} bytes)",
+                    p.bundle_json.len()
+                ),
+                None,
+            ));
+        }
+        let body = match trogon_atlas_client::attested::verify_json(&p.bundle_json) {
+            Ok((bundle, verified)) => {
+                let mut body = trogon_atlas_client::attested::outcome_json(&bundle, &verified);
+                body["verified"] = true.into();
+                body
+            }
+            Err(e) => {
+                let body = serde_json::json!({ "verified": false, "error": e.to_string() });
+                return Ok(CallToolResult::error(vec![ContentBlock::text(
+                    body.to_string(),
+                )]));
+            }
+        };
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            body.to_string(),
+        )]))
     }
 
     #[tool(
@@ -4835,7 +5316,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Merge a branch onto baseline (Phase 2: Review and merge). All-or-nothing: any conflict (see conflicts) or post-merge validation Error (see validation) persists nothing. Set dry_run to run full detection and validation without persisting even on success; the result splits the landable entries into added_count, changed_count and deleted_count and lists the post-merge findings, strategic ones included, in validation and, as JSON, in `issues` (Warning and Info findings are non-blocking; fix them). keep_branch controls whether a successful, non-dry-run merge deletes the branch afterward (default: deletes it). Set auto_merge to land the combined result for edit/edit conflicts whose two sides changed different fields.",
+        description = "Merge a branch onto baseline (Phase 2: Review and merge). All-or-nothing: any conflict (see conflicts) or post-merge validation Error (see validation) persists nothing. Set dry_run to run full detection and validation without persisting even on success; the result splits the landable entries into added_count, changed_count and deleted_count and lists the post-merge findings, strategic ones included, in validation and, as JSON, in `issues` (Warning and Info findings are non-blocking; fix them). keep_branch controls whether a successful, non-dry-run merge deletes the branch afterward (default: deletes it). Set auto_merge to land the combined result for edit/edit conflicts whose two sides changed different fields. A dry run that reaches validation also returns `consequence_delta`: which findings the change would introduce, resolve or leave unknown (advisory, never a refusal); it is absent when the merge has conflicts or when the server could not compute it, and an absent delta never means no findings changed. Every dry run also returns `change_assessment`: the server's advisory verdict (`land`, `needs_review` or `reject`) with stable reason codes and the snapshot ids, entry etags, scope and catalogue revision it is bound to. A verdict never changes what the merge itself does; assess again if any bound input moves.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -4862,16 +5343,22 @@ impl McpServer {
             .map_err(tool_err("merge_branch"))
             .map_err(|e| attach_operation_id(e, &operation_id))?
             .into_inner();
-        Ok(with_coverage(
-            with_issues(
-                ok_response(
-                    "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
-                    &resp,
-                    p.json.unwrap_or(false),
+        Ok(with_change_assessment(
+            with_consequence_delta(
+                with_coverage(
+                    with_issues(
+                        ok_response(
+                            "trogonatlas.api.eventmodel.v1alpha1.MergeBranchResponse",
+                            &resp,
+                            p.json.unwrap_or(false),
+                        ),
+                        issues_json(&resp.validation),
+                    ),
+                    resp.coverage.as_ref(),
                 ),
-                issues_json(&resp.validation),
+                resp.consequence_delta.as_ref(),
             ),
-            resp.coverage.as_ref(),
+            resp.change_assessment.as_ref(),
         ))
     }
 
@@ -4991,8 +5478,30 @@ impl McpServer {
 #[tool_handler]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerConfig {
-        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
-            .with_instructions(SERVER_INSTRUCTIONS)
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_prompts()
+            .build();
+        let mut config =
+            ServerConfig::new(capabilities).with_instructions(instructions_for(self.profile));
+        if let Some(profile) = self.profile {
+            let mut meta = serde_json::Map::new();
+            meta.insert(PROFILE_META_KEY.to_owned(), profile.as_str().into());
+            config.meta = Some(rmcp::model::MetaObject(meta));
+        }
+        config
+    }
+
+    /// Reports the profile this request runs under, which a header may name,
+    /// so the answer reflects the request rather than the shared instance.
+    async fn initialize(
+        &self,
+        request: rmcp::model::InitializeRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::InitializeResult, rmcp::ErrorData> {
+        let session = self.for_request(&context)?;
+        context.peer.set_peer_info(request.clone());
+        session.negotiate_initialize(&request)
     }
 
     /// Runs the tool as the caller who sent this request, never as the
@@ -5003,6 +5512,21 @@ impl ServerHandler for McpServer {
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<CallToolResponse, rmcp::ErrorData> {
         let caller = self.for_request(&context)?;
+        if let Some(profile) = caller.profile {
+            let offered = self
+                .tool_router
+                .get(&request.name)
+                .is_some_and(|tool| profile.admits(tool));
+            if !offered {
+                return Err(rmcp::ErrorData::invalid_params(
+                    format!(
+                        "tool `{}` is not in the `{profile}` tool profile",
+                        request.name
+                    ),
+                    None,
+                ));
+            }
+        }
         let tcc = rmcp::handler::server::tool::ToolCallContext::new(&caller, request, context);
         self.tool_router.call(tcc).await
     }
@@ -5018,8 +5542,14 @@ impl ServerHandler for McpServer {
         _request: Option<rmcp::model::PaginatedRequestParams>,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
-        let role = self.for_request(&context)?.learn_role().await;
-        let tools = self.tool_router.list_all();
+        let session = self.for_request(&context)?;
+        let role = session.learn_role().await;
+        let tools: Vec<_> = self
+            .tool_router
+            .list_all()
+            .into_iter()
+            .filter(|tool| session.offers(tool))
+            .collect();
         let tools = match role {
             None => tools,
             Some(role) => tools
@@ -5028,6 +5558,50 @@ impl ServerHandler for McpServer {
                 .collect(),
         };
         Ok(rmcp::model::ListToolsResult::with_all_items(tools))
+    }
+
+    /// Lists the task prompts whose every tool this caller is offered, by
+    /// profile and, when it is known, by role.
+    async fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListPromptsResult, rmcp::ErrorData> {
+        let session = self.for_request(&context)?;
+        let role = session.learn_role().await;
+        let prompts = TASK_PROMPTS
+            .iter()
+            .filter(|prompt| session.offers_prompt(prompt))
+            .filter(|prompt| {
+                role.is_none_or(|role| prompt.tools.iter().all(|t| tool_allowed_for(t, role)))
+            })
+            .map(TaskPrompt::listing)
+            .collect();
+        Ok(rmcp::model::ListPromptsResult::with_all_items(prompts))
+    }
+
+    async fn get_prompt(
+        &self,
+        request: rmcp::model::GetPromptRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::GetPromptResponse, rmcp::ErrorData> {
+        let session = self.for_request(&context)?;
+        let Some(prompt) = TaskPrompt::find(&request.name) else {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!("unknown prompt `{}`", request.name),
+                None,
+            ));
+        };
+        if let Some(profile) = session.profile.filter(|_| !session.offers_prompt(prompt)) {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "prompt `{}` names tools outside the `{profile}` tool profile",
+                    prompt.name
+                ),
+                None,
+            ));
+        }
+        Ok(prompt.result().into())
     }
 }
 
@@ -5258,18 +5832,32 @@ mod tests {
     }
 
     #[test]
-    fn server_instructions_cover_strategic_layout_and_validation_followup() {
-        for needle in [
-            "ONE problem-space namespace",
-            "DOMAIN_MISSING_PROJECT",
-            "validate_project with the namespace or project scope",
-            "`issues` array",
-            "Errors and Warnings",
-        ] {
+    fn every_session_s_instructions_fit_the_budget() {
+        let profiles = std::iter::once(None).chain(ToolProfile::ALL.iter().copied().map(Some));
+        for profile in profiles {
+            let len = instructions_for(profile).len();
             assert!(
-                SERVER_INSTRUCTIONS.contains(needle),
-                "doctrine lost: {needle}"
+                len <= SERVER_INSTRUCTIONS_BUDGET_BYTES,
+                "{profile:?}: {len} bytes exceeds {SERVER_INSTRUCTIONS_BUDGET_BYTES}; move procedure into a task prompt"
             );
+        }
+    }
+
+    #[test]
+    fn instructions_name_only_tools_every_profile_offers() {
+        let named = crate::prompts::mentioned_tools(SERVER_INSTRUCTIONS);
+        assert!(!named.is_empty());
+        for name in named {
+            let tool = McpServer::registered_tools()
+                .into_iter()
+                .find(|t| t.name == name)
+                .unwrap();
+            for &profile in ToolProfile::ALL {
+                assert!(
+                    profile.admits(&tool),
+                    "{profile} hides {name}, which the instructions name"
+                );
+            }
         }
     }
 
@@ -5601,6 +6189,22 @@ mod tests {
     /// only reads, so it is deliberately annotated read_only_hint = true.
     const READ_ONLY_ROLE_EXEMPT: &[&str] = &["get_operation"];
 
+    /// Tools that work only on their input and never call the server, so
+    /// they have no RPC to take a role from and are offered to every role.
+    const OFFLINE_TOOLS: &[&str] = &["verify_attested_bundle"];
+
+    #[test]
+    fn tool_policy_names_are_unique() {
+        let mut names = HashSet::new();
+        for policy in TOOL_POLICIES {
+            assert!(
+                names.insert(policy.tool),
+                "duplicate TOOL_POLICIES row for {}",
+                policy.tool
+            );
+        }
+    }
+
     #[test]
     fn every_tool_has_annotations_matching_the_role_map() {
         let live_tools = McpServer::tool_router().list_all();
@@ -5627,6 +6231,22 @@ mod tests {
                 .iter()
                 .find(|r| r.tool == name)
                 .unwrap_or_else(|| panic!("tool {name}: no TOOL_POLICIES row (checked above)"));
+            if OFFLINE_TOOLS.contains(&name) {
+                assert!(row.rpcs.is_empty(), "offline tool {name} must call no RPC");
+                assert_eq!(row.min_role, ToolRole::Reader, "offline tool {name}");
+                let annotations = tool.annotations.as_ref().unwrap();
+                assert_eq!(
+                    annotations.read_only_hint,
+                    Some(true),
+                    "offline tool {name}"
+                );
+                assert_eq!(
+                    annotations.destructive_hint,
+                    Some(false),
+                    "offline tool {name}"
+                );
+                continue;
+            }
             assert!(!row.rpcs.is_empty(), "tool {name}: empty rpcs list");
 
             let annotations = tool

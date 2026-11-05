@@ -271,7 +271,7 @@ fn read_file(path: &Path) -> Result<Vec<ManifestDocument>> {
     read_str(&read_text(path)?, &path.display().to_string())
 }
 
-fn read_text(path: &Path) -> Result<String> {
+pub(crate) fn read_text(path: &Path) -> Result<String> {
     std::fs::read_to_string(path).map_err(|err| {
         if err.kind() == std::io::ErrorKind::NotFound {
             invalid_input(format!("reading {}: {err}", path.display()))
