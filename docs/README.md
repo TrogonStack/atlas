@@ -37,6 +37,7 @@ Solve a specific problem:
 Look up exact behavior:
 
 - [Attested bundle format](reference/attested-bundle-format.md)
+- [Attested export MCP tools](reference/attested-export-mcp-tools.md)
 - [Change assessment](reference/change-assessment.md)
 - [Consequence delta](reference/consequence-delta.md)
 - [Failure reasons](reference/failure-reasons.md)

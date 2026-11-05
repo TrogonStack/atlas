@@ -6,8 +6,9 @@
 use std::path::Path;
 
 use anyhow::{Context as _, Result};
+use serde_json::{json, Value};
 use trogon_atlas_core::{
-    attested_bundle::{self, VerifiedBundle},
+    attested_bundle::{self, BundleError, Completeness, VerifiedBundle},
     attested_signing::{TrustedKey, TrustedKeys},
 };
 use trogon_atlas_proto as pb;
@@ -72,19 +73,76 @@ pub fn read_trusted_keys(paths: &[impl AsRef<Path>]) -> Result<Option<TrustedKey
     Ok(Some(TrustedKeys::new(keys)?))
 }
 
+/// Parse a bundle's saved proto3 JSON and verify it, without a server.
+/// This checks integrity only: it has no trusted keys, so a signature on
+/// the bundle is reported as present and not checked.
+pub fn verify_json(json: &str) -> Result<(pb::AttestedModelBundle, VerifiedBundle), BundleError> {
+    let bundle = attested_bundle::bundle_from_json(json)?;
+    let verified = attested_bundle::verify(&bundle)?;
+    Ok((bundle, verified))
+}
+
 /// Read a saved bundle and verify it, requiring a signature by one of
 /// `trusted` when given. A malformed, tampered or untrusted file is
 /// reported as invalid input.
-pub fn verify_file(path: &Path, trusted: Option<&TrustedKeys>) -> Result<VerifiedBundle> {
+pub fn verify_file(
+    path: &Path,
+    trusted: Option<&TrustedKeys>,
+) -> Result<(pb::AttestedModelBundle, VerifiedBundle)> {
     let json = crate::manifest::read_text(path)?;
     let bundle = attested_bundle::bundle_from_json(&json).map_err(|e| {
         crate::failure::invalid_input(format!("{} is not an attested bundle: {e}", path.display()))
     })?;
-    match trusted {
+    let verified = match trusted {
         Some(trusted) => attested_bundle::verify_trusted(&bundle, trusted),
         None => attested_bundle::verify(&bundle),
     }
     .map_err(|e| {
         crate::failure::invalid_input(format!("{} failed verification: {e}", path.display()))
+    })?;
+    Ok((bundle, verified))
+}
+
+/// The incomplete reasons of a verified bundle, by proto enum name. Empty
+/// when it is complete.
+#[must_use]
+pub fn incomplete_reason_names(verified: &VerifiedBundle) -> Vec<&'static str> {
+    match &verified.completeness {
+        Completeness::Complete => Vec::new(),
+        Completeness::Incomplete(reasons) => reasons
+            .iter()
+            .map(pb::attested_completeness::Reason::as_str_name)
+            .collect(),
+    }
+}
+
+/// What a verified bundle says about itself, in the shape every surface
+/// reports: its digest, whether it is complete, and when it is not, why
+/// and which entities it could not attest, plus what it proves about who
+/// sealed it.
+#[must_use]
+pub fn outcome_json(bundle: &pb::AttestedModelBundle, verified: &VerifiedBundle) -> Value {
+    let unresolved: Vec<Value> = bundle
+        .unresolved
+        .iter()
+        .map(|row| {
+            let entity = row.entity.as_ref().and_then(|entity| {
+                let kind = pb::EntityKind::try_from(entity.kind).ok()?;
+                Some(pb::canonical::id_string(kind, entity.id.as_ref()?))
+            });
+            json!({
+                "key": row.key,
+                "entity": entity,
+                "cause": row.cause().as_str_name(),
+            })
+        })
+        .collect();
+    json!({
+        "bundle_digest": verified.digest.to_hex(),
+        "complete": verified.completeness.is_complete(),
+        "incomplete_reasons": incomplete_reason_names(verified),
+        "unresolved": unresolved,
+        "authenticity": verified.authenticity.as_str(),
+        "signing_key_id": verified.authenticity.key_id().map(|id| id.to_hex()),
     })
 }

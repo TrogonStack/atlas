@@ -67,7 +67,7 @@ trogon-atlas verify checkout.bundle.json
 | `5` | The bundle is malformed or was changed after it was sealed, or it failed a `--trusted-key` check. |
 
 With `--format json`, the outcome carries `bundle_digest`, `complete`,
-`incomplete_reasons`, `unresolved`, a list of `key` and `cause`,
+`incomplete_reasons`, `unresolved`, a list of `key`, `entity` and `cause`,
 `authenticity` and `signing_key_id`.
 
 ## Verify who signed a bundle
@@ -85,3 +85,29 @@ Repeat `--trusted-key` to accept any of several keys, for example during a
 rotation. Once a key is given, an unsigned bundle, a bundle signed by any
 other key and a signature that does not verify all exit 5. To set up the
 server's key, see [sign attested bundles](sign-attested-bundles.md).
+
+## Through MCP
+
+An agent connected to the MCP endpoint uses `export_attested_model` and
+`verify_attested_bundle`. Their fields are listed in the
+[tool reference](../reference/attested-export-mcp-tools.md).
+
+1. Call `export_attested_model` with the model's `namespace`, `slug` and
+   `version`. The result reports `bundle_digest`, `complete`,
+   `incomplete_reasons` and `unresolved` without the bundle itself.
+2. If it fails with `EXPORT_INCOMPLETE`, read
+   `data.next_action_detail.incomplete_reasons` and act as described in
+   [when the export is refused as incomplete](#when-the-export-is-refused-as-incomplete).
+   Set `allow_incomplete` only when a record marked incomplete is what you
+   want.
+3. To keep the bundle, call again with `include_bundle` set and save
+   `bundle_json`. If `bundle_omitted` is `exceeds_mcp_limit`, export with
+   the CLI instead.
+4. To check a saved bundle, pass its JSON as `bundle_json` to
+   `verify_attested_bundle`. A tool error with `verified` false means the
+   bundle is malformed or was changed. A result with `complete` false is
+   intact but partial: `unresolved` names each entity it could not attest
+   and why. The tool holds no trusted keys, so a signed bundle reports
+   `authenticity` `signature_unchecked`: it shows the bundle is intact, not
+   who sealed it. To authenticate a signature, use the CLI with
+   `--trusted-key`, as described above.

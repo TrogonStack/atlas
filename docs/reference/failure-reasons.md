@@ -43,7 +43,7 @@ instead of re-deriving category from code or reason on its own.
 | `INVARIANT_VIOLATED` | `FAILED_PRECONDITION` | `precondition` | `invariant`, `carrier`, `status`, `reason`, `snapshot_id`, `redacted`; see [invariant gates](invariant-gates.md#refusals). `PreconditionFailure` lists the introduced findings |
 | `INVARIANT_UNEVALUABLE` | `FAILED_PRECONDITION` | `precondition` | As `INVARIANT_VIOLATED`, with `reason` naming why the invariant could not be evaluated |
 | `INVARIANT_STALE` | `ABORTED` | `stale_state` | none. A write landed in the judged scope after the verdict; read again and retry |
-| `EXPORT_INCOMPLETE` | `FAILED_PRECONDITION` | `precondition` | `reasons`, the comma-separated incomplete reasons of the refused bundle, such as `REASON_SNAPSHOT_TRUNCATED` |
+| `EXPORT_INCOMPLETE` | `FAILED_PRECONDITION` | `precondition` | `reasons`, the comma-separated incomplete reasons of the refused bundle, such as `REASON_SNAPSHOT_TRUNCATED`. The client gives it as a list in the failure details (MCP `next_action_detail.incomplete_reasons`). |
 | `SIGNING_KEY_UNAVAILABLE` | `FAILED_PRECONDITION` | `precondition` | `source`, the kind of key reference the server is configured with: `file` or `env` |
 
 `PARTIAL_APPLY` and `UNAVAILABLE` share the `UNAVAILABLE` gRPC code on
