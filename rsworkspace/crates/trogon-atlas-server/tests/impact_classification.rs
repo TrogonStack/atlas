@@ -958,6 +958,19 @@ async fn a_truncated_snapshot_never_fetches_an_omitted_input_separately() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_truncated_snapshot_reports_a_truly_missing_input_as_not_found() {
+    let mut c = client_with(Some(1)).await;
+    c.put(event("placed", 1, fields(&["order_id"]))).await;
+
+    let error = c
+        .classify_page(placed(1), placed(2), 0, 0, String::new())
+        .await
+        .expect_err("a nonexistent exact identity must be reported as missing");
+
+    assert_eq!(error.code(), Code::NotFound);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn hidden_dependents_make_the_verdict_unknown_without_naming_them() {
     let mut c = client().await;
     let acme = |slug: &str, version| id_in("acme-orders", slug, version);

@@ -966,14 +966,14 @@ impl EventModelServiceImpl {
         self.narrow(Arc::new(result.entities), vis).await
     }
 
-    /// A `ClassifyImpact` input read from the snapshot the answer uses. A
-    /// truncated snapshot that omitted the input fails closed instead of
-    /// combining two store reads under one snapshot identity.
-    fn impact_input(
+    /// A `ClassifyImpact` input read from the snapshot the answer uses.
+    async fn impact_input(
+        &self,
         snapshot: &[StoredEntity],
         truncated: bool,
         kind: pb::EntityKind,
         id: &pb::Id,
+        branch: Option<&str>,
     ) -> Result<pb::Entity, Status> {
         let found = snapshot.iter().find(|stored| {
             entity_kind(&stored.entity).is_ok_and(|k| k == kind)
@@ -981,9 +981,20 @@ impl EventModelServiceImpl {
         });
         match found {
             Some(stored) => Ok(stored.entity.clone()),
-            None if truncated => Err(Status::failed_precondition(
-                "the bounded snapshot omitted a requested impact input",
-            )),
+            None if truncated => match self.store.get(kind, id, branch).await {
+                // The point read only distinguishes absence from cap omission. Its entity
+                // content cannot participate in the snapshot-scoped classification.
+                Ok(_) => Err(Status::failed_precondition(
+                    "the bounded snapshot omitted a requested impact input",
+                )),
+                Err(trogon_atlas_store::error::StoreError::NotFound) => {
+                    Err(Status::not_found(format!(
+                        "{} not found",
+                        trogon_atlas_store::key::entity_key(kind, id)
+                    )))
+                }
+                Err(error) => Err(store_err(error)),
+            },
             None => Err(Status::not_found(format!(
                 "{} not found",
                 trogon_atlas_store::key::entity_key(kind, id)
@@ -5809,8 +5820,12 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             Some(_) => self.narrow(everything.clone(), &vis).await?,
         };
         let snapshot_id = snapshot_id_of(&all)?;
-        let current_entity = Self::impact_input(&all, truncated, kind, current_id)?;
-        let candidate_entity = Self::impact_input(&all, truncated, kind, candidate_id)?;
+        let current_entity = self
+            .impact_input(&all, truncated, kind, current_id, branch.as_deref())
+            .await?;
+        let candidate_entity = self
+            .impact_input(&all, truncated, kind, candidate_id, branch.as_deref())
+            .await?;
         let ops = diff::diff_entities(&current_entity, &candidate_entity);
         graph::validate_responsibility_discovery_budget(&all)?;
         let index = graph::ReverseIndex::build(&all)?;
