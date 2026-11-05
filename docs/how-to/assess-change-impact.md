@@ -35,7 +35,9 @@ bump-only.
    bump.
 
 4. **Resolve every unknown.**
-   Read `incompleteness` first. `DEPTH_LIMITED` means raise `--max-depth`;
+   Read `incompleteness` first. `DEPTH_LIMITED` means raise `--max-depth` when
+   it is below 16. The server caps the walk at 16; at that cap, continue the
+   incoming-reference walk by hand with `get_incoming_references`.
    `HIDDEN_DEPENDENTS` means someone with a wider view must run the
    classification; `SNAPSHOT_TRUNCATED` means the server's snapshot cap is too
    small for the model; `UNRESOLVED_REFERRERS` means a referrer could not be
@@ -60,17 +62,18 @@ it is how to audit an answer:
    candidate. Paths look like `schema.fields[amount]`, with
    `.kind`, `.repeated`, `.optional`, `.doc` and `.metadata` suffixes for
    changes within a field.
-2. Call `get_impact` on the current entity. It walks outgoing references as
-   well as incoming ones, so keep only nodes whose every path hop is
-   incoming: each hop's `to` is the previous node. The rest are not
-   dependents.
+2. Call `get_incoming_references` on the current entity. Repeat the call for
+   each newly discovered exact referrer, keeping a visited set of exact
+   entity identities, until no new referrer appears or the 16-hop server cap
+   is reached. This transitive incoming-only walk is the dependent set.
 3. For each dependent, intersect the fields its reference sites consume with
    the removals and type or cardinality changes from step 1.
 4. Do not treat additions as harmless. A projection must project every field
    its source event carries, and an event must source every field from its
    command, so adding a field breaks those consumers.
 
-`ClassifyImpact` names the same dependents as step 2 and uses the same ops as
+`ClassifyImpact` names the same dependents as the transitive procedure in step
+2 and uses the same ops as
 step 1.
 
 ## Notes

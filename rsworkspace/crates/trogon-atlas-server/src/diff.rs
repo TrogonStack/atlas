@@ -1019,10 +1019,22 @@ fn diff_field_list(
                     }
                 }
                 if fa.metadata != fb.metadata {
-                    let urls = |f: &pb::FieldSpec| {
+                    let values = |f: &pb::FieldSpec| {
+                        use sha2::{Digest as _, Sha256};
                         f.metadata
                             .iter()
-                            .map(|m| m.type_url.as_str())
+                            .map(|m| {
+                                let digest = Sha256::digest(&m.value);
+                                let digest =
+                                    digest
+                                        .iter()
+                                        .fold(String::with_capacity(64), |mut s, byte| {
+                                            use std::fmt::Write as _;
+                                            let _ = write!(s, "{byte:02x}");
+                                            s
+                                        });
+                                format!("{}#{digest}", m.type_url)
+                            })
                             .collect::<Vec<_>>()
                             .join(",")
                     };
@@ -1030,8 +1042,8 @@ fn diff_field_list(
                         kind: pb::DiffOpKind::Changed as i32,
                         path: format!("{base_path}[{name}].metadata"),
                         path_b: String::new(),
-                        before: urls(fa),
-                        after: urls(fb),
+                        before: values(fa),
+                        after: values(fb),
                         doc: String::new(),
                     });
                 }
@@ -1537,6 +1549,30 @@ mod tests {
         assert!(ops
             .iter()
             .all(|op| op.kind == pb::DiffOpKind::Changed as i32));
+
+        let mut value_ops = Vec::new();
+        diff_field_list(
+            &mut value_ops,
+            "schema.fields",
+            &[field(
+                false,
+                false,
+                vec![prost_types::Any {
+                    type_url: "type.googleapis.com/example.Unit".into(),
+                    value: vec![1],
+                }],
+            )],
+            &[field(
+                false,
+                false,
+                vec![prost_types::Any {
+                    type_url: "type.googleapis.com/example.Unit".into(),
+                    value: vec![2],
+                }],
+            )],
+        );
+        assert_eq!(value_ops.len(), 1);
+        assert_ne!(value_ops[0].before, value_ops[0].after);
     }
 
     #[test]

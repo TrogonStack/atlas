@@ -820,6 +820,10 @@ fn print_impact(classification: &trogon_atlas_client::impact::ImpactClassificati
         })
     };
     println!("verdict: {}", classification.verdict().as_str());
+    println!("snapshot: {}", response.snapshot_id);
+    if classification.pages() == trogon_atlas_client::impact::PageSnapshots::Mixed {
+        println!("page snapshots: mixed");
+    }
     for reason in &response.incompleteness {
         let name =
             pb::ImpactIncompleteness::try_from(*reason).map_or("unspecified", |r| r.as_str_name());
@@ -841,6 +845,13 @@ fn print_impact(classification: &trogon_atlas_client::impact::ImpactClassificati
             label(dependent.classification),
             dependent.depth
         );
+        for reason in &dependent.unknown_reasons {
+            let name = pb::ClassificationUnknownReason::try_from(*reason)
+                .map_or("CLASSIFICATION_UNKNOWN_REASON_UNSPECIFIED", |r| {
+                    r.as_str_name()
+                });
+            println!("  unknown: {name}");
+        }
         for occurrence in &dependent.occurrences {
             let site = occurrence
                 .reference
@@ -859,6 +870,13 @@ fn print_impact(classification: &trogon_atlas_client::impact::ImpactClassificati
                     label(occurrence.classification),
                     causes.join(", ")
                 );
+            }
+            for reason in &occurrence.unknown_reasons {
+                let name = pb::ClassificationUnknownReason::try_from(*reason)
+                    .map_or("CLASSIFICATION_UNKNOWN_REASON_UNSPECIFIED", |r| {
+                        r.as_str_name()
+                    });
+                println!("    unknown: {name}");
             }
         }
     }

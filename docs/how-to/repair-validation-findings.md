@@ -61,7 +61,8 @@ Use existing model tools before searching exports manually:
 | `get_impact` | Find related entities around a proposed change by traversing incoming and outgoing references. |
 | `classify_impact` | Classify every dependent of an exact version as breaking, bump-only or unknown against an exact candidate. |
 
-These tools take flat identity arguments, for example:
+Except for `classify_impact`, these tools take flat identity arguments, for
+example:
 
 ```json
 {
@@ -69,6 +70,15 @@ These tools take flat identity arguments, for example:
   "namespace": "ecommerce",
   "slug": "order.fulfilled",
   "version": 1
+}
+```
+
+`classify_impact` nests two exact identities:
+
+```json
+{
+  "current": {"kind": "event", "namespace": "ecommerce", "slug": "order.fulfilled", "version": 1},
+  "candidate": {"kind": "event", "namespace": "ecommerce", "slug": "order.fulfilled", "version": 2}
 }
 ```
 

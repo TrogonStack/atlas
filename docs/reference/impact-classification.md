@@ -3,7 +3,11 @@
 `ClassifyImpact` answers "if dependents of this exact version moved to that
 exact version, which of them break and which only need their pinned
 reference bumped?" It is a read RPC (Reader role) gated by
-`GetServerInfo.features.impact_classification`. The
+`GetServerInfo.features.impact_classification`. The Rust client, CLI and MCP
+surfaces preflight that feature. The Rust client returns
+`CompatibilityError::UnsupportedQuery`, and the CLI exits 8, when it is
+absent. Raw gRPC callers must inspect the feature themselves before calling
+the RPC. The
 [how-to guide](../how-to/assess-change-impact.md) shows it in use.
 
 ## Surfaces

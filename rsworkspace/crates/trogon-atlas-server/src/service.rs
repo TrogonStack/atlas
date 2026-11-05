@@ -35,7 +35,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     pin::Pin,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -539,6 +539,7 @@ pub struct EventModelServiceImpl {
     /// Uses `tokio::sync::RwLock` so reads and writes are async-aware and
     /// cannot block the runtime (`parking_lot::RwLock` would block the thread).
     snapshot_cache: tokio::sync::RwLock<Option<BaselineSnapshot>>,
+    snapshot_generation: AtomicU64,
     /// Entity cap of the baseline snapshot load.
     snapshot_cap: usize,
     /// Cached `ReverseIndex` co-located with the snapshot. Invalidated in
@@ -725,6 +726,7 @@ impl EventModelServiceImpl {
             branch_search_cache: Arc::new(crate::search::BranchIndexCache::default()),
             owner_search_cache: Arc::new(crate::search::BranchIndexCache::default()),
             snapshot_cache: tokio::sync::RwLock::new(None),
+            snapshot_generation: AtomicU64::new(0),
             snapshot_cap: MAX_PROJECTION_ENTITIES,
             reverse_index_cache: tokio::sync::RwLock::new(None),
             snapshot_load_lock: tokio::sync::Mutex::new(()),
@@ -775,6 +777,7 @@ impl EventModelServiceImpl {
         if let Some(snap) = self.snapshot_cache.read().await.clone() {
             return Ok(snap);
         }
+        let generation = self.snapshot_generation.load(Ordering::Acquire);
         // Instrument the async load with a span. Using `.instrument()` keeps
         // the span active across the await without holding an `EnteredSpan`
         // guard (which is `!Send`) across the suspension point.
@@ -795,7 +798,10 @@ impl EventModelServiceImpl {
                 self.store.is_writer(),
             ),
         };
-        *self.snapshot_cache.write().await = Some(snap.clone());
+        let mut cache = self.snapshot_cache.write().await;
+        if self.snapshot_generation.load(Ordering::Acquire) == generation {
+            *cache = Some(snap.clone());
+        }
         Ok(snap)
     }
 
@@ -960,16 +966,14 @@ impl EventModelServiceImpl {
         self.narrow(Arc::new(result.entities), vis).await
     }
 
-    /// A `ClassifyImpact` input read from the snapshot the answer uses. Only a
-    /// truncated snapshot falls back to the store, and that answer already
-    /// reports the truncation.
-    async fn impact_input(
-        &self,
+    /// A `ClassifyImpact` input read from the snapshot the answer uses. A
+    /// truncated snapshot that omitted the input fails closed instead of
+    /// combining two store reads under one snapshot identity.
+    fn impact_input(
         snapshot: &[StoredEntity],
         truncated: bool,
         kind: pb::EntityKind,
         id: &pb::Id,
-        branch: Option<&str>,
     ) -> Result<pb::Entity, Status> {
         let found = snapshot.iter().find(|stored| {
             entity_kind(&stored.entity).is_ok_and(|k| k == kind)
@@ -977,12 +981,9 @@ impl EventModelServiceImpl {
         });
         match found {
             Some(stored) => Ok(stored.entity.clone()),
-            None if truncated => Ok(self
-                .store
-                .get(kind, id, branch)
-                .await
-                .map_err(store_err)?
-                .entity),
+            None if truncated => Err(Status::failed_precondition(
+                "the bounded snapshot omitted a requested impact input",
+            )),
             None => Err(Status::not_found(format!(
                 "{} not found",
                 trogon_atlas_store::key::entity_key(kind, id)
@@ -1554,6 +1555,7 @@ impl EventModelServiceImpl {
     /// Marks the cached snapshot and reverse index stale. Every mutation path
     /// calls this after a successful apply so the next read re-fetches.
     async fn invalidate_snapshot(&self) {
+        self.snapshot_generation.fetch_add(1, Ordering::AcqRel);
         *self.snapshot_cache.write().await = None;
         *self.reverse_index_cache.write().await = None;
         self.owner_snapshot_cache.write().await.clear();
@@ -5807,12 +5809,8 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             Some(_) => self.narrow(everything.clone(), &vis).await?,
         };
         let snapshot_id = snapshot_id_of(&all)?;
-        let current_entity = self
-            .impact_input(&all, truncated, kind, current_id, branch.as_deref())
-            .await?;
-        let candidate_entity = self
-            .impact_input(&all, truncated, kind, candidate_id, branch.as_deref())
-            .await?;
+        let current_entity = Self::impact_input(&all, truncated, kind, current_id)?;
+        let candidate_entity = Self::impact_input(&all, truncated, kind, candidate_id)?;
         let ops = diff::diff_entities(&current_entity, &candidate_entity);
         graph::validate_responsibility_discovery_budget(&all)?;
         let index = graph::ReverseIndex::build(&all)?;

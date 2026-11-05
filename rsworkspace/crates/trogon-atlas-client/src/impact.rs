@@ -121,12 +121,7 @@ pub async fn classify(
         page_token = std::mem::take(&mut page.next_page_token);
         match aggregated.as_mut() {
             None => aggregated = Some(page),
-            Some(first) => {
-                if first.snapshot_id != page.snapshot_id {
-                    pages = PageSnapshots::Mixed;
-                }
-                first.dependents.extend(page.dependents);
-            }
+            Some(first) => merge_page(first, page, &mut pages),
         }
         if page_token.is_empty() {
             break;
@@ -134,6 +129,22 @@ pub async fn classify(
     }
     let response = aggregated.unwrap_or_default();
     Ok(ImpactClassification { response, pages })
+}
+
+fn merge_page(
+    first: &mut pb::ClassifyImpactResponse,
+    page: pb::ClassifyImpactResponse,
+    pages: &mut PageSnapshots,
+) {
+    if first.snapshot_id != page.snapshot_id || first.verdict != page.verdict {
+        *pages = PageSnapshots::Mixed;
+    }
+    for reason in page.incompleteness {
+        if !first.incompleteness.contains(&reason) {
+            first.incompleteness.push(reason);
+        }
+    }
+    first.dependents.extend(page.dependents);
 }
 
 #[cfg(test)]
@@ -186,6 +197,37 @@ mod tests {
         assert_eq!(
             reading_pages(C::Breaking, false, PageSnapshots::Mixed),
             ImpactVerdict::Breaking
+        );
+    }
+
+    #[test]
+    fn later_pages_merge_incompleteness_and_conflicting_verdicts() {
+        let mut first = pb::ClassifyImpactResponse {
+            snapshot_id: "same".into(),
+            verdict: pb::DependentClassification::BumpOnly as i32,
+            incompleteness: vec![pb::ImpactIncompleteness::DepthLimited as i32],
+            ..Default::default()
+        };
+        let page = pb::ClassifyImpactResponse {
+            snapshot_id: "same".into(),
+            verdict: pb::DependentClassification::Unknown as i32,
+            incompleteness: vec![
+                pb::ImpactIncompleteness::DepthLimited as i32,
+                pb::ImpactIncompleteness::SnapshotTruncated as i32,
+            ],
+            ..Default::default()
+        };
+        let mut pages = PageSnapshots::Consistent;
+
+        merge_page(&mut first, page, &mut pages);
+
+        assert_eq!(pages, PageSnapshots::Mixed);
+        assert_eq!(
+            first.incompleteness,
+            [
+                pb::ImpactIncompleteness::DepthLimited as i32,
+                pb::ImpactIncompleteness::SnapshotTruncated as i32,
+            ]
         );
     }
 

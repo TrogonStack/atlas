@@ -257,7 +257,7 @@ fn root_shape(current: &pb::Entity, candidate: &pb::Entity) -> RootShape {
                 if [a_schema, b_schema]
                     .into_iter()
                     .flatten()
-                    .any(|any| !schema::is_schema(any))
+                    .any(|any| !decodable_schema(any))
                 {
                     RootShape::OpaqueSchema
                 } else {
@@ -270,6 +270,10 @@ fn root_shape(current: &pb::Entity, candidate: &pb::Entity) -> RootShape {
         },
         _ => RootShape::Unsupported,
     }
+}
+
+fn decodable_schema(any: &prost_types::Any) -> bool {
+    schema::is_schema(any) && pb::Schema::decode(any.value.as_slice()).is_ok()
 }
 
 fn has_schema_slot(kind: &pb::entity::Kind) -> bool {
@@ -496,7 +500,7 @@ impl<'a> Model<'a> {
     fn field_names(&self, kind: pb::EntityKind, id: Option<&pb::Id>) -> Option<BTreeSet<String>> {
         let entity = self.entity(&pb::EntityKey::new(kind, id?))?;
         let any = schema::kind_schema(entity.kind.as_ref()?);
-        if any.is_some_and(|any| !schema::is_schema(any)) {
+        if any.is_some_and(|any| !decodable_schema(any)) {
             return None;
         }
         let mut names: BTreeSet<String> = schema::schema_fields(any)
@@ -609,11 +613,7 @@ impl<'a> Model<'a> {
                     .map(|field| field.name)
                     .collect();
                 names.extend(rm.key.iter().cloned());
-                if rm
-                    .schema
-                    .as_ref()
-                    .is_some_and(|any| !schema::is_schema(any))
-                {
+                if rm.schema.as_ref().is_some_and(|any| !decodable_schema(any)) {
                     return Consumption::Unknown(UnknownReason::ConsumerContextMissing);
                 }
                 fields(Some(names), |_| Additions::All)
@@ -1153,5 +1153,14 @@ mod tests {
             referrer_key(&reference(pb::EntityKind::Event as i32, Some(id.clone()))),
             Some(pb::EntityKey::new(pb::EntityKind::Event, &id))
         );
+    }
+
+    #[test]
+    fn schema_type_url_requires_decodable_schema_bytes() {
+        let malformed = prost_types::Any {
+            type_url: "type.googleapis.com/trogonatlas.api.eventmodel.v1alpha1.Schema".into(),
+            value: vec![0xff],
+        };
+        assert!(!decodable_schema(&malformed));
     }
 }
