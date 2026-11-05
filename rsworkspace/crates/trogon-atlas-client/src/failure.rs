@@ -451,6 +451,18 @@ impl Failure {
                 }))
             } else if code.starts_with("INVARIANT_") {
                 FailureDetails::from_json(json!(metadata))
+            } else if code == "EXPORT_INCOMPLETE" {
+                // Comma-joined by the server, like `did_you_mean`.
+                let reasons: Vec<&str> = metadata
+                    .get("reasons")
+                    .map(|reasons| reasons.split(',').filter(|r| !r.is_empty()).collect())
+                    .unwrap_or_default();
+                FailureDetails::from_json(json!({ "reasons": reasons }))
+            } else if let Some(source) = metadata
+                .get("source")
+                .filter(|_| code == "SIGNING_KEY_UNAVAILABLE")
+            {
+                FailureDetails::from_json(json!({ "source": source }))
             } else if let Some(journal) = metadata.get("journal") {
                 FailureDetails::from_json(json!({ "journal": journal }))
             } else if let Some(identity) = metadata.get("identity") {
@@ -745,13 +757,14 @@ mod tests {
         let details = ErrorDetails::with_error_info(
             "SIGNING_KEY_UNAVAILABLE",
             SERVER_ERROR_DOMAIN,
-            HashMap::new(),
+            HashMap::from([("source".to_string(), "file".to_string())]),
         );
         let status =
             Status::with_error_details(Code::FailedPrecondition, "signing unavailable", details);
         let failure = Failure::from_status(&status);
         assert_eq!(failure.category, FailureCategory::Precondition);
         assert_eq!(failure.next_action, NextAction::None);
+        assert_eq!(failure.details.0["source"], json!("file"));
     }
 
     #[test]
@@ -760,13 +773,23 @@ mod tests {
 
         use tonic_types::{ErrorDetails, StatusExt};
 
-        let details =
-            ErrorDetails::with_error_info("EXPORT_INCOMPLETE", SERVER_ERROR_DOMAIN, HashMap::new());
+        let details = ErrorDetails::with_error_info(
+            "EXPORT_INCOMPLETE",
+            SERVER_ERROR_DOMAIN,
+            HashMap::from([(
+                "reasons".to_string(),
+                "REASON_CONCURRENT_WRITE,REASON_BOUNDARY_UNVERIFIED".to_string(),
+            )]),
+        );
         let status =
             Status::with_error_details(Code::FailedPrecondition, "export incomplete", details);
         let failure = Failure::from_status(&status);
         assert_eq!(failure.category, FailureCategory::Precondition);
         assert_eq!(failure.next_action, NextAction::None);
+        assert_eq!(
+            failure.details.0["reasons"],
+            json!(["REASON_CONCURRENT_WRITE", "REASON_BOUNDARY_UNVERIFIED"])
+        );
     }
 
     #[test]

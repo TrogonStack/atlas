@@ -637,39 +637,63 @@ async fn a_newer_model_version_underneath_a_cached_snapshot_is_marked() {
     let mut allowed = export_req(ns, "checkout");
     allowed.id.as_mut().unwrap().version = 0;
     allowed.allow_incomplete = true;
-    export(&mut c, allowed.clone()).await;
-
-    let endpoint = endpoint.clone();
-    let exporting = tokio::spawn(async move {
-        let mut reader = client(&endpoint).await;
-        export(&mut reader, allowed).await
-    });
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    assert!(
-        !exporting.is_finished(),
-        "the export must still be in flight"
-    );
-    put(
-        &mut c,
-        event_model_version(ns, "checkout", 2, "After", &["placed"]),
-    )
-    .await;
-    let raced = exporting.await.unwrap();
-    assert_eq!(
-        model_entry(&raced)
+    let read_version = |bundle: &pb::AttestedModelBundle| {
+        model_entry(bundle)
             .entity
             .as_ref()
             .unwrap()
             .id
             .as_ref()
             .unwrap()
-            .version,
-        1
-    );
+            .version
+    };
+
+    // Each round caches the current version, then writes the next one while
+    // an export of the cached snapshot is in flight. Whichever way a round
+    // falls, a complete bundle must be the version its boundary names; the
+    // rounds repeat until one export reads the older version as the newer
+    // one lands, which must be marked.
+    let mut landed = vec![(newest_changeset(&mut c, ns).await, 1)];
+    let mut marked = false;
+    for version in 2..=40 {
+        export(&mut c, allowed.clone()).await;
+        let exporting = {
+            let endpoint = endpoint.clone();
+            let allowed = allowed.clone();
+            tokio::spawn(async move {
+                let mut reader = client(&endpoint).await;
+                export(&mut reader, allowed).await
+            })
+        };
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        put(
+            &mut c,
+            event_model_version(ns, "checkout", version, &format!("v{version}"), &members),
+        )
+        .await;
+        landed.push((newest_changeset(&mut c, ns).await, version));
+        let raced = exporting.await.unwrap();
+        let reasons = reasons_of(&raced);
+        if reasons.is_empty() {
+            let boundary = &raced.state.as_ref().unwrap().baseline_changeset_id;
+            let named = landed
+                .iter()
+                .rev()
+                .find(|(id, _)| id <= boundary)
+                .map(|(_, version)| *version);
+            assert_eq!(Some(read_version(&raced)), named, "complete at {boundary}");
+        } else if read_version(&raced) == version - 1 {
+            assert!(
+                reasons.contains(&IncompleteReason::ConcurrentWrite),
+                "{reasons:?}"
+            );
+            marked = true;
+            break;
+        }
+    }
     assert!(
-        reasons_of(&raced).contains(&IncompleteReason::ConcurrentWrite),
-        "{:?}",
-        reasons_of(&raced)
+        marked,
+        "no export read the older version as the newer one landed"
     );
 }
 

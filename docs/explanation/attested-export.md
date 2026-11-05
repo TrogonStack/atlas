@@ -75,7 +75,9 @@ yields a bundle that mixes the two without saying so.
 A bundle states whether it describes the current state or a past one:
 
 - **Current** names the newest baseline changeset, and on a branch also the
-  newest branch changeset, recorded before its snapshot was read.
+  newest branch changeset, recorded before its snapshot was read. A caller
+  bound to an owner gets an empty baseline changeset, since that id dates
+  every owner's writes.
 - **Historical** reads baseline as it stood right after
   `as_of_changeset` landed, rewound the same way `GetEventModelProjection`
   rewinds it, and names that changeset as its boundary. It reads baseline
@@ -114,7 +116,8 @@ prints its reasons and unresolved entities.
 
 ## What the digest covers
 
-The digest covers every field of the bundle except the digest itself. It
+The digest covers every field of the bundle except the digest itself and
+the signature. It
 reuses the content hash rules from
 [snapshot identity](snapshot-identity.md): proto3 JSON, re-serialized with
 sorted keys and pinned number formatting, then SHA-256 behind a domain tag
@@ -145,8 +148,9 @@ such as a release record, a signed commit or a CI log, turns a later
 
 ## Signed bundles move the trust boundary to a key
 
-A signed bundle carries an Ed25519 signature over its digest and the id of
-the key that made it. The signature moves trust from the channel to the
+A signed bundle carries an Ed25519 signature over its digest, and beside
+it the id of the key that made it, which tells a verifier which public key
+to check it with. The signature moves trust from the channel to the
 key: a verifier who holds the server's public key, obtained through a
 channel it already trusts, can check that whoever sealed the bundle held
 the private key, however the bundle reached it.

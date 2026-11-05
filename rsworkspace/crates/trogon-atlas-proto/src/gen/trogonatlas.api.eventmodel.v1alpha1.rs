@@ -4313,9 +4313,11 @@ pub struct AttestedState {
     /// snapshot was read. A complete bundle saw no visible changeset land
     /// while the snapshot was read, none after it touch an exported entry,
     /// and confirmed every exported entry against the store. Historical
-    /// exports: the requested changeset. Empty when the
-    /// baseline has recorded no changeset. Writes that record no changeset
-    /// do not move it, so `snapshot_id` remains the identity of record.
+    /// exports: the requested changeset. Empty when the baseline has
+    /// recorded no changeset, and on a current export by a caller bound to an
+    /// owner, since the id dates every owner's writes. Writes that record no
+    /// changeset do not move it, so `snapshot_id` remains the identity of
+    /// record.
     #[prost(string, tag="5")]
     pub baseline_changeset_id: ::prost::alloc::string::String,
     /// The newest changeset on `scope.branch` before the snapshot was read,
