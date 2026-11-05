@@ -2553,7 +2553,7 @@ async fn standalone_native_schema_hidden_and_missing_are_identical() {
         .namespace
         .unwrap()
         .id;
-    let (leaf, foreign_id) = foreign_native_schema_leaf(&mut client, &namespace).await;
+    let (leaf, foreign_id) = Box::pin(foreign_native_schema_leaf(&mut client, &namespace)).await;
     let mut hidden = Vec::new();
     for kind in [
         pb::EntityKind::Document,
@@ -2665,7 +2665,7 @@ async fn standalone_native_schema_authorization_and_decode_faults_remain_errors(
         .namespace
         .unwrap()
         .id;
-    let (leaf, foreign_id) = foreign_native_schema_leaf(&mut client, &namespace).await;
+    let (leaf, foreign_id) = Box::pin(foreign_native_schema_leaf(&mut client, &namespace)).await;
     *fault.target.lock().unwrap() = Some(foreign_id.namespace.clone());
     for kind in [
         pb::EntityKind::Document,

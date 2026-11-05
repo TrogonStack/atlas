@@ -3799,7 +3799,7 @@ async fn prepare_order_fixture(client: &mut BusinessClient) -> OrderFixture {
 #[tokio::test(flavor = "multi_thread")]
 async fn authenticated_order_fixture_keeps_business_declarations_explicit() {
     let mut client = authenticated_business_server().await;
-    let mut fixture = prepare_order_fixture(&mut client).await;
+    let mut fixture = Box::pin(prepare_order_fixture(&mut client)).await;
 
     let mut flagged = fixture.product.entity.clone();
     match &mut flagged.kind {

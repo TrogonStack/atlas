@@ -2082,6 +2082,427 @@ pub struct ValidationCoverage {
     #[prost(message, optional, tag="4")]
     pub requested_scope: ::core::option::Option<ValidationScope>,
 }
+// ---------- Invariant check --------------------------------------------------
+//
+// What every invariant declared in the write's scope said about the world the
+// write would produce. Evaluated against a snapshot before the write takes the
+// mutation lock; the write then applies only if nothing in its scope was
+// written since that snapshot was read, and is refused as stale otherwise.
+// See docs/explanation/invariant-gates.md.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InvariantCheck {
+    /// One per invariant declared in scope, in carrier then name order.
+    #[prost(message, repeated, tag="1")]
+    pub outcomes: ::prost::alloc::vec::Vec<InvariantOutcome>,
+    /// Snapshot the verdict was computed against, as GetSnapshotId reports it.
+    /// Empty when the snapshot has no content identity.
+    #[prost(string, tag="2")]
+    pub snapshot_id: ::prost::alloc::string::String,
+    /// The carriers and the entities the write touches, each with the etag it
+    /// had in that snapshot. An empty etag records that the entity was absent.
+    #[prost(message, repeated, tag="3")]
+    pub inputs: ::prost::alloc::vec::Vec<InvariantInput>,
+    /// True when no outcome is STATUS_UNEVALUABLE, none is redacted, and
+    /// snapshot_id is set.
+    #[prost(bool, tag="4")]
+    pub complete: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InvariantOutcome {
+    /// The EventModel declaring the invariant. Unset when `redacted`.
+    #[prost(message, optional, tag="1")]
+    pub carrier: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// Unset when `redacted`.
+    #[prost(string, tag="2")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(enumeration="invariant_outcome::Status", tag="3")]
+    pub status: i32,
+    /// Forbidden findings the write introduces. Set only for STATUS_VIOLATED.
+    #[prost(message, repeated, tag="4")]
+    pub violations: ::prost::alloc::vec::Vec<ValidationIssue>,
+    /// Why the invariant could not be evaluated. Set only for
+    /// STATUS_UNEVALUABLE.
+    #[prost(enumeration="invariant_outcome::Reason", tag="5")]
+    pub reason: i32,
+    /// Members of the carrier the world lacks. Set only for
+    /// REASON_MISSING_INPUTS.
+    #[prost(message, repeated, tag="6")]
+    pub missing: ::prost::alloc::vec::Vec<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    /// True when the declaration lets an unevaluable outcome through.
+    #[prost(bool, tag="7")]
+    pub advisory: bool,
+    /// Forbidden findings present both before and after the write.
+    #[prost(message, repeated, tag="8")]
+    pub preexisting: ::prost::alloc::vec::Vec<ValidationIssue>,
+    /// True when the carrier lives in a namespace the caller may not read:
+    /// the status is kept and every identifying field is cleared.
+    #[prost(bool, tag="9")]
+    pub redacted: bool,
+}
+/// Nested message and enum types in `InvariantOutcome`.
+pub mod invariant_outcome {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Status {
+        Unspecified = 0,
+        /// No forbidden finding after the write.
+        Holds = 1,
+        /// The write introduces a forbidden finding. Refuses the write.
+        Violated = 2,
+        /// The verdict cannot be trusted; see `reason`. Refuses the write unless
+        /// `advisory` is set.
+        Unevaluable = 3,
+        /// Forbidden findings exist, but every one was already there before the
+        /// write. Does not refuse the write.
+        AlreadyViolated = 4,
+    }
+    impl Status {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "STATUS_UNSPECIFIED",
+                Self::Holds => "STATUS_HOLDS",
+                Self::Violated => "STATUS_VIOLATED",
+                Self::Unevaluable => "STATUS_UNEVALUABLE",
+                Self::AlreadyViolated => "STATUS_ALREADY_VIOLATED",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+                "STATUS_HOLDS" => Some(Self::Holds),
+                "STATUS_VIOLATED" => Some(Self::Violated),
+                "STATUS_UNEVALUABLE" => Some(Self::Unevaluable),
+                "STATUS_ALREADY_VIOLATED" => Some(Self::AlreadyViolated),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Reason {
+        Unspecified = 0,
+        /// A member of the carrier is missing from the world the write produces.
+        MissingInputs = 1,
+        /// The snapshot hit the entity cap, so absence proves nothing.
+        SnapshotTruncated = 2,
+        /// The scope declares more invariants than one evaluation may check.
+        BudgetExhausted = 3,
+        /// The declaration cannot be decoded or forbids nothing.
+        MalformedDeclaration = 4,
+    }
+    impl Reason {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::MissingInputs => "REASON_MISSING_INPUTS",
+                Self::SnapshotTruncated => "REASON_SNAPSHOT_TRUNCATED",
+                Self::BudgetExhausted => "REASON_BUDGET_EXHAUSTED",
+                Self::MalformedDeclaration => "REASON_MALFORMED_DECLARATION",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
+                "REASON_MISSING_INPUTS" => Some(Self::MissingInputs),
+                "REASON_SNAPSHOT_TRUNCATED" => Some(Self::SnapshotTruncated),
+                "REASON_BUDGET_EXHAUSTED" => Some(Self::BudgetExhausted),
+                "REASON_MALFORMED_DECLARATION" => Some(Self::MalformedDeclaration),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct InvariantInput {
+    #[prost(message, optional, tag="1")]
+    pub r#ref: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub etag: ::prost::alloc::string::String,
+}
+// ---------- Consequence delta ------------------------------------------------
+//
+// What a proposed change would do to the findings of the model it lands in.
+// Both worlds are scanned with the same suites over the caller's whole
+// visible snapshot, then compared by finding identity. Advisory only: a
+// delta never refuses a write. See docs/explanation/consequence-delta.md.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FindingChange {
+    #[prost(enumeration="finding_change::Kind", tag="1")]
+    pub kind: i32,
+    /// Suite the finding belongs to, as on ValidationCheckResult.check_id.
+    #[prost(string, tag="2")]
+    pub check_id: ::prost::alloc::string::String,
+    /// Representative issue on each side. Unset on the side where the
+    /// identity has no occurrence.
+    #[prost(message, optional, tag="3")]
+    pub before: ::core::option::Option<ValidationIssue>,
+    #[prost(message, optional, tag="4")]
+    pub after: ::core::option::Option<ValidationIssue>,
+    /// Occurrences of this identity this change accounts for.
+    #[prost(uint32, tag="5")]
+    pub occurrences: u32,
+    /// Total occurrences of the identity in each world, so repeated findings
+    /// are visible as counts rather than as duplicate entries.
+    #[prost(uint32, tag="6")]
+    pub occurrences_before: u32,
+    #[prost(uint32, tag="7")]
+    pub occurrences_after: u32,
+    /// Why the change is KIND_UNKNOWN. Empty for every other kind.
+    #[prost(string, tag="8")]
+    pub reason: ::prost::alloc::string::String,
+    /// The entity whose validation pass produced the finding, for suites that
+    /// run once per entity (`model`, `scenarios`). Part of the finding's
+    /// identity: one rule on one subject reported by two models is two
+    /// findings. Absent for suites that scan the whole store.
+    #[prost(message, optional, tag="9")]
+    pub origin: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+}
+/// Nested message and enum types in `FindingChange`.
+pub mod finding_change {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Kind {
+        Unspecified = 0,
+        /// Present after the change and absent before, with the before scan
+        /// complete for its suite.
+        Introduced = 1,
+        /// Present before and absent after, with the after scan complete for its
+        /// suite and the subject still present.
+        Resolved = 2,
+        /// Same identity on both sides with a different severity.
+        SeverityChanged = 3,
+        /// The change removes the finding's subject or origin, so the finding
+        /// goes with it.
+        SubjectRemoved = 4,
+        /// The finding now also appears on a newer version of its subject: the
+        /// successor inherited it rather than introducing a new problem.
+        CarriedToSuccessor = 5,
+        /// Seen on one side only, but the other side's scan could not cover the
+        /// finding's suite. `before` set alone: resolution is unproven. `after`
+        /// set alone: novelty is unproven. `reason` names the gap.
+        Unknown = 6,
+    }
+    impl Kind {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "KIND_UNSPECIFIED",
+                Self::Introduced => "KIND_INTRODUCED",
+                Self::Resolved => "KIND_RESOLVED",
+                Self::SeverityChanged => "KIND_SEVERITY_CHANGED",
+                Self::SubjectRemoved => "KIND_SUBJECT_REMOVED",
+                Self::CarriedToSuccessor => "KIND_CARRIED_TO_SUCCESSOR",
+                Self::Unknown => "KIND_UNKNOWN",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "KIND_UNSPECIFIED" => Some(Self::Unspecified),
+                "KIND_INTRODUCED" => Some(Self::Introduced),
+                "KIND_RESOLVED" => Some(Self::Resolved),
+                "KIND_SEVERITY_CHANGED" => Some(Self::SeverityChanged),
+                "KIND_SUBJECT_REMOVED" => Some(Self::SubjectRemoved),
+                "KIND_CARRIED_TO_SUCCESSOR" => Some(Self::CarriedToSuccessor),
+                "KIND_UNKNOWN" => Some(Self::Unknown),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConsequenceDelta {
+    /// Every identity whose occurrences or severity differ, sorted by suite,
+    /// code and subject.
+    #[prost(message, repeated, tag="1")]
+    pub changes: ::prost::alloc::vec::Vec<FindingChange>,
+    /// Occurrences present on both sides with the same severity.
+    #[prost(uint32, tag="2")]
+    pub unchanged_count: u32,
+    /// Coverage of the scan over the world before the change.
+    #[prost(message, optional, tag="3")]
+    pub before_coverage: ::core::option::Option<ValidationCoverage>,
+    /// Coverage of the scan over the candidate world.
+    #[prost(message, optional, tag="4")]
+    pub after_coverage: ::core::option::Option<ValidationCoverage>,
+    /// True only when every suite the delta compares completed on both sides
+    /// and no applicable suite was left out. False never means "no change";
+    /// it means some finding may be missing from `changes`.
+    #[prost(bool, tag="5")]
+    pub complete: bool,
+    /// Snapshot identity of the visible world the change was compared
+    /// against, computed like GetSnapshotId with no namespace filter.
+    #[prost(string, tag="6")]
+    pub before_snapshot_id: ::prost::alloc::string::String,
+    /// Snapshot identity of the candidate world the change would produce.
+    #[prost(string, tag="7")]
+    pub after_snapshot_id: ::prost::alloc::string::String,
+}
+// ---------- Change assessment ------------------------------------------------
+//
+// The server's advisory verdict on landing a branch, computed from the merge
+// dry run's own evidence by server-owned rules. Advisory only: MergeBranch
+// does not consult it, and no caller-supplied threshold changes it. A verdict
+// is only meaningful against the inputs in `binding`; when any of them moves,
+// assess again. See docs/explanation/change-assessment.md.
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChangeAssessment {
+    #[prost(enumeration="change_assessment::Verdict", tag="1")]
+    pub verdict: i32,
+    /// Every reason that applies, in enum order. Empty only for VERDICT_LAND.
+    #[prost(enumeration="change_assessment::Reason", repeated, tag="2")]
+    pub reasons: ::prost::alloc::vec::Vec<i32>,
+    /// The inputs the verdict was computed from.
+    #[prost(message, optional, tag="3")]
+    pub binding: ::core::option::Option<AssessmentBinding>,
+}
+/// Nested message and enum types in `ChangeAssessment`.
+pub mod change_assessment {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Verdict {
+        Unspecified = 0,
+        /// Every check the server runs completed and the landing introduces,
+        /// worsens and leaves unknown no finding.
+        Land = 1,
+        /// The landing is admissible, but a person should look first; see
+        /// `reasons`.
+        NeedsReview = 2,
+        /// The merge would be refused as it stands; see `reasons`.
+        Reject = 3,
+    }
+    impl Verdict {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "VERDICT_UNSPECIFIED",
+                Self::Land => "VERDICT_LAND",
+                Self::NeedsReview => "VERDICT_NEEDS_REVIEW",
+                Self::Reject => "VERDICT_REJECT",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "VERDICT_UNSPECIFIED" => Some(Self::Unspecified),
+                "VERDICT_LAND" => Some(Self::Land),
+                "VERDICT_NEEDS_REVIEW" => Some(Self::NeedsReview),
+                "VERDICT_REJECT" => Some(Self::Reject),
+                _ => None,
+            }
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+    #[repr(i32)]
+    pub enum Reason {
+        Unspecified = 0,
+        /// The branch conflicts with baseline. Rejects.
+        Conflicts = 1,
+        /// The landed world fails a blocking validation check. Rejects.
+        BlockingFindings = 2,
+        /// The landing introduces a finding.
+        FindingsIntroduced = 3,
+        /// The landing raises the severity of an existing finding.
+        FindingsWorsened = 4,
+        /// A finding appeared or disappeared where the scan cannot vouch for it.
+        FindingsUnknown = 5,
+        /// No consequence delta could be computed.
+        DeltaMissing = 6,
+        /// The consequence delta did not cover every applicable suite.
+        DeltaIncomplete = 7,
+        /// An invariant in scope was not evaluated or is hidden from the caller.
+        InvariantsIncomplete = 8,
+        /// A world the verdict was computed over has no snapshot id, so the
+        /// verdict cannot be bound to it.
+        Unbound = 9,
+    }
+    impl Reason {
+        /// String value of the enum field names used in the ProtoBuf definition.
+        ///
+        /// The values are not transformed in any way and thus are considered stable
+        /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+        pub fn as_str_name(&self) -> &'static str {
+            match self {
+                Self::Unspecified => "REASON_UNSPECIFIED",
+                Self::Conflicts => "REASON_CONFLICTS",
+                Self::BlockingFindings => "REASON_BLOCKING_FINDINGS",
+                Self::FindingsIntroduced => "REASON_FINDINGS_INTRODUCED",
+                Self::FindingsWorsened => "REASON_FINDINGS_WORSENED",
+                Self::FindingsUnknown => "REASON_FINDINGS_UNKNOWN",
+                Self::DeltaMissing => "REASON_DELTA_MISSING",
+                Self::DeltaIncomplete => "REASON_DELTA_INCOMPLETE",
+                Self::InvariantsIncomplete => "REASON_INVARIANTS_INCOMPLETE",
+                Self::Unbound => "REASON_UNBOUND",
+            }
+        }
+        /// Creates an enum from field names used in the ProtoBuf definition.
+        pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+            match value {
+                "REASON_UNSPECIFIED" => Some(Self::Unspecified),
+                "REASON_CONFLICTS" => Some(Self::Conflicts),
+                "REASON_BLOCKING_FINDINGS" => Some(Self::BlockingFindings),
+                "REASON_FINDINGS_INTRODUCED" => Some(Self::FindingsIntroduced),
+                "REASON_FINDINGS_WORSENED" => Some(Self::FindingsWorsened),
+                "REASON_FINDINGS_UNKNOWN" => Some(Self::FindingsUnknown),
+                "REASON_DELTA_MISSING" => Some(Self::DeltaMissing),
+                "REASON_DELTA_INCOMPLETE" => Some(Self::DeltaIncomplete),
+                "REASON_INVARIANTS_INCOMPLETE" => Some(Self::InvariantsIncomplete),
+                "REASON_UNBOUND" => Some(Self::Unbound),
+                _ => None,
+            }
+        }
+    }
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AssessmentBinding {
+    /// The branch assessed.
+    #[prost(string, tag="1")]
+    pub branch: ::prost::alloc::string::String,
+    /// Snapshot id of the baseline the landing was compared against. Empty
+    /// when unbound.
+    #[prost(string, tag="2")]
+    pub baseline_snapshot_id: ::prost::alloc::string::String,
+    /// Snapshot id of the world the landing would produce. Empty when unbound.
+    #[prost(string, tag="3")]
+    pub landed_snapshot_id: ::prost::alloc::string::String,
+    /// Each landable entry with the baseline etag it was planned against. An
+    /// empty etag means the entry adds an entity baseline does not have.
+    #[prost(message, repeated, tag="4")]
+    pub entries: ::prost::alloc::vec::Vec<AssessmentPin>,
+    /// The caller's read scope: "*" for an unrestricted caller, otherwise
+    /// the owner boundary it is held to.
+    #[prost(string, tag="5")]
+    pub scope: ::prost::alloc::string::String,
+    /// Revision of the rule catalogue and assessment rules the verdict used.
+    #[prost(string, tag="6")]
+    pub catalogue_revision: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AssessmentPin {
+    #[prost(message, optional, tag="1")]
+    pub r#ref: ::core::option::Option<super::super::super::eventmodel::v1alpha1::EntityRef>,
+    #[prost(string, tag="2")]
+    pub baseline_etag: ::prost::alloc::string::String,
+}
 // Tenant type libraries are stored as proto source text and compiled on
 // demand. These messages let a client check a library and look up the
 // compiled types before it writes anything that depends on them. Every RPC
@@ -4453,6 +4874,14 @@ pub struct PutEntityResponse {
     /// check.
     #[prost(message, optional, tag="6")]
     pub coverage: ::core::option::Option<ValidationCoverage>,
+    /// How the change would move the model's findings. Set only on
+    /// `validate_only`; advisory, never a refusal.
+    #[prost(message, optional, tag="7")]
+    pub consequence_delta: ::core::option::Option<ConsequenceDelta>,
+    /// What the invariants declared in scope said about the write. Unset when
+    /// the scope declares none. A refused write returns a typed error instead.
+    #[prost(message, optional, tag="8")]
+    pub invariant_check: ::core::option::Option<InvariantCheck>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeleteEntityRequest {
@@ -4541,6 +4970,10 @@ pub struct DeleteEntityResponse {
     pub validation: ::prost::alloc::vec::Vec<ValidationIssue>,
     #[prost(bool, tag="4")]
     pub referrers_incomplete: bool,
+    /// What the invariants declared in scope said about the write. Unset when
+    /// the scope declares none. A refused write returns a typed error instead.
+    #[prost(message, optional, tag="5")]
+    pub invariant_check: ::core::option::Option<InvariantCheck>,
 }
 // ---------- Batch mutation (atomic multi-entity write) -----------------------
 //
@@ -4649,6 +5082,14 @@ pub struct BatchMutateResponse {
     /// `validation` is not a full-model clean bill of health.
     #[prost(message, optional, tag="7")]
     pub coverage: ::core::option::Option<ValidationCoverage>,
+    /// How the batch would move the model's findings. Set only on
+    /// STATUS_VALIDATED; advisory, never a refusal.
+    #[prost(message, optional, tag="8")]
+    pub consequence_delta: ::core::option::Option<ConsequenceDelta>,
+    /// What the invariants declared in scope said about the write. Unset when
+    /// the scope declares none. A refused write returns a typed error instead.
+    #[prost(message, optional, tag="9")]
+    pub invariant_check: ::core::option::Option<InvariantCheck>,
 }
 /// Nested message and enum types in `BatchMutateResponse`.
 pub mod batch_mutate_response {
@@ -4733,6 +5174,10 @@ pub struct DeleteByQueryResponse {
     /// lists what WOULD have been.
     #[prost(bool, tag="3")]
     pub dry_run: bool,
+    /// What the invariants declared in scope said about the write. Unset when
+    /// the scope declares none. A refused write returns a typed error instead.
+    #[prost(message, optional, tag="4")]
+    pub invariant_check: ::core::option::Option<InvariantCheck>,
 }
 /// Nested message and enum types in `DeleteByQueryResponse`.
 pub mod delete_by_query_response {
@@ -4869,6 +5314,10 @@ pub struct RetargetReferencesResponse {
     /// Count of referrers whose write failed.
     #[prost(uint32, tag="3")]
     pub failed: u32,
+    /// What the invariants declared in scope said about the write. Unset when
+    /// the scope declares none. A refused write returns a typed error instead.
+    #[prost(message, optional, tag="4")]
+    pub invariant_check: ::core::option::Option<InvariantCheck>,
 }
 /// Nested message and enum types in `RetargetReferencesResponse`.
 pub mod retarget_references_response {
@@ -5008,6 +5457,10 @@ pub struct RevertChangesetResponse {
     /// Set only when the request carried an operation_id.
     #[prost(message, optional, tag="4")]
     pub operation_receipt: ::core::option::Option<super::super::super::catalog::v1alpha1::OperationReceipt>,
+    /// What the invariants declared in scope said about the write. Unset when
+    /// the scope declares none. A refused write returns a typed error instead.
+    #[prost(message, optional, tag="5")]
+    pub invariant_check: ::core::option::Option<InvariantCheck>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetOperationRequest {
@@ -5627,6 +6080,18 @@ pub struct MergeBranchResponse {
     /// honestly so empty `validation` is not read as a clean full-model gate.
     #[prost(message, optional, tag="9")]
     pub coverage: ::core::option::Option<ValidationCoverage>,
+    /// How landing the branch would move baseline's findings. Set only on
+    /// `dry_run` once validation was reached; advisory, never a refusal.
+    #[prost(message, optional, tag="10")]
+    pub consequence_delta: ::core::option::Option<ConsequenceDelta>,
+    /// What the invariants declared in scope said about the write. Unset when
+    /// the scope declares none. A refused write returns a typed error instead.
+    #[prost(message, optional, tag="11")]
+    pub invariant_check: ::core::option::Option<InvariantCheck>,
+    /// The server's advisory verdict on landing the branch. Set only on
+    /// `dry_run`; a real merge never consults it.
+    #[prost(message, optional, tag="12")]
+    pub change_assessment: ::core::option::Option<ChangeAssessment>,
 }
 /// Nested message and enum types in `MergeBranchResponse`.
 pub mod merge_branch_response {

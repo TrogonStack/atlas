@@ -344,6 +344,100 @@ pub struct ApplyOutcome {
     /// or the server omitted it (for example operation_id replay). Never
     /// invent coverage client-side.
     pub coverage: Option<pb::ValidationCoverage>,
+    /// How a dry run would move the model's findings. Present only for a
+    /// dry run that reached validation.
+    pub consequence_delta: Option<pb::ConsequenceDelta>,
+}
+
+/// Adds a server-reported consequence delta to a JSON object. An absent
+/// delta stays absent: no delta is not the same as no change.
+pub fn insert_consequence_delta(body: &mut Value, delta: Option<&pb::ConsequenceDelta>) {
+    if let (Some(fields), Some(delta)) = (body.as_object_mut(), delta) {
+        fields.insert("consequence_delta".into(), consequence_delta_to_json(delta));
+    }
+}
+
+/// Adds the server's advisory change assessment to a JSON object. An absent
+/// assessment stays absent: it is never a verdict of `land`.
+pub fn insert_change_assessment(body: &mut Value, assessment: Option<&pb::ChangeAssessment>) {
+    if let (Some(fields), Some(assessment)) = (body.as_object_mut(), assessment) {
+        fields.insert(
+            "change_assessment".into(),
+            change_assessment_to_json(assessment),
+        );
+    }
+}
+
+/// JSON shape for [`pb::ChangeAssessment`]: the verdict and reason codes as
+/// lowercase names without their enum prefix, e.g. `needs_review`.
+#[must_use]
+pub fn change_assessment_to_json(assessment: &pb::ChangeAssessment) -> Value {
+    use pb::change_assessment::{Reason, Verdict};
+    let code = |name: &str, prefix: &str| {
+        name.strip_prefix(prefix)
+            .unwrap_or(name)
+            .to_ascii_lowercase()
+    };
+    let binding = assessment.binding.as_ref();
+    json!({
+        "verdict": code(
+            Verdict::try_from(assessment.verdict)
+                .unwrap_or(Verdict::Unspecified)
+                .as_str_name(),
+            "VERDICT_",
+        ),
+        "reasons": assessment.reasons.iter().map(|reason| code(
+            Reason::try_from(*reason)
+                .unwrap_or(Reason::Unspecified)
+                .as_str_name(),
+            "REASON_",
+        )).collect::<Vec<_>>(),
+        "binding": binding.map(|b| json!({
+            "branch": b.branch,
+            "baseline_snapshot_id": b.baseline_snapshot_id,
+            "landed_snapshot_id": b.landed_snapshot_id,
+            "entries": b.entries.iter().map(|pin| json!({
+                "ref": ref_string(pin.r#ref.as_ref()),
+                "baseline_etag": pin.baseline_etag,
+            })).collect::<Vec<_>>(),
+            "scope": b.scope,
+            "catalogue_revision": b.catalogue_revision,
+        })),
+    })
+}
+
+/// JSON shape for [`pb::ConsequenceDelta`], for CLI/MCP structured output.
+#[must_use]
+pub fn consequence_delta_to_json(delta: &pb::ConsequenceDelta) -> Value {
+    let finding = |issue: Option<&pb::ValidationIssue>| {
+        issue.map(|issue| {
+            let mut body = issue_to_json(issue);
+            if let Some(fields) = body.as_object_mut() {
+                fields.insert("subject_field".into(), issue.subject_field.clone().into());
+            }
+            body
+        })
+    };
+    json!({
+        "complete": delta.complete,
+        "unchanged_count": delta.unchanged_count,
+        "before_snapshot_id": delta.before_snapshot_id,
+        "after_snapshot_id": delta.after_snapshot_id,
+        "before_coverage": delta.before_coverage.as_ref().map(coverage_to_json),
+        "after_coverage": delta.after_coverage.as_ref().map(coverage_to_json),
+        "changes": delta.changes.iter().map(|c| json!({
+            "kind": pb::finding_change::Kind::try_from(c.kind)
+                .map_or("KIND_UNSPECIFIED", |k| k.as_str_name()),
+            "check_id": c.check_id,
+            "origin": ref_string(c.origin.as_ref()),
+            "before": finding(c.before.as_ref()),
+            "after": finding(c.after.as_ref()),
+            "occurrences": c.occurrences,
+            "occurrences_before": c.occurrences_before,
+            "occurrences_after": c.occurrences_after,
+            "reason": c.reason,
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// Adds server-reported coverage to a JSON object. Absent coverage stays
@@ -436,6 +530,7 @@ pub async fn apply(
     let mut op_issues = Vec::new();
     let mut operation_receipt = None;
     let mut coverage = None;
+    let mut consequence_delta = None;
     if !changed.is_empty() {
         let ops = changed
             .iter()
@@ -507,6 +602,7 @@ pub async fn apply(
             .flat_map(|o| o.issues.iter().cloned())
             .collect();
         coverage = resp.coverage;
+        consequence_delta = resp.consequence_delta;
     }
 
     let lines = plan
@@ -519,6 +615,7 @@ pub async fn apply(
         op_issues,
         operation_receipt,
         coverage,
+        consequence_delta,
     })
 }
 
@@ -927,6 +1024,41 @@ mod tests {
                 ),
                 (2, "subdomain:acme/ordering@1", "REALIZES_DANGLING"),
             ]
+        );
+    }
+
+    #[test]
+    fn change_assessment_json_names_codes_without_enum_prefixes() {
+        use pb::change_assessment::{Reason, Verdict};
+        let assessment = pb::ChangeAssessment {
+            verdict: Verdict::NeedsReview as i32,
+            reasons: vec![Reason::FindingsIntroduced as i32],
+            binding: Some(pb::AssessmentBinding {
+                branch: "feature".into(),
+                entries: vec![pb::AssessmentPin {
+                    r#ref: Some(pb::EntityRef {
+                        kind: pb::EntityKind::Event as i32,
+                        id: Some(pb::Id {
+                            namespace: "shop".into(),
+                            slug: "order.placed".into(),
+                            version: 1,
+                        }),
+                    }),
+                    baseline_etag: "7".into(),
+                }],
+                scope: "*".into(),
+                ..Default::default()
+            }),
+        };
+
+        let body = change_assessment_to_json(&assessment);
+
+        assert_eq!(body["verdict"], "needs_review");
+        assert_eq!(body["reasons"], json!(["findings_introduced"]));
+        assert_eq!(body["binding"]["branch"], "feature");
+        assert_eq!(
+            body["binding"]["entries"][0],
+            json!({"ref": "event:shop/order.placed@1", "baseline_etag": "7"})
         );
     }
 }

@@ -17,6 +17,7 @@ pub struct ServerMetrics {
     rpc_server_call_duration: metric::RpcServerCallDuration,
     rpc_server_stream_terminations: metric::RpcServerStreamTerminations,
     mutation_lock_wait_duration: metric::MutationLockWaitDuration,
+    consequence_delta_duration: metric::ConsequenceDeltaDuration,
     cache_lookups: metric::CacheLookups,
     change_stream_message_count: metric::ChangeStreamMessageCount,
     change_stream_size: metric::ChangeStreamSize,
@@ -42,6 +43,7 @@ impl ServerMetrics {
             rpc_server_call_duration: metric::RpcServerCallDuration::new(meter),
             rpc_server_stream_terminations: metric::RpcServerStreamTerminations::new(meter),
             mutation_lock_wait_duration: metric::MutationLockWaitDuration::new(meter),
+            consequence_delta_duration: metric::ConsequenceDeltaDuration::new(meter),
             cache_lookups: metric::CacheLookups::new(meter),
             change_stream_message_count: metric::ChangeStreamMessageCount::new(meter),
             change_stream_size: metric::ChangeStreamSize::new(meter),
@@ -84,6 +86,12 @@ impl ServerMetrics {
     pub fn record_mutation_lock_wait(&self, waited: Duration) {
         self.mutation_lock_wait_duration
             .record(waited.as_secs_f64());
+    }
+
+    /// Time spent computing one consequence delta.
+    pub fn record_consequence_delta(&self, elapsed: Duration) {
+        self.consequence_delta_duration
+            .record(elapsed.as_secs_f64());
     }
 
     pub fn record_snapshot_cache_hit(&self) {

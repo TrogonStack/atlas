@@ -40,6 +40,9 @@ instead of re-deriving category from code or reason on its own.
 | `BREAKING_CHANGE` | `FAILED_PRECONDITION` | `precondition` | none |
 | `ENTITY_PROTECTED` | `FAILED_PRECONDITION` | `precondition` | `identity` (`kind/namespace/slug`), `protection_reason` and `protected_by` of the first protected identity. Every protected identity the request touched is also listed as a `PreconditionFailure` violation of type `ENTITY_PROTECTED`. |
 | `PROTECTION_STATE_UNKNOWN` | `UNAVAILABLE` | `unavailable` | `identity` of the first identity whose protection could not be read, and `row_revision` when an unreadable row exists. Every such identity is also listed as a `PreconditionFailure` violation of type `PROTECTION_STATE_UNKNOWN`. |
+| `INVARIANT_VIOLATED` | `FAILED_PRECONDITION` | `precondition` | `invariant`, `carrier`, `status`, `reason`, `snapshot_id`, `redacted`; see [invariant gates](invariant-gates.md#refusals). `PreconditionFailure` lists the introduced findings |
+| `INVARIANT_UNEVALUABLE` | `FAILED_PRECONDITION` | `precondition` | As `INVARIANT_VIOLATED`, with `reason` naming why the invariant could not be evaluated |
+| `INVARIANT_STALE` | `ABORTED` | `stale_state` | none. A write landed in the judged scope after the verdict; read again and retry |
 | `EXPORT_INCOMPLETE` | `FAILED_PRECONDITION` | `precondition` | `reasons`, the comma-separated incomplete reasons of the refused bundle, such as `REASON_SNAPSHOT_TRUNCATED` |
 | `SIGNING_KEY_UNAVAILABLE` | `FAILED_PRECONDITION` | `precondition` | `source`, the kind of key reference the server is configured with: `file` or `env` |
 
