@@ -5183,19 +5183,10 @@ impl McpServer {
         let rendering = |e: trogon_atlas_core::attested_bundle::BundleError| {
             rmcp::ErrorData::internal_error(e.to_string(), None)
         };
-        // A summary only reports the size, so it counts the bytes instead of
-        // holding a rendered copy of every manifest and finding.
-        let json = if p.include_bundle {
-            Some(trogon_atlas_core::attested_bundle::bundle_to_json(&bundle).map_err(rendering)?)
-        } else {
-            None
-        };
-        let bundle_bytes = match &json {
-            Some(json) => json.len(),
-            None => {
-                trogon_atlas_core::attested_bundle::bundle_json_len(&bundle).map_err(rendering)?
-            }
-        };
+        // Counting the bytes first means a summary, or a bundle too large to
+        // return, never holds a rendered copy of every manifest and finding.
+        let bundle_bytes =
+            trogon_atlas_core::attested_bundle::bundle_json_len(&bundle).map_err(rendering)?;
         let mut body = trogon_atlas_client::attested::outcome_json(&bundle, &verified);
         if let Some(state) = &bundle.state {
             body["state"] = serde_json::json!({
@@ -5207,12 +5198,14 @@ impl McpServer {
             });
         }
         body["bundle_bytes"] = bundle_bytes.into();
-        match json {
-            None => body["bundle_omitted"] = "not_requested".into(),
-            Some(_) if bundle_bytes > MAX_JSON_BYTES => {
-                body["bundle_omitted"] = "exceeds_mcp_limit".into();
-            }
-            Some(json) => body["bundle_json"] = json.into(),
+        if !p.include_bundle {
+            body["bundle_omitted"] = "not_requested".into();
+        } else if bundle_bytes > MAX_JSON_BYTES {
+            body["bundle_omitted"] = "exceeds_mcp_limit".into();
+        } else {
+            body["bundle_json"] = trogon_atlas_core::attested_bundle::bundle_to_json(&bundle)
+                .map_err(rendering)?
+                .into();
         }
         Ok(CallToolResult::success(vec![ContentBlock::text(
             body.to_string(),
