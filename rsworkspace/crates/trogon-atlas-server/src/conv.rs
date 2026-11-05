@@ -160,6 +160,8 @@ pub mod reason {
     pub const INVARIANT_VIOLATED: &str = "INVARIANT_VIOLATED";
     pub const INVARIANT_UNEVALUABLE: &str = "INVARIANT_UNEVALUABLE";
     pub const INVARIANT_STALE: &str = "INVARIANT_STALE";
+    pub const EXPORT_INCOMPLETE: &str = "EXPORT_INCOMPLETE";
+    pub const SIGNING_KEY_UNAVAILABLE: &str = "SIGNING_KEY_UNAVAILABLE";
 }
 
 /// `FAILED_PRECONDITION`: the write would change an identity an admin has
@@ -313,6 +315,31 @@ pub fn protection_state_unknown(unknown: &[trogon_atlas_store::ProtectionUnknown
 /// the mutation as failed.
 pub fn operation_in_progress(message: impl Into<String>) -> Status {
     with_reason(Code::Unavailable, message, reason::OPERATION_IN_PROGRESS)
+}
+
+/// `FAILED_PRECONDITION`: an attested export could not cover its whole
+/// scope. `reasons` lists the bundle's incomplete reasons, comma-joined.
+/// The caller may ask again with `allow_incomplete` to get the bundle
+/// marked as incomplete instead.
+pub fn export_incomplete(message: impl Into<String>, reasons: String) -> Status {
+    with_reason_and_metadata(
+        Code::FailedPrecondition,
+        message,
+        reason::EXPORT_INCOMPLETE,
+        HashMap::from([("reasons".to_string(), reasons)]),
+    )
+}
+
+/// `FAILED_PRECONDITION`: the server is configured to sign attested
+/// bundles and could not load its key, so it refuses rather than return an
+/// unsigned bundle. `source` is the kind of key reference, `file` or `env`.
+pub fn signing_key_unavailable(message: impl Into<String>, source: &str) -> Status {
+    with_reason_and_metadata(
+        Code::FailedPrecondition,
+        message,
+        reason::SIGNING_KEY_UNAVAILABLE,
+        HashMap::from([("source".to_string(), source.to_string())]),
+    )
 }
 
 /// `ALREADY_EXISTS`: `operation_id` was already claimed for a request with a

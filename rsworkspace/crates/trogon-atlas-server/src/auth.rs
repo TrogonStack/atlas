@@ -236,6 +236,9 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExportEventModelManifests" => {
             Role::Reader
         }
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExportAttestedModel" => {
+            Role::Reader
+        }
 
         // Structural comparison
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DiffEntities" => Role::Reader,
@@ -1258,6 +1261,7 @@ namespaces = ["orders/*"]
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEventModelProjection",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExtractSubgraph",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExportEventModelManifests",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ExportAttestedModel",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/DiffEntities",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ListChanges",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/StreamChanges",

@@ -43,6 +43,8 @@ instead of re-deriving category from code or reason on its own.
 | `INVARIANT_VIOLATED` | `FAILED_PRECONDITION` | `precondition` | `invariant`, `carrier`, `status`, `reason`, `snapshot_id`, `redacted`; see [invariant gates](invariant-gates.md#refusals). `PreconditionFailure` lists the introduced findings |
 | `INVARIANT_UNEVALUABLE` | `FAILED_PRECONDITION` | `precondition` | As `INVARIANT_VIOLATED`, with `reason` naming why the invariant could not be evaluated |
 | `INVARIANT_STALE` | `ABORTED` | `stale_state` | none. A write landed in the judged scope after the verdict; read again and retry |
+| `EXPORT_INCOMPLETE` | `FAILED_PRECONDITION` | `precondition` | `reasons`, the comma-separated incomplete reasons of the refused bundle, such as `REASON_SNAPSHOT_TRUNCATED` |
+| `SIGNING_KEY_UNAVAILABLE` | `FAILED_PRECONDITION` | `precondition` | `source`, the kind of key reference the server is configured with: `file` or `env` |
 
 `PARTIAL_APPLY` and `UNAVAILABLE` share the `UNAVAILABLE` gRPC code on
 purpose: both mean "retry later", but only `PARTIAL_APPLY` means a batch
@@ -66,7 +68,9 @@ is `use_new_operation_id` instead of `operation_conflict`'s usual
 writer lease (see `docs/explanation/single-writer.md`), so the mutation
 never ran. Retrying against the same process will keep failing until it
 becomes the writer; a caller load-balancing across replicas should retry
-against a different one.
+against a different one. `ExportAttestedModel` does not refuse with
+`NOT_WRITER`: on a replica it marks the bundle with
+`REASON_BOUNDARY_UNVERIFIED`; see `docs/explanation/attested-export.md`.
 
 `CURSOR_REJECTED` is `ListChanges`' `since_token` carrying the sealed
 cursor prefix but failing to open: tampered, minted for a different
@@ -103,6 +107,22 @@ apart from `ENTITY_PROTECTED` because the recovery differs: retry first. When
 `row_revision` is present the row itself is unreadable and retrying will not
 help, so the next action is `request_unprotect`: an admin reads it with
 `GetEntityProtection` and removes it with `UnprotectEntity` at that revision.
+
+`EXPORT_INCOMPLETE` is `ExportAttestedModel` refusing a bundle that would
+not cover its whole scope. Retrying returns the same refusal while the
+cause holds. A refusal does not expose the causes behind
+`REASON_UNRESOLVED_ENTITIES`, which may be missing, hidden,
+outside-snapshot, changed or deleted entities. Pass `allow_incomplete` to
+inspect those causes before deciding whether a retry can succeed. Narrow the
+scope, raise the server's limits, or pass `allow_incomplete` to receive the bundle marked incomplete, as
+`docs/how-to/export-and-verify-an-attested-model.md` describes.
+
+`SIGNING_KEY_UNAVAILABLE` is `ExportAttestedModel` on a server configured to
+sign attested bundles that could not read or parse its signing key. The
+server refuses rather than return an unsigned bundle. Retrying fails the
+same way until an operator fixes the key; the server log names the
+reference that failed, which the status message leaves out. See
+`docs/how-to/sign-attested-bundles.md`.
 
 A status without an `ErrorInfo` at all (most `INVALID_ARGUMENT` statuses
 raised directly by request validation, for instance) still classifies

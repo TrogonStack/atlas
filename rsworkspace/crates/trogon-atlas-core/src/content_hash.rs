@@ -190,9 +190,19 @@ pub fn entity_content_hash(entity: &Entity) -> Result<ContentHash, ContentHashEr
     let mut stripped = entity.clone();
     stripped.system = None;
     let value = transcode::entity_json_value(&stripped)?;
-    let canonical = canonical_json(&value)?;
+    domain_digest(ENTITY_DOMAIN, &value)
+}
+
+/// SHA-256 over `domain` followed by the canonical form of `value`. The
+/// primitive every other content digest in the crate is built from; each
+/// caller owns its own NUL-terminated domain tag.
+pub(crate) fn domain_digest(
+    domain: &[u8],
+    value: &serde_json::Value,
+) -> Result<ContentHash, ContentHashError> {
+    let canonical = canonical_json(value)?;
     let mut hasher = Sha256::new();
-    hasher.update(ENTITY_DOMAIN);
+    hasher.update(domain);
     hasher.update(canonical.as_bytes());
     Ok(ContentHash(hasher.finalize().into()))
 }

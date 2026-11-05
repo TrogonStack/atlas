@@ -18,7 +18,9 @@ Solve a specific problem:
 - [Connect an MCP client](how-to/connect-an-mcp-client.md)
 - [Declare an SLO](how-to/declare-an-slo.md)
 - [Draft and land a new entity version](how-to/draft-then-land.md)
+- [Export and verify an attested model](how-to/export-and-verify-an-attested-model.md)
 - [Issue an API key to a client](how-to/issue-an-api-key.md)
+- [Sign attested bundles](how-to/sign-attested-bundles.md)
 - [Migrate legacy entity fields into `schema`](how-to/migrate-legacy-entity-fields.md)
 - [Model runtime code as an Event Model](how-to/model-runtime-code-as-an-event-model.md)
 - [Protect a published entity](how-to/protect-a-published-entity.md)
@@ -34,6 +36,7 @@ Solve a specific problem:
 
 Look up exact behavior:
 
+- [Attested bundle format](reference/attested-bundle-format.md)
 - [Change assessment](reference/change-assessment.md)
 - [Consequence delta](reference/consequence-delta.md)
 - [Failure reasons](reference/failure-reasons.md)
@@ -82,6 +85,7 @@ Understand how Atlas works and why:
 
 - [Atlas principles](explanation/principles/README.md)
 - [Architecture resource roadmap](explanation/architecture-resource-roadmap.md)
+- [Attested export](explanation/attested-export.md)
 - [Authorization design](explanation/authorization.md)
 - [Board renderer performance](explanation/board-renderer-performance.md)
 - [Branching](explanation/branching.md)

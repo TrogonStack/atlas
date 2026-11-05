@@ -32,7 +32,7 @@ mod responsibility_queries;
 mod source_business_bypass_test;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -43,6 +43,7 @@ use std::{
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tonic::{Request, Response, Status};
 use trogon_atlas_core::{
+    attested_bundle::{self, UnresolvedCause},
     operation_id::{operation_claim_key, validate_operation_id},
     NamespaceId, NamespaceName, OwnerId, WriterRole,
 };
@@ -433,6 +434,28 @@ impl PendingChangeset {
     }
 }
 
+/// The cached baseline view and whether the load that produced it hit the
+/// entity cap. Kept together so readers never see one load's entities with
+/// another load's truncation flag.
+#[derive(Clone)]
+struct BaselineSnapshot {
+    entities: Arc<Vec<StoredEntity>>,
+    truncated: bool,
+    boundary_writer: Option<WriterStatus>,
+}
+
+/// The caller's view of baseline as of an older changeset. `truncated` is
+/// the cap flag of the baseline load the rewind started from; `incomplete`
+/// is set when keys the rewind needed were left unfetched.
+struct AsOfView {
+    entities: Arc<Vec<StoredEntity>>,
+    truncated: bool,
+    incomplete: bool,
+    /// Whether the baseline load holds every changeset up to the target,
+    /// as [`cached_boundary_verified`] decides it for the load.
+    boundary_verified: bool,
+}
+
 /// The identity a protection RPC names. A kind, namespace and slug the
 /// store would never accept for an entity cannot be protected either.
 fn identity_from_request(kind: i32, namespace: &str, slug: &str) -> Result<EntityIdentity, Status> {
@@ -491,7 +514,7 @@ pub struct EventModelServiceImpl {
     ///
     /// Uses `tokio::sync::RwLock` so reads and writes are async-aware and
     /// cannot block the runtime (`parking_lot::RwLock` would block the thread).
-    snapshot_cache: tokio::sync::RwLock<Option<Arc<Vec<StoredEntity>>>>,
+    snapshot_cache: tokio::sync::RwLock<Option<BaselineSnapshot>>,
     /// Entity cap of the baseline snapshot load.
     snapshot_cap: usize,
     /// Cached `ReverseIndex` co-located with the snapshot. Invalidated in
@@ -520,10 +543,9 @@ pub struct EventModelServiceImpl {
     /// records a bound caller cannot see. See `change_cursor` for why a raw
     /// sequence number cannot be handed back in that case.
     change_cursor_seal: Arc<crate::change_cursor::ChangeCursorSeal>,
-    /// True when the last snapshot load hit the entity cap exactly, meaning
-    /// the in-process view may be incomplete. Destructive operations
-    /// (`delete_by_query`) refuse to proceed on a truncated snapshot.
-    snapshot_truncated: Arc<AtomicBool>,
+    /// The key `ExportAttestedModel` signs bundles with. `None` seals them
+    /// unsigned.
+    attested_signing_key: Option<crate::attested_signing::SigningKeySource>,
     /// Which namespaces refuse direct baseline writes. Mutating RPCs
     /// (`PutEntity`, `DeleteEntity`, `BatchMutate`, `RetargetReferences`,
     /// `DeleteByQuery`) reject a request that carries no
@@ -687,7 +709,7 @@ impl EventModelServiceImpl {
             change_cursor_seal: Arc::new(crate::change_cursor::ChangeCursorSeal::new(
                 &crate::change_cursor::ChangeCursorKey::generate(),
             )),
-            snapshot_truncated: Arc::new(AtomicBool::new(false)),
+            attested_signing_key: None,
             baseline_protection: BaselineProtection::Off,
             directory: directory.clone(),
             authorizer: Arc::new(RegistryAuthorizer::new(directory, store_for_authorizer)),
@@ -711,6 +733,13 @@ impl EventModelServiceImpl {
     /// (~15 MB at 1500 entities × ~10 KB), which was the dominant
     /// allocation cost on the read path.
     async fn baseline_snapshot(&self) -> Result<Arc<Vec<StoredEntity>>, Status> {
+        Ok(self.baseline_snapshot_with_truncation().await?.entities)
+    }
+
+    /// [`baseline_snapshot`](Self::baseline_snapshot) together with the
+    /// truncation flag of the very load that produced it, so a concurrent
+    /// rebuild can never pair one load's entities with another's flag.
+    async fn baseline_snapshot_with_truncation(&self) -> Result<BaselineSnapshot, Status> {
         if let Some(snap) = self.snapshot_cache.read().await.clone() {
             self.metrics.record_snapshot_cache_hit();
             return Ok(snap);
@@ -725,19 +754,25 @@ impl EventModelServiceImpl {
         // Instrument the async load with a span. Using `.instrument()` keeps
         // the span active across the await without holding an `EnteredSpan`
         // guard (which is `!Send`) across the suspension point.
+        let writer_before = self.store.writer_status();
         let result = {
             use tracing::Instrument as _;
             graph::load_all_with_cap(&self.store, self.snapshot_cap, None)
                 .instrument(tracing::info_span!("snapshot_rebuild"))
                 .await?
         };
-        // Persist the truncation flag on the service so destructive callers
-        // (delete_by_query) can refuse to proceed on a partial view.
-        self.snapshot_truncated
-            .store(result.truncated, std::sync::atomic::Ordering::Release);
-        let all = Arc::new(result.entities);
-        *self.snapshot_cache.write().await = Some(all.clone());
-        Ok(all)
+        let writer_after = self.store.writer_status();
+        let snap = BaselineSnapshot {
+            entities: Arc::new(result.entities),
+            truncated: result.truncated,
+            boundary_writer: snapshot_boundary_writer(
+                &writer_before,
+                &writer_after,
+                self.store.is_writer(),
+            ),
+        };
+        *self.snapshot_cache.write().await = Some(snap.clone());
+        Ok(snap)
     }
 
     /// The caller's view of the store.
@@ -919,15 +954,20 @@ impl EventModelServiceImpl {
     ///
     /// Every newer baseline changeset is undone from its revision rows. A
     /// key a newer changeset touched takes its value from those rows alone,
-    /// so a stale cached snapshot only ever supplies keys that have not
-    /// changed since, and the result does not depend on the cache's age.
+    /// so the cached snapshot only supplies keys that have not changed
+    /// since. That holds only while the cache is at least as new as
+    /// `changeset_id`: a replica's cache can predate it and keep a key's
+    /// older value. `attest` refreshes the cache the way a current
+    /// attested export does, and `boundary_verified` reports whether the
+    /// load can be trusted to hold the target.
     async fn snapshot_as_of(
         &self,
         changeset_id: &str,
         vis: &Visibility,
         principal: Option<&crate::auth::Principal>,
         root: (pb::EntityKind, &pb::Id),
-    ) -> Result<(Arc<Vec<StoredEntity>>, bool), Status> {
+        attest: bool,
+    ) -> Result<AsOfView, Status> {
         // Validates the id and turns an unknown one into NOT_FOUND before
         // any walk starts.
         let target = self
@@ -948,33 +988,18 @@ impl EventModelServiceImpl {
         }
         // Snapshot before listing: a write that lands in between is then
         // in `newer` and gets rewound, instead of leaking into the view.
-        let mut current = self.baseline_snapshot().await?;
+        let BaselineSnapshot {
+            entities: mut current,
+            truncated,
+            boundary_writer,
+        } = if attest {
+            self.attestation_baseline().await?
+        } else {
+            self.baseline_snapshot_with_truncation().await?
+        };
         let lens = self.lens(vis).await?;
         let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
-
-        let mut pre_images: Vec<as_of::PreImage> = Vec::new();
-        for (record_id, ops) in &newer {
-            for op in ops {
-                let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
-                let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
-                let revision = self
-                    .store
-                    .get_entity_revision(kind, id, record_id, None)
-                    .await
-                    .map_err(|e| match e {
-                        trogon_atlas_store::error::StoreError::NotFound => {
-                            Status::failed_precondition(format!(
-                                "changeset {} recorded no revision for {}/{}: it predates \
-                                 revision recording or was written without changeset \
-                                 attribution, so the model as of an older changeset is not recoverable",
-                                record_id, id.namespace, id.slug
-                            ))
-                        }
-                        other => store_err(other),
-                    })?;
-                pre_images.push((pb::EntityKey::new(kind, id), revision.before));
-            }
-        }
+        let pre_images = self.rewind_pre_images(&newer).await?;
 
         // The snapshot is capped, so it can omit the root and the members and
         // halo the board reaches. Fetch those by key and let the pre-images
@@ -984,19 +1009,64 @@ impl EventModelServiceImpl {
         // fetches are bounded; keys left unfetched make the view incomplete,
         // which the caller reports as truncated.
         let (root_kind, root_id) = root;
+        let mut fetched = 0usize;
+        let mut incomplete = false;
+        if root_id.version == 0 {
+            let kinds = [root_kind];
+            let namespaces = [root_id.namespace.clone()];
+            let mut candidates = self
+                .store
+                .list(
+                    ListFilter {
+                        kinds: &kinds,
+                        namespaces: &namespaces,
+                        slug: Some(&root_id.slug),
+                        latest_versions_only: false,
+                    },
+                    Some(MAX_PROJECTION_ENTITIES + 1),
+                    None,
+                )
+                .await
+                .map_err(store_err)?;
+            if candidates.len() > MAX_PROJECTION_ENTITIES {
+                candidates.truncate(MAX_PROJECTION_ENTITIES);
+                incomplete = true;
+            }
+            let mut held: std::collections::HashSet<pb::EntityKey> = current
+                .iter()
+                .filter_map(|se| {
+                    trogon_atlas_store::refs::entity_kind(&se.entity)
+                        .zip(trogon_atlas_store::refs::entity_id(&se.entity))
+                        .map(|(kind, id)| pb::EntityKey::new(kind, id))
+                })
+                .collect();
+            let mut with_versions = current.as_ref().clone();
+            for candidate in candidates {
+                let Some(candidate_id) = trogon_atlas_store::refs::entity_id(&candidate.entity)
+                else {
+                    continue;
+                };
+                if candidate_id.slug != root_id.slug {
+                    continue;
+                }
+                if held.insert(pb::EntityKey::new(root_kind, candidate_id)) {
+                    fetched += 1;
+                    with_versions.push(candidate);
+                }
+            }
+            current = Arc::new(with_versions);
+        }
         let touched: std::collections::HashSet<pb::EntityKey> =
             pre_images.iter().map(|(key, _)| key.clone()).collect();
         let mut absent: std::collections::HashSet<pb::EntityKey> = std::collections::HashSet::new();
-        let mut fetched = 0usize;
-        let mut incomplete = false;
-        let rewound = loop {
+        let mut rewound = loop {
             let rewound = as_of::rewind(&current, pre_images.clone());
             let mut wanted: Vec<(pb::EntityKind, pb::Id)> = vec![(root_kind, root_id.clone())];
-            let root_members = rewound.iter().find_map(|se| match se.entity.kind.as_ref() {
-                Some(pb::entity::Kind::EventModel(em)) if em.id.as_ref() == Some(root_id) => {
-                    Some(em.members.clone())
-                }
-                _ => None,
+            let root_members = event_model_in(&rewound, root_id).and_then(|entity| {
+                let Some(pb::entity::Kind::EventModel(model)) = entity.kind else {
+                    return None;
+                };
+                Some(model.members)
             });
             if let Some(members) = root_members {
                 wanted.extend(
@@ -1039,12 +1109,61 @@ impl EventModelServiceImpl {
                 break as_of::rewind(&current, pre_images.clone());
             }
         };
+        let closing_newer = self.baseline_changesets_after(changeset_id, &lens).await?;
+        if closing_newer
+            .iter()
+            .map(|(id, _)| id)
+            .ne(newer.iter().map(|(id, _)| id))
+        {
+            rewound = as_of::rewind(&current, self.rewind_pre_images(&closing_newer).await?);
+        }
         // Narrow with the lens the walk used: a namespace admitted only by a
         // later lookup was never rewound and would show its current state.
-        if lens.is_unrestricted() {
-            return Ok((Arc::new(rewound), incomplete));
+        let entities = if lens.is_unrestricted() {
+            Arc::new(rewound)
+        } else {
+            Self::apply_lens(&rewound, &lens)
+        };
+        Ok(AsOfView {
+            entities,
+            truncated,
+            incomplete,
+            boundary_verified: cached_boundary_verified(
+                boundary_writer.as_ref(),
+                &self.store.writer_status(),
+                self.store.is_writer(),
+            ),
+        })
+    }
+
+    async fn rewind_pre_images(
+        &self,
+        newer: &[(String, Vec<ChangesetOp>)],
+    ) -> Result<Vec<as_of::PreImage>, Status> {
+        let mut pre_images = Vec::new();
+        for (record_id, ops) in newer {
+            for op in ops {
+                let kind = kind_from_i32(op.entity_ref.kind, "changeset op kind")?;
+                let id = require_id(op.entity_ref.id.as_ref(), "changeset op")?;
+                let revision = self
+                    .store
+                    .get_entity_revision(kind, id, record_id, None)
+                    .await
+                    .map_err(|e| match e {
+                        trogon_atlas_store::error::StoreError::NotFound => {
+                            Status::failed_precondition(format!(
+                                "changeset {} recorded no revision for {}/{}: it predates \
+                                 revision recording or was written without changeset \
+                                 attribution, so the model as of an older changeset is not recoverable",
+                                record_id, id.namespace, id.slug
+                            ))
+                        }
+                        other => store_err(other),
+                    })?;
+                pre_images.push((pb::EntityKey::new(kind, id), revision.before));
+            }
         }
-        Ok((Self::apply_lens(&rewound, &lens), incomplete))
+        Ok(pre_images)
     }
 
     /// Baseline changesets newer than `changeset_id`, newest first, with
@@ -1107,8 +1226,7 @@ impl EventModelServiceImpl {
     /// [`snapshot_for`](Self::snapshot_for) plus whether the view hit the
     /// entity cap.
     ///
-    /// `snapshot_for` drops the branch load's truncation flag (only the
-    /// baseline path persists one, on `snapshot_truncated`). Callers that
+    /// `snapshot_for` drops the truncation flag of the load it read. Callers that
     /// must report completeness rather than merely tolerate it -- the
     /// snapshot id names a *state*, and naming a partial state as if it
     /// were whole is the failure mode -- need both branches to answer.
@@ -1118,9 +1236,9 @@ impl EventModelServiceImpl {
         vis: &Visibility,
     ) -> Result<(Arc<Vec<StoredEntity>>, bool), Status> {
         let Some(branch) = branch else {
-            let all = self.snapshot(vis).await?;
-            let truncated = self.snapshot_truncated.load(Ordering::Acquire);
-            return Ok((all, truncated));
+            let snap = self.baseline_snapshot_with_truncation().await?;
+            let all = self.narrow_baseline(snap.entities, vis).await?;
+            return Ok((all, snap.truncated));
         };
         use tracing::Instrument as _;
         let result = graph::load_all(&self.store, Some(branch))
@@ -1128,6 +1246,181 @@ impl EventModelServiceImpl {
             .await?;
         let entities = self.narrow(Arc::new(result.entities), vis).await?;
         Ok((entities, result.truncated))
+    }
+
+    /// The cached baseline, reloaded first when this process holds the
+    /// writer lease but the cache was loaded under another one, so a newly
+    /// promoted writer never attests a load it did not confirm.
+    async fn attestation_baseline(&self) -> Result<BaselineSnapshot, Status> {
+        let snap = self.baseline_snapshot_with_truncation().await?;
+        let writer = self.store.writer_status();
+        let is_writer = self.store.is_writer();
+        if !cached_boundary_needs_refresh(snap.boundary_writer.as_ref(), &writer, is_writer) {
+            return Ok(snap);
+        }
+        let refresh = self
+            .snapshot_cache
+            .read()
+            .await
+            .as_ref()
+            .is_none_or(|candidate| {
+                cached_boundary_needs_refresh(
+                    candidate.boundary_writer.as_ref(),
+                    &writer,
+                    is_writer,
+                )
+            });
+        if !refresh {
+            return Ok(snap);
+        }
+        self.invalidate_snapshot().await;
+        self.baseline_snapshot_with_truncation().await
+    }
+
+    async fn snapshot_for_attestation(
+        &self,
+        branch: Option<&str>,
+        vis: &Visibility,
+    ) -> Result<(Arc<Vec<StoredEntity>>, bool, bool), Status> {
+        let Some(branch) = branch else {
+            let snap = self.attestation_baseline().await?;
+            let all = self.narrow_baseline(snap.entities, vis).await?;
+            let writer = self.store.writer_status();
+            let boundary_verified = cached_boundary_verified(
+                snap.boundary_writer.as_ref(),
+                &writer,
+                self.store.is_writer(),
+            );
+            return Ok((all, snap.truncated, boundary_verified));
+        };
+        use tracing::Instrument as _;
+        let result = graph::load_all(&self.store, Some(branch))
+            .instrument(tracing::info_span!("snapshot_rebuild_branch", branch))
+            .await?;
+        let entities = self.narrow(Arc::new(result.entities), vis).await?;
+        Ok((entities, result.truncated, self.store.is_writer()))
+    }
+
+    /// Id of the newest changeset in `scope`, or empty when it holds none.
+    async fn newest_changeset(&self, scope: ChangesetScope<'_>) -> Result<String, Status> {
+        let page = self
+            .store
+            .list_changesets(ChangesetPage {
+                before: None,
+                limit: 1,
+                scope,
+                namespace: None,
+            })
+            .await
+            .map_err(store_err)?;
+        Ok(page.into_iter().next().map(|r| r.id).unwrap_or_default())
+    }
+
+    /// What identifies a branch's state for an attested export, compared
+    /// before and after the export reads it.
+    async fn branch_boundary(&self, branch: &str) -> Result<BranchBoundary, Status> {
+        let info = self
+            .store
+            .list_branches()
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .find(|b| b.name == branch)
+            .ok_or_else(|| branch_not_found(branch))?;
+        Ok(BranchBoundary {
+            created_at: info.created_at,
+            fork_changeset_id: info.fork_changeset_id,
+            delta_count: info.delta_count,
+            newest_changeset: self
+                .newest_changeset(ChangesetScope::Branch(branch))
+                .await?,
+        })
+    }
+
+    /// Manifests render through the live type libraries, so a historical
+    /// export whose libraries changed since `changeset_id` describes old
+    /// entities with new types. The export marks that instead of hiding it.
+    async fn type_libraries_changed_after(
+        &self,
+        changeset_id: &str,
+        lens: &Lens,
+        rendered_namespaces: &BTreeSet<&str>,
+    ) -> Result<bool, Status> {
+        let newer = self.baseline_changesets_after(changeset_id, lens).await?;
+        for op in newer.iter().flat_map(|(_, ops)| ops) {
+            if op.entity_ref.kind != pb::EntityKind::TypeLibrary as i32 {
+                continue;
+            }
+            let id = op.entity_ref.id.as_ref().ok_or_else(|| {
+                Status::data_loss("type-library changeset operation has no entity id")
+            })?;
+            if rendered_namespaces.contains(id.namespace.as_str()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Keys a branch holds its own delta for. A baseline write to one of
+    /// them does not change what the branch shows.
+    async fn branch_overlaid_keys(
+        &self,
+        branch: &str,
+    ) -> Result<std::collections::HashSet<pb::EntityKey>, Status> {
+        Ok(self
+            .store
+            .list_branch_deltas(branch)
+            .await
+            .map_err(store_err)?
+            .into_iter()
+            .map(|delta| pb::EntityKey::new(delta.kind, &delta.id))
+            .collect())
+    }
+
+    /// Whether a baseline changeset newer than `since` touched an entity
+    /// the export read or looked for, or a type library of a namespace it
+    /// rendered, unless the export's branch overlays that key. Through
+    /// `view_through`, a changeset that landed while the snapshot was read,
+    /// any visible key counts: the snapshot may hold it, and the bundle
+    /// names `since`. A changeset log it cannot walk counts as touched.
+    #[allow(clippy::too_many_arguments)]
+    async fn baseline_moved_under(
+        &self,
+        since: &str,
+        view_through: Option<&str>,
+        lens: &Lens,
+        read: &std::collections::HashSet<pb::EntityKey>,
+        versionless_root: Option<&pb::EntityKey>,
+        namespaces: &BTreeSet<&str>,
+        overlaid: &std::collections::HashSet<pb::EntityKey>,
+    ) -> bool {
+        let Ok(newer) = self.baseline_changesets_after(since, lens).await else {
+            return true;
+        };
+        newer
+            .iter()
+            .flat_map(|(changeset, ops)| ops.iter().map(move |op| (changeset, op)))
+            .any(|(changeset, op)| {
+                let Some(id) = op.entity_ref.id.as_ref() else {
+                    return true;
+                };
+                let Ok(kind) = pb::EntityKind::try_from(op.entity_ref.kind) else {
+                    return true;
+                };
+                let key = pb::EntityKey::new(kind, id);
+                if overlaid.contains(&key) {
+                    return false;
+                }
+                view_through.is_some_and(|through| changeset.as_str() <= through)
+                    || read.contains(&key)
+                    || versionless_root.is_some_and(|root| {
+                        root.kind == key.kind
+                            && root.namespace == key.namespace
+                            && root.slug == key.slug
+                    })
+                    || (kind == pb::EntityKind::TypeLibrary
+                        && namespaces.contains(id.namespace.as_str()))
+            })
     }
 
     /// How replacing `before` with `after` moves the findings of every
@@ -1203,9 +1496,6 @@ impl EventModelServiceImpl {
         *self.reverse_index_cache.write().await = None;
         self.owner_snapshot_cache.write().await.clear();
         self.owner_reverse_index_cache.write().await.clear();
-        // Reset the truncation flag so the next load re-evaluates.
-        self.snapshot_truncated
-            .store(false, std::sync::atomic::Ordering::Release);
     }
 
     /// Returns a cached `ReverseIndex` built from the current snapshot. The index
@@ -1269,7 +1559,7 @@ impl EventModelServiceImpl {
             .read()
             .await
             .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &snap))
+            .is_some_and(|current| Arc::ptr_eq(&current.entities, &snap))
         {
             *guard = Some(idx.clone());
         }
@@ -1448,6 +1738,34 @@ impl EventModelServiceImpl {
     pub fn with_change_cursor_key(mut self, key: &crate::change_cursor::ChangeCursorKey) -> Self {
         self.change_cursor_seal = Arc::new(crate::change_cursor::ChangeCursorSeal::new(key));
         self
+    }
+
+    /// Sign every attested bundle with the key `source` names
+    /// (`--attested-signing-key-file` / `--attested-signing-key-env`). The
+    /// key is read on each export; an export whose key cannot be read is
+    /// refused with `SIGNING_KEY_UNAVAILABLE`, never sealed unsigned.
+    #[must_use]
+    pub fn with_attested_signing_key(
+        mut self,
+        source: crate::attested_signing::SigningKeySource,
+    ) -> Self {
+        self.attested_signing_key = Some(source);
+        self
+    }
+
+    fn attested_signer(
+        &self,
+    ) -> Result<Option<trogon_atlas_core::attested_signing::SigningKey>, Status> {
+        let Some(source) = self.attested_signing_key.as_ref() else {
+            return Ok(None);
+        };
+        source.load().map(Some).map_err(|e| {
+            tracing::error!(error = %e, "attested export refused: signing key unavailable");
+            crate::conv::signing_key_unavailable(
+                "this server signs attested bundles and could not load its signing key",
+                source.kind(),
+            )
+        })
     }
 
     fn author_from_metadata<T>(req: &Request<T>) -> MirrorAuthor {
@@ -3309,44 +3627,12 @@ fn snapshot_digest(
     scope: &std::collections::BTreeSet<&str>,
     include_entries: bool,
 ) -> Result<SnapshotDigest, Status> {
-    let mut hasher = trogon_atlas_core::SnapshotHasher::new();
-    let mut entries = Vec::new();
-    for se in all {
-        let id = entity_id(&se.entity)?;
-        if !scope.is_empty() && !scope.contains(id.namespace.as_str()) {
-            continue;
-        }
-        let kind = entity_kind(&se.entity)?;
-        let key = trogon_atlas_store::key::entity_key(kind, id);
-        let hash = trogon_atlas_core::entity_content_hash(&se.entity).map_err(|e| {
-            // An entity that cannot render as canonical JSON has no
-            // content identity, so the snapshot has none either. Failing
-            // is the honest answer: silently skipping it would produce an
-            // id for a model that is missing an entity.
-            Status::failed_precondition(format!(
-                "entity {key} has no content identity, so no snapshot id can be computed: {e}"
-            ))
-        })?;
-        if include_entries {
-            entries.push(pb::SnapshotEntry {
-                key: key.clone(),
-                entity: Some(pb::EntityRef {
-                    kind: kind as i32,
-                    id: Some(id.clone()),
-                }),
-                content_hash: hash.to_hex(),
-            });
-        }
-        hasher.insert(key, hash).map_err(|e| {
-            // Two rows for one key means the store enumeration is
-            // broken; hashing on would name a state that never existed.
-            Status::internal(format!("snapshot enumeration produced {e}"))
-        })?;
-    }
-    // `SnapshotHasher` keeps its own sorted order; sort the response
-    // entries to match, since the proto promises key order.
-    entries.sort_by(|a, b| a.key.cmp(&b.key));
-
+    let in_scope = all.iter().map(|se| &se.entity).filter(|entity| {
+        scope.is_empty()
+            || trogon_atlas_store::refs::entity_id(entity)
+                .is_none_or(|id| scope.contains(id.namespace.as_str()))
+    });
+    let (hasher, entries) = snapshot_identity(in_scope, include_entries)?;
     Ok(SnapshotDigest {
         snapshot_id: hasher.finish().to_hex(),
         entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
@@ -5900,12 +6186,17 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             };
             (em, self.snapshot_for(branch.as_deref(), &vis).await?, false)
         } else {
-            let (all, incomplete) = self
+            let AsOfView {
+                entities: all,
+                incomplete,
+                ..
+            } = self
                 .snapshot_as_of(
                     &req.as_of_changeset,
                     &vis,
                     principal.as_ref(),
                     (pb::EntityKind::EventModel, id),
+                    false,
                 )
                 .await?;
             // The live row may be gone or newer, so the root comes from the
@@ -6101,6 +6392,385 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             external_manifests: rendered.external_manifests,
             skipped: rendered.skipped,
             truncated: board.truncated || load_truncated,
+        }))
+    }
+
+    async fn export_attested_model(
+        &self,
+        req: Request<pb::ExportAttestedModelRequest>,
+    ) -> Result<Response<pb::ExportAttestedModelResponse>, Status> {
+        use pb::attested_completeness::Reason;
+        let vis = Self::visibility_of(&req);
+        let principal = Self::principal_from_metadata(&req);
+        let branch = Self::branch_from_metadata(&req)?;
+        let req = req.into_inner();
+        let requested_id = require_id(req.id.as_ref(), "id")?.clone();
+        let historical = !req.as_of_changeset.is_empty();
+        if historical && branch.is_some() {
+            return Err(Status::invalid_argument(
+                "as_of_changeset reads baseline history only; send it without a branch header",
+            ));
+        }
+        if branch
+            .as_deref()
+            .is_some_and(|branch| !Self::branch_visible(principal.as_ref(), branch))
+        {
+            return Err(Status::not_found("branch not found"));
+        }
+        self.require_visible(&vis, &requested_id.namespace).await?;
+        let signer = self.attested_signer()?;
+
+        // Nothing holds writes off: the export reads one snapshot, binds the
+        // bundle to it, and marks whatever moved or could not be resolved.
+        let lens = self.lens(&vis).await?;
+        let mut reasons = BTreeSet::new();
+        let mut unresolved = Unresolved::default();
+        let branch_before = match branch.as_deref() {
+            Some(name) => Some(self.branch_boundary(name).await?),
+            None => None,
+        };
+        let baseline_before = self.newest_changeset(ChangesetScope::Baseline).await?;
+        let mut baseline_read = None;
+
+        let (root, all, snapshot_truncated, history_incomplete, baseline_changeset_id) =
+            if historical {
+                let AsOfView {
+                    entities: all,
+                    truncated,
+                    incomplete,
+                    boundary_verified,
+                } = self
+                    .snapshot_as_of(
+                        &req.as_of_changeset,
+                        &vis,
+                        principal.as_ref(),
+                        (pb::EntityKind::EventModel, &requested_id),
+                        true,
+                    )
+                    .await?;
+                if !boundary_verified {
+                    reasons.insert(Reason::BoundaryUnverified);
+                }
+                let root = event_model_in(&all, &requested_id)
+                    .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
+                (
+                    root,
+                    all,
+                    truncated,
+                    incomplete,
+                    req.as_of_changeset.clone(),
+                )
+            } else {
+                let (all, truncated, boundary_verified) = self
+                    .snapshot_for_attestation(branch.as_deref(), &vis)
+                    .await?;
+                // A mutation commits its entities before it records its
+                // changeset, both under the mutation lock. Waiting for the
+                // lock lets one the snapshot caught midway record first, so
+                // the changeset read next covers everything the snapshot holds.
+                drop(self.lock_mutations().await);
+                baseline_read = Some(self.newest_changeset(ChangesetScope::Baseline).await?);
+                let root = if let Some(root) = event_model_in(&all, &requested_id) {
+                    root
+                } else {
+                    // Not in the snapshot it was read from: carry the live
+                    // copy, marked, rather than attest it as part of it.
+                    let stored = if requested_id.version == 0 {
+                        let lens = self.lens(&vis).await?;
+                        get_latest_version_with_cap(
+                            &self.store,
+                            &lens,
+                            pb::EntityKind::EventModel,
+                            &requested_id.namespace,
+                            &requested_id.slug,
+                            MAX_PROJECTION_ENTITIES,
+                            branch.as_deref(),
+                        )
+                        .await?
+                        .map(|entity| StoredEntity {
+                            entity,
+                            etag: String::new(),
+                        })
+                        .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?
+                    } else {
+                        self.store
+                            .get(pb::EntityKind::EventModel, &requested_id, branch.as_deref())
+                            .await
+                            .map_err(store_err)?
+                    };
+                    let outside_id = entity_id(&stored.entity)?.clone();
+                    unresolved.mark(
+                        &pb::EntityKey::new(pb::EntityKind::EventModel, &outside_id),
+                        UnresolvedCause::OutsideSnapshot,
+                    );
+                    if !truncated {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    stored.entity
+                };
+                if !boundary_verified {
+                    reasons.insert(Reason::BoundaryUnverified);
+                }
+                // The newest baseline changeset dates every owner's writes,
+                // so only an unrestricted caller may learn it.
+                let boundary = if vis.is_unrestricted() {
+                    baseline_before.clone()
+                } else {
+                    String::new()
+                };
+                (root, all, truncated, false, boundary)
+            };
+        let id = entity_id(&root)?.clone();
+        let root_key = pb::EntityKey::new(pb::EntityKind::EventModel, &id);
+        let Some(pb::entity::Kind::EventModel(model)) = root.kind.as_ref() else {
+            return Err(Status::internal("stored entity is not an EventModel"));
+        };
+
+        let root_types = self
+            .transcode_pool(&id.namespace, branch.as_deref())
+            .await?;
+        let board = graph::board_closure(
+            &all,
+            &root,
+            MAX_PROJECTION_ENTITIES,
+            &self.metrics,
+            &root_types,
+        )?;
+        let namespaces: std::collections::BTreeSet<&str> = board
+            .own
+            .iter()
+            .chain(&board.external)
+            .filter_map(|e| trogon_atlas_store::refs::entity_id(e).map(|i| i.namespace.as_str()))
+            .collect();
+        let mut types = BTreeMap::from([(id.namespace.as_str(), root_types)]);
+        for namespace in namespaces {
+            if namespace != id.namespace {
+                types.insert(
+                    namespace,
+                    self.transcode_pool(namespace, branch.as_deref()).await?,
+                );
+            }
+        }
+        let rendered = trogon_atlas_client::export::render_board_scoped(
+            &board.own,
+            &board.external,
+            |namespace| types.get(namespace),
+        )
+        .map_err(|e| Status::internal(format!("rendering manifests: {e:#}")))?;
+        let (closure, entries) = snapshot_identity(board.own.iter().chain(&board.external), true)?;
+        let (view, _) = snapshot_identity(all.iter().map(|se| &se.entity), false)?;
+
+        for key in &board.missing {
+            let cause = if lens.admits(&key.namespace) {
+                UnresolvedCause::Missing
+            } else {
+                UnresolvedCause::Hidden
+            };
+            unresolved.mark(key, cause);
+        }
+        let mut read: std::collections::HashSet<pb::EntityKey> =
+            board.missing.iter().cloned().collect();
+        read.insert(root_key.clone());
+        let snapshot_etags: HashMap<pb::EntityKey, &str> = all
+            .iter()
+            .filter_map(|se| {
+                let kind = trogon_atlas_store::refs::entity_kind(&se.entity)?;
+                let id = trogon_atlas_store::refs::entity_id(&se.entity)?;
+                Some((pb::EntityKey::new(kind, id), se.etag.as_str()))
+            })
+            .collect();
+        let mut checked = Vec::new();
+        for entity in board.own.iter().chain(&board.external) {
+            let key = pb::EntityKey::new(entity_kind(entity)?, entity_id(entity)?);
+            read.insert(key.clone());
+            if historical {
+                continue;
+            }
+            // The bundle carries the snapshot's copy; a live etag that
+            // differs means a write landed after the snapshot was read.
+            let Some(&etag) = snapshot_etags.get(&key) else {
+                continue;
+            };
+            checked.push((key, etag.to_string()));
+        }
+        for chunk in checked.chunks(ADVERTISED_MAX_BATCH_GET_KEYS) {
+            let keys: Vec<_> = chunk.iter().map(|(key, _)| (key.kind, key.id())).collect();
+            let live = self
+                .store
+                .batch_get(&keys, branch.as_deref())
+                .await
+                .map_err(store_err)?;
+            for ((key, etag), live) in chunk.iter().zip(live) {
+                match live {
+                    Some(live) if live.etag == *etag => {}
+                    Some(_) => {
+                        unresolved.mark(key, UnresolvedCause::Changed);
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    None => {
+                        unresolved.mark(key, UnresolvedCause::Deleted);
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                }
+            }
+        }
+        let view_truncated = snapshot_truncated || history_incomplete;
+        let issues = validation::validate_model(model, &all);
+        let checks = vec![
+            validation::ran_against_snapshot(validation::CHECK_MODEL, 1, view_truncated),
+            validation::ran_against_snapshot(validation::CHECK_STRATEGIC, 1, view_truncated),
+        ];
+        let model_scope = pb::ValidationScope {
+            branch: branch.clone().unwrap_or_default(),
+            project_id: None,
+            domain_id: None,
+            namespace: id.namespace.clone(),
+            event_model_id: Some(id.clone()),
+        };
+        let coverage = validation::validation_coverage(
+            checks,
+            model_scope.clone(),
+            model_scope,
+            view_truncated,
+        );
+        let rule_catalog = attested_bundle::rule_catalog_digest(&validation::rule_catalog())
+            .map_err(|e| Status::internal(format!("digesting the rule catalog: {e}")))?;
+
+        let rendered_namespaces: BTreeSet<&str> = types.keys().copied().collect();
+        if historical {
+            // A historical view is rewound from history, so later writes do
+            // not move it. Only the live type libraries it rendered through
+            // can, checked after rendering so a change mid-export counts.
+            if self
+                .type_libraries_changed_after(&req.as_of_changeset, &lens, &rendered_namespaces)
+                .await?
+            {
+                reasons.insert(Reason::TypeLibrariesChanged);
+            }
+        } else if self.newest_changeset(ChangesetScope::Baseline).await? != baseline_before {
+            let overlaid = match branch.as_deref() {
+                Some(name) => self.branch_overlaid_keys(name).await?,
+                None => std::collections::HashSet::new(),
+            };
+            if self
+                .baseline_moved_under(
+                    &baseline_before,
+                    baseline_read
+                        .as_deref()
+                        .filter(|read| *read != baseline_before),
+                    &lens,
+                    &read,
+                    (requested_id.version == 0).then_some(&root_key),
+                    &rendered_namespaces,
+                    &overlaid,
+                )
+                .await
+            {
+                reasons.insert(Reason::ConcurrentWrite);
+            }
+        }
+        let branch_changeset_id = match (branch.as_deref(), branch_before) {
+            (Some(name), Some(before)) => {
+                match self.branch_boundary(name).await {
+                    Ok(after) if after == before => {}
+                    Ok(_) => {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    Err(status) if status.code() == tonic::Code::NotFound => {
+                        reasons.insert(Reason::ConcurrentWrite);
+                    }
+                    Err(status) => return Err(status),
+                }
+                before.newest_changeset
+            }
+            _ => String::new(),
+        };
+        if self.lens(&vis).await? != lens {
+            reasons.insert(Reason::ConcurrentWrite);
+        }
+        if !unresolved.is_empty() {
+            reasons.insert(Reason::UnresolvedEntities);
+        }
+
+        if snapshot_truncated {
+            reasons.insert(Reason::SnapshotTruncated);
+        }
+        if history_incomplete {
+            reasons.insert(Reason::HistoryIncomplete);
+        }
+        if board.truncated {
+            reasons.insert(Reason::ClosureTruncated);
+        }
+        if !rendered.skipped.is_empty() {
+            reasons.insert(Reason::EntitiesSkipped);
+        }
+        if coverage
+            .checks
+            .iter()
+            .any(|c| c.state() != pb::validation_check_result::State::Completed)
+        {
+            reasons.insert(Reason::ValidationIncomplete);
+        }
+        if !reasons.is_empty() && !req.allow_incomplete {
+            let names: Vec<&str> = reasons
+                .iter()
+                .map(pb::attested_completeness::Reason::as_str_name)
+                .collect();
+            return Err(crate::conv::export_incomplete(
+                format!(
+                    "the export does not cover its whole scope ({}); pass allow_incomplete to \
+                     receive a bundle marked incomplete",
+                    names.join(", ")
+                ),
+                names.join(","),
+            ));
+        }
+
+        let mode = if historical {
+            pb::attested_state::Mode::Historical
+        } else {
+            pb::attested_state::Mode::Current
+        };
+        let mut bundle = pb::AttestedModelBundle {
+            format: attested_bundle::BUNDLE_FORMAT.to_string(),
+            scope: Some(pb::AttestedScope {
+                event_model_id: Some(id.clone()),
+                branch: branch.unwrap_or_default(),
+                lens: Some(attested_lens(&lens)),
+            }),
+            state: Some(pb::AttestedState {
+                mode: mode as i32,
+                snapshot_id: view.finish().to_hex(),
+                snapshot_entity_count: u32::try_from(view.len()).unwrap_or(u32::MAX),
+                closure_id: closure.finish().to_hex(),
+                baseline_changeset_id,
+                branch_changeset_id,
+                closure_truncated: board.truncated,
+            }),
+            manifests: rendered.manifests,
+            external_manifests: rendered.external_manifests,
+            entries,
+            skipped: rendered.skipped,
+            validation: Some(pb::AttestedValidation {
+                issues,
+                coverage: Some(coverage),
+                rule_catalog: Some(pb::RuleCatalogIdentity {
+                    digest: rule_catalog.to_hex(),
+                    server_version: env!("CARGO_PKG_VERSION").to_string(),
+                }),
+            }),
+            completeness: Some(attested_bundle::Completeness::from_reasons(reasons).to_proto()),
+            bundle_digest: String::new(),
+            unresolved: unresolved.into_rows(),
+            signature: None,
+        };
+        match signer.as_ref() {
+            Some(key) => attested_bundle::seal_signed(&mut bundle, key),
+            None => attested_bundle::seal(&mut bundle),
+        }
+        .map_err(|e| Status::internal(format!("sealing the bundle: {e}")))?;
+        Ok(Response::new(pb::ExportAttestedModelResponse {
+            bundle: Some(bundle),
         }))
     }
 
@@ -11062,6 +11732,201 @@ fn branch_entry_state_label(state: &pb::BranchEntryState) -> String {
         side(&state.ours_etag),
         side(&state.theirs_etag)
     )
+}
+
+/// Content identity of `entities` by the rules `GetSnapshotId` documents,
+/// plus their entries in key order when `with_entries` is set.
+fn snapshot_identity<'a>(
+    entities: impl IntoIterator<Item = &'a pb::Entity>,
+    with_entries: bool,
+) -> Result<(trogon_atlas_core::SnapshotHasher, Vec<pb::SnapshotEntry>), Status> {
+    let mut hasher = trogon_atlas_core::SnapshotHasher::new();
+    let mut entries = Vec::new();
+    for entity in entities {
+        let id = entity_id(entity)?;
+        let kind = entity_kind(entity)?;
+        let key = trogon_atlas_store::key::entity_key(kind, id);
+        let hash = trogon_atlas_core::entity_content_hash(entity).map_err(|e| {
+            // An entity that cannot render as canonical JSON has no
+            // content identity, so the snapshot has none either. Failing
+            // is the honest answer: silently skipping it would produce an
+            // id for a model that is missing an entity.
+            Status::failed_precondition(format!(
+                "entity {key} has no content identity, so no snapshot id can be computed: {e}"
+            ))
+        })?;
+        if with_entries {
+            entries.push(pb::SnapshotEntry {
+                key: key.clone(),
+                entity: Some(pb::EntityRef {
+                    kind: kind as i32,
+                    id: Some(id.clone()),
+                }),
+                content_hash: hash.to_hex(),
+            });
+        }
+        hasher.insert(key, hash).map_err(|e| {
+            // Two rows for one key means the store enumeration is
+            // broken; hashing on would name a state that never existed.
+            Status::internal(format!("snapshot enumeration produced {e}"))
+        })?;
+    }
+    // `SnapshotHasher` keeps its own sorted order; sort the entries to
+    // match, since the proto promises key order.
+    entries.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok((hasher, entries))
+}
+
+fn event_model_in(all: &[StoredEntity], id: &pb::Id) -> Option<pb::Entity> {
+    all.iter()
+        .filter_map(|se| {
+            let Some(pb::entity::Kind::EventModel(em)) = se.entity.kind.as_ref() else {
+                return None;
+            };
+            let candidate = em.id.as_ref()?;
+            (candidate.namespace == id.namespace
+                && candidate.slug == id.slug
+                && (id.version == 0 || candidate.version == id.version))
+                .then_some((candidate.version, se.entity.clone()))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, entity)| entity)
+}
+
+fn snapshot_boundary_writer(
+    writer_before: &WriterStatus,
+    writer_after: &WriterStatus,
+    is_writer: bool,
+) -> Option<WriterStatus> {
+    (is_writer && writer_before == writer_after).then(|| writer_after.clone())
+}
+
+fn cached_boundary_verified(
+    cached_writer: Option<&WriterStatus>,
+    current_writer: &WriterStatus,
+    is_writer: bool,
+) -> bool {
+    is_writer && cached_writer == Some(current_writer)
+}
+
+fn cached_boundary_needs_refresh(
+    cached_writer: Option<&WriterStatus>,
+    current_writer: &WriterStatus,
+    is_writer: bool,
+) -> bool {
+    is_writer && cached_writer != Some(current_writer)
+}
+
+#[cfg(test)]
+mod attested_snapshot_tests {
+    use trogon_atlas_core::{Epoch, WriterRole};
+    use trogon_atlas_store::store::WriterStatus;
+
+    use super::{
+        cached_boundary_needs_refresh, cached_boundary_verified, snapshot_boundary_writer,
+    };
+
+    fn status(epoch: u64, holder: &str) -> WriterStatus {
+        WriterStatus {
+            role: WriterRole::Standby,
+            epoch: Epoch::new(epoch),
+            lease_holder: holder.to_string(),
+        }
+    }
+
+    #[test]
+    fn promotion_during_snapshot_load_does_not_verify_its_boundary() {
+        assert!(snapshot_boundary_writer(
+            &status(1, "old-writer"),
+            &status(2, "promoted-writer"),
+            true,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn stable_writer_snapshot_verifies_its_boundary() {
+        let writer = status(2, "writer");
+        assert_eq!(
+            snapshot_boundary_writer(&writer, &writer, true),
+            Some(writer)
+        );
+    }
+
+    #[test]
+    fn cached_snapshot_is_unverified_after_writer_demotion() {
+        let cached = status(2, "writer");
+        let current = status(3, "new-writer");
+        assert!(!cached_boundary_verified(Some(&cached), &current, false));
+    }
+
+    #[test]
+    fn promoted_writer_refreshes_an_unverified_cached_snapshot() {
+        let current = status(3, "promoted-writer");
+        assert!(cached_boundary_needs_refresh(None, &current, true));
+        assert!(cached_boundary_needs_refresh(
+            Some(&status(2, "old-writer")),
+            &current,
+            true,
+        ));
+        assert!(!cached_boundary_needs_refresh(
+            Some(&current),
+            &current,
+            true,
+        ));
+        assert!(!cached_boundary_needs_refresh(None, &current, false));
+    }
+}
+
+/// Entities an attested export names but could not attest from its
+/// snapshot, one row per key in key order. The first cause found wins.
+#[derive(Default)]
+struct Unresolved(BTreeMap<String, pb::AttestedUnresolved>);
+
+impl Unresolved {
+    fn mark(&mut self, key: &pb::EntityKey, cause: UnresolvedCause) {
+        let id = key.id();
+        let name = trogon_atlas_store::key::entity_key(key.kind, &id);
+        self.0
+            .entry(name.clone())
+            .or_insert_with(|| pb::AttestedUnresolved {
+                key: name,
+                entity: Some(pb::EntityRef {
+                    kind: key.kind as i32,
+                    id: Some(id),
+                }),
+                cause: cause as i32,
+            });
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    fn into_rows(self) -> Vec<pb::AttestedUnresolved> {
+        self.0.into_values().collect()
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BranchBoundary {
+    created_at: String,
+    fork_changeset_id: Option<String>,
+    delta_count: u32,
+    newest_changeset: String,
+}
+
+fn attested_lens(lens: &Lens) -> pb::AttestedLens {
+    match lens {
+        Lens::Everything => pb::AttestedLens {
+            unrestricted: true,
+            namespaces: Vec::new(),
+        },
+        Lens::Only(namespaces) => pb::AttestedLens {
+            unrestricted: false,
+            namespaces: namespaces.iter().map(ToString::to_string).collect(),
+        },
+    }
 }
 
 fn branch_not_found(name: &str) -> Status {
