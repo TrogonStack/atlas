@@ -452,12 +452,13 @@ impl Failure {
             } else if code.starts_with("INVARIANT_") {
                 FailureDetails::from_json(json!(metadata))
             } else if code == "EXPORT_INCOMPLETE" {
-                // Comma-joined by the server, like `did_you_mean`.
+                // Comma-joined by the server, like `did_you_mean`, and named as the
+                // CLI names a bundle's reasons.
                 let reasons: Vec<&str> = metadata
                     .get("reasons")
                     .map(|reasons| reasons.split(',').filter(|r| !r.is_empty()).collect())
                     .unwrap_or_default();
-                FailureDetails::from_json(json!({ "reasons": reasons }))
+                FailureDetails::from_json(json!({ "incomplete_reasons": reasons }))
             } else if let Some(source) = metadata
                 .get("source")
                 .filter(|_| code == "SIGNING_KEY_UNAVAILABLE")
@@ -787,7 +788,7 @@ mod tests {
         assert_eq!(failure.category, FailureCategory::Precondition);
         assert_eq!(failure.next_action, NextAction::None);
         assert_eq!(
-            failure.details.0["reasons"],
+            failure.details.0["incomplete_reasons"],
             json!(["REASON_CONCURRENT_WRITE", "REASON_BOUNDARY_UNVERIFIED"])
         );
     }
