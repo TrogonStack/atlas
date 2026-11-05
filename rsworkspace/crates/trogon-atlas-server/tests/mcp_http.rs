@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{atomic::AtomicI64, Arc},
     time::Duration,
 };
@@ -24,6 +24,7 @@ use tonic::transport::{server::TcpIncoming, Server};
 use tonic_health::pb::{health_client::HealthClient, HealthCheckRequest};
 use trogon_atlas_mcp::{
     profile::{ToolProfile, PROFILE_HEADER},
+    prompts::TASK_PROMPTS,
     server::{McpServer, ToolRole, PROFILE_META_KEY, TOOL_POLICIES},
 };
 use trogon_atlas_proto::event_model_service_server::EventModelServiceServer;
@@ -585,6 +586,83 @@ async fn a_tool_outside_the_profile_is_refused_at_dispatch() {
     http.shut_down().await;
 }
 
+fn prompt_names(prompts: &[rmcp::model::Prompt]) -> HashSet<String> {
+    prompts.iter().map(|p| p.name.clone()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prompts_are_listed_only_where_their_tools_are_offered() {
+    let http = McpHttp::start(authenticated_registry()).await;
+    let every: HashSet<String> = TASK_PROMPTS.iter().map(|p| p.name.to_owned()).collect();
+    let reader_can_follow: HashSet<String> = TASK_PROMPTS
+        .iter()
+        .filter(|p| {
+            p.tools.iter().all(|tool| {
+                TOOL_POLICIES
+                    .iter()
+                    .any(|row| row.tool == *tool && row.min_role == ToolRole::Reader)
+            })
+        })
+        .map(|p| p.name.to_owned())
+        .collect();
+
+    let admin = http.client(Some(ADMIN_TOKEN)).await;
+    assert!(admin.peer_info().unwrap().capabilities.prompts.is_some());
+    assert_eq!(
+        prompt_names(&admin.list_all_prompts().await.unwrap()),
+        every
+    );
+    let storyboard = admin
+        .get_prompt(rmcp::model::GetPromptRequestParams::new(
+            "author-storyboard",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(storyboard.messages.len(), 1);
+
+    let reader = http.client(Some(READER_TOKEN)).await;
+    assert_eq!(
+        prompt_names(&reader.list_all_prompts().await.unwrap()),
+        reader_can_follow
+    );
+
+    let repair = http
+        .try_client(Some(ADMIN_TOKEN), Some("repair"))
+        .await
+        .unwrap();
+    assert_eq!(
+        prompt_names(&repair.list_all_prompts().await.unwrap()),
+        every
+    );
+
+    let review = http
+        .try_client(Some(ADMIN_TOKEN), Some("review"))
+        .await
+        .unwrap();
+    assert_eq!(
+        prompt_names(&review.list_all_prompts().await.unwrap()),
+        HashSet::new()
+    );
+    let err = review
+        .get_prompt(rmcp::model::GetPromptRequestParams::new(
+            "author-storyboard",
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("outside the `review` tool profile"),
+        "{err}"
+    );
+    let err = admin
+        .get_prompt(rmcp::model::GetPromptRequestParams::new("everything"))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown prompt"), "{err}");
+
+    http.shut_down().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unknown_profile_is_refused() {
     let http = McpHttp::start(authenticated_registry()).await;
@@ -671,6 +749,261 @@ async fn concurrent_sessions_keep_their_own_profile() {
     assert!(unprofiled_tools.contains("delete_entity"));
     assert!(read_only.peer_info().unwrap().meta.is_some());
     assert!(unprofiled.peer_info().unwrap().meta.is_none());
+
+    http.shut_down().await;
+}
+
+const CLIENT_CONFIG: &str = include_str!("../../../../examples/mcp-client.json");
+const CLIENT_CONFIG_GUIDE: &str = include_str!("../../../../docs/how-to/connect-an-mcp-client.md");
+
+/// The host-neutral `mcpServers` file a client installs, limited to the HTTP
+/// shape Atlas serves. Unknown fields fail the parse, so the example cannot
+/// grow a field this test does not check.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ClientConfig {
+    mcp_servers: std::collections::BTreeMap<String, ClientServer>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClientServer {
+    #[serde(rename = "type")]
+    transport: String,
+    url: String,
+    headers: std::collections::BTreeMap<String, String>,
+}
+
+/// A `${NAME}` environment reference: the only form a credential may take in
+/// a client config.
+struct EnvReference<'a>(&'a str);
+
+impl<'a> EnvReference<'a> {
+    fn parse(value: &'a str) -> Option<Self> {
+        let name = value.strip_prefix("${")?.strip_suffix('}')?;
+        let well_formed = name.starts_with(|c: char| c.is_ascii_uppercase())
+            && name
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+        well_formed.then_some(Self(name))
+    }
+}
+
+impl ClientServer {
+    fn credential(&self) -> EnvReference<'_> {
+        let value = &self.headers["Authorization"];
+        value
+            .strip_prefix("Bearer ")
+            .and_then(EnvReference::parse)
+            .expect("Authorization must be `Bearer ${NAME}`")
+    }
+
+    fn profile(&self) -> ToolProfile {
+        self.headers[PROFILE_HEADER].parse().unwrap()
+    }
+
+    /// The headers a host sends, with each `${NAME}` taken from `env`.
+    fn expanded_headers(
+        &self,
+        env: &HashMap<&str, &str>,
+    ) -> HashMap<http::HeaderName, http::HeaderValue> {
+        self.headers
+            .iter()
+            .map(|(name, value)| {
+                let mut expanded = value.clone();
+                while let Some(start) = expanded.find("${") {
+                    let end = start + expanded[start..].find('}').unwrap();
+                    let reference = &expanded[start + 2..end];
+                    let resolved = env
+                        .get(reference)
+                        .unwrap_or_else(|| panic!("{reference} is unset"));
+                    expanded.replace_range(start..=end, resolved);
+                }
+                (
+                    http::HeaderName::try_from(name.as_str()).unwrap(),
+                    http::HeaderValue::from_str(&expanded).unwrap(),
+                )
+            })
+            .collect()
+    }
+}
+
+fn client_config() -> ClientConfig {
+    serde_json::from_str(CLIENT_CONFIG).unwrap()
+}
+
+/// The task prompts a caller of `role` should see under `profile`.
+fn expected_prompts(role: ToolRole, profile: ToolProfile) -> HashSet<String> {
+    let tools = expected_tools(role, profile);
+    TASK_PROMPTS
+        .iter()
+        .filter(|prompt| prompt.tools.iter().all(|tool| tools.contains(*tool)))
+        .map(|prompt| prompt.name.to_owned())
+        .collect()
+}
+
+#[test]
+fn the_client_config_keeps_credentials_as_references_and_starts_least_privileged() {
+    let config = client_config();
+    assert!(!config.mcp_servers.is_empty());
+    let default_hosts: AllowedHosts = "localhost,127.0.0.1,::1".parse().unwrap();
+    for (name, server) in &config.mcp_servers {
+        assert_eq!(server.transport, "http", "{name}");
+        let uri: http::Uri = server.url.parse().unwrap();
+        assert_eq!(uri.path(), MCP_PATH, "{name}");
+        let AllowedHosts::Only(hosts) = &default_hosts else {
+            unreachable!()
+        };
+        assert!(
+            hosts.iter().any(|host| Some(host.as_str()) == uri.host()),
+            "{name} must reach a host the server accepts by default"
+        );
+        server.credential();
+        assert_eq!(server.profile(), ToolProfile::ReadOnly, "{name}");
+        assert_eq!(
+            server
+                .headers
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["Authorization", PROFILE_HEADER],
+            "{name} sends a header this test does not check"
+        );
+    }
+}
+
+#[test]
+fn rejected_client_config_credentials_do_not_appear_in_panic_output() {
+    let rejected = "literal-api-key-that-must-not-leak";
+    let server = ClientServer {
+        transport: "http".to_owned(),
+        url: "http://localhost:50069/mcp".to_owned(),
+        headers: std::collections::BTreeMap::from([(
+            "Authorization".to_owned(),
+            format!("Bearer {rejected}"),
+        )]),
+    };
+
+    let panic = std::panic::catch_unwind(|| {
+        server.credential();
+    })
+    .unwrap_err();
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap();
+    assert!(!message.contains(rejected), "panic exposed the credential");
+}
+
+#[test]
+fn the_client_config_guide_shows_the_example_and_names_only_offered_tools() {
+    assert!(
+        CLIENT_CONFIG_GUIDE.contains(CLIENT_CONFIG.trim()),
+        "the guide must embed examples/mcp-client.json verbatim"
+    );
+    let authoring_line = format!("\"{PROFILE_HEADER}\": \"{}\"", ToolProfile::Authoring);
+    assert!(
+        CLIENT_CONFIG_GUIDE.contains(&authoring_line),
+        "the guide shows switching to {authoring_line}"
+    );
+    let profile = client_config()
+        .mcp_servers
+        .values()
+        .next()
+        .unwrap()
+        .profile();
+    let offered = expected_tools(ToolRole::Reader, profile);
+    let registered: HashSet<String> = McpServer::registered_tools()
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect();
+    let named: Vec<&str> = CLIENT_CONFIG_GUIDE
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter(|span| {
+            span.contains('_') && span.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+        })
+        .collect();
+    assert!(named.contains(&"who_am_i"), "the guide names a first tool");
+    for tool in named {
+        assert!(
+            registered.contains(tool),
+            "the guide names unknown tool {tool}"
+        );
+        assert!(
+            offered.contains(tool),
+            "the guide names {tool}, which a reader under {profile} is not offered"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_clean_install_from_the_client_config_discovers_its_first_tool_and_prompts() {
+    let config = client_config();
+    let server = config.mcp_servers.values().next().unwrap();
+    let http = McpHttp::start_with_hosts(
+        authenticated_registry(),
+        "localhost,127.0.0.1,::1".parse().unwrap(),
+    )
+    .await;
+    let credential = server.credential();
+    let env = HashMap::from([(credential.0, WRITER_TOKEN)]);
+    let configured: http::Uri = server.url.parse().unwrap();
+    let url = format!("http://{}{}", http.addr, configured.path());
+    let connect = |headers| {
+        ().serve(StreamableHttpClientTransport::from_config(
+            StreamableHttpClientTransportConfig::with_uri(url.clone()).custom_headers(headers),
+        ))
+    };
+
+    let client = connect(server.expanded_headers(&env)).await.unwrap();
+    let info = client.peer_info().unwrap().clone();
+    assert!(
+        info.instructions.as_deref().unwrap().contains("who_am_i"),
+        "{info:?}"
+    );
+    assert_eq!(
+        info.meta.as_ref().unwrap().0[PROFILE_META_KEY],
+        serde_json::json!(server.profile().as_str())
+    );
+    let tools = client.list_all_tools().await.unwrap();
+    let names = tool_names(&tools);
+    assert_eq!(names, expected_tools(ToolRole::Writer, server.profile()));
+    assert!(names.contains("who_am_i"));
+    let who_am_i = client
+        .call_tool(CallToolRequestParams::new("who_am_i"))
+        .await
+        .unwrap();
+    assert_eq!(who_am_i_body(&who_am_i)["role"], "writer");
+    let prompts = client.list_all_prompts().await.unwrap();
+    assert_eq!(
+        prompt_names(&prompts),
+        expected_prompts(ToolRole::Writer, server.profile())
+    );
+    let echoed = serde_json::to_string(&(&info, &tools, &prompts, &who_am_i)).unwrap();
+    assert!(
+        !echoed.contains(WRITER_TOKEN),
+        "the session echoed the bearer token"
+    );
+    assert!(
+        !echoed.contains(credential.0),
+        "the session echoed the credential reference"
+    );
+
+    let mut authoring = server.expanded_headers(&env);
+    authoring.insert(
+        http::HeaderName::from_static(PROFILE_HEADER),
+        http::HeaderValue::from_static(ToolProfile::Authoring.as_str()),
+    );
+    let author = connect(authoring).await.unwrap();
+    let authoring_prompts = prompt_names(&author.list_all_prompts().await.unwrap());
+    assert_eq!(
+        authoring_prompts,
+        expected_prompts(ToolRole::Writer, ToolProfile::Authoring)
+    );
+    assert!(authoring_prompts.contains("author-storyboard"));
 
     http.shut_down().await;
 }

@@ -12,6 +12,8 @@ Enable it on the server with `TROGON_ATLAS_MCP` (see the
 [server README](../trogon-atlas-server/README.md)), then point an MCP client
 at `http://<host>:<grpc-port>/mcp`. The endpoint is stateless, so any replica
 can answer any request.
+[Connect an MCP client](../../../docs/how-to/connect-an-mcp-client.md)
+walks through installing the example client configuration.
 
 The endpoint holds no credential of its own. Each MCP request acts as its
 own `Authorization: Bearer <token>` header, so the server authenticates and
@@ -52,6 +54,18 @@ For validation repairs, use the
 [repair playbook](../../../docs/how-to/repair-validation-findings.md), which
 covers dependency discovery, guarded mutations, verification, and preserving
 the procedure for future runs.
+
+## Task prompts
+
+The server instructions stay within `SERVER_INSTRUCTIONS_BUDGET_BYTES`
+because every session receives them. Task procedures, such as the storyboard
+authoring rules or the validation repair procedure, are MCP prompts instead:
+a session fetches the one for its task with `prompts/get`. Each prompt lives
+in `prompts/` and declares the tools its body names. Crate tests fail when a
+prompt names a tool it does not declare, declares one the registry lacks, or
+is hidden by the profile its task belongs to, and when the instructions name a tool some profile
+hides. The [MCP tool reference](../../../docs/reference/mcp-tools.md#task-prompts)
+lists the prompts.
 
 ## What the tools return
 
