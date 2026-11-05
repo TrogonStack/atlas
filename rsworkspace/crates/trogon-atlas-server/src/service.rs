@@ -451,6 +451,9 @@ struct AsOfView {
     entities: Arc<Vec<StoredEntity>>,
     truncated: bool,
     incomplete: bool,
+    /// Whether the baseline load holds every changeset up to the target,
+    /// as [`cached_boundary_verified`] decides it for the load.
+    boundary_verified: bool,
 }
 
 /// The identity a protection RPC names. A kind, namespace and slug the
@@ -951,14 +954,19 @@ impl EventModelServiceImpl {
     ///
     /// Every newer baseline changeset is undone from its revision rows. A
     /// key a newer changeset touched takes its value from those rows alone,
-    /// so a stale cached snapshot only ever supplies keys that have not
-    /// changed since, and the result does not depend on the cache's age.
+    /// so the cached snapshot only supplies keys that have not changed
+    /// since. That holds only while the cache is at least as new as
+    /// `changeset_id`: a replica's cache can predate it and keep a key's
+    /// older value. `attest` refreshes the cache the way a current
+    /// attested export does, and `boundary_verified` reports whether the
+    /// load can be trusted to hold the target.
     async fn snapshot_as_of(
         &self,
         changeset_id: &str,
         vis: &Visibility,
         principal: Option<&crate::auth::Principal>,
         root: (pb::EntityKind, &pb::Id),
+        attest: bool,
     ) -> Result<AsOfView, Status> {
         // Validates the id and turns an unknown one into NOT_FOUND before
         // any walk starts.
@@ -983,8 +991,12 @@ impl EventModelServiceImpl {
         let BaselineSnapshot {
             entities: mut current,
             truncated,
-            ..
-        } = self.baseline_snapshot_with_truncation().await?;
+            boundary_writer,
+        } = if attest {
+            self.attestation_baseline().await?
+        } else {
+            self.baseline_snapshot_with_truncation().await?
+        };
         let lens = self.lens(vis).await?;
         let newer = self.baseline_changesets_after(changeset_id, &lens).await?;
         let pre_images = self.rewind_pre_images(&newer).await?;
@@ -1116,6 +1128,11 @@ impl EventModelServiceImpl {
             entities,
             truncated,
             incomplete,
+            boundary_verified: cached_boundary_verified(
+                boundary_writer.as_ref(),
+                &self.store.writer_status(),
+                self.store.is_writer(),
+            ),
         })
     }
 
@@ -1231,33 +1248,42 @@ impl EventModelServiceImpl {
         Ok((entities, result.truncated))
     }
 
+    /// The cached baseline, reloaded first when this process holds the
+    /// writer lease but the cache was loaded under another one, so a newly
+    /// promoted writer never attests a load it did not confirm.
+    async fn attestation_baseline(&self) -> Result<BaselineSnapshot, Status> {
+        let snap = self.baseline_snapshot_with_truncation().await?;
+        let writer = self.store.writer_status();
+        let is_writer = self.store.is_writer();
+        if !cached_boundary_needs_refresh(snap.boundary_writer.as_ref(), &writer, is_writer) {
+            return Ok(snap);
+        }
+        let refresh = self
+            .snapshot_cache
+            .read()
+            .await
+            .as_ref()
+            .is_none_or(|candidate| {
+                cached_boundary_needs_refresh(
+                    candidate.boundary_writer.as_ref(),
+                    &writer,
+                    is_writer,
+                )
+            });
+        if !refresh {
+            return Ok(snap);
+        }
+        self.invalidate_snapshot().await;
+        self.baseline_snapshot_with_truncation().await
+    }
+
     async fn snapshot_for_attestation(
         &self,
         branch: Option<&str>,
         vis: &Visibility,
     ) -> Result<(Arc<Vec<StoredEntity>>, bool, bool), Status> {
         let Some(branch) = branch else {
-            let mut snap = self.baseline_snapshot_with_truncation().await?;
-            let writer = self.store.writer_status();
-            let is_writer = self.store.is_writer();
-            if cached_boundary_needs_refresh(snap.boundary_writer.as_ref(), &writer, is_writer) {
-                let refresh = self
-                    .snapshot_cache
-                    .read()
-                    .await
-                    .as_ref()
-                    .is_none_or(|candidate| {
-                        cached_boundary_needs_refresh(
-                            candidate.boundary_writer.as_ref(),
-                            &writer,
-                            is_writer,
-                        )
-                    });
-                if refresh {
-                    self.invalidate_snapshot().await;
-                    snap = self.baseline_snapshot_with_truncation().await?;
-                }
-            }
+            let snap = self.attestation_baseline().await?;
             let all = self.narrow_baseline(snap.entities, vis).await?;
             let writer = self.store.writer_status();
             let boundary_verified = cached_boundary_verified(
@@ -6170,6 +6196,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     &vis,
                     principal.as_ref(),
                     (pb::EntityKind::EventModel, id),
+                    false,
                 )
                 .await?;
             // The live row may be gone or newer, so the root comes from the
@@ -6411,14 +6438,19 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     entities: all,
                     truncated,
                     incomplete,
+                    boundary_verified,
                 } = self
                     .snapshot_as_of(
                         &req.as_of_changeset,
                         &vis,
                         principal.as_ref(),
                         (pb::EntityKind::EventModel, &requested_id),
+                        true,
                     )
                     .await?;
+                if !boundary_verified {
+                    reasons.insert(Reason::BoundaryUnverified);
+                }
                 let root = event_model_in(&all, &requested_id)
                     .ok_or_else(|| store_err(trogon_atlas_store::error::StoreError::NotFound))?;
                 (
@@ -6432,6 +6464,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 let (all, truncated, boundary_verified) = self
                     .snapshot_for_attestation(branch.as_deref(), &vis)
                     .await?;
+                // A mutation commits its entities before it records its
+                // changeset, both under the mutation lock. Waiting for the
+                // lock lets one the snapshot caught midway record first, so
+                // the changeset read next covers everything the snapshot holds.
+                drop(self.lock_mutations().await);
                 baseline_read = Some(self.newest_changeset(ChangesetScope::Baseline).await?);
                 let root = if let Some(root) = event_model_in(&all, &requested_id) {
                     root
