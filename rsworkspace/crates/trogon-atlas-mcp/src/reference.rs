@@ -8,6 +8,7 @@ use rmcp::model::Tool;
 
 use crate::{
     profile::{ToolEffect, ToolProfile},
+    prompts::{TaskPrompt, TASK_PROMPTS},
     server::{McpServer, ToolPolicy, TOOL_POLICIES},
 };
 
@@ -33,8 +34,54 @@ pub struct RegistryMismatch {
 
 /// The reference for the tools this crate registers.
 pub fn generate() -> Result<String, RegistryMismatch> {
-    render(&McpServer::registered_tools(), TOOL_POLICIES)
+    let tools = McpServer::registered_tools();
+    let mut out = render(&tools, TOOL_POLICIES)?;
+    out.push_str(&render_prompts(&tools, TASK_PROMPTS));
+    Ok(out)
 }
+
+/// The task prompts section. A profile offers a prompt only when it offers
+/// every tool the prompt names.
+pub fn render_prompts(tools: &[Tool], prompts: &[TaskPrompt]) -> String {
+    let mut out = String::from(PROMPTS_HEADER);
+    for prompt in prompts {
+        let named: Vec<&Tool> = prompt
+            .tools
+            .iter()
+            .filter_map(|name| tools.iter().find(|tool| tool.name == *name))
+            .collect();
+        let homes: Vec<&str> = ToolProfile::ALL
+            .iter()
+            .filter(|profile| named.iter().all(|tool| profile.admits(tool)))
+            .map(|profile| profile.as_str())
+            .collect();
+        let _ = writeln!(
+            out,
+            "| `{}` | {} | {} | {} |",
+            prompt.name,
+            cell(prompt.description),
+            code_list(prompt.tools.iter().copied()),
+            if homes.is_empty() {
+                "none".to_owned()
+            } else {
+                code_list(homes.into_iter())
+            },
+        );
+    }
+    out
+}
+
+const PROMPTS_HEADER: &str = "
+## Task prompts
+
+Each task procedure is an MCP prompt, fetched with `prompts/get` by the
+session doing that task, so the server instructions stay short. A session is
+offered a prompt only when its profile, and its role when known, offer every
+tool the prompt names.
+
+| Prompt | Description | Tools | Profiles |
+| --- | --- | --- | --- |
+";
 
 pub fn render(tools: &[Tool], policies: &[ToolPolicy]) -> Result<String, RegistryMismatch> {
     let mut rows: Vec<(&Tool, &ToolPolicy)> = Vec::with_capacity(tools.len());
@@ -201,7 +248,7 @@ mod tests {
         let first = render(&tools, TOOL_POLICIES).unwrap();
         tools.reverse();
         assert_eq!(first, render(&tools, TOOL_POLICIES).unwrap());
-        assert_eq!(first, generate().unwrap());
+        assert!(generate().unwrap().starts_with(&first));
     }
 
     fn tool(name: &'static str, annotations: ToolAnnotations) -> Tool {
@@ -248,6 +295,24 @@ mod tests {
         assert!(with
             .contains("| `beta` | writer | destructive | no | none | `PutBeta`, `DeleteBeta` |"));
         assert!(with.find("`alpha`") < with.find("`beta`"));
+    }
+
+    #[test]
+    fn a_prompt_row_lists_only_the_profiles_offering_all_its_tools() {
+        let prompt = TaskPrompt {
+            name: "tidy",
+            title: "Tidy",
+            description: "Removes | things.",
+            body: "",
+            tools: &["who_am_i", "delete_entity"],
+        };
+        let out = render_prompts(&McpServer::registered_tools(), &[prompt]);
+        assert!(
+            out.contains(
+                "| `tidy` | Removes \\| things. | `who_am_i`, `delete_entity` | `repair` |"
+            ),
+            "{out}"
+        );
     }
 
     #[test]
