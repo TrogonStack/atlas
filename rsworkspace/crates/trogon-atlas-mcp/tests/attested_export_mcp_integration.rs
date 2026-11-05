@@ -1,7 +1,8 @@
 //! `export_attested_model` and `verify_attested_bundle` through a real MCP
 //! session against an in-process gRPC server: a complete export verifies, an
 //! edited bundle does not, and a partial export is refused unless the caller
-//! asks for one marked incomplete.
+//! asks for one marked incomplete. A bundle at the size limit still fits in
+//! an HTTP request once it is escaped as an argument.
 //!
 //! The store is shared across tests, so every test writes into its own
 //! namespace.
@@ -311,4 +312,38 @@ async fn partial_export_is_refused_unless_allowed_and_then_marked() {
     assert_eq!(verified["unresolved"], marked["unresolved"]);
 
     service.cancel().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bundle_within_the_limit_reaches_verify_over_http() {
+    let app = trogon_atlas_mcp::router(
+        support::mcp_server("http://127.0.0.1:1", None),
+        trogon_atlas_mcp::AllowedHosts::Any,
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = ()
+        .serve(rmcp::transport::StreamableHttpClientTransport::from_uri(
+            format!("http://{address}{}", trogon_atlas_mcp::MCP_PATH),
+        ))
+        .await
+        .unwrap();
+
+    // Every escaped quote doubles once the argument is itself escaped, so this
+    // request body is about twice the 4 MiB the tool accepts.
+    let quotes = "\\\"".repeat((trogon_atlas_mcp::server::MAX_JSON_BYTES - 16) / 2);
+    let bundle_json = format!("{{\"model\":\"{quotes}\"}}");
+    assert!(bundle_json.len() <= trogon_atlas_mcp::server::MAX_JSON_BYTES);
+
+    let result = verify(&client, &bundle_json).await;
+    assert_eq!(result.is_error, Some(true), "{result:?}");
+    let result = body(&result);
+    assert_eq!(result["verified"], false, "{result}");
+    assert!(
+        !result["error"].as_str().unwrap().contains("4 MiB"),
+        "{result}"
+    );
+
+    client.cancel().await.unwrap();
 }

@@ -16,6 +16,13 @@ use rmcp::transport::streamable_http_server::{
 
 pub const MCP_PATH: &str = "/mcp";
 
+/// Largest JSON-RPC request body the endpoint reads. A JSON text passed as a
+/// string argument grows when escaped, up to threefold for characters a
+/// client writes as `\u` surrogate pairs, so this leaves room for a
+/// [`server::MAX_JSON_BYTES`] argument and its envelope. Each tool still
+/// enforces its own limit on the decoded argument.
+pub const MAX_REQUEST_BODY_BYTES: usize = 3 * server::MAX_JSON_BYTES + 1024 * 1024;
+
 /// Host header allow-list guarding the MCP endpoint against DNS rebinding.
 /// Entries without a port match any port; `*` turns the check off.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,7 +59,8 @@ pub fn router(server: server::McpServer, allowed_hosts: AllowedHosts) -> Router 
     let config = StreamableHttpServerConfig::default()
         .with_legacy_session_mode(false)
         .with_json_response(true)
-        .with_sse_keep_alive(None);
+        .with_sse_keep_alive(None)
+        .with_max_request_body_bytes(MAX_REQUEST_BODY_BYTES);
     let config = match allowed_hosts {
         AllowedHosts::Any => config.disable_allowed_hosts(),
         AllowedHosts::Only(hosts) => config.with_allowed_hosts(hosts),
