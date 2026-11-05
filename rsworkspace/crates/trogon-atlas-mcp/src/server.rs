@@ -5152,7 +5152,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Export a stored EventModel as an attested bundle: its manifests, its validation findings and coverage, and the snapshot both were read from, sealed by one digest that verify_attested_bundle checks offline. Reads only what the caller may see. Refuses with EXPORT_INCOMPLETE (data.next_action_detail.incomplete_reasons) when the export cannot cover its whole scope, unless allow_incomplete is set; then complete is false and incomplete_reasons and unresolved say why. Set include_bundle to receive the bundle itself.",
+        description = "Export a stored EventModel as an attested bundle: its manifests, its validation findings and coverage, and the snapshot both were read from, sealed by one digest that verify_attested_bundle checks offline. Reads only what the caller may see. Refuses with EXPORT_INCOMPLETE (data.next_action_detail.incomplete_reasons) when the export cannot cover its whole scope, unless allow_incomplete is set; then complete is false and incomplete_reasons and unresolved say why. Set include_bundle to receive the bundle itself in bundle_json; a bundle over 4 MiB is left out with bundle_omitted exceeds_mcp_limit.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
