@@ -47,8 +47,10 @@ bump-only.
 5. **Bump the rest.**
    Bump-only dependents need only their pinned reference rewritten, for
    example with `retarget_references`. The answer holds for the
-   `snapshot_id` it reports; if `get_snapshot_id` returns a different value
-   before you land, classify again.
+   `snapshot_id` it reports. Run `classify-impact` again before landing.
+   Namespace-scoped readers must not use `get_snapshot_id` alone for this
+   recheck: a hidden dependent can change the verdict without changing the
+   visible snapshot ID.
 
 The [impact classification reference](../reference/impact-classification.md)
 lists every rule and reason.

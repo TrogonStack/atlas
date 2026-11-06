@@ -151,7 +151,63 @@ fn merge_page(
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use std::{
+        convert::Infallible,
+        pin::Pin,
+        sync::{Arc, Mutex},
+    };
+
+    use http_body::Body as _;
+    use prost::Message;
+    use tonic::body::Body;
+
     use super::*;
+    use crate::client::{client_for_transport, ConnectOptions, Transport};
+
+    struct ReplyBody(Option<bytes::Bytes>);
+
+    impl http_body::Body for ReplyBody {
+        type Data = bytes::Bytes;
+        type Error = Infallible;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+            std::task::Poll::Ready(self.0.take().map(|bytes| Ok(http_body::Frame::data(bytes))))
+        }
+    }
+
+    fn grpc_response(message: impl Message) -> http::Response<ReplyBody> {
+        let message = message.encode_to_vec();
+        let mut frame = vec![0];
+        frame.extend_from_slice(&u32::try_from(message.len()).unwrap().to_be_bytes());
+        frame.extend_from_slice(&message);
+        http::Response::builder()
+            .header("content-type", "application/grpc")
+            .header("grpc-status", "0")
+            .body(ReplyBody(Some(frame.into())))
+            .unwrap()
+    }
+
+    fn entity_ref(slug: &str) -> pb::EntityRef {
+        pb::EntityRef {
+            kind: pb::EntityKind::ReadModel as i32,
+            id: Some(pb::Id {
+                namespace: "orders".into(),
+                slug: slug.into(),
+                version: 1,
+            }),
+        }
+    }
+
+    fn dependent(slug: &str) -> pb::DependentImpact {
+        pb::DependentImpact {
+            dependent: Some(entity_ref(slug)),
+            classification: pb::DependentClassification::BumpOnly as i32,
+            ..Default::default()
+        }
+    }
 
     fn reading(verdict: pb::DependentClassification, incomplete: bool) -> ImpactVerdict {
         reading_pages(verdict, incomplete, PageSnapshots::Consistent)
@@ -229,6 +285,89 @@ mod tests {
                 pb::ImpactIncompleteness::SnapshotTruncated as i32,
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn classify_reads_every_page_and_reports_mixed_snapshots() {
+        let tokens = Arc::new(Mutex::new(Vec::new()));
+        let service_tokens = Arc::clone(&tokens);
+        let transport = Transport::new(tower::service_fn(move |request: http::Request<Body>| {
+            let tokens = Arc::clone(&service_tokens);
+            async move {
+                if request.uri().path().ends_with("/GetServerInfo") {
+                    return Ok::<_, Infallible>(grpc_response(pb::GetServerInfoResponse {
+                        features: Some(pb::get_server_info_response::Features {
+                            impact_classification: true,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }));
+                }
+
+                assert!(request.uri().path().ends_with("/ClassifyImpact"));
+                let mut body = request.into_body();
+                let mut wire = Vec::new();
+                while let Some(frame) =
+                    std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx)).await
+                {
+                    if let Ok(data) = frame.unwrap().into_data() {
+                        wire.extend_from_slice(&data);
+                    }
+                }
+                let request = pb::ClassifyImpactRequest::decode(&wire[5..]).unwrap();
+                tokens.lock().unwrap().push(request.page_token.clone());
+
+                let response = if request.page_token.is_empty() {
+                    pb::ClassifyImpactResponse {
+                        verdict: pb::DependentClassification::BumpOnly as i32,
+                        dependents: vec![dependent("projection")],
+                        next_page_token: "second-page".into(),
+                        snapshot_id: "snapshot-a".into(),
+                        ..Default::default()
+                    }
+                } else {
+                    assert_eq!(request.page_token, "second-page");
+                    pb::ClassifyImpactResponse {
+                        verdict: pb::DependentClassification::BumpOnly as i32,
+                        dependents: vec![dependent("dashboard")],
+                        snapshot_id: "snapshot-b".into(),
+                        ..Default::default()
+                    }
+                };
+                Ok(grpc_response(response))
+            }
+        }));
+        let mut client = client_for_transport(transport, None, &ConnectOptions::default()).unwrap();
+
+        let result = classify(
+            &mut client,
+            entity_ref("current"),
+            entity_ref("candidate"),
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(tokens.lock().unwrap().as_slice(), ["", "second-page"]);
+        assert_eq!(
+            result
+                .response()
+                .dependents
+                .iter()
+                .map(|dependent| dependent
+                    .dependent
+                    .as_ref()
+                    .unwrap()
+                    .id
+                    .as_ref()
+                    .unwrap()
+                    .slug
+                    .as_str())
+                .collect::<Vec<_>>(),
+            ["projection", "dashboard"]
+        );
+        assert_eq!(result.pages(), PageSnapshots::Mixed);
+        assert_eq!(result.verdict(), ImpactVerdict::Unknown);
     }
 
     #[test]
