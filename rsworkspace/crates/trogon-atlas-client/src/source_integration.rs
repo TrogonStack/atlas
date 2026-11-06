@@ -225,14 +225,16 @@ pub async fn create_source_mapping(
     client: &mut Client,
     request: pb::CreateSourceMappingRequest,
 ) -> Result<Value> {
-    let response = client
-        .clone()
-        .max_encoding_message_size(MAX_SOURCE_MESSAGE_BYTES)
-        .max_decoding_message_size(MAX_SOURCE_MESSAGE_BYTES)
-        .create_source_mapping(request)
-        .await
-        .context("CreateSourceMapping failed")?
-        .into_inner();
+    let response = Box::pin(
+        client
+            .clone()
+            .max_encoding_message_size(MAX_SOURCE_MESSAGE_BYTES)
+            .max_decoding_message_size(MAX_SOURCE_MESSAGE_BYTES)
+            .create_source_mapping(request),
+    )
+    .await
+    .context("CreateSourceMapping failed")?
+    .into_inner();
     crate::source_codec::response_json(
         client,
         "trogonatlas.api.eventmodel.v1alpha1.CreateSourceMappingResponse",
@@ -246,14 +248,16 @@ pub async fn update_source_mapping(
     client: &mut Client,
     request: pb::UpdateSourceMappingRequest,
 ) -> Result<Value> {
-    let response = client
-        .clone()
-        .max_encoding_message_size(MAX_SOURCE_MESSAGE_BYTES)
-        .max_decoding_message_size(MAX_SOURCE_MESSAGE_BYTES)
-        .update_source_mapping(request)
-        .await
-        .context("UpdateSourceMapping failed")?
-        .into_inner();
+    let response = Box::pin(
+        client
+            .clone()
+            .max_encoding_message_size(MAX_SOURCE_MESSAGE_BYTES)
+            .max_decoding_message_size(MAX_SOURCE_MESSAGE_BYTES)
+            .update_source_mapping(request),
+    )
+    .await
+    .context("UpdateSourceMapping failed")?
+    .into_inner();
     crate::source_codec::response_json(
         client,
         "trogonatlas.api.eventmodel.v1alpha1.UpdateSourceMappingResponse",
