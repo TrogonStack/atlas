@@ -18,6 +18,7 @@ pub enum Capability {
     TypeLibraries,
     ImpactClassification,
     EntityProtection,
+    AsOfTime,
 }
 
 impl Capability {
@@ -31,6 +32,7 @@ impl Capability {
             Capability::TypeLibraries => features.type_libraries,
             Capability::ImpactClassification => features.impact_classification,
             Capability::EntityProtection => features.entity_protection,
+            Capability::AsOfTime => features.as_of_time,
         }
     }
 
@@ -45,6 +47,7 @@ impl Capability {
             Capability::TypeLibraries => "type_libraries",
             Capability::ImpactClassification => "impact_classification",
             Capability::EntityProtection => "entity_protection",
+            Capability::AsOfTime => "as_of_time",
         }
     }
 }
@@ -288,6 +291,15 @@ mod tests {
         assert!(!Capability::TypeLibraries.advertised_by(&features));
         features.type_libraries = true;
         assert!(Capability::TypeLibraries.advertised_by(&features));
+    }
+
+    #[test]
+    fn as_of_time_capability_reflects_the_feature_flag() {
+        assert_eq!(Capability::AsOfTime.feature_flag(), "as_of_time");
+        let mut features = pb::get_server_info_response::Features::default();
+        assert!(!Capability::AsOfTime.advertised_by(&features));
+        features.as_of_time = true;
+        assert!(Capability::AsOfTime.advertised_by(&features));
     }
 
     #[test]

@@ -831,6 +831,7 @@ message GetServerInfoResponse {
     bool type_libraries = 18;                 // CompileTypeLibrary, ResolveType, GetTypeLibraryDescriptorSet
     bool entity_protection = 19;              // ProtectEntity, UnprotectEntity; writes to a protected identity refuse with ENTITY_PROTECTED, or PROTECTION_STATE_UNKNOWN when its row cannot be read; ProtectionAnnotation is never stored
     bool impact_classification = 20;          // ClassifyImpact
+    bool as_of_time = 21;                     // GetEventModelProjection.as_of_time; an older server would return the current model
   }
   Features features = 3;
 

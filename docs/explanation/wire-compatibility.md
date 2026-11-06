@@ -170,6 +170,12 @@ is read-only. A client that relies on impact classification requires the
 feature before it sends the request, so an older server refuses it rather
 than silently substituting a different impact contract.
 
+Contract revision 23 adds `GetEventModelProjection.as_of_time` and the
+`as_of_time` feature flag. The floors stay at 20 because the read is
+optional. A client that sends the instant requires the feature first, so an
+older server refuses it rather than ignoring the field and returning the
+current model.
+
 ## Supported combinations
 
 | Client vs server | Mutations |
@@ -201,7 +207,7 @@ drift.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
 
-The current contract revision is 22, with both mutation compatibility floors
+The current contract revision is 23, with both mutation compatibility floors
 at 20. Native catalog context writers preserve Decision dates, makers and
 amendments, Term domain ownership, and Document content and classifications.
 CalendarDate uses the shared type package. It requires no breaking-change

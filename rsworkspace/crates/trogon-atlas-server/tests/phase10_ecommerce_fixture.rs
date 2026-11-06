@@ -905,6 +905,7 @@ async fn fixture_projection_event_model() {
             id: Some(id(NS, "ecommerce", 1)),
             include_cross_model: false,
             as_of_changeset: String::new(),
+            as_of_time: String::new(),
         }))
         .await
         .unwrap()
