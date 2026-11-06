@@ -107,6 +107,9 @@ struct_excessive_bools = "allow"
 # Every gRPC handler and its helpers return tonic::Status, which is what trips this;
 # boxing it would fight the framework's own signatures, generated code included.
 result_large_err = "allow"
+# tonic 0.14.9 gRPC client call futures exceed clippy's default 16KB stack threshold;
+# boxing every gRPC client call in internal code and test fixtures fights tonic's API.
+large_futures = "allow"
 
 [profile.release]
 lto = "thin"
