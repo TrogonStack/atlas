@@ -36,8 +36,8 @@ bump-only.
 
 4. **Resolve every unknown.**
    Read `incompleteness` first. `DEPTH_LIMITED` means raise `--max-depth` when
-   it is below 16. The server caps the walk at 16; at that cap, continue the
-   incoming-reference walk by hand with `get_incoming_references`.
+   it is below 16. The server caps the walk at 16; at that cap, continue with
+   the manual incoming-reference walk below.
    `HIDDEN_DEPENDENTS` means someone with a wider view must run the
    classification; `SNAPSHOT_TRUNCATED` means the server's snapshot cap is too
    small for the model; `UNRESOLVED_REFERRERS` means a referrer could not be
@@ -62,25 +62,30 @@ it is how to audit an answer:
    candidate. Paths look like `schema.fields[amount]`, with
    `.kind`, `.repeated`, `.optional`, `.doc` and `.metadata` suffixes for
    changes within a field.
-2. Call `get_incoming_references` on the current entity. Repeat the call for
-   each newly discovered exact referrer, keeping a visited set of exact
-   entity identities, until no new referrer appears or the 16-hop server cap
-   is reached. This transitive incoming-only walk is the dependent set.
+2. Collect every incoming referrer of the current entity, then of each newly
+   discovered exact referrer. Keep a visited set of exact entity identities,
+   and stop when no new referrer appears or the 16-hop server cap is reached.
+   At each hop, follow `next_page_token` on `GetIncomingReferences` until it
+   is empty before expanding the next hop. MCP `get_incoming_references`
+   returns only the first page and accepts no page token, so a complete hop
+   goes through gRPC. Skip the candidate wherever it appears: it is not a
+   dependent, and its own referrers are not part of this walk, even when its
+   `supersedes` points at the current version. What remains is the dependent
+   set.
 3. For each dependent, intersect the fields its reference sites consume with
-   the removals and type or cardinality changes from step 1.
+   the removals and type or cardinality changes from the diff.
 4. Do not treat additions as harmless. A projection must project every field
    its source event carries, and an event must source every field from its
    command, so adding a field breaks those consumers.
 
-`ClassifyImpact` names the same dependents as the transitive procedure in step
-2 and uses the same ops as
-step 1.
+`ClassifyImpact` names the same dependents as that walk and uses the same ops
+as `diff_entities`.
 
 ## Notes
 
 - The blast radius belongs to the old entity. Nothing new has to exist under
   the real name; a scratch draft is enough for the candidate.
 - `get_incoming_references` is the depth-1 subset of the dependents; use it
-  when only direct referrers matter.
+  when only direct referrers matter. MCP returns the first page only.
 - After landing, `SLICE_STALE_REF` findings from `validate_project` are the
   live checklist that the bump-only set actually got bumped.
