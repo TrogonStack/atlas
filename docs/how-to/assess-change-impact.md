@@ -36,8 +36,8 @@ bump-only.
 
 4. **Resolve every unknown.**
    Read `incompleteness` first. `DEPTH_LIMITED` means raise `--max-depth` when
-   it is below 16. The server caps the walk at 16; at that cap, continue with
-   the manual incoming-reference walk below.
+   it is below 16. The server caps the walk at 16; at that cap, continue past
+   it by hand, as the continuation below describes.
    `HIDDEN_DEPENDENTS` means someone with a wider view must run the
    classification; `SNAPSHOT_TRUNCATED` means the server's snapshot cap is too
    small for the model; `UNRESOLVED_REFERRERS` means a referrer could not be
@@ -64,22 +64,32 @@ it is how to audit an answer:
    changes within a field.
 2. Collect every incoming referrer of the current entity, then of each newly
    discovered exact referrer. Keep a visited set of exact entity identities,
-   and stop when no new referrer appears or the 16-hop server cap is reached.
+   and stop when no new referrer appears. Stop at 16 hops to audit a
+   `ClassifyImpact` answer: that capped set is the one the RPC names. When
+   the answer is `DEPTH_LIMITED` at that cap, keep the same walk going past
+   16 hops. Referrers found only past the cap are the ones the RPC omitted.
    At each hop, follow `next_page_token` on `GetIncomingReferences` until it
    is empty before expanding the next hop. MCP `get_incoming_references`
    returns only the first page and accepts no page token, so a complete hop
    goes through gRPC. Skip the candidate wherever it appears: it is not a
    dependent, and its own referrers are not part of this walk, even when its
-   `supersedes` points at the current version. What remains is the dependent
-   set.
-3. For each dependent, intersect the fields its reference sites consume with
-   the removals and type or cardinality changes from the diff.
+   `supersedes` points at the current version.
+3. Classify a direct dependent by intersecting the fields its reference
+   sites consume with the removals and type or cardinality changes from the
+   diff. A transitive dependent does not reference the current entity, so
+   its sites are not intersected with that diff. Read each `through` link.
+   A link to a bump-only dependent inherits bump-only. A link to a breaking
+   or unknown dependent is unknown (`TRANSITIVE_THROUGH_AFFECTED`); inspect
+   that intermediate. A UI slice that only points at a breaking read model
+   is unknown for this reason, and the break to fix is on the read model.
 4. Do not treat additions as harmless. A projection must project every field
    its source event carries, and an event must source every field from its
    command, so adding a field breaks those consumers.
 
-`ClassifyImpact` names the same dependents as that walk and uses the same ops
-as `diff_entities`.
+`ClassifyImpact` names the same dependents as the walk that stops at 16 hops
+and uses the same ops as `diff_entities`. Referrers found only by continuing
+past that cap are outside its answer. A transitive unknown is the
+`through` link above, not a second diff of the root.
 
 ## Notes
 
