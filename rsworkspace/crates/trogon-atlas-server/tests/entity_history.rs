@@ -1161,6 +1161,19 @@ async fn as_of_time_reads_the_board_of_the_changeset_at_that_instant() {
     ))
     .await
     .unwrap();
+    let event_changeset = newest_changeset(&mut c).await;
+    let event_millis = minted_millis(&event_changeset);
+    // The model has to be minted in a later millisecond. One millisecond
+    // before it is otherwise also before every readable changeset, and the
+    // server answers FAILED_PRECONDITION instead of the model's absence.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while minted_millis(&uuid::Uuid::now_v7().to_string()) <= event_millis {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "clock did not pass the event changeset's millisecond"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
     c.put_entity(as_author(
         put_req(event_model(ns, "checkout", &["order-placed"])),
         "alice",
@@ -1168,6 +1181,10 @@ async fn as_of_time_reads_the_board_of_the_changeset_at_that_instant() {
     .await
     .unwrap();
     let target = newest_changeset(&mut c).await;
+    assert!(
+        minted_millis(&target) > event_millis,
+        "model changeset {target} was not minted after event {event_changeset}"
+    );
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     c.put_entity(as_author(
         put_req(event(ns, "order-placed", "Order was placed")),
