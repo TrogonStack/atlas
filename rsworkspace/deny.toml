@@ -4,6 +4,7 @@ targets = []
 [advisories]
 ignore = [
   { id = "RUSTSEC-2026-0381", reason = "0.26.11 only reexports patched 1.x roots; bans below reject every affected version except this data-free shim" },
+  { id = "RUSTSEC-2026-0440", reason = "testsupport's testcontainers 0.27 depends on astral-tokio-tar, which is unmaintained with no patched release; nothing outside tests reaches it" },
 ]
 
 [licenses]
