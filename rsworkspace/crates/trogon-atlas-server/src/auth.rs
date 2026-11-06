@@ -223,6 +223,7 @@ pub fn required_role(grpc_path: &str) -> Option<Role> {
             Role::Reader
         }
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetImpact" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ClassifyImpact" => Role::Reader,
 
         // Denormalized projections
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSliceProjection" => Role::Reader,
@@ -1256,6 +1257,7 @@ namespaces = ["orders/*"]
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetIncomingReferences",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetOutgoingReferences",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetImpact",
+            "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/ClassifyImpact",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSliceProjection",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetStoryboardProjection",
             "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetEventModelProjection",

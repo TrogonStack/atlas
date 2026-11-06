@@ -955,7 +955,8 @@ fn diff_field_list(
         a.iter().map(|f| (f.name.as_str(), f)).collect();
     let by_name_b: std::collections::HashMap<&str, &pb::FieldSpec> =
         b.iter().map(|f| (f.name.as_str(), f)).collect();
-    for (name, fa) in &by_name_a {
+    for fa in a {
+        let name = fa.name.as_str();
         match by_name_b.get(name) {
             None => ops.push(pb::DiffOp {
                 kind: pb::DiffOpKind::Removed as i32,
@@ -1002,10 +1003,55 @@ fn diff_field_list(
                         doc: String::new(),
                     });
                 }
+                for (facet, before, after) in [
+                    ("repeated", fa.repeated, fb.repeated),
+                    ("optional", fa.optional, fb.optional),
+                ] {
+                    if before != after {
+                        ops.push(pb::DiffOp {
+                            kind: pb::DiffOpKind::Changed as i32,
+                            path: format!("{base_path}[{name}].{facet}"),
+                            path_b: String::new(),
+                            before: before.to_string(),
+                            after: after.to_string(),
+                            doc: String::new(),
+                        });
+                    }
+                }
+                if fa.metadata != fb.metadata {
+                    let values = |f: &pb::FieldSpec| {
+                        use sha2::{Digest as _, Sha256};
+                        f.metadata
+                            .iter()
+                            .map(|m| {
+                                let digest = Sha256::digest(&m.value);
+                                let digest =
+                                    digest
+                                        .iter()
+                                        .fold(String::with_capacity(64), |mut s, byte| {
+                                            use std::fmt::Write as _;
+                                            let _ = write!(s, "{byte:02x}");
+                                            s
+                                        });
+                                format!("{}#{digest}", m.type_url)
+                            })
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    };
+                    ops.push(pb::DiffOp {
+                        kind: pb::DiffOpKind::Changed as i32,
+                        path: format!("{base_path}[{name}].metadata"),
+                        path_b: String::new(),
+                        before: values(fa),
+                        after: values(fb),
+                        doc: String::new(),
+                    });
+                }
             }
         }
     }
-    for (name, fb) in &by_name_b {
+    for fb in b {
+        let name = fb.name.as_str();
         if !by_name_a.contains_key(name) {
             ops.push(pb::DiffOp {
                 kind: pb::DiffOpKind::Added as i32,
@@ -1468,6 +1514,65 @@ mod tests {
                 ..Default::default()
             })),
         }
+    }
+
+    #[test]
+    fn field_cardinality_and_metadata_changes_are_reported_per_field() {
+        let field = |repeated, optional, metadata: Vec<prost_types::Any>| pb::FieldSpec {
+            name: "amount".into(),
+            repeated,
+            optional,
+            metadata,
+            ..Default::default()
+        };
+        let annotation = prost_types::Any {
+            type_url: "type.googleapis.com/example.Unit".into(),
+            value: vec![1],
+        };
+        let mut ops = Vec::new();
+        diff_field_list(
+            &mut ops,
+            "schema.fields",
+            &[field(false, false, Vec::new())],
+            &[field(true, true, vec![annotation])],
+        );
+        let mut paths: Vec<&str> = ops.iter().map(|op| op.path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(
+            paths,
+            [
+                "schema.fields[amount].metadata",
+                "schema.fields[amount].optional",
+                "schema.fields[amount].repeated",
+            ]
+        );
+        assert!(ops
+            .iter()
+            .all(|op| op.kind == pb::DiffOpKind::Changed as i32));
+
+        let mut value_ops = Vec::new();
+        diff_field_list(
+            &mut value_ops,
+            "schema.fields",
+            &[field(
+                false,
+                false,
+                vec![prost_types::Any {
+                    type_url: "type.googleapis.com/example.Unit".into(),
+                    value: vec![1],
+                }],
+            )],
+            &[field(
+                false,
+                false,
+                vec![prost_types::Any {
+                    type_url: "type.googleapis.com/example.Unit".into(),
+                    value: vec![2],
+                }],
+            )],
+        );
+        assert_eq!(value_ops.len(), 1);
+        assert_ne!(value_ops[0].before, value_ops[0].after);
     }
 
     #[test]

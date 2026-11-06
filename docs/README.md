@@ -48,6 +48,7 @@ Look up exact behavior:
 - [Connection identity](reference/connection-identity.md)
 - [Reliability validation rules](reference/reliability-rules.md)
 - [`trogon-atlas` exit codes](reference/trogon-atlas-exit-codes.md)
+- [Impact classification](reference/impact-classification.md)
 - [Entity protection commands](reference/entity-protection-commands.md)
 
 Resource contracts and acceptance:
