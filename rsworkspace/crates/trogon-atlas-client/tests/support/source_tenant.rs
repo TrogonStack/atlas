@@ -81,33 +81,32 @@ pub async fn prepare(endpoint: &str, token: &str, namespace: String) -> Value {
         .as_str()
         .unwrap()
         .to_owned();
-    admin
-        .create_source_mapping(pb::CreateSourceMappingRequest {
-            registration_revision: registration_revision.clone(),
-            mapping: Some(pb::SourceMapping {
-                id: "surface-priced-schema".into(),
-                source: Some(key.clone()),
-                selection: Some(pb::SourceSelection {
-                    selection: Some(pb::source_selection::Selection::Entity(
-                        observed.owner.clone().unwrap(),
-                    )),
-                }),
-                ownership: Some(pb::SourceFieldOwnership {
-                    policy: Some(pb::source_field_ownership::Policy::Fields(
-                        pb::SourceOwnedFields {
-                            fields: vec![pb::SourceOwnedField::Schema as i32],
-                        },
-                    )),
-                }),
-                adoption: Some(pb::SourceAdoption {
-                    observed: Some(observed.clone()),
-                    authorized_adoption: true,
-                }),
-                ..Default::default()
+    Box::pin(admin.create_source_mapping(pb::CreateSourceMappingRequest {
+        registration_revision: registration_revision.clone(),
+        mapping: Some(pb::SourceMapping {
+            id: "surface-priced-schema".into(),
+            source: Some(key.clone()),
+            selection: Some(pb::SourceSelection {
+                selection: Some(pb::source_selection::Selection::Entity(
+                    observed.owner.clone().unwrap(),
+                )),
             }),
-        })
-        .await
-        .unwrap();
+            ownership: Some(pb::SourceFieldOwnership {
+                policy: Some(pb::source_field_ownership::Policy::Fields(
+                    pb::SourceOwnedFields {
+                        fields: vec![pb::SourceOwnedField::Schema as i32],
+                    },
+                )),
+            }),
+            adoption: Some(pb::SourceAdoption {
+                observed: Some(observed.clone()),
+                authorized_adoption: true,
+            }),
+            ..Default::default()
+        }),
+    }))
+    .await
+    .unwrap();
     let supplied = manifest("9007199254740994", "{z: last, a: first}");
     let incoming = source::native_payload(&mut admin, key.clone(), supplied.as_bytes())
         .await
