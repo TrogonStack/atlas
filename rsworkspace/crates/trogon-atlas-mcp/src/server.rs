@@ -563,7 +563,7 @@ pub const TOOL_POLICIES: &[ToolPolicy] = &[
     },
     ToolPolicy {
         tool: "get_event_model_projection",
-        rpcs: &["GetEventModelProjection"],
+        rpcs: &["GetEventModelProjection", "GetServerInfo"],
         min_role: ToolRole::Reader,
         area: ToolArea::Model,
     },
