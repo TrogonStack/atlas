@@ -438,7 +438,9 @@ GetEventModelProjection(id: {namespace: "acme", slug: "checkout", version: 1},
   -> projection, as_of_changeset: <the changeset it resolved to>
 ```
 
-The MCP tool `get_event_model_projection` takes `as_of_time` too.
+The MCP tool `get_event_model_projection` takes `as_of_time` too, and only
+after the server advertises `as_of_time`. An older server would ignore the
+field and return the current model.
 
 ## Cost, and when to move off this
 

@@ -5926,6 +5926,9 @@ pub mod get_server_info_response {
         /// ClassifyImpact
         #[prost(bool, tag="20")]
         pub impact_classification: bool,
+        /// GetEventModelProjection.as_of_time; an older server would return the current model
+        #[prost(bool, tag="21")]
+        pub as_of_time: bool,
     }
     /// Numeric limits the server applies. Clients use these to size their
     /// requests appropriately and to know when a single call cannot return

@@ -4141,6 +4141,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 type_libraries: true,
                 impact_classification: true,
                 entity_protection: true,
+                as_of_time: true,
             }),
             limits: Some(pb::get_server_info_response::Limits {
                 max_page_size: ADVERTISED_MAX_PAGE_SIZE,
