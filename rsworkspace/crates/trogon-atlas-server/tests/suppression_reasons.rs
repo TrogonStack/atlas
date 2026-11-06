@@ -82,6 +82,23 @@ async fn batch_put(service: &EventModelServiceImpl, entities: Vec<pb::Entity>) {
         .unwrap();
 }
 
+fn orphan_doc(entity: &pb::Entity) -> String {
+    let Some(pb::entity::Kind::Event(event)) = &entity.kind else {
+        panic!("stored entity is not an event");
+    };
+    let any = event
+        .metadata
+        .iter()
+        .find(|any| {
+            any.type_url
+                .ends_with("trogonatlas.eventmodel.v1alpha1.OrphanAnnotation")
+        })
+        .expect("stored event has no OrphanAnnotation");
+    pb::OrphanAnnotation::decode(any.value.as_slice())
+        .expect("stored OrphanAnnotation")
+        .doc
+}
+
 async fn orphan_codes(service: &EventModelServiceImpl, model: pb::Id) -> Vec<String> {
     service
         .validate_event_model(Request::new(pb::ValidateEventModelRequest {
@@ -141,17 +158,25 @@ async fn whitespace_orphan_reason_written_by_batch_mutate_does_not_suppress() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stated_orphan_reason_suppresses() {
     let service = service().await;
-    put(
-        &service,
-        orphan_event("sr-stated", "legacy", "  kept for replaying v1 streams  "),
-    )
-    .await;
+    let submitted = "  kept for replaying v1 streams  ";
+    put(&service, orphan_event("sr-stated", "legacy", submitted)).await;
     put(
         &service,
         event_model("sr-stated", "board", id("sr-stated", "legacy")),
     )
     .await;
 
+    let stored = service
+        .get_entity(Request::new(pb::GetEntityRequest {
+            kind: pb::EntityKind::Event as i32,
+            id: Some(id("sr-stated", "legacy")),
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .entity
+        .expect("stored event");
+    assert_eq!(orphan_doc(&stored), submitted);
     assert_eq!(
         orphan_codes(&service, id("sr-stated", "board")).await,
         Vec::<String>::new()

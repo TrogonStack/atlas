@@ -1085,7 +1085,7 @@ fn is_stated_reason(doc: &str) -> bool {
 }
 
 #[cfg(test)]
-const BLANK_DOCS: &[&str] = &["", " ", "\t", "\n", " \t\r\n "];
+const BLANK_DOCS: &[&str] = &["", " ", "\t", "\n", " \t\r\n ", "\u{00a0}", "\u{2003}"];
 
 pub(crate) fn is_derived_field(field: &pb::FieldSpec) -> bool {
     // Doc is mandatory on DerivedFieldAnnotation (same contract as
