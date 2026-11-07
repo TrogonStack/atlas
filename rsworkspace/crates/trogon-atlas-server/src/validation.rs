@@ -620,7 +620,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "A ReadModelScenario's Then step must reference the same read model the scenario is attached to.",
           ReadModel, "then", "scenarios"),
         r("SCENARIO_MISSING_THEN", Error, "Scenario has no Then clause",
-          "Every scenario must declare its outcome (events for command scenarios, projected state for read-model scenarios).",
+          "Command and read-model scenarios must declare their outcome (emitted events or a rejection, projected state). An automation scenario may leave Then unset to mean it issues no command.",
           Unspecified, "then", "scenarios"),
         r("SCENARIO_REJECT_NO_REASON", Error, "Rejected scenario has no reason",
           "A scenario whose outcome is `reject` must record the rejection reason.",
@@ -2178,17 +2178,9 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                         &mut issues,
                     );
                 }
+                // An unset Then means the automation issues no command, a
+                // valid outcome per AutomationScenario in scenarios.proto.
                 let Some(then) = &sc.then else {
-                    // Parity with CommandScenario / ReadModelScenario:
-                    // an automation scenario with no Then is meaningless
-                    // (the test has no observable side effect to assert)
-                    // and was silently accepted by the previous branch.
-                    issues.push(issue_error(
-                        "SCENARIO_MISSING_THEN",
-                        format!("automation scenario {:?} must set then.command", sc.title),
-                        subject.clone(),
-                        "scenarios[].then",
-                    ));
                     continue;
                 };
                 let cmd_id = then.command.as_ref().and_then(|r| r.id.as_ref());

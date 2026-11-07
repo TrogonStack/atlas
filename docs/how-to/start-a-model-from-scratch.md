@@ -140,7 +140,9 @@ storyboard entry (`UI_NO_PERSONA`, Error).
   a `DerivedFieldAnnotation` (`EVENT_FIELD_UNSOURCED`, Error). The command
   marks `added_at` as derived, since the system sets it.
 - A slice with no scenario is reported (`SLICE_NO_SCENARIOS`, Info). Each
-  scenario needs an outcome (`SCENARIO_MISSING_THEN`, Error).
+  scenario needs an outcome (`SCENARIO_MISSING_THEN`, Error). An automation
+  scenario is the exception: leaving `then` unset means the automation
+  issues no command.
 
 ## 6. Add the read model and its slice
 

@@ -336,6 +336,60 @@ async fn command_scenario_clean_is_accepted() {
         .unwrap();
 }
 
+fn automation_slice_with_scenarios(scenarios: Vec<pb::AutomationScenario>) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+            id: Some(id("place-order-automation", 1)),
+            title: "place-order-automation".into(),
+            emitted_command: Some(command_edge("place-order")),
+            scenarios,
+            ..Default::default()
+        })),
+    }
+}
+
+fn automation_scenario(title: &str, then: Option<pb::CommandExample>) -> pb::AutomationScenario {
+    pb::AutomationScenario {
+        id: title.into(),
+        title: title.into(),
+        doc: String::new(),
+        given: Vec::new(),
+        when_doc: "order paid".into(),
+        then,
+        metadata: Vec::new(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_without_then_is_accepted() {
+    let svc = seed_basics().await;
+    let scenarios = vec![
+        automation_scenario("fires", Some(command_example("place-order"))),
+        automation_scenario("does not fire", None),
+    ];
+    put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_command_must_match_slice_command() {
+    let svc = seed_basics().await;
+    let scenarios = vec![automation_scenario(
+        "wrong command",
+        Some(command_example("cancel-order")),
+    )];
+    let err = put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap_err();
+    assert!(
+        err.message().contains("SCENARIO_COMMAND_MISMATCH"),
+        "msg={}",
+        err.message()
+    );
+}
+
 fn make_event_on_lane(slug: &str, lane: &str) -> pb::Entity {
     pb::Entity {
         system: None,
