@@ -25,6 +25,7 @@ it must not become a prerequisite or an active native backlog item. See the
 - [Connected clients](connected-clients.md): Require service connectivity while allowing local hosting and local AI models.
 - [AI-first work](ai-first.md): Agents execute tasks; people inspect the model and communicate intent.
 - [Layered information](layered-information.md): Work with relationships and make incomplete or broken graphs inspectable.
+- [Explicit intent and state](explicit-state.md): Make meaningful state and intentional absence visible instead of relying on hidden assumptions.
 - [Multiplayer](multiplayer.md): Support people, individual agents, and agent swarms working concurrently.
 - [Multiple roles](multiple-roles.md): Adapt views to roles and preferences while preserving a complete, coherent model for every affected role.
 - [Event Modeling](event-modeling.md): Anchor every layer in the model's behavioral primitives.
