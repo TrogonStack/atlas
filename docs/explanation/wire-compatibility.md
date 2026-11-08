@@ -215,8 +215,8 @@ drift.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
 
-The current contract revision is 23, with both mutation compatibility floors
-at 20. Native catalog context writers preserve Decision dates, makers and
+The current contract revision is 24, with both mutation compatibility floors
+at 24. Native catalog context writers preserve Decision dates, makers and
 amendments, Term domain ownership, and Document content and classifications.
 CalendarDate uses the shared type package. It requires no breaking-change
 acknowledgment against the main baseline.
