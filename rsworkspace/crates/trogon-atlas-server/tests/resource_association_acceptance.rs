@@ -1532,10 +1532,8 @@ async fn advertised_writer_floor_is_revision_20_and_get_sends_no_mutation() {
         compat::writer_revision_decision(18, info.min_client_contract_revision).unwrap_err();
     assert!(matches!(
         refused,
-        CompatibilityError::ClientTooOld {
-            client: 18,
-            minimum: 20
-        }
+        CompatibilityError::ClientTooOld { client: 18, minimum }
+            if minimum == pb::MIN_CLIENT_CONTRACT_REVISION
     ));
     assert!(
         refused

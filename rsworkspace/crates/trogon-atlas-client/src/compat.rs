@@ -399,10 +399,8 @@ mod tests {
         let server = check(&older_server, MutationIntent::default()).unwrap_err();
         assert!(matches!(
             server,
-            CompatibilityError::ServerTooOld {
-                server: 18,
-                minimum: 20
-            }
+            CompatibilityError::ServerTooOld { server: 18, minimum }
+                if minimum == pb::MIN_SERVER_CONTRACT_REVISION
         ));
         assert!(
             server
@@ -454,8 +452,8 @@ mod tests {
             refused,
             CompatibilityError::ClientTooOld {
                 client: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
-                minimum: 20
-            }
+                minimum
+            } if minimum == pb::MIN_CLIENT_CONTRACT_REVISION
         ));
         assert!(
             refused
@@ -477,10 +475,8 @@ mod tests {
             writer_revision_decision(19, advertised.min_client_contract_revision).unwrap_err();
         assert!(matches!(
             refused,
-            CompatibilityError::ClientTooOld {
-                client: 19,
-                minimum: 20
-            }
+            CompatibilityError::ClientTooOld { client: 19, minimum }
+                if minimum == pb::MIN_CLIENT_CONTRACT_REVISION
         ));
         assert!(
             refused
