@@ -73,8 +73,11 @@ use crate::{
 /// Domain tag for a single entity's content hash.
 const ENTITY_DOMAIN: &[u8] = b"trogonatlas.content.entity.v1\0";
 /// Domain tag for a whole-model snapshot hash. `v2` binds the declared
-/// scope into the digest; `v1` ids covered content only.
+/// scope into the digest.
 const SNAPSHOT_DOMAIN: &[u8] = b"trogonatlas.content.snapshot.v2\0";
+/// Domain tag attested closure ids already ship. Kept apart from
+/// [`SNAPSHOT_DOMAIN`] so a saved bundle still verifies.
+const CLOSURE_DOMAIN: &[u8] = b"trogonatlas.content.snapshot.v1\0";
 
 /// Version of the snapshot identity format, reported beside every id so a
 /// caller holding one from an older format knows not to compare it.
@@ -493,7 +496,7 @@ impl SnapshotHasher {
     #[must_use]
     pub fn finish_closure(&self) -> ContentHash {
         let mut hasher = Sha256::new();
-        hasher.update(SNAPSHOT_DOMAIN);
+        hasher.update(CLOSURE_DOMAIN);
         hasher.update(self.entries.len().to_string().as_bytes());
         hasher.update(b"\0");
         for (key, hash) in &self.entries {
@@ -760,6 +763,20 @@ mod tests {
         other.insert("a", h).unwrap();
         other.insert("b", h).unwrap();
         assert_ne!(one.finish(&readable()), other.finish(&readable()));
+    }
+
+    #[test]
+    fn closure_digest_keeps_the_shipped_v1_domain() {
+        use sha2::{Digest, Sha256};
+        let mut expected = Sha256::new();
+        expected.update(b"trogonatlas.content.snapshot.v1\0");
+        expected.update(b"0\0");
+        let expected = ContentHash(expected.finalize().into());
+        assert_eq!(SnapshotHasher::new().finish_closure(), expected);
+        assert_ne!(
+            SnapshotHasher::new().finish_closure(),
+            SnapshotHasher::new().finish(&readable())
+        );
     }
 
     #[test]
