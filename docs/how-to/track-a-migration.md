@@ -48,8 +48,11 @@ The Tracker is a plan; validation is the truth. Reconcile on demand:
    done; flip it back and note why.
 3. Zero findings for the pair AND `get_incoming_references` on the old
    version returning empty means the migration is complete, regardless of
-   what the Tracker says. Close remaining items and mark the Tracker itself
-   done in its `doc`.
+   what the Tracker says. Page until `next_page_token` is empty. That empty
+   result covers only the namespaces in the credential's snapshot, so it
+   proves completion only when the credential can see every namespace a pin
+   might live in and the call did not fail because the snapshot was truncated.
+   Then close remaining items and mark the Tracker itself done in its `doc`.
 
 ## Catch a version left pinned without a successor link
 
@@ -68,9 +71,10 @@ never declared `supersedes`.
    whole world: the snapshot was truncated, your credential cannot read every
    namespace, the report hit its referrer budget, or the reference index could
    not be built. An empty list then proves nothing. `get_incoming_references`
-   on the old version is the fallback, and it has the same limits: page until
-   `next_page_token` is empty, and an empty page still only contains referrers
-   the credential's snapshot could see.
+   on the old version is the fallback. Page until `next_page_token` is empty.
+   An empty result still only contains referrers in the credential's snapshot,
+   so check namespace visibility and scan coverage on their own before treating
+   it as complete.
 
 The report is advisory. It never refuses a retarget or a merge, and applied
 calls leave it empty. Only the latest version of each referring entity
