@@ -579,7 +579,6 @@ pub struct UnbridgedReport {
 /// Retired versions that no entity in `world` supersedes while the latest
 /// version of some other entity still references them. `world` is the store
 /// as it will be once the change lands.
-#[must_use]
 pub fn unbridged_removals(
     world: &[StoredEntity],
     retired: &[pb::EntityRef],
