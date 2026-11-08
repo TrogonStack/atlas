@@ -58,9 +58,9 @@ class ArtifactValuesTest(unittest.TestCase):
         }
 
     @staticmethod
-    def enabled(kind, value):
+    def enabled(kind, spec):
         return {
-            "backend": {"kind": kind, "value": value},
+            "backend": {"kind": kind, "spec": spec},
             "catalog": {"natsKvBucket": "fixture_artifact_catalog"},
             "publicUrl": "https://atlas.example.com",
             "maxBytes": 1048576,
@@ -139,23 +139,38 @@ class ArtifactValuesTest(unittest.TestCase):
 
     def test_active_backends_require_nonempty_bucket(self):
         for kind in ["nats", "s3"]:
-            for value in [{}, {"bucket": ""}]:
-                with self.subTest(kind=kind, value=value):
-                    self.assert_invalid(self.enabled(kind, value))
+            for spec in [{}, {"bucket": ""}]:
+                with self.subTest(kind=kind, spec=spec):
+                    self.assert_invalid(self.enabled(kind, spec))
 
     def test_provider_fields_cannot_cross_backend_boundary(self):
-        for kind, value in [
+        for kind, spec in [
             ("nats", {"bucket": "fixture", "region": "eu-west-1"}),
             ("nats", {"bucket": "fixture", "endpoint": "https://objects.example.com"}),
             ("s3", {"bucket": "fixture", "natsBucket": "another"}),
         ]:
-            with self.subTest(kind=kind, value=value):
-                self.assert_invalid(self.enabled(kind, value))
+            with self.subTest(kind=kind, spec=spec):
+                self.assert_invalid(self.enabled(kind, spec))
 
-    def test_disabled_backend_rejects_provider_values(self):
+    def test_disabled_backend_rejects_provider_spec(self):
         self.assert_invalid(
-            {"backend": {"kind": "disabled", "value": {"bucket": "fixture"}}}
+            {"backend": {"kind": "disabled", "spec": {"bucket": "fixture"}}}
         )
+
+    def test_legacy_backend_value_wrapper_is_rejected(self):
+        for kind, config in [
+            ("disabled", {}),
+            ("nats", {"bucket": "fixture"}),
+            ("s3", {"bucket": "fixture"}),
+        ]:
+            for backend in [
+                {"kind": kind, "value": config},
+                {"kind": kind, "spec": config, "value": config},
+            ]:
+                artifacts = self.enabled(kind, config)
+                artifacts["backend"] = backend
+                with self.subTest(backend=backend):
+                    self.assert_invalid(artifacts)
 
     def test_legacy_and_unknown_configuration_is_rejected(self):
         for artifacts in [
@@ -166,7 +181,7 @@ class ArtifactValuesTest(unittest.TestCase):
             {
                 "backend": {
                     "kind": "nats",
-                    "value": {"bucket": "fixture"},
+                    "spec": {"bucket": "fixture"},
                     "extra": True,
                 }
             },

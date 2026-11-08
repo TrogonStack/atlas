@@ -14,8 +14,8 @@ configuration; they do not need NATS or S3 credentials. Artifact storage is
 disabled by default.
 
 With Helm, select `artifacts.backend.kind` and put that provider's settings
-in `artifacts.backend.value`. Use `kind: nats` with a NATS Object Store
-`value.bucket`, or `kind: s3` with an existing S3 `value.bucket` and optional
+in `artifacts.backend.spec`. Use `kind: nats` with a NATS Object Store
+`spec.bucket`, or `kind: s3` with an existing S3 `spec.bucket` and optional
 S3 settings. `artifacts.catalog.natsKvBucket` always names the separate NATS
 KV bucket for metadata and upload sessions with either backend. See the
 [chart's backend settings and examples](../../devops/helm/charts/trogon-atlas-server/README.md#artifacts).

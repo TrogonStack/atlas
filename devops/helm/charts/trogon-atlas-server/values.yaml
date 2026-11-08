@@ -104,7 +104,7 @@ config:
 artifacts:
   backend:
     kind: disabled
-    value: {}
+    spec: {}
   catalog:
     natsKvBucket: atlas_artifact_catalog
   publicUrl: ""

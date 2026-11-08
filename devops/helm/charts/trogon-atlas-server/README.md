@@ -107,20 +107,20 @@ deployment; CLI and MCP clients discover the active backend and upload limits
 with `artifacts info` and `get_artifact_storage_info`.
 
 `artifacts.backend.kind` selects where file bytes are stored. Its
-`artifacts.backend.value` contains only that provider's settings. Metadata
+`artifacts.backend.spec` contains only that provider's settings. Metadata
 and upload sessions use `artifacts.catalog.natsKvBucket` with either enabled
 backend, through the server's existing NATS connection.
 
 | Setting | Applies when | Meaning |
 | --- | --- | --- |
 | `artifacts.backend.kind` | Always | `disabled`, `nats` or `s3`; defaults to `disabled`. |
-| `artifacts.backend.value` | `kind: disabled` | Must be an empty object. |
-| `artifacts.backend.value.bucket` | `kind: nats` | Required NATS Object Store bucket for file bytes. |
-| `artifacts.backend.value.bucket` | `kind: s3` | Required existing S3-compatible bucket for file bytes. |
-| `artifacts.backend.value.region` | `kind: s3` | Signing region; defaults to `us-east-1`. |
-| `artifacts.backend.value.endpoint` | `kind: s3` | Optional S3-compatible endpoint; otherwise provider defaults apply. |
-| `artifacts.backend.value.forcePathStyle` | `kind: s3` | Path-style requests; defaults to `false`. |
-| `artifacts.backend.value.allowHttp` | `kind: s3` | HTTP for isolated development; defaults to `false`. |
+| `artifacts.backend.spec` | `kind: disabled` | Must be an empty object. |
+| `artifacts.backend.spec.bucket` | `kind: nats` | Required NATS Object Store bucket for file bytes. |
+| `artifacts.backend.spec.bucket` | `kind: s3` | Required existing S3-compatible bucket for file bytes. |
+| `artifacts.backend.spec.region` | `kind: s3` | Signing region; defaults to `us-east-1`. |
+| `artifacts.backend.spec.endpoint` | `kind: s3` | Optional S3-compatible endpoint; otherwise provider defaults apply. |
+| `artifacts.backend.spec.forcePathStyle` | `kind: s3` | Path-style requests; defaults to `false`. |
+| `artifacts.backend.spec.allowHttp` | `kind: s3` | HTTP for isolated development; defaults to `false`. |
 | `artifacts.catalog.natsKvBucket` | `kind: nats` or `kind: s3` | NATS KV bucket for metadata and upload sessions; defaults to `atlas_artifact_catalog`. |
 | `artifacts.publicUrl`, `maxBytes`, `uploadTtlSecs` | Either enabled backend | Public Atlas origin, file-size limit and upload lifetime. |
 
@@ -132,7 +132,7 @@ config:
 artifacts:
   backend:
     kind: nats
-    value:
+    spec:
       bucket: atlas_artifacts
   catalog:
     natsKvBucket: atlas_artifact_catalog
@@ -156,7 +156,7 @@ config:
 artifacts:
   backend:
     kind: s3
-    value:
+    spec:
       bucket: product-artifacts
       region: us-east-1
   catalog:
@@ -185,16 +185,16 @@ bytes and writes a separate immutable final object. Artifact metadata still
 uses the configured NATS catalog KV bucket.
 
 With `kind: s3`, put `endpoint`, `forcePathStyle` and `allowHttp` inside
-`artifacts.backend.value` for compatible providers such as MinIO. The
+`artifacts.backend.spec` for compatible providers such as MinIO. The
 endpoint must be reachable by the server and upload clients because it
 appears in signed URLs. Keep `allowHttp: false` outside isolated development.
 
 The values schema rejects unknown kinds, fields belonging to a different
-provider, missing or empty selected buckets, and nonempty values for
+provider, missing or empty selected buckets, and a nonempty `spec` for
 `kind: disabled`. The previous flat `backend`, `natsBucket`, `catalogBucket`
-and sibling `s3` forms are rejected; select `backend.kind`, put the selected
-provider's fields in `backend.value`, and use `catalog.natsKvBucket` for
-shared metadata.
+and sibling `s3` forms, as well as the old `backend.value` wrapper, are
+rejected. Select `backend.kind` and put the selected provider's fields in
+`backend.spec`. Use `catalog.natsKvBucket` for shared metadata.
 
 An enabled backend requires `publicUrl`, file limits must be within 1 byte
 through 32 MiB, and upload lifetimes must be within 1 through 3,600 seconds.
@@ -204,7 +204,7 @@ transport limit must be increased when enabling the default 16 MiB artifact
 limit.
 
 The chart maps `backend.kind` to `TROGON_ATLAS_ARTIFACT_BACKEND`.
-`backend.value.bucket` maps to `TROGON_ATLAS_ARTIFACT_NATS_BUCKET` for
+`backend.spec.bucket` maps to `TROGON_ATLAS_ARTIFACT_NATS_BUCKET` for
 `kind: nats` or `TROGON_ATLAS_ARTIFACT_S3_BUCKET` for `kind: s3`; only the
 selected provider's variables are emitted. `catalog.natsKvBucket` maps to
 `TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET` with either enabled backend.

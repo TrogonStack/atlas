@@ -18,7 +18,7 @@
           "additionalProperties": false,
           "required": [
             "kind",
-            "value"
+            "spec"
           ],
           "properties": {
             "kind": {
@@ -30,7 +30,7 @@
               ],
               "description": "Provider storing artifact bytes; catalog metadata remains in NATS KV."
             },
-            "value": {
+            "spec": {
               "type": "object",
               "description": "Only the selected backend kind's configuration."
             }
@@ -42,7 +42,7 @@
                 "kind": {
                   "const": "disabled"
                 },
-                "value": {
+                "spec": {
                   "maxProperties": 0
                 }
               }
@@ -53,7 +53,7 @@
                 "kind": {
                   "const": "nats"
                 },
-                "value": {
+                "spec": {
                   "type": "object",
                   "additionalProperties": false,
                   "required": [
@@ -76,7 +76,7 @@
                 "kind": {
                   "const": "s3"
                 },
-                "value": {
+                "spec": {
                   "type": "object",
                   "additionalProperties": false,
                   "required": [

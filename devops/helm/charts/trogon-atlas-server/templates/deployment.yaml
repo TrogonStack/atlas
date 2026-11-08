@@ -4,7 +4,7 @@
 {{- include "trogon-atlas-server.validateSpicedb" . }}
 {{- $server := .Values }}
 {{- $artifactBackend := $server.artifacts.backend }}
-{{- $artifactStorage := $artifactBackend.value }}
+{{- $artifactStorage := $artifactBackend.spec }}
 {{- if not (has $artifactBackend.kind (list "disabled" "nats" "s3")) }}
 {{- fail "artifacts.backend.kind must be disabled, nats or s3" }}
 {{- end }}
@@ -22,7 +22,7 @@
 {{- fail "config.maxMessageBytes must be at least artifacts.maxBytes plus 65536" }}
 {{- end }}
 {{- if not $artifactStorage.bucket }}
-{{- fail "artifacts.backend.value.bucket is required for the selected artifact backend" }}
+{{- fail "artifacts.backend.spec.bucket is required for the selected artifact backend" }}
 {{- end }}
 {{- end }}
 {{- $tokensSecret := include "trogon-atlas-server.tokensSecretName" . }}
