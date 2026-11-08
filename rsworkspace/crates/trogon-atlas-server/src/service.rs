@@ -6266,10 +6266,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                     ))
                 })
                 .collect();
-            let report = graph::unbridged_removals(
-                &world_after(&before, &overlay),
-                std::slice::from_ref(&from),
-            )?;
+            let retired: &[pb::EntityRef] = if from == to {
+                &[]
+            } else {
+                std::slice::from_ref(&from)
+            };
+            let report = graph::unbridged_removals(&world_after(&before, &overlay), retired)
+                .unwrap_or(graph::UnbridgedReport {
+                    removals: Vec::new(),
+                    incomplete: true,
+                });
             drop(guard);
             let changes: Vec<invariant_admission::Change> = metas
                 .iter()
@@ -11192,7 +11198,11 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             let unbridged = graph::unbridged_removals(
                 &post_world,
                 &merge_retired_versions(&op_metas, &pre_all),
-            )?;
+            )
+            .unwrap_or(graph::UnbridgedReport {
+                removals: Vec::new(),
+                incomplete: true,
+            });
             let unbridged_incomplete =
                 unbridged.incomplete || snapshot_truncated || !vis.is_unrestricted();
             let mut validation_issues = validation::validate_store_hygiene(&post_world);

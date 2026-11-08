@@ -66,8 +66,11 @@ never declared `supersedes`.
    `SLICE_STALE_REF` findings, or add each remaining referrer to the Tracker.
 4. When `unbridged_removals_incomplete` is true, the report could not see the
    whole world: the snapshot was truncated, your credential cannot read every
-   namespace, or the report hit its referrer budget. An empty list then proves
-   nothing; fall back to `get_incoming_references` on the old version.
+   namespace, the report hit its referrer budget, or the reference index could
+   not be built. An empty list then proves nothing. `get_incoming_references`
+   on the old version is the fallback, and it has the same limits: page until
+   `next_page_token` is empty, and an empty page still only contains referrers
+   the credential's snapshot could see.
 
 The report is advisory. It never refuses a retarget or a merge, and applied
 calls leave it empty. Only the latest version of each referring entity

@@ -35,13 +35,13 @@ pub struct ReverseIndex {
 
 impl ReverseIndex {
     pub fn build(all: &[StoredEntity]) -> Result<Self, Status> {
-        Self::build_counted(all, responsibility_occurrence_count(all)?)
+        Self::build_counted(all, responsibility_occurrence_count(all)?, &[])
     }
 
     pub(crate) fn build_discovery(all: &[StoredEntity]) -> Result<Self, Status> {
         let occurrences = responsibility_occurrence_count(all)?;
         check_responsibility_occurrence_count(occurrences)?;
-        Self::build_counted(all, occurrences)
+        Self::build_counted(all, occurrences, &[])
     }
 
     pub(crate) fn check_discovery_budget(&self) -> Result<(), Status> {
@@ -54,10 +54,12 @@ impl ReverseIndex {
     fn build_counted(
         all: &[StoredEntity],
         responsibility_occurrences: usize,
+        extra_known: &[pb::EntityKey],
     ) -> Result<Self, Status> {
         // Known keys let untyped Storyboard slice refs resolve the same way
         // `closure()` does: probe CommandSlice / ReadModelSlice / AutomationSlice.
-        let known: HashSet<pb::EntityKey> = all
+        // `extra_known` keeps a target resolvable after this world has deleted it.
+        let mut known: HashSet<pb::EntityKey> = all
             .iter()
             .filter_map(|se| {
                 let k = ref_entity_kind(&se.entity)?;
@@ -65,6 +67,7 @@ impl ReverseIndex {
                 Some(pb::EntityKey::new(k, i))
             })
             .collect();
+        known.extend(extra_known.iter().cloned());
         let mut by_target: HashMap<pb::EntityKey, Vec<pb::Reference>> = HashMap::new();
         for se in all {
             let (Some(from_kind), Some(from_id)) =
@@ -602,7 +605,19 @@ pub fn unbridged_removals(
         };
         latest.get(&(kind, id.namespace.as_str(), id.slug.as_str())) == Some(&id.version)
     };
-    let index = ReverseIndex::build(world)?;
+    let retired_keys: Vec<pb::EntityKey> = retired
+        .iter()
+        .filter_map(|entity| {
+            let kind = pb::EntityKind::try_from(entity.kind).ok()?;
+            let id = entity.id.as_ref()?;
+            Some(pb::EntityKey::new(kind, id))
+        })
+        .collect();
+    let index = ReverseIndex::build_counted(
+        world,
+        responsibility_occurrence_count(world)?,
+        &retired_keys,
+    )?;
     let mut report = UnbridgedReport {
         removals: Vec::new(),
         incomplete: false,
@@ -618,6 +633,7 @@ pub fn unbridged_removals(
         if bridged.contains(&key) || !seen.insert(key) {
             continue;
         }
+        let room = UNBRIDGED_REFERRER_BUDGET - emitted;
         let referrers: Vec<pb::Reference> = index
             .incoming(kind, id)
             .iter()
@@ -627,12 +643,12 @@ pub fn unbridged_removals(
                     .as_ref()
                     .is_some_and(|from| from != entity && is_live(from))
             })
+            .take(room + 1)
             .cloned()
             .collect();
         if referrers.is_empty() {
             continue;
         }
-        let room = UNBRIDGED_REFERRER_BUDGET - emitted;
         if referrers.len() > room {
             report.incomplete = true;
             break;
@@ -1468,6 +1484,32 @@ mod impact_tests {
             !incoming.is_empty(),
             "ReverseIndex must surface Storyboard→CommandSlice via untyped slice ref; got {incoming:?}"
         );
+    }
+
+    #[test]
+    fn unbridged_report_keeps_a_deleted_slice_resolvable() {
+        let slice_id = id("orders", "place-slice");
+        let board = StoredEntity {
+            entity: pb::Entity {
+                system: None,
+                kind: Some(pb::entity::Kind::Storyboard(pb::Storyboard {
+                    id: Some(id("orders", "happy-path")),
+                    title: "happy".into(),
+                    slices: vec![pb::SliceRef {
+                        id: Some(slice_id.clone()),
+                    }],
+                    ..Default::default()
+                })),
+            },
+            etag: String::new(),
+        };
+        let retired = pb::EntityRef {
+            kind: pb::EntityKind::CommandSlice as i32,
+            id: Some(slice_id),
+        };
+        let report = unbridged_removals(std::slice::from_ref(&board), &[retired]).unwrap();
+        assert!(!report.incomplete);
+        assert_eq!(report.removals.len(), 1);
     }
 
     fn stored_ui(ns: &str, slug: &str, screen: Option<(&str, &str)>) -> StoredEntity {
