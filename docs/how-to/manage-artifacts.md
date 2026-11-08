@@ -13,6 +13,13 @@ Configure storage on the server deployment. CLI and MCP clients discover that
 configuration; they do not need NATS or S3 credentials. Artifact storage is
 disabled by default.
 
+With Helm, select `artifacts.backend.kind` and put that provider's settings
+in `artifacts.backend.value`. Use `kind: nats` with a NATS Object Store
+`value.bucket`, or `kind: s3` with an existing S3 `value.bucket` and optional
+S3 settings. `artifacts.catalog.natsKvBucket` always names the separate NATS
+KV bucket for metadata and upload sessions with either backend. See the
+[chart's backend settings and examples](../../devops/helm/charts/trogon-atlas-server/README.md#artifacts).
+
 ## Enable NATS Object Store
 
 Set these variables in the environment that starts `trogon-atlas-server`:
@@ -37,8 +44,10 @@ The service uses the existing `TROGON_ATLAS_NATS_URL` connection. NATS must
 have JetStream enabled, and the server's NATS identity needs access to the
 artifact Object Store and catalog KV bucket. Provision file storage, replicas,
 capacity, and backups for both buckets according to the deployment's
-durability requirements. New buckets use the service's provider defaults;
-pre-provision them when a different replication policy is required.
+durability requirements. The server creates missing buckets at startup when
+its NATS identity permits it, and reuses existing compatible buckets. New
+buckets use the service's provider defaults; pre-provision them when a
+different replication policy is required.
 
 An artifact can be larger than a NATS message because Object Store splits its
 bytes into chunks. This does not change the existing entity-size contract or
@@ -51,6 +60,7 @@ Create a private bucket, then configure the server:
 ```sh
 export TROGON_ATLAS_ARTIFACT_BACKEND=s3
 export TROGON_ATLAS_ARTIFACT_PUBLIC_URL=https://atlas.example.com
+export TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET=atlas_artifact_catalog
 export TROGON_ATLAS_ARTIFACT_S3_BUCKET=product-artifacts
 export TROGON_ATLAS_ARTIFACT_S3_REGION=us-east-1
 export TROGON_ATLAS_MAX_MESSAGE_BYTES=37748736

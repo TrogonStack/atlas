@@ -1,0 +1,173 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend",
+        "catalog",
+        "publicUrl",
+        "maxBytes",
+        "uploadTtlSecs"
+      ],
+      "properties": {
+        "backend": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "disabled",
+                "nats",
+                "s3"
+              ],
+              "description": "Provider storing artifact bytes; catalog metadata remains in NATS KV."
+            },
+            "value": {
+              "type": "object",
+              "description": "Only the selected backend kind's configuration."
+            }
+          },
+          "oneOf": [
+            {
+              "title": "Disabled artifact storage",
+              "properties": {
+                "kind": {
+                  "const": "disabled"
+                },
+                "value": {
+                  "maxProperties": 0
+                }
+              }
+            },
+            {
+              "title": "NATS Object Store",
+              "properties": {
+                "kind": {
+                  "const": "nats"
+                },
+                "value": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "bucket"
+                  ],
+                  "properties": {
+                    "bucket": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "description": "NATS Object Store bucket holding artifact bytes."
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "title": "S3 object storage",
+              "properties": {
+                "kind": {
+                  "const": "s3"
+                },
+                "value": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "bucket"
+                  ],
+                  "properties": {
+                    "bucket": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "description": "Existing private S3-compatible bucket holding artifact bytes."
+                    },
+                    "region": {
+                      "type": "string",
+                      "minLength": 1,
+                      "pattern": "\\S",
+                      "description": "S3 signing region; defaults to us-east-1."
+                    },
+                    "endpoint": {
+                      "type": "string",
+                      "description": "Optional S3-compatible endpoint reachable by both server and upload clients."
+                    },
+                    "forcePathStyle": {
+                      "type": "boolean",
+                      "description": "Use path-style S3 requests; defaults to false."
+                    },
+                    "allowHttp": {
+                      "type": "boolean",
+                      "description": "Allow HTTP for isolated development; defaults to false."
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "catalog": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "natsKvBucket"
+          ],
+          "properties": {
+            "natsKvBucket": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S",
+              "description": "Shared NATS KV metadata and upload-session bucket for either enabled byte-storage backend."
+            }
+          }
+        },
+        "publicUrl": {
+          "type": "string",
+          "description": "Externally reachable Atlas origin serving artifact HTTP routes."
+        },
+        "maxBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 33554432
+        },
+        "uploadTtlSecs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "backend": {
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "nats",
+                      "s3"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "publicUrl": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

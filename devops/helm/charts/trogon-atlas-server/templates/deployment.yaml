@@ -3,10 +3,12 @@
 {{- include "trogon-atlas-server.validateStoreCredential" . }}
 {{- include "trogon-atlas-server.validateSpicedb" . }}
 {{- $server := .Values }}
-{{- if not (has $server.artifacts.backend (list "disabled" "nats" "s3")) }}
-{{- fail "artifacts.backend must be disabled, nats or s3" }}
+{{- $artifactBackend := $server.artifacts.backend }}
+{{- $artifactStorage := $artifactBackend.value }}
+{{- if not (has $artifactBackend.kind (list "disabled" "nats" "s3")) }}
+{{- fail "artifacts.backend.kind must be disabled, nats or s3" }}
 {{- end }}
-{{- if ne $server.artifacts.backend "disabled" }}
+{{- if ne $artifactBackend.kind "disabled" }}
 {{- if not $server.artifacts.publicUrl }}
 {{- fail "artifacts.publicUrl is required when artifact storage is enabled" }}
 {{- end }}
@@ -19,8 +21,8 @@
 {{- if lt (int64 $server.config.maxMessageBytes) (add (int64 $server.artifacts.maxBytes) 65536) }}
 {{- fail "config.maxMessageBytes must be at least artifacts.maxBytes plus 65536" }}
 {{- end }}
-{{- if and (eq $server.artifacts.backend "s3") (not $server.artifacts.s3.bucket) }}
-{{- fail "artifacts.s3.bucket is required for the s3 artifact backend" }}
+{{- if not $artifactStorage.bucket }}
+{{- fail "artifacts.backend.value.bucket is required for the selected artifact backend" }}
 {{- end }}
 {{- end }}
 {{- $tokensSecret := include "trogon-atlas-server.tokensSecretName" . }}
@@ -85,31 +87,33 @@ spec:
             - name: TROGON_ATLAS_STORE
               value: nats
             - name: TROGON_ATLAS_ARTIFACT_BACKEND
-              value: {{ $server.artifacts.backend | quote }}
-            {{- if ne $server.artifacts.backend "disabled" }}
+              value: {{ $artifactBackend.kind | quote }}
+            {{- if ne $artifactBackend.kind "disabled" }}
             - name: TROGON_ATLAS_ARTIFACT_PUBLIC_URL
               value: {{ $server.artifacts.publicUrl | quote }}
-            - name: TROGON_ATLAS_ARTIFACT_NATS_BUCKET
-              value: {{ $server.artifacts.natsBucket | quote }}
             - name: TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET
-              value: {{ $server.artifacts.catalogBucket | quote }}
+              value: {{ $server.artifacts.catalog.natsKvBucket | quote }}
             - name: TROGON_ATLAS_ARTIFACT_MAX_BYTES
-              value: {{ $server.artifacts.maxBytes | quote }}
+              value: {{ $server.artifacts.maxBytes | int64 | quote }}
             - name: TROGON_ATLAS_ARTIFACT_UPLOAD_TTL_SECS
-              value: {{ $server.artifacts.uploadTtlSecs | quote }}
-            {{- if eq $server.artifacts.backend "s3" }}
+              value: {{ $server.artifacts.uploadTtlSecs | int64 | quote }}
+            {{- if eq $artifactBackend.kind "nats" }}
+            - name: TROGON_ATLAS_ARTIFACT_NATS_BUCKET
+              value: {{ $artifactStorage.bucket | quote }}
+            {{- end }}
+            {{- if eq $artifactBackend.kind "s3" }}
             - name: TROGON_ATLAS_ARTIFACT_S3_BUCKET
-              value: {{ $server.artifacts.s3.bucket | quote }}
+              value: {{ $artifactStorage.bucket | quote }}
             - name: TROGON_ATLAS_ARTIFACT_S3_REGION
-              value: {{ $server.artifacts.s3.region | quote }}
-            {{- with $server.artifacts.s3.endpoint }}
+              value: {{ $artifactStorage.region | default "us-east-1" | quote }}
+            {{- with $artifactStorage.endpoint }}
             - name: TROGON_ATLAS_ARTIFACT_S3_ENDPOINT
               value: {{ . | quote }}
             {{- end }}
             - name: TROGON_ATLAS_ARTIFACT_S3_FORCE_PATH_STYLE
-              value: {{ $server.artifacts.s3.forcePathStyle | quote }}
+              value: {{ $artifactStorage.forcePathStyle | default false | quote }}
             - name: TROGON_ATLAS_ARTIFACT_S3_ALLOW_HTTP
-              value: {{ $server.artifacts.s3.allowHttp | quote }}
+              value: {{ $artifactStorage.allowHttp | default false | quote }}
             {{- end }}
             {{- end }}
             {{- if $server.config.natsUrlSecret.name }}
@@ -135,7 +139,7 @@ spec:
             - name: TROGON_ATLAS_CHANGES_MAX_BYTES
               value: {{ $server.config.changesMaxBytes | quote }}
             - name: TROGON_ATLAS_MAX_MESSAGE_BYTES
-              value: {{ $server.config.maxMessageBytes | quote }}
+              value: {{ $server.config.maxMessageBytes | int64 | quote }}
             - name: TROGON_ATLAS_CONCURRENCY_LIMIT
               value: {{ $server.config.concurrencyLimit | quote }}
             - name: TROGON_ATLAS_RPC_TIMEOUT_SECS

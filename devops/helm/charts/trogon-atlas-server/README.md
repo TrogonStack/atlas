@@ -106,35 +106,64 @@ The artifact service is disabled by default. Configure its backend in the
 deployment; CLI and MCP clients discover the active backend and upload limits
 with `artifacts info` and `get_artifact_storage_info`.
 
-For NATS Object Store:
+`artifacts.backend.kind` selects where file bytes are stored. Its
+`artifacts.backend.value` contains only that provider's settings. Metadata
+and upload sessions use `artifacts.catalog.natsKvBucket` with either enabled
+backend, through the server's existing NATS connection.
+
+| Setting | Applies when | Meaning |
+| --- | --- | --- |
+| `artifacts.backend.kind` | Always | `disabled`, `nats` or `s3`; defaults to `disabled`. |
+| `artifacts.backend.value` | `kind: disabled` | Must be an empty object. |
+| `artifacts.backend.value.bucket` | `kind: nats` | Required NATS Object Store bucket for file bytes. |
+| `artifacts.backend.value.bucket` | `kind: s3` | Required existing S3-compatible bucket for file bytes. |
+| `artifacts.backend.value.region` | `kind: s3` | Signing region; defaults to `us-east-1`. |
+| `artifacts.backend.value.endpoint` | `kind: s3` | Optional S3-compatible endpoint; otherwise provider defaults apply. |
+| `artifacts.backend.value.forcePathStyle` | `kind: s3` | Path-style requests; defaults to `false`. |
+| `artifacts.backend.value.allowHttp` | `kind: s3` | HTTP for isolated development; defaults to `false`. |
+| `artifacts.catalog.natsKvBucket` | `kind: nats` or `kind: s3` | NATS KV bucket for metadata and upload sessions; defaults to `atlas_artifact_catalog`. |
+| `artifacts.publicUrl`, `maxBytes`, `uploadTtlSecs` | Either enabled backend | Public Atlas origin, file-size limit and upload lifetime. |
+
+For NATS Object Store, select `kind: nats` and supply its object bucket:
 
 ```yaml
 config:
   maxMessageBytes: 37748736
 artifacts:
-  backend: nats
+  backend:
+    kind: nats
+    value:
+      bucket: atlas_artifacts
+  catalog:
+    natsKvBucket: atlas_artifact_catalog
   publicUrl: https://atlas.example.com
-  natsBucket: atlas_artifacts
-  catalogBucket: atlas_artifact_catalog
   maxBytes: 16777216
   uploadTtlSecs: 900
 ```
 
-The artifact Object Store and metadata KV bucket use the existing NATS
-connection. Provision file storage, replication, capacity and backups for
-these buckets alongside the model store. The chart does not install NATS.
+The server creates missing Object Store and catalog KV buckets at startup
+when its NATS credentials permit it, and reuses existing compatible buckets.
+Pre-provisioning is optional; use it to control file storage, replication,
+capacity and backups alongside the model store. The chart does not install
+NATS.
 
-For S3, select the private bucket and region:
+For S3, create the private bucket first, then select `kind: s3`. The catalog
+remains a NATS KV bucket; an artifact NATS Object Store bucket is not needed:
 
 ```yaml
 config:
   maxMessageBytes: 37748736
 artifacts:
-  backend: s3
+  backend:
+    kind: s3
+    value:
+      bucket: product-artifacts
+      region: us-east-1
+  catalog:
+    natsKvBucket: atlas_artifact_catalog
   publicUrl: https://atlas.example.com
-  s3:
-    bucket: product-artifacts
-    region: us-east-1
+  maxBytes: 16777216
+  uploadTtlSecs: 900
 extraEnv:
   - name: AWS_ACCESS_KEY_ID
     valueFrom:
@@ -155,17 +184,30 @@ go directly to a bounded presigned PUT URL; completion verifies the staging
 bytes and writes a separate immutable final object. Artifact metadata still
 uses the configured NATS catalog KV bucket.
 
-`artifacts.s3.endpoint`, `forcePathStyle`, and `allowHttp` support compatible
-providers such as MinIO. The endpoint must be reachable by the server and
-upload clients because it appears in signed URLs. Keep `allowHttp: false`
-outside isolated development.
+With `kind: s3`, put `endpoint`, `forcePathStyle` and `allowHttp` inside
+`artifacts.backend.value` for compatible providers such as MinIO. The
+endpoint must be reachable by the server and upload clients because it
+appears in signed URLs. Keep `allowHttp: false` outside isolated development.
 
-The chart rejects unknown backends, an enabled backend without `publicUrl`,
-file limits outside 1 byte through 32 MiB, upload lifetimes outside 1 through
-3,600 seconds, and S3 without a bucket. It also requires
+The values schema rejects unknown kinds, fields belonging to a different
+provider, missing or empty selected buckets, and nonempty values for
+`kind: disabled`. The previous flat `backend`, `natsBucket`, `catalogBucket`
+and sibling `s3` forms are rejected; select `backend.kind`, put the selected
+provider's fields in `backend.value`, and use `catalog.natsKvBucket` for
+shared metadata.
+
+An enabled backend requires `publicUrl`, file limits must be within 1 byte
+through 32 MiB, and upload lifetimes must be within 1 through 3,600 seconds.
+The chart also requires
 `config.maxMessageBytes >= artifacts.maxBytes + 65536`; the default 4 MiB
 transport limit must be increased when enabling the default 16 MiB artifact
 limit.
+
+The chart maps `backend.kind` to `TROGON_ATLAS_ARTIFACT_BACKEND`.
+`backend.value.bucket` maps to `TROGON_ATLAS_ARTIFACT_NATS_BUCKET` for
+`kind: nats` or `TROGON_ATLAS_ARTIFACT_S3_BUCKET` for `kind: s3`; only the
+selected provider's variables are emitted. `catalog.natsKvBucket` maps to
+`TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET` with either enabled backend.
 
 Route the artifact HTTP paths through the same gateway as the server and
 set `publicUrl` to its externally reachable origin. Stable content URLs

@@ -23,3 +23,5 @@ for chart in "$charts_dir"/*/; do
     helm lint --strict "$chart" --values "$values"
   done
 done
+
+python3 "$root/.config/mise/lib/helm-artifacts/test_values.py"
