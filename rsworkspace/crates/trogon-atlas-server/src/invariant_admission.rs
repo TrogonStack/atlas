@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     future::Future,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -314,7 +314,7 @@ impl EventModelServiceImpl {
         // The id the caller's own GetSnapshotId reports, so it never moves
         // with a write the caller cannot read.
         let visible = self.narrow(before.clone(), vis).await?;
-        let snapshot_id = snapshot_digest(&visible, &BTreeSet::new(), false)
+        let snapshot_id = snapshot_digest(&visible, &super::readable_scope(vis), false)
             .map(|digest| digest.snapshot_id)
             .unwrap_or_default();
         if let Some(refusal) = invariants::refusal(&outcomes) {

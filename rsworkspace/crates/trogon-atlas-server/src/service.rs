@@ -1593,9 +1593,9 @@ impl EventModelServiceImpl {
             branch: branch.unwrap_or_default().to_owned(),
             ..Default::default()
         };
-        let all_namespaces = std::collections::BTreeSet::new();
+        let snapshot_scope = readable_scope(vis);
         let snapshot_id = |world: &[StoredEntity]| {
-            snapshot_digest(world, &all_namespaces, false).map(|digest| digest.snapshot_id)
+            snapshot_digest(world, &snapshot_scope, false).map(|digest| digest.snapshot_id)
         };
         let mut delta = consequence::compare(
             &consequence::Scan::of(before, &before_context, truncated, &scope),
@@ -3757,20 +3757,35 @@ struct SnapshotDigest {
     entries: Vec<pb::SnapshotEntry>,
 }
 
-/// Content identity of `all`, restricted to `scope` when it is not empty.
+pub(crate) fn snapshot_reader(vis: &Visibility) -> trogon_atlas_core::SnapshotReader {
+    vis.owner().cloned().map_or(
+        trogon_atlas_core::SnapshotReader::Everything,
+        trogon_atlas_core::SnapshotReader::Owner,
+    )
+}
+
+/// The question `GetSnapshotId` answers when the caller names no namespaces:
+/// everything this reader can see.
+pub(crate) fn readable_scope(vis: &Visibility) -> trogon_atlas_core::SnapshotScope {
+    trogon_atlas_core::SnapshotScope::new(
+        snapshot_reader(vis),
+        trogon_atlas_core::NamespaceSelection::Readable,
+    )
+}
+
+/// Content identity of `all`, restricted to the namespaces `scope` declares.
 fn snapshot_digest(
     all: &[StoredEntity],
-    scope: &std::collections::BTreeSet<&str>,
+    scope: &trogon_atlas_core::SnapshotScope,
     include_entries: bool,
 ) -> Result<SnapshotDigest, Status> {
     let in_scope = all.iter().map(|se| &se.entity).filter(|entity| {
-        scope.is_empty()
-            || trogon_atlas_store::refs::entity_id(entity)
-                .is_none_or(|id| scope.contains(id.namespace.as_str()))
+        trogon_atlas_store::refs::entity_id(entity)
+            .is_none_or(|id| scope.namespaces().admits(&id.namespace))
     });
     let (hasher, entries) = snapshot_identity(in_scope, include_entries)?;
     Ok(SnapshotDigest {
-        snapshot_id: hasher.finish().to_hex(),
+        snapshot_id: hasher.finish(scope).to_hex(),
         entity_count: u32::try_from(hasher.len()).unwrap_or(u32::MAX),
         entries,
     })
@@ -4641,14 +4656,16 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         let vis = Self::visibility_of(&req);
         let branch = Self::branch_from_metadata(&req)?;
         let req = req.into_inner();
+        let selection = trogon_atlas_core::NamespaceSelection::from_requested(&req.namespaces)
+            .map_err(|e| Status::invalid_argument(format!("namespaces: {e}")))?;
+        let reader = vis.owner().cloned().map_or(
+            trogon_atlas_core::SnapshotReader::Everything,
+            trogon_atlas_core::SnapshotReader::Owner,
+        );
+        let scope = trogon_atlas_core::SnapshotScope::new(reader, selection);
         let (all, truncated) = self
             .snapshot_with_truncation(branch.as_deref(), &vis)
             .await?;
-
-        // Empty means every namespace. A set rather than a scan per entity so
-        // a wide filter stays linear.
-        let scope: std::collections::BTreeSet<&str> =
-            req.namespaces.iter().map(String::as_str).collect();
 
         let digest = snapshot_digest(&all, &scope, req.include_entries)?;
         Ok(Response::new(pb::GetSnapshotIdResponse {
@@ -4656,6 +4673,15 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             entity_count: digest.entity_count,
             truncated,
             entries: digest.entries,
+            scope: Some(pb::SnapshotIdScope {
+                owner: vis
+                    .owner()
+                    .map(|o| o.as_str().to_owned())
+                    .unwrap_or_default(),
+                namespaces: scope.namespaces().names(),
+                branch: branch.unwrap_or_default(),
+            }),
+            identity_version: trogon_atlas_core::SNAPSHOT_IDENTITY_VERSION,
         }))
     }
 
@@ -5881,7 +5907,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             None => self.narrow_baseline(everything.clone(), &vis).await?,
             Some(_) => self.narrow(everything.clone(), &vis).await?,
         };
-        let snapshot_id = snapshot_id_of(&all)?;
+        let snapshot_id = snapshot_id_of(&all, &readable_scope(&vis))?;
         let current_entity = self
             .impact_input(&all, truncated, kind, current_id, branch.as_deref())
             .await?;
@@ -7040,9 +7066,9 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
             }),
             state: Some(pb::AttestedState {
                 mode: mode as i32,
-                snapshot_id: view.finish().to_hex(),
+                snapshot_id: view.finish(&readable_scope(&vis)).to_hex(),
                 snapshot_entity_count: u32::try_from(view.len()).unwrap_or(u32::MAX),
-                closure_id: closure.finish().to_hex(),
+                closure_id: closure.finish_closure().to_hex(),
                 baseline_changeset_id,
                 branch_changeset_id,
                 closure_truncated: board.truncated,
@@ -12445,16 +12471,22 @@ fn insert_snapshot_entry(
     })
 }
 
-/// The `GetSnapshotId` identity of `entities` without a namespace filter.
-fn snapshot_id_of(entities: &[StoredEntity]) -> Result<String, Status> {
+/// The `GetSnapshotId` identity of `entities` for `scope`.
+fn snapshot_id_of(
+    entities: &[StoredEntity],
+    scope: &trogon_atlas_core::SnapshotScope,
+) -> Result<String, Status> {
     let mut hasher = trogon_atlas_core::SnapshotHasher::new();
     for se in entities {
         let kind = entity_kind(&se.entity)?;
         let id = entity_id(&se.entity)?;
+        if !scope.namespaces().admits(&id.namespace) {
+            continue;
+        }
         let (key, hash) = snapshot_entry(&se.entity, kind, id)?;
         insert_snapshot_entry(&mut hasher, key, hash)?;
     }
-    Ok(hasher.finish().to_hex())
+    Ok(hasher.finish(scope).to_hex())
 }
 
 #[cfg(test)]
