@@ -3781,7 +3781,7 @@ fn snapshot_digest(
 ) -> Result<SnapshotDigest, Status> {
     let in_scope = all.iter().map(|se| &se.entity).filter(|entity| {
         trogon_atlas_store::refs::entity_id(entity)
-            .is_some_and(|id| scope.namespaces().admits(&id.namespace))
+            .is_none_or(|id| scope.namespaces().admits(&id.namespace))
     });
     let (hasher, entries) = snapshot_identity(in_scope, include_entries)?;
     Ok(SnapshotDigest {
@@ -7068,7 +7068,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
                 mode: mode as i32,
                 snapshot_id: view.finish(&readable_scope(&vis)).to_hex(),
                 snapshot_entity_count: u32::try_from(view.len()).unwrap_or(u32::MAX),
-                closure_id: closure.finish(&trogon_atlas_core::closure_scope()).to_hex(),
+                closure_id: closure.finish_closure().to_hex(),
                 baseline_changeset_id,
                 branch_changeset_id,
                 closure_truncated: board.truncated,

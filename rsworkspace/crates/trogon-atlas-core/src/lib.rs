@@ -52,7 +52,7 @@ pub mod transcode;
 pub mod writer_lease;
 
 pub use content_hash::{
-    canonical_json, closure_scope, entity_content_hash, ContentHash, ContentHashError,
+    canonical_json, entity_content_hash, ContentHash, ContentHashError,
     NamespaceSelection, SnapshotHasher, SnapshotReader, SnapshotScope, CONTENT_HASH_LEN,
     SNAPSHOT_IDENTITY_VERSION,
 };

@@ -323,16 +323,6 @@ pub struct SnapshotScope {
     namespaces: NamespaceSelection,
 }
 
-/// Identity framing for a closure's entries.
-///
-/// A closure is not a tenant question: the verifier recomputes it from the
-/// bundle alone, so the scope is the fixed "everything" framing rather than
-/// a reader the bundle does not carry.
-#[must_use]
-pub fn closure_scope() -> SnapshotScope {
-    SnapshotScope::new(SnapshotReader::Everything, NamespaceSelection::Readable)
-}
-
 impl SnapshotScope {
     #[must_use]
     pub fn new(reader: SnapshotReader, namespaces: NamespaceSelection) -> Self {
@@ -483,6 +473,27 @@ impl SnapshotHasher {
         let mut hasher = Sha256::new();
         hasher.update(SNAPSHOT_DOMAIN);
         scope.hash_into(&mut hasher);
+        hasher.update(self.entries.len().to_string().as_bytes());
+        hasher.update(b"\0");
+        for (key, hash) in &self.entries {
+            let key = key.as_bytes();
+            hasher.update(key.len().to_string().as_bytes());
+            hasher.update(b":");
+            hasher.update(key);
+            hasher.update(hash.as_bytes());
+        }
+        ContentHash(hasher.finalize().into())
+    }
+
+    /// Closure identity attested bundles already ship.
+    ///
+    /// Distinct from [`Self::finish`]: that digest binds a reader and a
+    /// namespace question. A saved bundle does not carry that question, and
+    /// a verifier that predates it recomputes this digest.
+    #[must_use]
+    pub fn finish_closure(&self) -> ContentHash {
+        let mut hasher = Sha256::new();
+        hasher.update(SNAPSHOT_DOMAIN);
         hasher.update(self.entries.len().to_string().as_bytes());
         hasher.update(b"\0");
         for (key, hash) in &self.entries {

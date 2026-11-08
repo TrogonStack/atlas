@@ -755,4 +755,22 @@ async fn get_snapshot_id_binds_the_reader_into_the_id() {
         .into_inner();
     assert_eq!(hidden.entity_count, 0);
     assert_eq!(hidden.entries, Vec::<pb::SnapshotEntry>::new());
+
+    let readable = |token| {
+        let mut c = c.clone();
+        async move {
+            c.get_snapshot_id(authed(
+                pb::GetSnapshotIdRequest {
+                    namespaces: Vec::new(),
+                    include_entries: false,
+                },
+                token,
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+        }
+    };
+    let (acme_all, beta_all) = (readable(ACME_TOKEN).await, readable(BETA_TOKEN).await);
+    assert_ne!(acme_all.snapshot_id, beta_all.snapshot_id);
 }

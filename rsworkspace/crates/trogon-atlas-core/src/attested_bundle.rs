@@ -359,7 +359,7 @@ pub fn closure_id(entries: &[pb::SnapshotEntry]) -> Result<ContentHash, BundleEr
         })?;
         hasher.insert(entry.key.clone(), hash)?;
     }
-    Ok(hasher.finish(&crate::closure_scope()))
+    Ok(hasher.finish_closure())
 }
 
 /// Parse a bundle from the proto3 JSON a client saved. Unknown fields are
