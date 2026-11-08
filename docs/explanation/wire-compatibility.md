@@ -176,6 +176,14 @@ optional. A client that sends the instant requires the feature first, so an
 older server refuses it rather than ignoring the field and returning the
 current model.
 
+Contract revision 24 lets an automation scenario state that it issues no
+command: `AutomationScenario.then` moves into `oneof outcome` beside the new
+`no_command`, and a scenario with neither is rejected. Field 6 keeps its number
+and JSON name, so stored scenarios and manifests are unchanged. buf reports the
+move as an acknowledged FIELD_SAME_ONEOF break. Both mutation compatibility
+floors rise to 24: an older writer would drop `no_command` from a slice it
+re-puts, so it is refused before any mutation.
+
 ## Supported combinations
 
 | Client vs server | Mutations |

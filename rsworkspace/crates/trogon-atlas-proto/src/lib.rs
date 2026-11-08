@@ -28,11 +28,11 @@ pub const CONTRACT_REVISION: u32 = 24;
 
 /// Oldest server contract revision clients built from this tree mutate
 /// against.
-pub const MIN_SERVER_CONTRACT_REVISION: u32 = 20;
+pub const MIN_SERVER_CONTRACT_REVISION: u32 = 24;
 
 /// Oldest client contract revision a server built from this tree accepts
 /// mutations from.
-pub const MIN_CLIENT_CONTRACT_REVISION: u32 = 20;
+pub const MIN_CLIENT_CONTRACT_REVISION: u32 = 24;
 
 /// Serialized `FileDescriptorSet` for the schema, for reflection-based
 /// tooling (textproto/JSON transcoding).

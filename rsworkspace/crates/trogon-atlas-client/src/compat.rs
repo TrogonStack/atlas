@@ -371,8 +371,8 @@ mod tests {
     fn revision_20_refuses_an_older_writer_before_mutation() {
         const {
             assert!(pb::CONTRACT_REVISION >= 20);
-            assert!(pb::MIN_SERVER_CONTRACT_REVISION == 20);
-            assert!(pb::MIN_CLIENT_CONTRACT_REVISION == 20);
+            assert!(pb::MIN_SERVER_CONTRACT_REVISION >= 20);
+            assert!(pb::MIN_CLIENT_CONTRACT_REVISION >= 20);
         }
         let server_requires_newer_writer = pb::GetServerInfoResponse {
             contract_revision: pb::CONTRACT_REVISION,
@@ -469,7 +469,7 @@ mod tests {
     fn writer_below_revision_20_is_refused_before_any_mutation() {
         let advertised = current_server();
         assert_eq!(advertised.contract_revision, pb::CONTRACT_REVISION);
-        assert_eq!(advertised.min_client_contract_revision, 20);
+        assert!(advertised.min_client_contract_revision >= 20);
         for intent in every_intent() {
             check(&advertised, intent).unwrap();
         }
