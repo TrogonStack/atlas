@@ -118,8 +118,12 @@ The design, whatever it is, must satisfy these:
   a review (`Deny`, `RequireBranch`, `RequireReview`) is declined. The server
   holds no durable, authorized evidence that a review happened, so a review
   requirement could only check a claim the caller makes about itself. The
-  `Deny` case is already covered by authorization, entity protection and the
-  planned invariant gates. Review stays a team convention.
+  `Deny` case is partly covered by authorization, entity protection and
+  [invariant gates](invariant-gates.md). Protection freezes a whole identity,
+  and a gate refuses a write that would introduce a declared validation
+  finding. A namespace writer can still remove an invariant from a model that
+  is not protected. None of these controls can forbid one field while allowing
+  other edits to the same entity. Review stays a team convention.
 
 ## Merge conflicts
 
