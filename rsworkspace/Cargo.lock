@@ -4704,6 +4704,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-nats",
+ "axum",
  "clap",
  "ed25519-dalek",
  "prost",
@@ -4909,6 +4910,7 @@ dependencies = [
  "prost-types",
  "serde_json",
  "sha2 0.11.1",
+ "testcontainers",
  "thiserror",
  "tokio",
  "tracing",

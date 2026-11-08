@@ -10,10 +10,10 @@ PREFIX = "TROGON_ATLAS_ARTIFACT_"
 
 
 class ArtifactValuesTest(unittest.TestCase):
-    def render(self, artifacts):
+    def render(self, artifacts, max_message_bytes=37748736):
         values = {
             "auth": {"insecureAllowAnonymous": True},
-            "config": {"maxMessageBytes": 37748736},
+            "config": {"maxMessageBytes": max_message_bytes},
             "artifacts": artifacts,
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -151,6 +151,18 @@ class ArtifactValuesTest(unittest.TestCase):
         self.assertEqual(env["TROGON_ATLAS_MAX_MESSAGE_BYTES"], "37748736")
         self.assertEqual(env["TROGON_ATLAS_ARTIFACT_MAX_BYTES"], "1048576")
         self.assertEqual(env["TROGON_ATLAS_ARTIFACT_UPLOAD_TTL_SECS"], "300")
+
+    def test_enabled_backends_enforce_message_size_boundary(self):
+        for kind in ["nats", "s3"]:
+            artifacts = self.enabled(kind, {"bucket": "fixture"})
+            boundary = artifacts["maxBytes"] + 65536
+            with self.subTest(kind=kind):
+                accepted = self.render(artifacts, max_message_bytes=boundary)
+                self.assertEqual(accepted.returncode, 0, accepted.stderr)
+                rejected = self.render(artifacts, max_message_bytes=boundary - 1)
+                self.assertNotEqual(rejected.returncode, 0)
+                self.assertIn("maxMessageBytes", rejected.stderr)
+                self.assertIn("artifacts.maxBytes", rejected.stderr)
 
     def test_unknown_backend_kind_is_rejected(self):
         self.assert_invalid(self.enabled("unknown", {}))

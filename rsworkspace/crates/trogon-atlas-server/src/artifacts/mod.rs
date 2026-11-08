@@ -1,4 +1,5 @@
 pub mod config;
+pub mod download_budget;
 pub mod storage;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -9,6 +10,13 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use tonic::Status;
 use trogon_atlas_proto as pb;
+use trogon_atlas_store::{
+    artifact_publication::{
+        ArtifactPublicationAuthority, ArtifactPublicationCandidate, ArtifactPublicationState,
+        ArtifactReceiptId,
+    },
+    StoreError,
+};
 
 use self::storage::BlobStorage;
 
@@ -27,6 +35,8 @@ struct Upload {
     phase: Phase,
     staging_key: String,
     final_key: Option<String>,
+    #[serde(default)]
+    receipt_id: Option<String>,
     backend: String,
 }
 
@@ -44,6 +54,7 @@ pub struct ArtifactService {
     catalog: Store,
     max_bytes: u64,
     upload_ttl: Duration,
+    authority: Arc<dyn ArtifactPublicationAuthority>,
 }
 
 impl ArtifactService {
@@ -52,6 +63,7 @@ impl ArtifactService {
         catalog: Store,
         max_bytes: u64,
         upload_ttl: Duration,
+        authority: Arc<dyn ArtifactPublicationAuthority>,
     ) -> Result<Self, Status> {
         validate_configuration(max_bytes, upload_ttl)?;
         Ok(Self {
@@ -59,6 +71,7 @@ impl ArtifactService {
             catalog,
             max_bytes,
             upload_ttl,
+            authority,
         })
     }
 
@@ -128,6 +141,7 @@ impl ArtifactService {
             phase: Phase::Pending,
             staging_key,
             final_key: None,
+            receipt_id: None,
             backend: self.blobs.backend_name().into(),
         };
         self.catalog
@@ -189,6 +203,10 @@ impl ArtifactService {
     ) -> Result<(), Status> {
         let (mut upload, revision) = self.load(namespace, id).await?;
         Self::require_session(&upload, principal)?;
+        if !self.info().direct_upload && upload.phase == Phase::Uploaded {
+            verify(&upload, &content, self.max_bytes)?;
+            return Ok(());
+        }
         if self.info().direct_upload || upload.phase != Phase::Pending {
             return Err(Status::failed_precondition(
                 "upload is not awaiting content",
@@ -214,9 +232,20 @@ impl ArtifactService {
         principal: &str,
     ) -> Result<pb::Artifact, Status> {
         let (mut upload, revision) = self.load(namespace, id).await?;
+        if upload.principal != principal {
+            return Err(Status::not_found("upload not found"));
+        }
+        let receipt_state = self.publication_state(&upload).await?;
+        if matches!(receipt_state, ArtifactPublicationState::Accepted(_)) {
+            if upload.phase != Phase::Ready {
+                upload.phase = Phase::Ready;
+                self.update(&upload, revision).await?;
+            }
+            return Ok(Self::artifact(&upload));
+        }
         Self::require_session(&upload, principal)?;
         if upload.phase == Phase::Ready {
-            return Ok(Self::artifact(&upload));
+            return Err(unverified_artifact());
         }
         if !matches!(upload.phase, Phase::Pending | Phase::Uploaded) {
             return Err(Status::failed_precondition(
@@ -224,30 +253,62 @@ impl ArtifactService {
             ));
         }
         let previous = upload.phase;
+        let permit = self
+            .authority
+            .capture_permit()
+            .await
+            .map_err(|error| publication_error(&error))?;
+        let existing_candidate = upload.final_key.is_some();
+        let final_key = upload
+            .final_key
+            .get_or_insert_with(|| format!("artifacts/{}", uuid::Uuid::now_v7()))
+            .clone();
+        let receipt_id = match (&upload.receipt_id, receipt_state) {
+            (Some(id), ArtifactPublicationState::Missing) => {
+                ArtifactReceiptId::parse(id).map_err(|error| publication_error(&error))?
+            }
+            _ => ArtifactReceiptId::generate(),
+        };
+        upload.receipt_id = Some(receipt_id.as_str().into());
+        let candidate = Self::candidate(&upload)?;
         upload.phase = Phase::Verifying;
         let revision = self.update(&upload, revision).await?;
         let result = async {
             let byte_limit = usize::try_from(self.max_bytes).map_err(|_| {
                 Status::failed_precondition("artifact byte limit exceeds platform capacity")
             })?;
+            if existing_candidate {
+                match self.blobs.get(&final_key, byte_limit).await {
+                    Ok(persisted) => {
+                        verify(&upload, &persisted, self.max_bytes)?;
+                        return self
+                            .authority
+                            .publish(&permit, &candidate, &receipt_id)
+                            .await
+                            .map(|_| ())
+                            .map_err(|error| publication_error(&error));
+                    }
+                    Err(error) if error.code() == tonic::Code::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
             let content = self.blobs.get(&upload.staging_key, byte_limit).await?;
             verify(&upload, &content, self.max_bytes)?;
-            let final_key = format!("artifacts/{}", uuid::Uuid::now_v7());
             self.blobs.put(&final_key, content).await?;
             let persisted = self.blobs.get(&final_key, byte_limit).await?;
             verify(&upload, &persisted, self.max_bytes)?;
-            Ok::<_, Status>(final_key)
+            self.authority
+                .publish(&permit, &candidate, &receipt_id)
+                .await
+                .map_err(|error| publication_error(&error))?;
+            Ok::<_, Status>(())
         }
         .await;
-        let final_key = match result {
-            Ok(key) => key,
-            Err(error) => {
-                upload.phase = previous;
-                let _ = self.update(&upload, revision).await;
-                return Err(error);
-            }
-        };
-        upload.final_key = Some(final_key);
+        if let Err(error) = result {
+            upload.phase = previous;
+            let _ = self.update(&upload, revision).await;
+            return Err(error);
+        }
         upload.phase = Phase::Ready;
         self.update(&upload, revision).await?;
         if !self.info().direct_upload {
@@ -267,10 +328,42 @@ impl ArtifactService {
         }
     }
 
+    fn candidate(upload: &Upload) -> Result<ArtifactPublicationCandidate, Status> {
+        ArtifactPublicationCandidate::new(
+            &Self::artifact(upload),
+            &upload.backend,
+            upload
+                .final_key
+                .as_deref()
+                .ok_or_else(unverified_artifact)?,
+            &upload.principal,
+        )
+        .map_err(|error| publication_error(&error))
+    }
+
+    async fn publication_state(&self, upload: &Upload) -> Result<ArtifactPublicationState, Status> {
+        let Some(id) = upload.receipt_id.as_deref() else {
+            return Ok(ArtifactPublicationState::Missing);
+        };
+        self.authority
+            .verify(
+                &Self::candidate(upload)?,
+                &ArtifactReceiptId::parse(id).map_err(|error| publication_error(&error))?,
+            )
+            .await
+            .map_err(|error| publication_error(&error))
+    }
+
     async fn ready(&self, namespace: &str, id: &str) -> Result<Upload, Status> {
         let (upload, _) = self.load(namespace, id).await?;
         if upload.phase != Phase::Ready {
             return Err(Status::not_found("artifact not found"));
+        }
+        if !matches!(
+            self.publication_state(&upload).await?,
+            ArtifactPublicationState::Accepted(_)
+        ) {
+            return Err(unverified_artifact());
         }
         Ok(upload)
     }
@@ -283,21 +376,25 @@ impl ArtifactService {
         &self,
         namespace: &str,
         id: &str,
-    ) -> Result<pb::GetArtifactContentResponse, Status> {
+    ) -> Result<download_budget::BudgetedContent, Status> {
         let upload = self.ready(namespace, id).await?;
         let key = upload
             .final_key
             .as_deref()
             .ok_or_else(|| Status::internal("invalid artifact record"))?;
-        let byte_limit = usize::try_from(MAX_ARTIFACT_BYTES).map_err(|_| {
+        let lease = download_budget::DownloadLease::reserve(upload.size)?;
+        let byte_limit = usize::try_from(upload.size).map_err(|_| {
             Status::failed_precondition("artifact byte limit exceeds platform capacity")
         })?;
         let content = self.blobs.get(key, byte_limit).await?;
         verify(&upload, &content, MAX_ARTIFACT_BYTES)?;
-        Ok(pb::GetArtifactContentResponse {
-            artifact: Some(Self::artifact(&upload)),
-            content: content.to_vec(),
-        })
+        Ok(download_budget::BudgetedContent::new(
+            pb::GetArtifactContentResponse {
+                artifact: Some(Self::artifact(&upload)),
+                content: content.to_vec(),
+            },
+            lease,
+        ))
     }
 
     pub async fn download(
@@ -331,6 +428,24 @@ impl ArtifactService {
     }
 }
 
+fn unverified_artifact() -> Status {
+    Status::failed_precondition("artifact has no verified publication receipt; reupload required")
+}
+
+fn publication_error(error: &StoreError) -> Status {
+    match error {
+        StoreError::NotWriter { .. } => {
+            Status::unavailable("artifact writer lease no longer authorizes publication")
+        }
+        StoreError::InvalidArgument(_) => {
+            Status::failed_precondition("invalid artifact publication identity")
+        }
+        _ => {
+            Status::unavailable("artifact publication authority unavailable; retry the same upload")
+        }
+    }
+}
+
 pub fn validate_namespace(namespace: &str) -> Result<(), Status> {
     trogon_atlas_core::NamespaceId::parse(namespace)
         .map(|_| ())
@@ -340,7 +455,7 @@ pub fn validate_namespace(namespace: &str) -> Result<(), Status> {
 pub(super) fn validate_configuration(max_bytes: u64, upload_ttl: Duration) -> Result<(), Status> {
     if max_bytes == 0
         || max_bytes > MAX_ARTIFACT_BYTES
-        || upload_ttl.is_zero()
+        || upload_ttl < Duration::from_secs(1)
         || upload_ttl > Duration::from_secs(3600)
     {
         return Err(Status::invalid_argument(

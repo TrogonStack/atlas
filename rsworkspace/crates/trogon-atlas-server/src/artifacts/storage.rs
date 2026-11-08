@@ -6,6 +6,7 @@ use std::{
 use async_nats::jetstream::{
     context::GetStreamErrorKind,
     object_store::{GetErrorKind, ObjectStore as NatsObjectStore},
+    stream::{DiscardPolicy, RetentionPolicy},
     Context, ErrorCode,
 };
 use async_trait::async_trait;
@@ -70,13 +71,7 @@ impl NatsBlobStorage {
             ));
         }
         match context.get_stream(format!("OBJ_{}", config.bucket)).await {
-            Ok(stream) => {
-                if !stream.cached_info().config.max_age.is_zero() {
-                    return Err(Status::failed_precondition(
-                        "artifact object storage cannot expire accepted content",
-                    ));
-                }
-            }
+            Ok(_) => {}
             Err(error) => match error.kind() {
                 GetStreamErrorKind::JetStream(error)
                     if error.error_code() == ErrorCode::STREAM_NOT_FOUND =>
@@ -95,6 +90,26 @@ impl NatsBlobStorage {
             .get_object_store(&config.bucket)
             .await
             .map_err(|_| unavailable())?;
+        let stream = context
+            .get_stream(format!("OBJ_{}", config.bucket))
+            .await
+            .map_err(|_| unavailable())?;
+        let stream_config = &stream.cached_info().config;
+        if !stream_config.max_age.is_zero() {
+            return Err(Status::failed_precondition(
+                "artifact object storage cannot expire accepted content",
+            ));
+        }
+        let global_eviction = stream_config.discard == DiscardPolicy::Old
+            && (stream_config.max_bytes > 0 || stream_config.max_messages > 0);
+        let chunk_eviction = stream_config.max_messages_per_subject > 0
+            && !(stream_config.discard == DiscardPolicy::New
+                && stream_config.discard_new_per_subject);
+        if stream_config.retention != RetentionPolicy::Limits || global_eviction || chunk_eviction {
+            return Err(Status::failed_precondition(
+                "artifact object storage must retain accepted content without eviction",
+            ));
+        }
         Ok(Self { bucket })
     }
 }
@@ -881,11 +896,13 @@ mod tests {
             .create_key_value(catalog_config.clone())
             .await
             .unwrap();
+        let store = nats.store().await;
         let service = crate::artifacts::ArtifactService::new(
             storage.clone(),
             catalog,
             1024,
             Duration::from_secs(60),
+            trogon_atlas_store::Store::artifact_publication_authority(&store).unwrap(),
         )
         .unwrap();
         let namespace = "artifact-s3-fixture";

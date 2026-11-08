@@ -708,7 +708,7 @@ async fn run(
     .with_baseline_protection(baseline_protection.clone());
     if let Some(artifacts) = args
         .artifacts
-        .open(&args.nats_url, args.max_message_bytes)
+        .open(&args.nats_url, args.max_message_bytes, store.clone())
         .await?
     {
         svc = svc.with_artifacts(artifacts);
@@ -998,7 +998,10 @@ async fn run(
     >;
     let grpc_service = ServiceServer::new(svc)
         .max_decoding_message_size(args.max_message_bytes)
-        .max_encoding_message_size(args.max_message_bytes);
+        .max_encoding_message_size(
+            args.artifacts
+                .max_encoding_message_bytes(args.max_message_bytes)?,
+        );
 
     let health = trogon_atlas_server::health::Health::new().await;
 
@@ -1340,7 +1343,7 @@ async fn restore_namespace_snapshot(
                 return Err(anyhow::anyhow!(
                     "restoring namespace {}: {err}",
                     record.id.as_str()
-                ))
+                ));
             }
         }
     }

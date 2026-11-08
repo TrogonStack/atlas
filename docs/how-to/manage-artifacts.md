@@ -103,6 +103,12 @@ CLI uploads are not subject to browser CORS.
 The S3 backend still requires NATS for the artifact catalog and the rest of
 the Atlas service. Configuring S3 does not replace the model store.
 
+Back up the model store's writer-lease bucket with the artifact catalog and
+objects. It also holds durable acceptance receipts; purging or expiring it
+makes retained files unverifiable. The
+[publication and upgrade contract](../explanation/single-writer.md#artifact-publication)
+describes the store format change and coordinated upgrade requirements.
+
 Changing the configured backend, bucket, or endpoint does not migrate existing
 artifacts. Preserve the matching catalog and blobs, or migrate them together
 before changing the deployment configuration.
@@ -125,6 +131,17 @@ The gRPC message limit must be at least this value plus 65,536 bytes for
 request metadata. `TROGON_ATLAS_ARTIFACT_UPLOAD_TTL_SECS` defaults to 900 seconds
 and must be between 1 and 3,600 seconds. Configure these limits in deployment,
 not independently in each client.
+
+When storage is enabled, response encoding retains capacity for the supported
+32 MiB artifact size plus metadata. Lowering upload admission and request
+decoding limits therefore does not make previously confirmed files unreadable.
+
+Concurrent RPC downloads share a 256 MiB payload budget. Each reserves six
+times the stored file size plus 128 KiB for buffering and encoding, including
+response bytes still held by the transport. When capacity is exhausted, the
+RPC returns `RESOURCE_EXHAUSTED` before fetching the file; retry after active
+transfers finish. Allow additional deployment memory for model state,
+transport buffers and the allocator; this budget is not a process memory limit.
 
 ## Upload with the CLI
 
@@ -149,6 +166,11 @@ returned artifact includes its namespace, opaque artifact ID, filename, media
 type, size and digest. Keep the namespace and artifact ID together for later
 RPC reads. Uploading does not publish a model
 change or attach the file to an entity.
+
+If the completion reply is lost, SDK errors and CLI failure output preserve
+the namespace and upload ID. Retry `CompleteArtifactUpload` with those values
+to recover the accepted artifact. An identical NATS content-transfer retry is
+also accepted after its size and digest are verified.
 
 Treat media type as declared presentation metadata. Successful completion
 establishes byte integrity; it does not certify screenshot contents, image
@@ -243,6 +265,19 @@ abandoned staging objects through a reviewed operator procedure that preserves
 their catalog records. A signed PUT can start before expiry and finish after
 it; expiry alone does not prove that a deleted staging key cannot reappear.
 Retain cleanup evidence and revisit temporary objects after uncertain writes.
+
+Completion records its final candidate key before writing bytes. After a
+provider error, a retry verifies and reuses that candidate rather than creating
+another final object. This records named candidates; it does not recover NATS
+chunks left by a crash before object metadata was published.
+
+An interrupted request can leave its session in `Receiving` or `Verifying`.
+Completion recovers an existing valid acceptance receipt even if the catalog
+update was interrupted or the upload lifetime has ended. Without that receipt,
+these phases refuse retries because the service cannot yet distinguish
+abandoned provider work from a live writer. Begin a new upload in that case;
+retain the old catalog record for future cleanup. Automatic phase takeover
+needs the operation leases defined in the proposed lifecycle contract.
 
 The proposed [artifact lifecycle and cleanup contract](../reference/artifact-lifecycle.md)
 defines temporary markers, durable write receipts, cleanup claims, NATS

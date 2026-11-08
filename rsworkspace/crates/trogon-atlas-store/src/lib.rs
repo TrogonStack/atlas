@@ -1,3 +1,4 @@
+pub mod artifact_publication;
 pub mod error;
 pub mod key;
 pub mod metrics;

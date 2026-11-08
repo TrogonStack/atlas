@@ -10,13 +10,41 @@ use trogon_atlas_proto::{
 };
 use trogon_atlas_server::{
     artifacts::{storage::NatsBlobStorage, ArtifactService},
-    auth::{BearerAuth, TokenRegistry},
+    auth::{BearerAuth, LiveRegistry, TokenRegistry},
     mcp::{data_plane, DataPlane},
     metrics::ServerMetrics,
     service::EventModelServiceImpl,
 };
+use trogon_atlas_store::Store as _;
 
 async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, DataPlane) {
+    let (endpoint, namespace, task, data, _) = fixture_with_registry().await;
+    (endpoint, namespace, task, data)
+}
+
+fn registry(restrict_writer: bool) -> TokenRegistry {
+    let namespaces = if restrict_writer {
+        vec!["artifact-allowed-only"]
+    } else {
+        Vec::new()
+    };
+    TokenRegistry::from_file_contents(serde_json::from_value(serde_json::json!({"principals":{
+        "writer":{"role":"writer","parent":"artifact-owner","namespaces":namespaces,"tokens":["artifact-writer-fixture"]},
+        "reader":{"role":"reader","parent":"artifact-owner","tokens":["artifact-reader-fixture"]},
+        "hidden":{"role":"reader","parent":"different-owner","tokens":["artifact-hidden-fixture"]},
+        "foreign-writer":{"role":"writer","parent":"different-owner","tokens":["artifact-foreign-writer-fixture"]},
+        "agent-writer":{"kind":"agent","role":"writer","parent":"artifact-owner","tokens":["artifact-agent-writer-fixture"]},
+        "unrestricted":{"role":"writer","tokens":["artifact-unrestricted-fixture"]}
+    }})).unwrap()).unwrap()
+}
+
+async fn fixture_with_registry() -> (
+    String,
+    String,
+    tokio::task::JoinHandle<()>,
+    DataPlane,
+    LiveRegistry,
+) {
     let nats = trogon_atlas_testsupport::shared().await;
     let js = async_nats::jetstream::new(async_nats::connect(&nats.url).await.unwrap());
     let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
@@ -39,16 +67,17 @@ async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, DataPlane) {
         .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let store = nats.store().await;
     let artifacts = Arc::new(
         ArtifactService::new(
             Arc::new(blobs),
             catalog,
             1024 * 1024,
             Duration::from_secs(60),
+            store.artifact_publication_authority().unwrap(),
         )
         .unwrap(),
     );
-    let store = nats.store().await;
     let service = EventModelServiceImpl::try_new(Arc::new(store), ServerMetrics::default())
         .unwrap()
         .with_artifacts(artifacts);
@@ -63,16 +92,13 @@ async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, DataPlane) {
         .namespace
         .unwrap()
         .id;
-    let registry = TokenRegistry::from_file_contents(serde_json::from_value(serde_json::json!({"principals":{
-        "writer":{"role":"writer","parent":"artifact-owner","tokens":["artifact-writer-fixture"]},
-        "reader":{"role":"reader","parent":"artifact-owner","tokens":["artifact-reader-fixture"]},
-        "hidden":{"role":"reader","parent":"different-owner","tokens":["artifact-hidden-fixture"]}
-    }})).unwrap()).unwrap();
+    let auth = BearerAuth::new(registry(false));
+    let live = auth.live();
     let data = data_plane(
         EventModelServiceServer::new(service)
             .max_decoding_message_size(2 * 1024 * 1024)
             .max_encoding_message_size(2 * 1024 * 1024),
-        BearerAuth::new(registry),
+        auth,
     );
     let mut routes = tonic::service::Routes::builder();
     routes.add_service(data.clone());
@@ -85,7 +111,7 @@ async fn fixture() -> (String, String, tokio::task::JoinHandle<()>, DataPlane) {
             .await
             .unwrap();
     });
-    (endpoint, namespace, task, data)
+    (endpoint, namespace, task, data, live)
 }
 
 async fn client(endpoint: &str, token: &str) -> trogon_atlas_client::client::Client {
@@ -102,6 +128,296 @@ fn begin(namespace: &str, content: &[u8]) -> pb::BeginArtifactUploadRequest {
         size: content.len() as u64,
         sha256: trogon_atlas_client::artifacts::sha256_hex(content),
     }
+}
+
+fn event(namespace: &str) -> pb::PutEntityRequest {
+    pb::PutEntityRequest {
+        entity: Some(pb::Entity {
+            system: None,
+            kind: Some(pb::entity::Kind::Event(pb::Event {
+                id: Some(pb::Id {
+                    namespace: namespace.into(),
+                    slug: "claimed".into(),
+                    version: 1,
+                }),
+                title: "Claimed".into(),
+                ..Default::default()
+            })),
+        }),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn artifact_unrestricted_upload_reserves_unclaimed_namespace_permanently() {
+    let (endpoint, _, task, _) = fixture().await;
+    let mut writer = client(&endpoint, "artifact-unrestricted-fixture").await;
+    let mut foreign = client(&endpoint, "artifact-foreign-writer-fixture").await;
+    let namespace = format!(
+        "artifact-unclaimed-{}",
+        trogon_atlas_testsupport::unique_suffix_for_test()
+    );
+    let content = b"reserved artifact".to_vec();
+    let upload = writer
+        .begin_artifact_upload(begin(&namespace, &content))
+        .await
+        .unwrap()
+        .into_inner();
+    let listed = writer
+        .list_namespaces(pb::ListNamespacesRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    let reserved = listed
+        .namespaces
+        .iter()
+        .find(|record| record.id == namespace)
+        .expect("accepting an upload must reserve even an unrestricted writer's namespace");
+    assert_eq!(reserved.parent, "default");
+    writer
+        .upload_artifact_content(pb::UploadArtifactContentRequest {
+            namespace: namespace.clone(),
+            upload_id: upload.upload_id.clone(),
+            content: content.clone(),
+        })
+        .await
+        .unwrap();
+    let artifact = writer
+        .complete_artifact_upload(pb::CompleteArtifactUploadRequest {
+            namespace: namespace.clone(),
+            upload_id: upload.upload_id,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .artifact
+        .unwrap();
+    assert_eq!(
+        foreign
+            .put_entity(event(&namespace))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    assert_eq!(
+        foreign
+            .get_artifact_content(pb::GetArtifactContentRequest {
+                namespace: namespace.clone(),
+                artifact_id: artifact.artifact_id.clone(),
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    assert_eq!(
+        writer
+            .get_artifact_content(pb::GetArtifactContentRequest {
+                namespace,
+                artifact_id: artifact.artifact_id,
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .content,
+        content
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn artifact_bound_writer_can_reserve_a_new_namespace() {
+    let (endpoint, _, task, _) = fixture().await;
+    let mut writer = client(&endpoint, "artifact-writer-fixture").await;
+    let namespace = format!(
+        "artifact-owned-{}",
+        trogon_atlas_testsupport::unique_suffix_for_test()
+    );
+    writer
+        .begin_artifact_upload(begin(&namespace, b"new namespace"))
+        .await
+        .expect("a bound writer may reserve an unclaimed namespace for its upload");
+    let listed = writer
+        .list_namespaces(pb::ListNamespacesRequest {})
+        .await
+        .unwrap()
+        .into_inner();
+    let record = listed
+        .namespaces
+        .iter()
+        .find(|record| record.id == namespace)
+        .expect("the accepted upload's namespace must be registered");
+    assert_eq!(record.parent, "artifact-owner");
+    task.abort();
+}
+
+#[tokio::test]
+async fn artifact_retention_preserves_branch_namespace_ownership_after_deletion() {
+    let (endpoint, _, task, _) = fixture().await;
+    let mut writer = client(&endpoint, "artifact-agent-writer-fixture").await;
+    let mut foreign = client(&endpoint, "artifact-foreign-writer-fixture").await;
+    let suffix = trogon_atlas_testsupport::unique_suffix_for_test();
+    let namespace = format!("artifact-branch-{suffix}");
+    let branch = format!("@artifact-owner:artifact-branch-{suffix}");
+    writer
+        .create_branch(pb::CreateBranchRequest {
+            name: branch.clone(),
+            doc: "Artifact namespace retention".into(),
+        })
+        .await
+        .unwrap();
+    let mut branch_write = tonic::Request::new(event(&namespace));
+    branch_write
+        .metadata_mut()
+        .insert("x-trogon-atlas-branch", branch.parse().unwrap());
+    writer.put_entity(branch_write).await.unwrap();
+    assert_eq!(
+        writer
+            .get_entity(pb::GetEntityRequest {
+                kind: pb::EntityKind::Event.into(),
+                id: Some(pb::Id {
+                    namespace: namespace.clone(),
+                    slug: "claimed".into(),
+                    version: 1,
+                }),
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    let content = b"retained after branch deletion".to_vec();
+    let upload = writer
+        .begin_artifact_upload(begin(&namespace, &content))
+        .await
+        .unwrap()
+        .into_inner();
+    writer
+        .upload_artifact_content(pb::UploadArtifactContentRequest {
+            namespace: namespace.clone(),
+            upload_id: upload.upload_id.clone(),
+            content: content.clone(),
+        })
+        .await
+        .unwrap();
+    let artifact = writer
+        .complete_artifact_upload(pb::CompleteArtifactUploadRequest {
+            namespace: namespace.clone(),
+            upload_id: upload.upload_id,
+        })
+        .await
+        .unwrap()
+        .into_inner()
+        .artifact
+        .unwrap();
+    writer
+        .delete_branch(pb::DeleteBranchRequest { name: branch })
+        .await
+        .unwrap();
+    assert_eq!(
+        writer
+            .get_artifact_content(pb::GetArtifactContentRequest {
+                namespace: namespace.clone(),
+                artifact_id: artifact.artifact_id.clone(),
+            })
+            .await
+            .expect("branch deletion must retain the artifact owner's namespace")
+            .into_inner()
+            .content,
+        content
+    );
+    assert_eq!(
+        foreign
+            .put_entity(event(&namespace))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    assert_eq!(
+        foreign
+            .get_artifact_content(pb::GetArtifactContentRequest {
+                namespace,
+                artifact_id: artifact.artifact_id,
+            })
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::NotFound
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn artifact_writer_namespace_scope_is_rechecked_for_valid_upload_sessions() {
+    let (endpoint, namespace, task, _, live) = fixture_with_registry().await;
+    let mut writer = client(&endpoint, "artifact-writer-fixture").await;
+    let content = b"valid scoped session".to_vec();
+    let upload = writer
+        .begin_artifact_upload(begin(&namespace, &content))
+        .await
+        .unwrap()
+        .into_inner();
+    live.install(Arc::new(registry(true)));
+    assert_eq!(
+        writer
+            .begin_artifact_upload(begin(&namespace, &content))
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    let transfer = pb::UploadArtifactContentRequest {
+        namespace: namespace.clone(),
+        upload_id: upload.upload_id.clone(),
+        content: content.clone(),
+    };
+    assert_eq!(
+        writer
+            .upload_artifact_content(transfer.clone())
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    live.install(Arc::new(registry(false)));
+    writer.upload_artifact_content(transfer).await.unwrap();
+    live.install(Arc::new(registry(true)));
+    let completion = pb::CompleteArtifactUploadRequest {
+        namespace: namespace.clone(),
+        upload_id: upload.upload_id,
+    };
+    assert_eq!(
+        writer
+            .complete_artifact_upload(completion.clone())
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::PermissionDenied
+    );
+    live.install(Arc::new(registry(false)));
+    let artifact = writer
+        .complete_artifact_upload(completion)
+        .await
+        .unwrap()
+        .into_inner()
+        .artifact
+        .unwrap();
+    live.install(Arc::new(registry(true)));
+    assert_eq!(
+        writer
+            .get_artifact_content(pb::GetArtifactContentRequest {
+                namespace,
+                artifact_id: artifact.artifact_id,
+            })
+            .await
+            .unwrap()
+            .into_inner()
+            .content,
+        content
+    );
+    task.abort();
 }
 
 #[tokio::test]
@@ -403,12 +719,14 @@ async fn upload_record_survives_service_restart_and_final_content_ignores_stagin
         })
         .await
         .unwrap();
+    let store = nats.store().await;
     let make = || {
         ArtifactService::new(
             blobs.clone(),
             catalog.clone(),
             1024,
             Duration::from_secs(60),
+            store.artifact_publication_authority().unwrap(),
         )
         .unwrap()
     };

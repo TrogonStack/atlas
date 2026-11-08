@@ -70,6 +70,46 @@ The batch journal header carries the epoch the writer held when it started
 the batch (`writer_epoch`), so a recovered batch is attributable to the
 lease holder that wrote it, even across a takeover.
 
+## Artifact publication
+
+File verification can outlast a lease or overlap a writer takeover. A local
+writer check before provider I/O cannot authorize the eventual publication.
+Artifact completion therefore captures the original holder and epoch, then
+conditionally publishes an immutable acceptance receipt in the same KV stream
+as lease changes. The publication checks both the stream sequence and the
+unused receipt subject. A concurrent renewal or takeover requires a fresh
+snapshot, and a different holder or epoch refuses publication.
+
+Lease snapshots use the leader-backed stream API because direct KV reads can
+lag on a follower. The receipt's server publication timestamp must also precede
+the captured lease expiry; a delayed message arriving afterward remains
+rejected even when no takeover occurred. Renewals by the same holder and epoch
+can extend that expiry while verification runs.
+
+The receipt binds the artifact metadata, creator, backend and final object key. A
+catalog `Ready` row is a projection of that acceptance, and every metadata,
+content or download-grant read requires a matching valid receipt. Completion
+can recover an already accepted result after session expiry or an interrupted
+catalog update. It cannot turn a missing or rejected receipt into acceptance
+without a new authorized publication.
+
+The lease bucket (`trogon-atlas-writer-lease` by default) now also retains
+artifact receipts. Back it up with the
+artifact catalog and object storage. Do not purge it as disposable lease state,
+expire its messages or configure eviction of old records. Capacity refusal is
+safe for retained receipts, but operators must leave headroom for further
+publications. Artifact storage refuses a store without this publication
+authority.
+
+The store schema marker includes `artifact-receipts-v1`. Stores with the prior
+marker are refused even when artifact storage is disabled. Follow the
+[greenfield development policy](wire-compatibility.md#current-development-policy):
+recreate development stores or provide a separately reviewed migration before
+upgrading retained data. Stop older replicas before starting the new version;
+a startup marker check cannot stop a process that is already running. Existing
+artifact rows without verified receipts retain their bytes and require
+reupload rather than invented historical acceptance.
+
 ## What this does not do
 
 Fencing makes it safe for more than one process to exist; it does not load

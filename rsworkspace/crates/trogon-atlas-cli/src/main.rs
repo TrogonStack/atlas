@@ -1315,6 +1315,11 @@ async fn run(
                         "artifact must be a regular file within the client transfer limit",
                     ));
                 }
+                if metadata.len() == 0 {
+                    return Err(trogon_atlas_client::failure::invalid_input(
+                        "artifact file must not be empty",
+                    ));
+                }
             }
             let mut client = client::connect_with_options(
                 &endpoint,
@@ -1341,7 +1346,7 @@ async fn run(
                     media_type,
                 } => {
                     let artifact = trogon_atlas_client::artifacts::upload_file(
-                        &mut client,
+                        &client,
                         &namespace,
                         &file,
                         media_type.as_deref(),
@@ -1366,10 +1371,7 @@ async fn run(
                     output,
                 } => {
                     let artifact = trogon_atlas_client::artifacts::download_file(
-                        &mut client,
-                        &namespace,
-                        &id,
-                        &output,
+                        &client, &namespace, &id, &output,
                     )
                     .await?;
                     trogon_atlas_client::artifacts::artifact_json(&artifact)?

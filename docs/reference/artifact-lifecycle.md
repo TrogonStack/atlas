@@ -1,16 +1,17 @@
 # Artifact lifecycle and cleanup contract
 
 Status: proposed cleanup contract. Upload, verification and retrieval exist;
-automatic garbage collection, provider lifecycle tags, write reservations and
-model-reference retention do not. See the implemented
+automatic garbage collection, provider lifecycle tags, complete provider write
+reservations and model-reference retention do not. See the implemented
 [artifact workflow](../how-to/manage-artifacts.md).
 
 ## Confirmation and retention
 
 `complete_artifact_upload` confirms that the declared bytes were verified,
-persisted under a separate immutable key, read back and published as `Ready`
-in the artifact catalog. Confirmation does not mean attachment to an Event
-Model. A retry after successful confirmation returns the accepted artifact.
+persisted under a separate immutable key, read back, accepted by a fenced
+publication receipt and materialized as `Ready` in the artifact catalog.
+Confirmation does not mean attachment to an Event Model. A retry after
+successful confirmation returns the accepted artifact.
 
 Artifact retention is independent of upload-session expiry. A confirmed
 file can be retained by its namespace and artifact ID for later association
@@ -32,9 +33,12 @@ contract below is implemented. No blanket final-object TTL is permitted.
 
 ## Temporary markers and provider tags
 
-The NATS KV catalog is authoritative for lifecycle, ownership and deletion
-eligibility. It must survive independently of upload grants. A storage tag
-or prefix alone never authorizes deletion of an accepted artifact.
+The NATS KV catalog tracks upload lifecycle and ownership. Immutable
+publication receipts in the model store's writer-lease bucket authorize
+acceptance, and a matching receipt protects its selected final object even
+before the catalog materializes `Ready`. Both stores must survive independently
+of upload grants. The proposed cleanup eligibility checks must consult that
+authority; a storage tag or prefix alone never authorizes deletion.
 
 Temporary bytes use `staging/`; final candidates use fresh `artifacts/` keys.
 Neither name is reused by a later upload or promotion attempt. Confirmation
@@ -63,6 +67,11 @@ cleanup queue. All decisions affecting completion and reclamation use the
 same record's compare-and-swap revision. Any separate scheduling index is
 only a projection and must be repairable from the catalog.
 
+The service already records its named final candidate before writing bytes and
+its receipt ID before publication. The provider cleanup handles, operation
+leases and cleanup claims below remain proposed; a named key does not identify
+unnamed NATS chunks left by an interrupted write.
+
 | Record data | Required purpose |
 | --- | --- |
 | Namespace, upload ID, creator, backend instance | Preserve ownership and bind cleanup to the exact configured bucket/store. A backend name alone is insufficient after configuration changes. |
@@ -86,6 +95,13 @@ and retry, rather than being treated as proof that no bytes were written.
 
 ## Completion and cleanup coordination
 
+The catalog and acceptance receipts live in different streams. Catalog
+compare-and-swap alone cannot exclude a concurrent receipt publication. Before
+enabling deletion, the cleaner needs a shared fenced authority or a durable
+coordination protocol that prevents acceptance while a cleanup claim is held.
+Until that protocol is implemented and verified, retain uncertain candidates
+and keep automatic deletion disabled.
+
 1. Begin creates the durable session and staging reservation, then returns
    the upload instructions. A failed catalog write returns no usable grant.
 1. An Atlas-mediated transfer claims a receiving lease before provider I/O.
@@ -95,14 +111,16 @@ and retry, rather than being treated as proof that no bytes were written.
    staged bytes, reserves and persists a fresh final-write plan, then writes
    and reads back the candidate. Renewals and phase changes require the
    current operation generation and an unexpired lease.
-1. Completion publishes `Ready` and selects that candidate in the same
-   conditional catalog update. A lost lease or cleanup claim prevents this
-   update. A response lost after publication is recovered by retrying
-   completion, which returns the same accepted artifact.
+1. Completion publishes a writer-fenced acceptance receipt, then materializes
+   `Ready` and selects the candidate in a conditional catalog update. The
+   proposed operation and cleanup claims must also fence publication. A lost
+   writer lease prevents new acceptance; a late catalog update cannot create
+   authority. A lost response is recovered by retrying completion.
 1. Cleanup conditionally expires abandoned sessions after session and
    operation deadlines permit. This transition competes with verification
-   and Ready publication on the same revision. A worker must reload after
-   a conflict, not delete based on its old observation.
+   on the same revision. Before expiring a session, the worker must recover any
+   valid acceptance receipt and protect its selected final object. A worker
+   must reload after a conflict, not delete based on its old observation.
 1. For a Ready record, cleanup claims only staging and unselected attempts.
    It does not change Ready into an unavailable phase or collect the
    selected final object.

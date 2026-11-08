@@ -53,8 +53,7 @@ pub(crate) const DEFAULT_LEASE_DURATION: Duration = Duration::from_secs(15);
 /// before its lease is eligible for takeover.
 pub(crate) const DEFAULT_LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(5);
 
-/// The single key every lease row lives under. One bucket, one lease: no
-/// second key is ever written here.
+/// Artifact publication receipts use separate immutable keys in this same stream.
 const LEASE_KEY: &str = "writer-lease";
 
 /// On-disk encoding of the lease row in the `trogon-atlas-writer-lease` KV
@@ -88,6 +87,50 @@ pub(crate) struct WriterLease {
 }
 
 impl WriterLease {
+    pub(super) fn publication_identity(&self) -> StoreResult<(String, Epoch)> {
+        if !self.is_writer() {
+            return Err(StoreError::NotWriter {
+                role: self.status().role,
+                epoch: self.current_epoch(),
+            });
+        }
+        Ok((self.holder_id.clone(), self.current_epoch()))
+    }
+
+    pub(super) async fn publication_snapshot(
+        &self,
+        stream: &async_nats::jetstream::stream::Stream,
+        subject: &str,
+        holder: &str,
+        epoch: Epoch,
+    ) -> StoreResult<PublicationLease> {
+        // Direct KV reads may lag takeover on a follower, even after fresh stream info.
+        let message = tokio::time::timeout(
+            KV_OP_TIMEOUT,
+            stream.get_last_raw_message_by_subject(subject),
+        )
+        .await
+        .map_err(|_| StoreError::Unavailable("artifact writer lease read timed out".into()))?
+        .map_err(|_| StoreError::Unavailable("artifact writer lease unavailable".into()))?;
+        let row = LeaseRow::decode(message.payload)
+            .map_err(|_| StoreError::Unavailable("invalid artifact writer lease".into()))?;
+        if message.subject.as_str() != subject
+            || holder != self.holder_id
+            || row.holder_id != holder
+            || row.epoch != epoch.get()
+            || row.expires_at_micros <= now_micros()
+        {
+            return Err(StoreError::NotWriter {
+                role: self.status().role,
+                epoch,
+            });
+        }
+        Ok(PublicationLease {
+            revision: message.sequence,
+            expires_at_micros: row.expires_at_micros,
+        })
+    }
+
     pub(crate) fn new(configured_role: WriterRole, lease_duration: Duration) -> Self {
         Self {
             holder_id: uuid::Uuid::now_v7().to_string(),
@@ -182,6 +225,11 @@ impl WriterLease {
         self.epoch.store(epoch, Ordering::Release);
         *self.last_known_holder.lock() = holder_id;
     }
+}
+
+pub(super) struct PublicationLease {
+    pub(super) revision: u64,
+    pub(super) expires_at_micros: i64,
 }
 
 /// Background loop driving one [`WriterLease`]. Runs for the lifetime of

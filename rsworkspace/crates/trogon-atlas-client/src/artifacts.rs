@@ -12,6 +12,37 @@ use crate::{client::Client, failure::invalid_input};
 pub const MAX_TRANSFER_BYTES: usize = 32 * 1024 * 1024;
 pub const MAX_MESSAGE_BYTES: usize = 36 * 1024 * 1024;
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct UploadRecovery {
+    pub namespace: String,
+    pub upload_id: String,
+}
+
+impl UploadRecovery {
+    #[must_use]
+    pub fn completion_request(&self) -> pb::CompleteArtifactUploadRequest {
+        pb::CompleteArtifactUploadRequest {
+            namespace: self.namespace.clone(),
+            upload_id: self.upload_id.clone(),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("artifact completion failed; retry CompleteArtifactUpload with namespace {namespace} and upload_id {upload_id}", namespace = .recovery.namespace, upload_id = .recovery.upload_id)]
+pub struct UploadCompletionError {
+    pub recovery: UploadRecovery,
+    #[source]
+    pub(crate) source: anyhow::Error,
+}
+
+fn transfer_client(client: &Client) -> Client {
+    client
+        .clone()
+        .max_decoding_message_size(MAX_MESSAGE_BYTES)
+        .max_encoding_message_size(MAX_MESSAGE_BYTES)
+}
+
 fn json<M: prost::Message>(name: &str, message: &M) -> Result<Value> {
     Ok(TranscodePool::builtin()?.message_json_value(
         &format!("trogonatlas.api.eventmodel.v1alpha1.{name}"),
@@ -90,12 +121,13 @@ fn media_type(path: &Path) -> &'static str {
 }
 
 pub async fn upload_file(
-    client: &mut Client,
+    client: &Client,
     namespace: &str,
     path: &Path,
     supplied_media_type: Option<&str>,
     timeout: Duration,
 ) -> Result<pb::Artifact> {
+    let mut client = transfer_client(client);
     let info = client
         .get_artifact_storage_info(pb::GetArtifactStorageInfoRequest {})
         .await?
@@ -139,19 +171,24 @@ pub async fn upload_file(
             })
             .await?;
     }
-    let artifact = client
-        .complete_artifact_upload(pb::CompleteArtifactUploadRequest {
-            namespace: namespace.to_owned(),
-            upload_id: upload.upload_id,
-        })
-        .await?
-        .into_inner()
-        .artifact
-        .context("server omitted the completed artifact")?;
-    if artifact.namespace != namespace || artifact.size != size || artifact.sha256 != digest {
-        bail!("completed artifact does not match the uploaded file");
+    let recovery = UploadRecovery {
+        namespace: namespace.to_owned(),
+        upload_id: upload.upload_id,
+    };
+    let completion = async {
+        let artifact = client
+            .complete_artifact_upload(recovery.completion_request())
+            .await?
+            .into_inner()
+            .artifact
+            .context("server omitted the completed artifact")?;
+        if artifact.namespace != namespace || artifact.size != size || artifact.sha256 != digest {
+            bail!("completed artifact does not match the uploaded file");
+        }
+        Ok(artifact)
     }
-    Ok(artifact)
+    .await;
+    completion.map_err(|source| UploadCompletionError { recovery, source }.into())
 }
 
 pub async fn upload_to_presigned_url<S: std::hash::BuildHasher>(
@@ -223,11 +260,12 @@ pub async fn upload_to_presigned_url<S: std::hash::BuildHasher>(
 }
 
 pub async fn download_file(
-    client: &mut Client,
+    client: &Client,
     namespace: &str,
     artifact_id: &str,
     destination: &Path,
 ) -> Result<pb::Artifact> {
+    let mut client = transfer_client(client);
     let response = client
         .get_artifact_content(pb::GetArtifactContentRequest {
             namespace: namespace.to_owned(),
@@ -280,6 +318,38 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    #[test]
+    fn completion_recovery_preserves_original_retry_code_and_details() {
+        use tonic_types::{ErrorDetails, StatusExt as _};
+
+        let status = tonic::Status::with_error_details(
+            tonic::Code::Unavailable,
+            "operation already in progress",
+            ErrorDetails::with_error_info(
+                "OPERATION_IN_PROGRESS",
+                "trogonatlas.api.eventmodel.v1alpha1",
+                HashMap::from([("journal".to_owned(), "recovery-journal".to_owned())]),
+            ),
+        );
+        let expected = crate::failure::Failure::from_status(&status);
+        let error: anyhow::Error = UploadCompletionError {
+            recovery: UploadRecovery {
+                namespace: "sample".to_owned(),
+                upload_id: "upload".to_owned(),
+            },
+            source: status.into(),
+        }
+        .into();
+        let actual = crate::failure::Failure::classify(&error);
+        assert_eq!(actual.category, expected.category);
+        assert_eq!(actual.code, expected.code);
+        assert_eq!(actual.next_action, expected.next_action);
+        let details = actual.details.into_json();
+        assert_eq!(details["journal"], expected.details.into_json()["journal"]);
+        assert_eq!(details["artifact_upload"]["namespace"], "sample");
+        assert_eq!(details["artifact_upload"]["upload_id"], "upload");
+    }
 
     fn artifact(content: &[u8]) -> pb::Artifact {
         pb::Artifact {

@@ -1823,8 +1823,9 @@ impl EventModelServiceImpl {
     ) -> Result<String, Status> {
         crate::artifacts::validate_namespace(namespace)?;
         let vis = Self::visibility_of(request);
-        self.require_visible(&vis, namespace).await?;
         if write {
+            let _guard = self.mutation_lock.lock().await;
+            self.artifact_service()?;
             if !self.store.is_writer() {
                 return Err(Status::failed_precondition(
                     "artifact upload requires the active writer",
@@ -1843,10 +1844,19 @@ impl EventModelServiceImpl {
                 principal.as_ref(),
                 &WriteTargets::of(namespace),
                 &NamespaceTenure::Permanent,
-                WriteEffect::DryRun,
+                WriteEffect::Persist,
             )
             .await?;
+            let id = NamespaceId::parse(namespace)
+                .map_err(|_| Status::invalid_argument("invalid namespace ID"))?;
+            self.store
+                .promote_namespace(&id)
+                .await
+                .map_err(store_err)?
+                .ok_or_else(|| Status::aborted("artifact namespace reservation disappeared"))?;
+            self.invalidate_directory().await;
         }
+        self.require_visible(&vis, namespace).await?;
         Ok(vis.principal().to_owned())
     }
 
@@ -4982,7 +4992,7 @@ impl pb::event_model_service_server::EventModelService for EventModelServiceImpl
         self.artifact_service()?
             .content(&request.namespace, &request.artifact_id)
             .await
-            .map(Response::new)
+            .map(crate::artifacts::download_budget::BudgetedContent::into_response)
     }
 
     async fn get_design_graph_detail(
