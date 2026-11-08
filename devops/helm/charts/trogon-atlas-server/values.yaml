@@ -101,6 +101,20 @@ config:
     existingSecret: ""
     key: change-cursor-key
 
+artifacts:
+  backend: disabled
+  publicUrl: ""
+  natsBucket: atlas_artifacts
+  catalogBucket: atlas_artifact_catalog
+  maxBytes: 16777216
+  uploadTtlSecs: 900
+  s3:
+    bucket: ""
+    region: us-east-1
+    endpoint: ""
+    forcePathStyle: false
+    allowHttp: false
+
 # Delegate the "who may see this namespace" question to SpiceDB.
 #
 # Left off, the server answers it from the registry's own `parent` column:

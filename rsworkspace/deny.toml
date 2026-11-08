@@ -38,6 +38,7 @@ deny = [
 # third-party dependencies. These are not security concerns; skip them
 # until the direct deps align on a common version.
 skip = [
+  { crate = "itertools@0.15", reason = "object_store 0.14 requires 0.15 while prost 0.14 still requires 0.14" },
   { name = "base64" },
   { name = "darling" },
   { name = "darling_core" },

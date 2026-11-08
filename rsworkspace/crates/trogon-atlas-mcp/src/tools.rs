@@ -1332,6 +1332,15 @@ pub struct CatalogQueryParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct ArtifactRequestParams {
+    #[schemars(
+        description = "Exact artifact RPC request in proto3 JSON. begin_artifact_upload requires namespace, filename, mediaType, size in bytes and sha256. complete_artifact_upload requires namespace and uploadId. get_artifact and get_artifact_download require namespace and artifactId. get_artifact_storage_info accepts an empty object. Transfer binary content separately by HTTP PUT using the begin response; remote MCP cannot read caller-local file paths."
+    )]
+    pub request_json: JsonPayload,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SourceRequestParams {
     #[schemars(
         description = "Exact source RPC proto3 JSON request. Supply complete native owners explicitly; preserve typed selectors, adoption, field ownership, guards and branch. Source pointers are inert; no source fetch or execution."

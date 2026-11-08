@@ -122,6 +122,216 @@ pub mod event_model_service_client {
             self.inner.unary(req, path, codec).await
         }
         ///
+        pub async fn get_artifact_storage_info(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetArtifactStorageInfoRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetArtifactStorageInfoResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactStorageInfo",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetArtifactStorageInfo",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn begin_artifact_upload(
+            &mut self,
+            request: impl tonic::IntoRequest<super::BeginArtifactUploadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BeginArtifactUploadResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BeginArtifactUpload",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "BeginArtifactUpload",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn upload_artifact_content(
+            &mut self,
+            request: impl tonic::IntoRequest<super::UploadArtifactContentRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UploadArtifactContentResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UploadArtifactContent",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "UploadArtifactContent",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn complete_artifact_upload(
+            &mut self,
+            request: impl tonic::IntoRequest<super::CompleteArtifactUploadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompleteArtifactUploadResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CompleteArtifactUpload",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "CompleteArtifactUpload",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn get_artifact(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetArtifactRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetArtifactResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifact",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetArtifact",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn get_artifact_download(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetArtifactDownloadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetArtifactDownloadResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactDownload",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetArtifactDownload",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
+        pub async fn get_artifact_content(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetArtifactContentRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetArtifactContentResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactContent",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "trogonatlas.api.eventmodel.v1alpha1.EventModelService",
+                        "GetArtifactContent",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn create_source_registration(
             &mut self,
             request: impl tonic::IntoRequest<super::CreateSourceRegistrationRequest>,
@@ -3156,6 +3366,62 @@ pub mod event_model_service_server {
             tonic::Status,
         >;
         ///
+        async fn get_artifact_storage_info(
+            &self,
+            request: tonic::Request<super::GetArtifactStorageInfoRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetArtifactStorageInfoResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn begin_artifact_upload(
+            &self,
+            request: tonic::Request<super::BeginArtifactUploadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BeginArtifactUploadResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn upload_artifact_content(
+            &self,
+            request: tonic::Request<super::UploadArtifactContentRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::UploadArtifactContentResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn complete_artifact_upload(
+            &self,
+            request: tonic::Request<super::CompleteArtifactUploadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::CompleteArtifactUploadResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn get_artifact(
+            &self,
+            request: tonic::Request<super::GetArtifactRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetArtifactResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn get_artifact_download(
+            &self,
+            request: tonic::Request<super::GetArtifactDownloadRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetArtifactDownloadResponse>,
+            tonic::Status,
+        >;
+        ///
+        async fn get_artifact_content(
+            &self,
+            request: tonic::Request<super::GetArtifactContentRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetArtifactContentResponse>,
+            tonic::Status,
+        >;
+        ///
         async fn create_source_registration(
             &self,
             request: tonic::Request<super::CreateSourceRegistrationRequest>,
@@ -4123,6 +4389,346 @@ pub mod event_model_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = InspectHumanInteractionSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactStorageInfo" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetArtifactStorageInfoSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::GetArtifactStorageInfoRequest>
+                    for GetArtifactStorageInfoSvc<T> {
+                        type Response = super::GetArtifactStorageInfoResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetArtifactStorageInfoRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::get_artifact_storage_info(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetArtifactStorageInfoSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BeginArtifactUpload" => {
+                    #[allow(non_camel_case_types)]
+                    struct BeginArtifactUploadSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::BeginArtifactUploadRequest>
+                    for BeginArtifactUploadSvc<T> {
+                        type Response = super::BeginArtifactUploadResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::BeginArtifactUploadRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::begin_artifact_upload(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = BeginArtifactUploadSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UploadArtifactContent" => {
+                    #[allow(non_camel_case_types)]
+                    struct UploadArtifactContentSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::UploadArtifactContentRequest>
+                    for UploadArtifactContentSvc<T> {
+                        type Response = super::UploadArtifactContentResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::UploadArtifactContentRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::upload_artifact_content(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = UploadArtifactContentSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CompleteArtifactUpload" => {
+                    #[allow(non_camel_case_types)]
+                    struct CompleteArtifactUploadSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::CompleteArtifactUploadRequest>
+                    for CompleteArtifactUploadSvc<T> {
+                        type Response = super::CompleteArtifactUploadResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::CompleteArtifactUploadRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::complete_artifact_upload(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = CompleteArtifactUploadSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifact" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetArtifactSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::GetArtifactRequest>
+                    for GetArtifactSvc<T> {
+                        type Response = super::GetArtifactResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetArtifactRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::get_artifact(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetArtifactSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactDownload" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetArtifactDownloadSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::GetArtifactDownloadRequest>
+                    for GetArtifactDownloadSvc<T> {
+                        type Response = super::GetArtifactDownloadResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetArtifactDownloadRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::get_artifact_download(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetArtifactDownloadSvc(inner);
+                        let codec = tonic_prost::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactContent" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetArtifactContentSvc<T: EventModelService>(pub Arc<T>);
+                    impl<
+                        T: EventModelService,
+                    > tonic::server::UnaryService<super::GetArtifactContentRequest>
+                    for GetArtifactContentSvc<T> {
+                        type Response = super::GetArtifactContentResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetArtifactContentRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as EventModelService>::get_artifact_content(
+                                        &inner,
+                                        request,
+                                    )
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetArtifactContentSvc(inner);
                         let codec = tonic_prost::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

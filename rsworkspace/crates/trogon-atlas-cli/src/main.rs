@@ -72,7 +72,43 @@ enum Format {
 }
 
 #[derive(Subcommand)]
+enum ArtifactCmd {
+    /// Discover the deployment's artifact backend and upload limits.
+    Info,
+    /// Upload a local file and return its verified durable artifact reference.
+    Upload {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long)]
+        media_type: Option<String>,
+    },
+    /// Inspect an accepted artifact without fetching its bytes.
+    Get {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        id: String,
+    },
+    /// Download and verify an artifact into a new file.
+    Download {
+        #[arg(long)]
+        namespace: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        output: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
 enum Cmd {
+    /// Upload and retrieve files using the server-configured object storage.
+    Artifacts {
+        #[command(subcommand)]
+        command: ArtifactCmd,
+    },
     /// Read the exact bounded operation and guard page for a source preview.
     ListSourceRunOperations {
         #[arg(long)]
@@ -1267,6 +1303,83 @@ async fn run(
     // Local validation (paths, flags, kind parse) runs before connect so an
     // unreachable --endpoint cannot mask authoring errors.
     match cmd {
+        Cmd::Artifacts { command } => {
+            if let ArtifactCmd::Upload { ref file, .. } = command {
+                let metadata = std::fs::symlink_metadata(file).map_err(|_| {
+                    trogon_atlas_client::failure::invalid_input("artifact file unavailable")
+                })?;
+                if !metadata.is_file()
+                    || metadata.len() > trogon_atlas_client::artifacts::MAX_TRANSFER_BYTES as u64
+                {
+                    return Err(trogon_atlas_client::failure::invalid_input(
+                        "artifact must be a regular file within the client transfer limit",
+                    ));
+                }
+            }
+            let mut client = client::connect_with_options(
+                &endpoint,
+                auth_token.as_deref(),
+                rpc_timeout_secs,
+                client::ConnectOptions {
+                    request_id_prefix: Some("trogon-atlas-artifacts"),
+                    max_message_bytes: Some(trogon_atlas_client::artifacts::MAX_MESSAGE_BYTES),
+                    branch,
+                },
+            )
+            .await?;
+            let result = match command {
+                ArtifactCmd::Info => {
+                    trogon_atlas_client::artifacts::get_artifact_storage_info(
+                        &mut client,
+                        pb::GetArtifactStorageInfoRequest {},
+                    )
+                    .await?
+                }
+                ArtifactCmd::Upload {
+                    namespace,
+                    file,
+                    media_type,
+                } => {
+                    let artifact = trogon_atlas_client::artifacts::upload_file(
+                        &mut client,
+                        &namespace,
+                        &file,
+                        media_type.as_deref(),
+                        std::time::Duration::from_secs(rpc_timeout_secs),
+                    )
+                    .await?;
+                    trogon_atlas_client::artifacts::artifact_json(&artifact)?
+                }
+                ArtifactCmd::Get { namespace, id } => {
+                    trogon_atlas_client::artifacts::get_artifact(
+                        &mut client,
+                        pb::GetArtifactRequest {
+                            namespace,
+                            artifact_id: id,
+                        },
+                    )
+                    .await?
+                }
+                ArtifactCmd::Download {
+                    namespace,
+                    id,
+                    output,
+                } => {
+                    let artifact = trogon_atlas_client::artifacts::download_file(
+                        &mut client,
+                        &namespace,
+                        &id,
+                        &output,
+                    )
+                    .await?;
+                    trogon_atlas_client::artifacts::artifact_json(&artifact)?
+                }
+            };
+            if text {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+            Ok((ExitCode::SUCCESS, Some(result)))
+        }
         Cmd::Schema => {
             let schema = manifest_schema::generate()?;
             if text {
@@ -3360,5 +3473,62 @@ mod secret_env_help_guard {
             offenders.is_empty(),
             "env-backed secrets must set `hide_env_values = true`: {offenders:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod artifact_command_tests {
+    use clap::Parser;
+
+    use super::{Args, ArtifactCmd, Cmd};
+
+    #[test]
+    fn artifact_upload_requires_local_file_and_namespace_without_backend_credentials() {
+        let args = Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--namespace",
+            "sample",
+            "--file",
+            "capture.png",
+        ])
+        .unwrap_or_else(|error| panic!("artifact upload should parse: {error}"));
+        assert!(matches!(
+            args.cmd,
+            Cmd::Artifacts {
+                command: ArtifactCmd::Upload { .. }
+            }
+        ));
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--file",
+            "capture.png"
+        ])
+        .is_err());
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "upload",
+            "--namespace",
+            "sample"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn artifact_download_requires_explicit_destination() {
+        assert!(Args::try_parse_from([
+            "trogon-atlas",
+            "artifacts",
+            "download",
+            "--namespace",
+            "sample",
+            "--id",
+            "capture",
+        ])
+        .is_err());
     }
 }

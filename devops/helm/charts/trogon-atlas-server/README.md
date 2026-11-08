@@ -100,6 +100,79 @@ rebinding; gRPC is unaffected by this guard. The chart allows loopback and
 every name of this release's Service; add the hostname of any Ingress or
 Gateway that routes to the server to `mcp.allowedHosts`.
 
+## Artifacts
+
+The artifact service is disabled by default. Configure its backend in the
+deployment; CLI and MCP clients discover the active backend and upload limits
+with `artifacts info` and `get_artifact_storage_info`.
+
+For NATS Object Store:
+
+```yaml
+config:
+  maxMessageBytes: 37748736
+artifacts:
+  backend: nats
+  publicUrl: https://atlas.example.com
+  natsBucket: atlas_artifacts
+  catalogBucket: atlas_artifact_catalog
+  maxBytes: 16777216
+  uploadTtlSecs: 900
+```
+
+The artifact Object Store and metadata KV bucket use the existing NATS
+connection. Provision file storage, replication, capacity and backups for
+these buckets alongside the model store. The chart does not install NATS.
+
+For S3, select the private bucket and region:
+
+```yaml
+config:
+  maxMessageBytes: 37748736
+artifacts:
+  backend: s3
+  publicUrl: https://atlas.example.com
+  s3:
+    bucket: product-artifacts
+    region: us-east-1
+extraEnv:
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        name: artifact-storage-credentials
+        key: access-key-id
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: artifact-storage-credentials
+        key: secret-access-key
+```
+
+Use supported workload identity or an existing Secret for provider
+credentials. Temporary credentials also need `AWS_SESSION_TOKEN`. No
+credential values belong in `artifacts` or client configuration. S3 uploads
+go directly to a bounded presigned PUT URL; completion verifies the staging
+bytes and writes a separate immutable final object. Artifact metadata still
+uses the configured NATS catalog KV bucket.
+
+`artifacts.s3.endpoint`, `forcePathStyle`, and `allowHttp` support compatible
+providers such as MinIO. The endpoint must be reachable by the server and
+upload clients because it appears in signed URLs. Keep `allowHttp: false`
+outside isolated development.
+
+The chart rejects unknown backends, an enabled backend without `publicUrl`,
+file limits outside 1 byte through 32 MiB, upload lifetimes outside 1 through
+3,600 seconds, and S3 without a bucket. It also requires
+`config.maxMessageBytes >= artifacts.maxBytes + 65536`; the default 4 MiB
+transport limit must be increased when enabling the default 16 MiB artifact
+limit.
+
+Route the artifact HTTP paths through the same gateway as the server and
+set `publicUrl` to its externally reachable origin. Stable content URLs
+check Atlas authorization; signed S3 URLs remain capabilities until their
+expiry. See [Upload and retrieve artifacts](../../../../docs/how-to/manage-artifacts.md)
+for CLI/MCP usage and retention requirements.
+
 ## Port
 
 The server listens on one port, named `private` on the container and the Service: its callers (studio, agents, the CLI) reach it from inside the cluster, and the chart creates no Ingress for it. `service.port` (default `50069`) sets it. Without TLS the Service port declares `appProtocol: kubernetes.io/h2c`, so meshes and gateways speak HTTP/2 cleartext to it rather than guess; with `tls.existingSecret` set it declares none.

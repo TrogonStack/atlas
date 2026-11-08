@@ -128,6 +128,13 @@ impl Principal {
 #[allow(clippy::match_same_arms)]
 pub fn required_role(grpc_path: &str) -> Option<Role> {
     Some(match grpc_path {
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactStorageInfo"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifact"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactDownload"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetArtifactContent" => Role::Reader,
+        "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/BeginArtifactUpload"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UploadArtifactContent"
+        | "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CompleteArtifactUpload" => Role::Writer,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/CreateSourceRegistration" => Role::Admin,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/UpdateSourceRegistration" => Role::Admin,
         "/trogonatlas.api.eventmodel.v1alpha1.EventModelService/GetSourceRegistration" => Role::Reader,

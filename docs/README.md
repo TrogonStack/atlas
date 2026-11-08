@@ -20,6 +20,7 @@ Solve a specific problem:
 - [Draft and land a new entity version](how-to/draft-then-land.md)
 - [Export and verify an attested model](how-to/export-and-verify-an-attested-model.md)
 - [Issue an API key to a client](how-to/issue-an-api-key.md)
+- [Upload and retrieve artifacts](how-to/manage-artifacts.md)
 - [Sign attested bundles](how-to/sign-attested-bundles.md)
 - [Migrate legacy entity fields into `schema`](how-to/migrate-legacy-entity-fields.md)
 - [Model runtime code as an Event Model](how-to/model-runtime-code-as-an-event-model.md)
@@ -38,6 +39,7 @@ Look up exact behavior:
 
 - [Attested bundle format](reference/attested-bundle-format.md)
 - [Attested export MCP tools](reference/attested-export-mcp-tools.md)
+- [Artifact lifecycle and cleanup contract (proposed)](reference/artifact-lifecycle.md)
 - [Change assessment](reference/change-assessment.md)
 - [Consequence delta](reference/consequence-delta.md)
 - [Failure reasons](reference/failure-reasons.md)

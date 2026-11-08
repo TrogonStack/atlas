@@ -22,6 +22,8 @@ use trogon_atlas_store::{
 #[derive(Parser, Debug, Clone)]
 #[command(name = "trogon-atlas-server")]
 struct Args {
+    #[command(flatten)]
+    artifacts: trogon_atlas_server::artifacts::config::ArtifactConfig,
     #[command(subcommand)]
     cmd: Option<Cmd>,
 
@@ -704,6 +706,13 @@ async fn run(
     )
     .context("constructing event modeling service")?
     .with_baseline_protection(baseline_protection.clone());
+    if let Some(artifacts) = args
+        .artifacts
+        .open(&args.nats_url, args.max_message_bytes)
+        .await?
+    {
+        svc = svc.with_artifacts(artifacts);
+    }
     match args.change_cursor_key.as_deref() {
         Some(encoded) => {
             let key = trogon_atlas_server::change_cursor::ChangeCursorKey::from_base64(encoded)
@@ -1127,6 +1136,16 @@ async fn run(
             rpc_timeout,
         );
         *routes.axum_router_mut() = timed_out;
+    }
+    if args.artifacts.artifact_backend
+        != trogon_atlas_server::artifacts::config::ArtifactBackend::Disabled
+    {
+        let artifacts = trogon_atlas_server::artifacts::http::router(
+            data_plane.clone(),
+            usize::try_from(args.artifacts.artifact_max_bytes)
+                .context("artifact byte limit exceeds platform capacity")?,
+        );
+        *routes.axum_router_mut() = routes.axum_router_mut().clone().merge(artifacts);
     }
     if args.mcp {
         let mcp_router = trogon_atlas_server::mcp::mcp_router(

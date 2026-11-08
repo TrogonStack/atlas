@@ -24,18 +24,18 @@ use crate::{
     profile::ToolProfile,
     prompts::{TaskPrompt, TASK_PROMPTS},
     tools::{
-        AnalysisScopeParams, ApplyManifestsParams, BatchGetParams, BatchMutateJsonParams,
-        BatchMutateParams, CatalogQueryParams, ClassifyImpactParams, CompileTypeLibraryParams,
-        CreateBranchParams, DeleteBranchParams, DeleteByQueryParams, DeleteEntityParams,
-        DiffBranchParams, DiffEntitiesParams, DiffManifestsParams, EmptyParams, EntitySchemaParams,
-        EntitySpec, EventModelProjectionParams, ExportAttestedModelParams, ExportNamespaceParams,
-        ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams, GetEntityHistoryParams,
-        GetEntityProtectionParams, GetLatestVersionParams, GetOperationParams, GetSnapshotIdParams,
-        ImpactParams, JsonOpts, ListChangesParams, ListChangesetsParams,
-        ListEntitiesByDomainParams, ListEntitiesParams, ListEntityProtectionsParams,
-        ListVersionsParams, MergeBranchParams, MoveNamespaceParams, ProjectionParams,
-        ProtectEntityParams, PutEntityJsonParams, PutEntityParams, ReferencesParams,
-        RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
+        AnalysisScopeParams, ApplyManifestsParams, ArtifactRequestParams, BatchGetParams,
+        BatchMutateJsonParams, BatchMutateParams, CatalogQueryParams, ClassifyImpactParams,
+        CompileTypeLibraryParams, CreateBranchParams, DeleteBranchParams, DeleteByQueryParams,
+        DeleteEntityParams, DiffBranchParams, DiffEntitiesParams, DiffManifestsParams, EmptyParams,
+        EntitySchemaParams, EntitySpec, EventModelProjectionParams, ExportAttestedModelParams,
+        ExportNamespaceParams, ExportOpensloParams, ExtractSubgraphParams, GetChangesetParams,
+        GetEntityHistoryParams, GetEntityProtectionParams, GetLatestVersionParams,
+        GetOperationParams, GetSnapshotIdParams, ImpactParams, JsonOpts, ListChangesParams,
+        ListChangesetsParams, ListEntitiesByDomainParams, ListEntitiesParams,
+        ListEntityProtectionsParams, ListVersionsParams, MergeBranchParams, MoveNamespaceParams,
+        ProjectionParams, ProtectEntityParams, PutEntityJsonParams, PutEntityParams,
+        ReferencesParams, RegisterNamespaceParams, ResolveBranchEntryParams, ResolveTypeParams,
         ResponsibilityQueryParams, RetargetReferencesParams, RevertChangesetParams, SearchParams,
         SliceProjectionParams, SourceRequestParams, SupersessionChainParams, UnprotectEntityParams,
         UpdateBranchParams, ValidateEventModelParams, ValidateProjectParams,
@@ -149,6 +149,36 @@ pub struct ToolPolicy {
 }
 
 pub const TOOL_POLICIES: &[ToolPolicy] = &[
+    ToolPolicy {
+        tool: "get_artifact_storage_info",
+        rpcs: &["GetArtifactStorageInfo"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Discovery,
+    },
+    ToolPolicy {
+        tool: "begin_artifact_upload",
+        rpcs: &["BeginArtifactUpload"],
+        min_role: ToolRole::Writer,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "complete_artifact_upload",
+        rpcs: &["CompleteArtifactUpload"],
+        min_role: ToolRole::Writer,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "get_artifact",
+        rpcs: &["GetArtifact"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
+    ToolPolicy {
+        tool: "get_artifact_download",
+        rpcs: &["GetArtifactDownload"],
+        min_role: ToolRole::Reader,
+        area: ToolArea::Model,
+    },
     ToolPolicy {
         tool: "list_source_run_operations",
         rpcs: &["ListSourceRunOperations"],
@@ -1109,6 +1139,23 @@ fn message_from_json<M: Message + Default>(message_name: &str, json: &str) -> Re
         message_name,
         json,
     )?)
+}
+
+fn parse_artifact_params<T: Message + Default>(
+    params: &ArtifactRequestParams,
+    name: &str,
+) -> Result<T, rmcp::ErrorData> {
+    let text = params.request_json.to_json_text();
+    if text.len() > MAX_JSON_BYTES {
+        return Err(rmcp::ErrorData::invalid_params(
+            "request_json exceeds the 4 MiB limit",
+            None,
+        ));
+    }
+    let json = serde_json::from_str(&text)
+        .map_err(|_| rmcp::ErrorData::invalid_params("invalid artifact request JSON", None))?;
+    trogon_atlas_client::artifacts::parse_request(name, &json)
+        .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))
 }
 
 fn message_to_json<M: Message>(message_name: &str, msg: &M) -> Result<String> {
@@ -3285,6 +3332,120 @@ impl McpServer {
         )
         .await
         .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Discover the server-configured artifact backend, enabled state, upload limits and direct-upload support. Backend credentials remain in the deployment.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_artifact_storage_info(
+        &self,
+        Parameters(p): Parameters<ArtifactRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = parse_artifact_params(&p, "GetArtifactStorageInfoRequest")?;
+        let result =
+            trogon_atlas_client::artifacts::get_artifact_storage_info(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Request an artifact upload with request_json containing namespace, filename, mediaType, size in bytes, and sha256 as 64 lowercase hexadecimal digits. The response contains uploadId, uploadUrl, headers, expiresUnixSeconds and directUpload. Before expiry, use a file-capable HTTP tool to PUT the raw file bytes to uploadUrl with the exact returned headers. When directUpload is true, upload directly to the S3 presigned URL without Atlas bearer or AWS credentials. When false, the Atlas upload endpoint requires the caller's current Atlas bearer authorization. After a successful PUT, call complete_artifact_upload with namespace and uploadId. Remote MCP cannot read caller-local file paths. If file transfer or the needed Atlas authorization is unavailable to your HTTP tool, use the Atlas CLI artifacts upload command where the file is accessible. Keep the upload URL transient; it is not the completed artifact's content URL.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = true
+        )
+    )]
+    async fn begin_artifact_upload(
+        &self,
+        Parameters(p): Parameters<ArtifactRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = parse_artifact_params(&p, "BeginArtifactUploadRequest")?;
+        let result =
+            trogon_atlas_client::artifacts::begin_artifact_upload(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "After the upload HTTP PUT succeeds, supply request_json containing namespace and the uploadId returned by begin_artifact_upload. Verify and publish the uploaded bytes, returning an artifact with its durable artifactId and contentUrl. Incomplete or mismatched uploads are refused; an upload URL alone is not evidence of completion. Repeating accepted completion returns the same artifact.",
+        annotations(
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn complete_artifact_upload(
+        &self,
+        Parameters(p): Parameters<ArtifactRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = parse_artifact_params(&p, "CompleteArtifactUploadRequest")?;
+        let result =
+            trogon_atlas_client::artifacts::complete_artifact_upload(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Inspect an accepted artifact and its digest, namespace, size, media type and stable display URL. Missing or hidden artifacts are unavailable.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn get_artifact(
+        &self,
+        Parameters(p): Parameters<ArtifactRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = parse_artifact_params(&p, "GetArtifactRequest")?;
+        let result = trogon_atlas_client::artifacts::get_artifact(&mut self.client(), request)
+            .await
+            .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result.to_string(),
+        )]))
+    }
+
+    #[tool(
+        description = "Obtain an authorized download instruction for an accepted artifact. A presigned URL is temporary access, not durable model identity; retain the artifact reference instead.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
+    )]
+    async fn get_artifact_download(
+        &self,
+        Parameters(p): Parameters<ArtifactRequestParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let request = parse_artifact_params(&p, "GetArtifactDownloadRequest")?;
+        let result =
+            trogon_atlas_client::artifacts::get_artifact_download(&mut self.client(), request)
+                .await
+                .map_err(|error| rmcp::ErrorData::from(McpError::from(error)))?;
         Ok(CallToolResult::success(vec![ContentBlock::text(
             result.to_string(),
         )]))
@@ -5620,6 +5781,19 @@ impl ServerHandler for McpServer {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    #[test]
+    fn artifact_intake_rejects_caller_local_file_paths() {
+        let params = serde_json::from_value(serde_json::json!({
+            "request_json": {"namespace": "sample", "file": "capture.png"}
+        }))
+        .expect("valid parameter envelope");
+        let result = super::parse_artifact_params::<trogon_atlas_proto::BeginArtifactUploadRequest>(
+            &params,
+            "BeginArtifactUploadRequest",
+        );
+        assert!(result.is_err());
+    }
 
     use super::*;
 

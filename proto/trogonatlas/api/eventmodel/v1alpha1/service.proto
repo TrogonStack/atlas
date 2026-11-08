@@ -29,6 +29,7 @@ import "trogonatlas/api/eventmodel/v1alpha1/term_domains.proto";
 
 import "trogonatlas/api/eventmodel/v1alpha1/channel_messages.proto";
 import "trogonatlas/api/eventmodel/v1alpha1/human_interactions.proto";
+import "trogonatlas/api/eventmodel/v1alpha1/artifacts.proto";
 
 
 // =============================================================================
@@ -1346,6 +1347,13 @@ message ResolveBranchEntryResponse {
 
 service EventModelService {
   rpc InspectHumanInteraction(InspectHumanInteractionRequest) returns (InspectHumanInteractionResponse);
+  rpc GetArtifactStorageInfo(GetArtifactStorageInfoRequest) returns (GetArtifactStorageInfoResponse);
+  rpc BeginArtifactUpload(BeginArtifactUploadRequest) returns (BeginArtifactUploadResponse);
+  rpc UploadArtifactContent(UploadArtifactContentRequest) returns (UploadArtifactContentResponse);
+  rpc CompleteArtifactUpload(CompleteArtifactUploadRequest) returns (CompleteArtifactUploadResponse);
+  rpc GetArtifact(GetArtifactRequest) returns (GetArtifactResponse);
+  rpc GetArtifactDownload(GetArtifactDownloadRequest) returns (GetArtifactDownloadResponse);
+  rpc GetArtifactContent(GetArtifactContentRequest) returns (GetArtifactContentResponse);
   rpc CreateSourceRegistration(CreateSourceRegistrationRequest) returns (CreateSourceRegistrationResponse);
   rpc UpdateSourceRegistration(UpdateSourceRegistrationRequest) returns (UpdateSourceRegistrationResponse);
   rpc GetSourceRegistration(GetSourceRegistrationRequest) returns (GetSourceRegistrationResponse);

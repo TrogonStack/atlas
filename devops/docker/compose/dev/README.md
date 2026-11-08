@@ -134,6 +134,35 @@ and return proto3 JSON instead. See "What the tools return" in
 
 ## Configuration
 
+### Artifact storage
+
+Artifact storage is disabled by default. To enable NATS-backed file uploads
+in this Compose deployment, add a local override file:
+
+```yaml
+services:
+  trogon-atlas-server:
+    environment:
+      TROGON_ATLAS_ARTIFACT_BACKEND: nats
+      TROGON_ATLAS_ARTIFACT_PUBLIC_URL: http://127.0.0.1:50069
+      TROGON_ATLAS_ARTIFACT_NATS_BUCKET: atlas_artifacts
+      TROGON_ATLAS_ARTIFACT_CATALOG_BUCKET: atlas_artifact_catalog
+      TROGON_ATLAS_MAX_MESSAGE_BYTES: "37748736"
+```
+
+Start Compose with the base file and this override, then run
+`trogon-atlas artifacts info` against its exposed endpoint. The NATS Object
+Store and catalog use the existing persistent NATS volume.
+
+For S3, set `TROGON_ATLAS_ARTIFACT_BACKEND=s3`, configure the server's bucket
+and region, and inject provider credentials from the deployment's secret
+manager. S3-compatible endpoints must be reachable from the server container
+and upload clients. An internal Compose hostname alone will not work in
+presigned URLs used by a host-side CLI.
+
+See [Upload and retrieve artifacts](../../../../docs/how-to/manage-artifacts.md)
+for server settings, direct S3 uploads, CLI/MCP operations, and retention.
+
 `trogon-atlas-server` honors both CLI flags and environment variables:
 
 | Flag | Env | Default |

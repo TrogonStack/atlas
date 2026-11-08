@@ -326,6 +326,13 @@ pub struct NatsStoreConfig {
 }
 
 impl NatsStoreConfig {
+    pub fn connection_options(&self) -> async_nats::ConnectOptions {
+        let options = async_nats::ConnectOptions::new();
+        match &self.credentials {
+            Some(credentials) => credentials.apply(options),
+            None => options,
+        }
+    }
     pub fn new(url: impl Into<String>, metrics: StoreMetrics) -> Self {
         let (url, credentials) = split_url_credentials(&url.into());
         Self {
@@ -600,7 +607,8 @@ impl NatsStore {
         config.take_url_credentials();
         config.validate()?;
         let metrics = config.metrics.clone();
-        let connect_options = async_nats::ConnectOptions::new()
+        let connect_options = config
+            .connection_options()
             .connection_timeout(Duration::from_secs(10))
             .retry_on_initial_connect()
             .event_callback(move |event| {
@@ -619,10 +627,6 @@ impl NatsStore {
                     }
                 }
             });
-        let connect_options = match &config.credentials {
-            Some(credentials) => credentials.apply(connect_options),
-            None => connect_options,
-        };
         let client = connect_options.connect(&config.url).await.map_err(|e| {
             StoreError::Unavailable(format!("nats connect {url}: {e}", url = config.url))
         })?;

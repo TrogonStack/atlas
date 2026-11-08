@@ -1,4 +1,5 @@
 pub mod analysis;
+pub mod artifacts;
 pub mod as_of;
 pub mod assessment;
 pub mod attested_signing;
