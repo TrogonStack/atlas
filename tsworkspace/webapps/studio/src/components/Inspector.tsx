@@ -248,7 +248,9 @@ function ScenarioBlock({ scenario, givenApplies }: { scenario: ScenarioView; giv
         ? `state: ${scenario.thenState.id.slug}`
         : scenario.thenCommand
           ? `→ ${scenario.thenCommand.id.slug}`
-          : '';
+          : scenario.noCommand
+            ? '→ no command'
+            : '';
   return (
     <details className="rounded-md border border-border">
       <summary className="cursor-pointer px-2 py-1.5 text-xs">
@@ -300,6 +302,12 @@ function ScenarioBlock({ scenario, givenApplies }: { scenario: ScenarioView; giv
           ))}
           {scenario.thenState ? <ExampleBlock example={scenario.thenState} /> : null}
           {scenario.thenCommand ? <ExampleBlock example={scenario.thenCommand} /> : null}
+          {scenario.noCommand ? (
+            <div className="rounded-md border border-border px-2 py-1.5 text-[11px]">
+              <span className="font-mono font-semibold">no command</span>
+              {scenario.noCommand.doc ? <p className="mt-0.5 text-muted-foreground">{scenario.noCommand.doc}</p> : null}
+            </div>
+          ) : null}
         </div>
       </div>
     </details>

@@ -552,6 +552,7 @@ export interface ScenarioStep {
   /** Automation slices state the trigger in prose. */
   doc?: string;
   reject?: { reasonCode: string; doc: string };
+  noCommand?: { doc: string };
 }
 
 /**
@@ -572,6 +573,7 @@ export function scenarioSteps(slice: SliceView, scenario: ScenarioView): Scenari
       ...(scenario.thenCommand ? [scenario.thenCommand] : []),
     ],
     reject: scenario.reject,
+    noCommand: scenario.noCommand,
   });
   return steps;
 }

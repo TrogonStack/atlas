@@ -349,24 +349,37 @@ fn automation_slice_with_scenarios(scenarios: Vec<pb::AutomationScenario>) -> pb
     }
 }
 
-fn automation_scenario(title: &str, then: Option<pb::CommandExample>) -> pb::AutomationScenario {
+fn automation_scenario(
+    title: &str,
+    outcome: Option<pb::automation_scenario::Outcome>,
+) -> pb::AutomationScenario {
     pb::AutomationScenario {
         id: title.into(),
         title: title.into(),
         doc: String::new(),
         given: Vec::new(),
         when_doc: "order paid".into(),
-        then,
+        outcome,
         metadata: Vec::new(),
     }
 }
 
+fn issues_command(slug: &str) -> pb::automation_scenario::Outcome {
+    pb::automation_scenario::Outcome::Then(command_example(slug))
+}
+
+fn issues_no_command() -> pb::automation_scenario::Outcome {
+    pb::automation_scenario::Outcome::NoCommand(pb::NoCommand {
+        doc: "still within backoff".into(),
+    })
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn automation_scenario_without_then_is_accepted() {
+async fn automation_scenario_command_or_no_command_is_accepted() {
     let svc = seed_basics().await;
     let scenarios = vec![
-        automation_scenario("fires", Some(command_example("place-order"))),
-        automation_scenario("does not fire", None),
+        automation_scenario("fires", Some(issues_command("place-order"))),
+        automation_scenario("does not fire", Some(issues_no_command())),
     ];
     put_slice(&svc, automation_slice_with_scenarios(scenarios))
         .await
@@ -374,11 +387,25 @@ async fn automation_scenario_without_then_is_accepted() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_missing_outcome_is_rejected() {
+    let svc = seed_basics().await;
+    let scenarios = vec![automation_scenario("no outcome", None)];
+    let err = put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap_err();
+    assert!(
+        err.message().contains("SCENARIO_MISSING_THEN"),
+        "msg={}",
+        err.message()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn automation_scenario_command_must_match_slice_command() {
     let svc = seed_basics().await;
     let scenarios = vec![automation_scenario(
         "wrong command",
-        Some(command_example("cancel-order")),
+        Some(issues_command("cancel-order")),
     )];
     let err = put_slice(&svc, automation_slice_with_scenarios(scenarios))
         .await

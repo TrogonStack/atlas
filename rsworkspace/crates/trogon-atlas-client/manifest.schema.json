@@ -340,6 +340,16 @@
     },
     "trogonatlas.eventmodel.v1alpha1.AutomationScenario": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "not": {
+            "required": [
+              "then",
+              "noCommand"
+            ]
+          }
+        }
+      ],
       "properties": {
         "doc": {
           "type": "string"
@@ -366,6 +376,9 @@
             "type": "object"
           },
           "type": "array"
+        },
+        "noCommand": {
+          "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.NoCommand"
         },
         "then": {
           "$ref": "#/$defs/trogonatlas.eventmodel.v1alpha1.CommandExample"
@@ -4347,6 +4360,15 @@
           "type": "object"
         }
       ]
+    },
+    "trogonatlas.eventmodel.v1alpha1.NoCommand": {
+      "additionalProperties": false,
+      "properties": {
+        "doc": {
+          "type": "string"
+        }
+      },
+      "type": "object"
     },
     "trogonatlas.eventmodel.v1alpha1.OpaqueDirectoryKey": {
       "additionalProperties": false,

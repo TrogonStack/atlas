@@ -620,7 +620,7 @@ pub fn rule_catalog() -> Vec<pb::ValidationRule> {
           "A ReadModelScenario's Then step must reference the same read model the scenario is attached to.",
           ReadModel, "then", "scenarios"),
         r("SCENARIO_MISSING_THEN", Error, "Scenario has no Then clause",
-          "Command and read-model scenarios must declare their outcome (emitted events or a rejection, projected state). An automation scenario may leave Then unset to mean it issues no command.",
+          "Every scenario must declare its outcome: emitted events or a rejection for command scenarios, projected state for read-model scenarios, and the command issued or noCommand for automation scenarios.",
           Unspecified, "then", "scenarios"),
         r("SCENARIO_REJECT_NO_REASON", Error, "Rejected scenario has no reason",
           "A scenario whose outcome is `reject` must record the rejection reason.",
@@ -2178,10 +2178,23 @@ pub fn validate_scenarios(entity: &pb::Entity, all: &[StoredEntity]) -> Vec<pb::
                         &mut issues,
                     );
                 }
-                // An unset Then means the automation issues no command, a
-                // valid outcome per AutomationScenario in scenarios.proto.
-                let Some(then) = &sc.then else {
-                    continue;
+                // The outcome must be stated: the command issued, or
+                // no_command when the automation deliberately does not fire.
+                let then = match &sc.outcome {
+                    Some(pb::automation_scenario::Outcome::Then(then)) => then,
+                    Some(pb::automation_scenario::Outcome::NoCommand(_)) => continue,
+                    None => {
+                        issues.push(issue_error(
+                            "SCENARIO_MISSING_THEN",
+                            format!(
+                                "automation scenario {:?} must set then.command or noCommand",
+                                sc.title
+                            ),
+                            subject.clone(),
+                            "scenarios[].then",
+                        ));
+                        continue;
+                    }
                 };
                 let cmd_id = then.command.as_ref().and_then(|r| r.id.as_ref());
                 check_ref(

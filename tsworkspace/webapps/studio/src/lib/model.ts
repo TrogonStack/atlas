@@ -172,6 +172,8 @@ export interface ScenarioView {
   thenEmits: ScenarioExample[];
   thenState?: ScenarioExample;
   thenCommand?: ScenarioExample;
+  /** An automation scenario in which the automation deliberately issues nothing. */
+  noCommand?: { doc: string };
   reject?: { reasonCode: string; doc: string };
   annotations: Annotation[];
 }
@@ -761,6 +763,8 @@ function scenarioViews(entity: Entity): ScenarioView[] {
       v.whenDoc = s.whenDoc ? String(s.whenDoc) : undefined;
       const t = example('command', s.then, 'command');
       if (t) v.thenCommand = t;
+      const none = s.noCommand as Record<string, unknown> | undefined;
+      if (none) v.noCommand = { doc: String(none.doc ?? '') };
     }
     return v;
   });

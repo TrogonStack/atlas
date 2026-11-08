@@ -170,6 +170,13 @@ export function storefront(extra: Record<string, unknown>[] = []): Model {
             // oxlint-disable-next-line unicorn/no-thenable -- `then` is the AutomationScenario proto field
             then: { command: { id: id('capture-payment') } },
           },
+          {
+            id: 'declined',
+            title: 'Payment declined',
+            given: [{ readModel: { id: id('pending-payments') } }],
+            whenDoc: 'The payment provider declines the capture.',
+            noCommand: { doc: 'Nothing to capture.' },
+          },
         ],
       },
     },

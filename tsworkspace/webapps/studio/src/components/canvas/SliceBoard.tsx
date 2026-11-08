@@ -793,6 +793,7 @@ function scenarioOutcome(s: ScenarioView): string {
   if (s.thenEmits.length > 0) return `emits ${s.thenEmits.map((e) => e.id.slug).join(', ')}`;
   if (s.thenState) return `state ${s.thenState.id.slug}`;
   if (s.thenCommand) return `issues ${s.thenCommand.id.slug}`;
+  if (s.noCommand) return 'issues no command';
   return '';
 }
 
@@ -892,7 +893,7 @@ function ScenariosPanel({
           </div>
           <section aria-label={phaseLabel(current.phase)} className="space-y-1.5">
             {current.doc ? <p className="text-[11px] italic">{current.doc}</p> : null}
-            {current.examples.length === 0 && !current.doc && !current.reject ? (
+            {current.examples.length === 0 && !current.doc && !current.reject && !current.noCommand ? (
               <p className="text-[11px] italic text-muted-foreground">nothing</p>
             ) : null}
             <div className="grid gap-1.5 [grid-template-columns:repeat(auto-fill,minmax(14rem,1fr))]">
@@ -910,6 +911,12 @@ function ScenariosPanel({
               <div className="rounded-md border border-red-200 bg-red-50 px-2 py-1.5 text-[11px]">
                 <span className="font-mono font-semibold text-red-700">{current.reject.reasonCode}</span>
                 {current.reject.doc ? <p className="mt-0.5 text-red-800">{current.reject.doc}</p> : null}
+              </div>
+            ) : null}
+            {current.noCommand ? (
+              <div className="rounded-md border border-border px-2 py-1.5 text-[11px]">
+                <span className="font-mono font-semibold">no command</span>
+                {current.noCommand.doc ? <p className="mt-0.5 text-muted-foreground">{current.noCommand.doc}</p> : null}
               </div>
             ) : null}
           </section>

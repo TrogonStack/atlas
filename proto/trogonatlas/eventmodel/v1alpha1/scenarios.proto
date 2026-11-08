@@ -89,20 +89,32 @@ message ReadModelScenario {
   repeated google.protobuf.Any metadata = 6;
 }
 
+// The outcome of an AutomationScenario in which the automation issues no
+// command. doc says why (e.g. "still within backoff"). Wrapped so it can
+// participate in a oneof.
+message NoCommand {
+  string doc = 1;
+}
+
 // Scenario for an AutomationSlice.
 //   Given: read model state(s) the processor is observing.
 //   When : the trigger condition (free-form doc; e.g. "threshold exceeded",
 //          "every Monday 09:00", "row count > 100").
-//   Then : at most one command issued. Unset = "do nothing" (a valid
-//          outcome that should be documented explicitly for at least one
-//          scenario when relevant).
+//   Then : exactly one outcome, stated explicitly: the command issued
+//          (`then`), or `no_command` when the automation does not fire.
+//          Leaving both unset is an error, so a deliberate "does nothing"
+//          reads differently from a missing outcome.
 message AutomationScenario {
   string id = 1;
   string title = 2;
   string doc = 3;
   repeated ReadModelExample given = 4;
   string when_doc = 5;
-  CommandExample then = 6;
+
+  oneof outcome {
+    CommandExample then = 6;
+    NoCommand no_command = 8;
+  }
 
   // Per-scenario annotations (e.g. NoteAnnotation, OpenQuestionAnnotation).
   // Each entry is an Any whose type_url identifies the annotation's schema.

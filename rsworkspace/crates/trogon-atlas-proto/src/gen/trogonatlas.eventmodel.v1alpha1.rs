@@ -851,13 +851,22 @@ pub struct ReadModelScenario {
     #[prost(message, repeated, tag="6")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
 }
+/// The outcome of an AutomationScenario in which the automation issues no
+/// command. doc says why (e.g. "still within backoff"). Wrapped so it can
+/// participate in a oneof.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NoCommand {
+    #[prost(string, tag="1")]
+    pub doc: ::prost::alloc::string::String,
+}
 /// Scenario for an AutomationSlice.
 ///    Given: read model state(s) the processor is observing.
 ///    When : the trigger condition (free-form doc; e.g. "threshold exceeded",
 ///           "every Monday 09:00", "row count > 100").
-///    Then : at most one command issued. Unset = "do nothing" (a valid
-///           outcome that should be documented explicitly for at least one
-///           scenario when relevant).
+///    Then : exactly one outcome, stated explicitly: the command issued
+///           (`then`), or `no_command` when the automation does not fire.
+///           Leaving both unset is an error, so a deliberate "does nothing"
+///           reads differently from a missing outcome.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AutomationScenario {
     #[prost(string, tag="1")]
@@ -870,12 +879,22 @@ pub struct AutomationScenario {
     pub given: ::prost::alloc::vec::Vec<ReadModelExample>,
     #[prost(string, tag="5")]
     pub when_doc: ::prost::alloc::string::String,
-    #[prost(message, optional, tag="6")]
-    pub then: ::core::option::Option<CommandExample>,
     /// Per-scenario annotations (e.g. NoteAnnotation, OpenQuestionAnnotation).
     /// Each entry is an Any whose type_url identifies the annotation's schema.
     #[prost(message, repeated, tag="7")]
     pub metadata: ::prost::alloc::vec::Vec<::prost_types::Any>,
+    #[prost(oneof="automation_scenario::Outcome", tags="6, 8")]
+    pub outcome: ::core::option::Option<automation_scenario::Outcome>,
+}
+/// Nested message and enum types in `AutomationScenario`.
+pub mod automation_scenario {
+    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    pub enum Outcome {
+        #[prost(message, tag="6")]
+        Then(super::CommandExample),
+        #[prost(message, tag="8")]
+        NoCommand(super::NoCommand),
+    }
 }
 /// Explanation for why an entity is intentionally disconnected from the
 /// model's slice graph (no command slice produces it, no read-model slice

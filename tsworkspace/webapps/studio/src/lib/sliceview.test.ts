@@ -585,4 +585,13 @@ describe('scenario playback', () => {
     expect(steps[1]).toEqual({ phase: 'when', examples: [], doc: 'The payment provider confirms the capture.' });
     expect([...scenarioStepKeys(steps[2])]).toEqual(['command:acme-storefront/capture-payment']);
   });
+
+  it('ends an automation scenario that does not fire on no command', () => {
+    const model = storefront();
+    const slice = sliceNamed(model, 'capture-payment-auto');
+    const steps = scenarioSteps(slice, slice.scenarios[1]);
+    expect(steps.map((s) => s.phase)).toEqual(['given', 'when', 'then']);
+    expect(steps[2].examples).toEqual([]);
+    expect(steps[2].noCommand).toEqual({ doc: 'Nothing to capture.' });
+  });
 });
