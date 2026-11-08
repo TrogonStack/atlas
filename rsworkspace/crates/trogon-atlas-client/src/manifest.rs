@@ -867,11 +867,16 @@ spec:
       given: [order-queue]
       whenDoc: poll finds a row
       then: fulfill
+    - id: idle
+      title: Queue empty
+      given: [order-queue]
+      whenDoc: poll finds nothing
+      noCommand: {doc: nothing to fulfill}
 ");
         let Some(pb::entity::Kind::AutomationSlice(slice)) = m.entity.kind else {
             panic!("expected automationSlice");
         };
-        assert_eq!(slice.scenarios.len(), 1);
+        assert_eq!(slice.scenarios.len(), 2);
         // Scenario id stays the literal string, NOT expanded into an Id.
         assert_eq!(slice.scenarios[0].id, "happy");
         let given = slice.scenarios[0].given[0]
@@ -883,14 +888,18 @@ spec:
         assert_eq!(given.slug, "order-queue");
         assert_eq!(given.namespace, "shop");
         let then = slice.scenarios[0]
-            .then
-            .clone()
-            .unwrap()
-            .command
+            .then_command()
             .unwrap()
             .id
+            .clone()
             .unwrap();
         assert_eq!(then.slug, "fulfill");
+        assert_eq!(
+            slice.scenarios[1].outcome,
+            Some(pb::automation_scenario::Outcome::NoCommand(pb::NoCommand {
+                doc: "nothing to fulfill".into(),
+            }))
+        );
         let rms: Vec<pb::Id> = slice
             .source_read_models
             .into_iter()

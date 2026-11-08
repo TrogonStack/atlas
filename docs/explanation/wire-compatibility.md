@@ -176,6 +176,14 @@ optional. A client that sends the instant requires the feature first, so an
 older server refuses it rather than ignoring the field and returning the
 current model.
 
+Contract revision 24 lets an automation scenario state that it issues no
+command: `AutomationScenario.then` moves into `oneof outcome` beside the new
+`no_command`, and a scenario with neither is rejected. Field 6 keeps its number
+and JSON name, so stored scenarios and manifests are unchanged. buf reports the
+move as an acknowledged FIELD_SAME_ONEOF break. Both mutation compatibility
+floors rise to 24: an older writer would drop `no_command` from a slice it
+re-puts, so it is refused before any mutation.
+
 ## Supported combinations
 
 | Client vs server | Mutations |
@@ -207,8 +215,8 @@ drift.
 - Make an intentional breaking change: bump `CONTRACT_REVISION` and raise the
   `MIN_*` constants as the how-to describes.
 
-The current contract revision is 23, with both mutation compatibility floors
-at 20. Native catalog context writers preserve Decision dates, makers and
+The current contract revision is 24, with both mutation compatibility floors
+at 24. Native catalog context writers preserve Decision dates, makers and
 amendments, Term domain ownership, and Document content and classifications.
 CalendarDate uses the shared type package. It requires no breaking-change
 acknowledgment against the main baseline.

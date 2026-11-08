@@ -749,7 +749,7 @@ fn scenario_example<'e>(referrer: &'e pb::Entity, site: &str) -> Option<Scenario
                         given.payload.as_ref(),
                     ));
                 }
-                if let Some(then) = &scenario.then {
+                if let Some(pb::automation_scenario::Outcome::Then(then)) = &scenario.outcome {
                     sites.push((
                         format!("scenarios[{s}].then.command"),
                         then.payload.as_ref(),

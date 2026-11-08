@@ -45,7 +45,8 @@ The containing Component is the declaration owner. Equal UI targets and wording
 may repeat as distinct occurrences; retain order without causal meaning. Empty
 means no hosting assertions in that checked owner, not no deployed interfaces.
 No direct Persona field, reverse editable list or arbitrary hosting metadata is
-added. Contract revision and both mutation compatibility floors are 20. The client
+added. Contract revision 20 introduced them and raised both mutation compatibility
+floors to 20 (they are now 24). The client
 compatibility gate refuses older writers before a mutation can discard hosting
 assertions.
 

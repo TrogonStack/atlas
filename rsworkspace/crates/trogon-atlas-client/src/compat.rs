@@ -371,8 +371,8 @@ mod tests {
     fn revision_20_refuses_an_older_writer_before_mutation() {
         const {
             assert!(pb::CONTRACT_REVISION >= 20);
-            assert!(pb::MIN_SERVER_CONTRACT_REVISION == 20);
-            assert!(pb::MIN_CLIENT_CONTRACT_REVISION == 20);
+            assert!(pb::MIN_SERVER_CONTRACT_REVISION >= 20);
+            assert!(pb::MIN_CLIENT_CONTRACT_REVISION >= 20);
         }
         let server_requires_newer_writer = pb::GetServerInfoResponse {
             contract_revision: pb::CONTRACT_REVISION,
@@ -399,10 +399,8 @@ mod tests {
         let server = check(&older_server, MutationIntent::default()).unwrap_err();
         assert!(matches!(
             server,
-            CompatibilityError::ServerTooOld {
-                server: 18,
-                minimum: 20
-            }
+            CompatibilityError::ServerTooOld { server: 18, minimum }
+                if minimum == pb::MIN_SERVER_CONTRACT_REVISION
         ));
         assert!(
             server
@@ -454,8 +452,8 @@ mod tests {
             refused,
             CompatibilityError::ClientTooOld {
                 client: LAST_REVISION_WITHOUT_DESIGN_GRAPH,
-                minimum: 20
-            }
+                minimum
+            } if minimum == pb::MIN_CLIENT_CONTRACT_REVISION
         ));
         assert!(
             refused
@@ -469,7 +467,7 @@ mod tests {
     fn writer_below_revision_20_is_refused_before_any_mutation() {
         let advertised = current_server();
         assert_eq!(advertised.contract_revision, pb::CONTRACT_REVISION);
-        assert_eq!(advertised.min_client_contract_revision, 20);
+        assert!(advertised.min_client_contract_revision >= 20);
         for intent in every_intent() {
             check(&advertised, intent).unwrap();
         }
@@ -477,10 +475,8 @@ mod tests {
             writer_revision_decision(19, advertised.min_client_contract_revision).unwrap_err();
         assert!(matches!(
             refused,
-            CompatibilityError::ClientTooOld {
-                client: 19,
-                minimum: 20
-            }
+            CompatibilityError::ClientTooOld { client: 19, minimum }
+                if minimum == pb::MIN_CLIENT_CONTRACT_REVISION
         ));
         assert!(
             refused

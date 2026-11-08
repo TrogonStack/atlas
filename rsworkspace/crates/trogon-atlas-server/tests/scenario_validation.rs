@@ -336,6 +336,87 @@ async fn command_scenario_clean_is_accepted() {
         .unwrap();
 }
 
+fn automation_slice_with_scenarios(scenarios: Vec<pb::AutomationScenario>) -> pb::Entity {
+    pb::Entity {
+        system: None,
+        kind: Some(pb::entity::Kind::AutomationSlice(pb::AutomationSlice {
+            id: Some(id("place-order-automation", 1)),
+            title: "place-order-automation".into(),
+            emitted_command: Some(command_edge("place-order")),
+            scenarios,
+            ..Default::default()
+        })),
+    }
+}
+
+fn automation_scenario(
+    title: &str,
+    outcome: Option<pb::automation_scenario::Outcome>,
+) -> pb::AutomationScenario {
+    pb::AutomationScenario {
+        id: title.into(),
+        title: title.into(),
+        doc: String::new(),
+        given: Vec::new(),
+        when_doc: "order paid".into(),
+        outcome,
+        metadata: Vec::new(),
+    }
+}
+
+fn issues_command(slug: &str) -> pb::automation_scenario::Outcome {
+    pb::automation_scenario::Outcome::Then(command_example(slug))
+}
+
+fn issues_no_command() -> pb::automation_scenario::Outcome {
+    pb::automation_scenario::Outcome::NoCommand(pb::NoCommand {
+        doc: "still within backoff".into(),
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_command_or_no_command_is_accepted() {
+    let svc = seed_basics().await;
+    let scenarios = vec![
+        automation_scenario("fires", Some(issues_command("place-order"))),
+        automation_scenario("does not fire", Some(issues_no_command())),
+    ];
+    put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_missing_outcome_is_rejected() {
+    let svc = seed_basics().await;
+    let scenarios = vec![automation_scenario("no outcome", None)];
+    let err = put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap_err();
+    assert!(
+        err.message().contains("SCENARIO_MISSING_THEN"),
+        "msg={}",
+        err.message()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn automation_scenario_command_must_match_slice_command() {
+    let svc = seed_basics().await;
+    let scenarios = vec![automation_scenario(
+        "wrong command",
+        Some(issues_command("cancel-order")),
+    )];
+    let err = put_slice(&svc, automation_slice_with_scenarios(scenarios))
+        .await
+        .unwrap_err();
+    assert!(
+        err.message().contains("SCENARIO_COMMAND_MISMATCH"),
+        "msg={}",
+        err.message()
+    );
+}
+
 fn make_event_on_lane(slug: &str, lane: &str) -> pb::Entity {
     pb::Entity {
         system: None,

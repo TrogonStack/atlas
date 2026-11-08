@@ -413,12 +413,7 @@ pub fn outbound_refs(entity: &Entity) -> Vec<OutboundRef> {
                         });
                     }
                 }
-                if let Some(id) = sc
-                    .then
-                    .as_ref()
-                    .and_then(|t| t.command.as_ref())
-                    .and_then(|r| r.id.as_ref())
-                {
+                if let Some(id) = sc.then_command().and_then(|r| r.id.as_ref()) {
                     out.push(OutboundRef {
                         to_kind: Some(EntityKind::Command),
                         to_id: id.clone(),
@@ -1670,18 +1665,15 @@ pub fn retarget_refs(
                         }
                     }
                 }
-                if from_kind == EntityKind::Command
-                    && sc
-                        .then
-                        .as_ref()
-                        .and_then(|t| t.command.as_ref())
-                        .and_then(|r| r.id.as_ref())
-                        == Some(from_id)
-                {
-                    if let Some(t) = sc.then.as_mut() {
+                if from_kind == EntityKind::Command {
+                    if let Some(trogon_atlas_proto::automation_scenario::Outcome::Then(t)) =
+                        sc.outcome.as_mut()
+                    {
                         if let Some(r) = t.command.as_mut() {
-                            r.id = Some(to_id.clone());
-                            rewritten.push(format!("scenarios[{si}].then.command"));
+                            if r.id.as_ref() == Some(from_id) {
+                                r.id = Some(to_id.clone());
+                                rewritten.push(format!("scenarios[{si}].then.command"));
+                            }
                         }
                     }
                 }
